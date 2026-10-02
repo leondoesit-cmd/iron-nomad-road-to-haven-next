@@ -2,6 +2,7 @@ import type * as THREE from 'three';
 import type { PhysicsWorld } from '../physics/physics';
 import type { GameRenderer } from '../render/renderer';
 import type { Particles, Tracers } from '../render/particles';
+import type { WorkFx } from '../render/workFx';
 import type { SignatureGrid } from '../sim/signature';
 import type { ObstacleIndex } from './obstacles';
 import type { TerrainDef, Surface } from '../world/terrain';
@@ -43,6 +44,8 @@ export interface Ctx {
   R: GameRenderer;
   root: THREE.Group;
   fx: Particles;
+  /** Cosmetic staging of work on vehicles: parts flying, bursts, callouts. */
+  work: WorkFx;
   tracers: Tracers;
   sig: SignatureGrid;
   obs: ObstacleIndex;

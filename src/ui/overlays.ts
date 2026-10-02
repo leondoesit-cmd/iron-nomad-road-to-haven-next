@@ -305,7 +305,7 @@ export class Overlays {
       [pair('RT', 'LT'), 'Fire / aim', 'Throttle / brake', 'Fire / zoom', 'Place / remove'],
       [pad('RB'), 'Tap melee · hold takedown', 'Fire front gun', 'Fire', 'Next element'],
       [pad('LB'), 'Swap tool: gun, wrench (repair), crowbar (strip parts), jerrycan (fuel)', '—', 'Swap weapon', 'Previous element'],
-      [pad('A'), 'Interact · hold to loot, repair, strip, siphon, refuel, revive', 'Handbrake', 'Reload', 'Rotate'],
+      [pad('A'), 'Tap jump (when nothing is in reach) · hold to loot, repair, strip, siphon, refuel, revive', 'Handbrake', 'Reload', 'Rotate'],
       [pad('B'), 'Crouch', 'Tap lights · hold engine off', 'Cancel', 'Cancel'],
       [pad('X'), 'Reload · hold swap utility · wrench: workbench', 'Tap horn · hold siren', 'Reload', 'Watch post'],
       [pad('Y'), 'Enter any vehicle (abandoned cars become yours) · hold bail out', 'Exit · hold to bail at speed', 'Exit', 'Build wheel'],
@@ -317,7 +317,7 @@ export class Overlays {
     const kbLine = (set: 0 | 1) => {
       const m: KeyMap = b.kb[set];
       const k = (id: keyof KeyMap) => keyLabel(m[id]);
-      return `${set === 0 ? 'P1' : 'P2'}: ${k('moveUp')} ${k('moveLeft')} ${k('moveDown')} ${k('moveRight')} move, ${k('turnLeft')} / ${k('turnRight')} aim, ${k('fire')} fire, ${k('interact')} interact, ${k('vehicle')} vehicle, ${k('view')} first / third person, ${k('crouch')} crouch / lights, ${k('sprint')} sprint / handbrake, ${k('wheel')} wheel, ${k('swap')} swap tool, ${k('prevBuild')} ${k('nextBuild')} cycle build, hold ${k('sheet')} for the convoy sheet`;
+      return `${set === 0 ? 'P1' : 'P2'}: ${k('moveUp')} ${k('moveLeft')} ${k('moveDown')} ${k('moveRight')} move, ${k('turnLeft')} / ${k('turnRight')} aim, ${k('fire')} fire, ${k('interact')} interact, ${k('jump')} jump, ${k('vehicle')} vehicle, ${k('view')} first / third person, ${k('crouch')} crouch / lights, ${k('sprint')} sprint / handbrake, ${k('wheel')} wheel, ${k('swap')} swap tool, ${k('prevBuild')} ${k('nextBuild')} cycle build, hold ${k('sheet')} for the convoy sheet`;
     };
     const mouse = `fire ${mouseWord(b.mouse.fire)}, aim ${mouseWord(b.mouse.aim)}, view ${mouseWord(b.mouse.view)}`;
     host.innerHTML = `<div class="menu" style="min-width:900px"><h2>Controls</h2>

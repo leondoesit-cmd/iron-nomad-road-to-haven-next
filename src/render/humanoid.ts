@@ -325,11 +325,11 @@ export class Humanoid {
 
   /**
    * Pose the rig. `speed` is horizontal speed in m/s for walk cycles; `aim` raises the weapon arm;
-   * `crouch` 0..1 lowers the stance.
+   * `crouch` 0..1 lowers the stance, `air` 0..1 tucks the legs for a jump or a fall.
    */
-  update(dt: number, pose: PoseKind, speed: number, aim: number, crouch: number, lookPitch = 0) {
+  update(dt: number, pose: PoseKind, speed: number, aim: number, crouch: number, lookPitch = 0, air = 0) {
     this.walkT += dt * (1.5 + speed * 1.1);
-    const run = Math.min(1, speed / 3.5);
+    const run = Math.min(1, speed / 3.5) * (1 - air);
     const sw = Math.sin(this.walkT * 2) * run;
     const bob = Math.abs(Math.cos(this.walkT * 2)) * run;
     const r = this.root;
@@ -365,6 +365,17 @@ export class Humanoid {
         this.elbowL.rotation.x = -0.55 * aim;
       }
       this.head.rotation.x = lookPitch * 0.4 - this.torso.rotation.x * 0.6;
+      if (air > 0) {
+        // Off the ground: knees drawn up, one foot ahead of the other, arms out for balance.
+        this.legL.rotation.x += (-0.55 - this.legL.rotation.x) * air;
+        this.legR.rotation.x += (0.15 - this.legR.rotation.x) * air;
+        this.kneeL.rotation.x += (1.1 - this.kneeL.rotation.x) * air;
+        this.kneeR.rotation.x += (0.7 - this.kneeR.rotation.x) * air;
+        if (aim <= 0.1) {
+          this.armL.rotation.z += (0.55 - this.armL.rotation.z) * air;
+          this.armR.rotation.z += (-0.55 - this.armR.rotation.z) * air;
+        }
+      }
       if (this.carried) {
         // Both arms cradle the load, elbows in, leaning back a touch against the weight.
         this.armL.rotation.set(-1.05, 0, -0.28);

@@ -1,4 +1,6 @@
-import type { PartSlot } from '../data';
+import * as THREE from 'three';
+import { partDef, type PartSlot } from '../data';
+import { MK_CSS, SLOT_SITE, modelKey, type Site } from '../render/workFx';
 import { OIL_RESERVE_MAX } from './campaign';
 import { carriedName, liftSecs, planFit, planStow, pourFuel, type Carried } from '../sim/carry';
 import { installPart } from '../sim/garage';
@@ -15,6 +17,30 @@ import type { Vehicle } from './vehicle';
 
 /** Vehicles that count as "our ride": the convoy's own cars with a build, standing still. */
 const isOwnRide = (v: Vehicle) => v.faction === 'convoy' && !!v.build && !v.wreck && v.kind !== 'crew';
+
+/** Where on a vehicle a job at `site` happens, in the world. */
+export function sitePos(v: Vehicle, site: Site): THREE.Vector3 {
+  const w = v.def.width / 2;
+  const l = v.def.length / 2;
+  const at = (x: number, y: number, z: number) => {
+    const [px, py, pz] = v.body.toWorld(x, y, z);
+    return new THREE.Vector3(px, py, pz);
+  };
+  switch (site) {
+    case 'hood': return at(0, 1.0, l * 0.55);
+    case 'wheel': return at(w + 0.1, 0.4, l * 0.5);
+    case 'flank': return at(w + 0.15, 0.9, 0);
+    case 'roof': return at(0, 1.7, 0);
+    case 'rear': return at(0, 0.9, -l - 0.1);
+    case 'front': return at(0, 0.7, l + 0.1);
+    case 'gun': return at(0, 1.5, -0.3);
+    case 'under': return at(0, 0.25, 0);
+  }
+}
+
+const slotSite = (id: string): Site => SLOT_SITE[partDef(id).slot] ?? 'hood';
+const handPos = (p: Player) => p.human.hand.getWorldPosition(new THREE.Vector3());
+const trunkPos = (v: Vehicle) => sitePos(v, 'rear');
 
 /** How close a loose item must be to lift it. */
 export const LIFT_REACH = 1.9;
@@ -63,6 +89,7 @@ export function haulCandidate(p: Player): Cand | null {
     noise: c.kind === 'part' ? 22 : 14,
     run: () => fit(p, v, c),
     tick: () => {
+      if (c.kind === 'part') ctx.work.hold(p.index, c.item, handPos(p), sitePos(v, slotSite(c.item.id)), p.action ? p.action.t / p.action.dur : 0);
       if (c.kind === 'part' && Math.random() < 0.18) ctx.fx.spark(v.position.x + (Math.random() - 0.5), v.position.y + 0.8, v.position.z + (Math.random() - 0.5), 2, 3);
       return true;
     },
@@ -85,6 +112,20 @@ function fit(p: Player, v: Vehicle, c: Carried) {
       p.carry = null;
       ctx.audio.play('wrench', v.position.x, v.position.z, 0.8);
       const name = partName(c.item);
+      const anchor = sitePos(v, slotSite(c.item.id));
+      const mk = Math.min(3, Math.max(1, partDef(c.item.id).mk));
+      ctx.work.swap({
+        key: p.index,
+        anchor,
+        from: handPos(p),
+        out: trunkPos(v),
+        fresh: c.item,
+        old: res.removed,
+        hit: () => {
+          ctx.work.label(`${partDef(c.item.id).slot.toUpperCase()}  ${name}`, MK_CSS[mk], anchor.clone().add(new THREE.Vector3(0, 0.8, 0)));
+          ctx.audio.play('wrench', v.position.x, v.position.z, 0.6);
+        },
+      });
       if (!res.removed) {
         p.note(`${name} fitted`, 'good');
       } else if (camp.stowPart(res.removed)) {
@@ -98,6 +139,8 @@ function fit(p: Player, v: Vehicle, c: Carried) {
     case 'fuel': {
       const r = pourFuel(v.fuel, v.tankMax, c.amount);
       v.fuel = r.fuel;
+      ctx.work.pour(handPos(p), sitePos(v, 'rear'), [0.85, 0.7, 0.2]);
+      ctx.work.label(`+${r.used.toFixed(1)} FU`, '#ffd27a', sitePos(v, 'rear').add(new THREE.Vector3(0, 0.8, 0)));
       p.carry = r.left > 0.05 ? { kind: 'fuel', amount: r.left } : null;
       p.note(`+${r.used.toFixed(1)} FU in the tank${p.carry ? ', some left in the can' : ''}`, 'good');
       ctx.audio.play('pickup', v.position.x, v.position.z, 0.5);
@@ -107,6 +150,8 @@ function fit(p: Player, v: Vehicle, c: Carried) {
       const r = pourOil(v.health.comp.oil, c.amount);
       v.health.comp.oil = r.oil;
       v.commit();
+      ctx.work.pour(handPos(p), sitePos(v, 'hood'), [0.12, 0.1, 0.08]);
+      ctx.work.label(`OIL ${Math.round(r.oil * 100)}%`, '#e6dcc0', sitePos(v, 'hood').add(new THREE.Vector3(0, 0.8, 0)));
       p.carry = r.left > 0.02 ? { kind: 'oil', amount: r.left } : null;
       p.note(`Oil topped up to ${Math.round(r.oil * 100)}%`, 'good');
       ctx.audio.play('pickup', v.position.x, v.position.z, 0.5);
@@ -125,6 +170,8 @@ export function stowCarry(p: Player, quiet = false): boolean {
     if (!quiet) p.note(plan.label, 'warn');
     return false;
   }
+  const near = ownRideNear(p);
+  if (near && !quiet) p.ctx.work.stow(c.kind === 'part' ? modelKey(c.item) : c.kind, handPos(p), trunkPos(near));
   switch (c.kind) {
     case 'part':
       camp.stowPart(c.item);

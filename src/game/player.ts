@@ -19,7 +19,7 @@ import type { Pilot, Vehicle } from './vehicle';
 import type { Interactable } from './interact';
 import { carrySlow, type Carried } from '../sim/carry';
 import { OIL_LOW, pourOil } from '../sim/oil';
-import { dropCarry, haulCandidate, haulKey, haulPrompt, returnCarry, stashBeforeEntering } from './hauling';
+import { dropCarry, sitePos, haulCandidate, haulKey, haulPrompt, returnCarry, stashBeforeEntering } from './hauling';
 
 export interface Cand {
   kind: string;
@@ -71,6 +71,10 @@ const WALK = 3.4;
 const SPRINT = 5.9;
 const CROUCH = 1.7;
 const BODY_H = 1.7;
+/** Jump: take-off speed (about 1 m of height at gravity 22), the grace after leaving a ledge, and how early a press still counts. */
+const JUMP_V = 6.6;
+const COYOTE = 0.1;
+const JUMP_BUFFER = 0.12;
 const BODY_R = 0.3;
 const RAY_STATIC = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
 const _v = new THREE.Vector3();
@@ -88,6 +92,14 @@ export class Player implements Pilot {
   ads = 0;
   crouch = false;
   grounded = true;
+  /** Seconds since the feet last touched ground, and the time left on a buffered jump press. */
+  private airT = 0;
+  private jumpBuf = 0;
+  /** Horizontal velocity carried through the air (steering only nudges it). */
+  private hvx = 0;
+  private hvz = 0;
+  /** 0 on the ground, 1 in the air; eased so the tuck in the pose does not snap. */
+  private airVis = 0;
   moveSpeed = 0;
   hp = 100;
   maxHp = 100;
@@ -604,6 +616,7 @@ export class Player implements Pilot {
 
     this.updateTools(dt, it);
     this.updateInteractions(dt, it);
+    this.updateJump(dt, it);
 
     // Pick up swap: LB cycles equipment.
     if (!this.buildMode && wasPressed(it, Btn.LB)) {
@@ -622,10 +635,41 @@ export class Player implements Pilot {
     // Ground hazards: spore clouds are handled by the zombie system.
   }
 
+  /**
+   * Jump. A press is remembered for a moment and a ledge walked off still allows one, so it feels forgiving. On a pad the
+   * button is shared with interact, so a press that has something to interact with is left to that.
+   */
+  private updateJump(dt: number, it: PlayerIntent) {
+    this.jumpBuf = wasPressed(it, Btn.Jump) ? JUMP_BUFFER : Math.max(0, this.jumpBuf - dt);
+    if (this.jumpBuf <= 0 || this.airT > COYOTE || this.vy > 1) return;
+    if (this.swimming || this.carry || this.action || this.buildMode || this.pinned >= ENEMIES.zombieRules.pinAt) return;
+    if (wasPressed(it, Btn.A) && this.prompt?.button === 'A') {
+      this.jumpBuf = 0;
+      return;
+    }
+    this.jumpBuf = 0;
+    this.vy = JUMP_V;
+    this.airT = COYOTE + 1;
+    this.grounded = false;
+    this.crouch = false;
+    this.ctx.audio.play('swing', this.pos.x, this.pos.z, 0.25);
+  }
+
   private moveBody(dt: number, vx: number, vz: number) {
     const ctx = this.ctx;
+    // Airborne, the feet cannot push: the take-off velocity carries, and the stick only bends it.
+    if (this.grounded || this.swimming) {
+      this.hvx = vx;
+      this.hvz = vz;
+    } else {
+      this.hvx = damp(this.hvx, vx, 4, dt);
+      this.hvz = damp(this.hvz, vz, 4, dt);
+      vx = this.hvx;
+      vz = this.hvz;
+    }
     this.vy -= 22 * dt;
     if (this.vy < -30) this.vy = -30;
+    const fallV = this.vy;
     let desired = { x: vx * dt, y: this.vy * dt, z: vz * dt };
     if (this.swimming) {
       // Afloat: no gravity, ease toward the surface so the head stays out and the body bobs a little.
@@ -641,9 +685,21 @@ export class Player implements Pilot {
     }
     this.kcc.computeColliderMovement(this.collider, desired, undefined, RAY_STATIC);
     const m = this.kcc.computedMovement();
+    const wasGrounded = this.grounded;
     this.grounded = this.kcc.computedGrounded();
+    if (this.vy > 0 && m.y < desired.y - 1e-3) this.vy = 0; // head against a ceiling
     if (this.grounded && this.vy < 0) this.vy = 0;
     if (this.swimming) this.grounded = false;
+    if (this.grounded) {
+      if (!wasGrounded && fallV < -5 && !this.swimming) {
+        // Landing: a thud and a puff of dust, louder the harder it came down.
+        const k = clamp((-fallV - 5) / 12, 0, 1);
+        ctx.audio.play('thud', this.pos.x, this.pos.z, 0.15 + 0.3 * k);
+        ctx.fx.puff(this.pos.x, this.pos.y + 0.05, this.pos.z, 0.62, 0.55, 0.44, 0.5 + 0.5 * k, 0.5);
+        ctx.sig.emit(this.pos.x, this.pos.z, 6 + 8 * k, 'noise');
+      }
+      this.airT = 0;
+    } else this.airT += dt;
     // The body is the capsule centre: update our feet position from it.
     const t = this.body.translation();
     const nx = t.x + m.x;
@@ -1029,6 +1085,9 @@ export class Player implements Pilot {
         this.note(msg, 'good');
         if (job.kind === 'engine' && v.health.comp.engine >= 0.1) v.startFail = '';
         ctx.audio.play('wrench', v.position.x, v.position.z, 0.7);
+        const at = sitePos(v, job.kind === 'engine' ? 'hood' : job.kind === 'tire' ? 'wheel' : 'flank');
+        ctx.work.burst(at, 1, 0.8);
+        ctx.work.label(msg, '#7ddc7a', at.add(new THREE.Vector3(0, 0.8, 0)));
       },
       tick: () => {
         if (Math.random() < 0.15) ctx.fx.spark(v.position.x, v.position.y + 0.8, v.position.z, 2, 3);
@@ -1462,7 +1521,8 @@ export class Player implements Pilot {
     // First person: whatever is in hand is held up in front, where the camera can see it.
     if (this.firstPerson && !this.carry && weapon !== 'none') aim = Math.max(aim, 0.75);
     this.syncCarryModel();
-    h.update(dt, this.state === 'downed' ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch);
+    this.airVis = damp(this.airVis, this.state === 'foot' && !this.grounded && !this.swimming && this.airT > 0.06 ? 1 : 0, 16, dt);
+    h.update(dt, this.state === 'downed' ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch, this.airVis);
     h.muzzle(this.muzzleT > 0.05);
     if (this.invuln > 0) h.root.visible = Math.floor(this.invuln * 12) % 2 === 0;
   }
@@ -1471,7 +1531,7 @@ export class Player implements Pilot {
 
   /** Show what is in the arms, rebuilding the model only when it changes kind. */
   private syncCarryModel() {
-    const c = this.carry;
+    const c = this.ctx.work.holding(this.index) ? null : this.carry;
     const key = !c ? '' : c.kind === 'part' ? `part${partDef(c.item.id).mk}` : c.kind;
     if (key === this.carryKey) return;
     this.carryKey = key;

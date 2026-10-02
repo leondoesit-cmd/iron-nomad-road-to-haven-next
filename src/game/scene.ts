@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { PhysicsWorld } from '../physics/physics';
 import { Particles, Tracers } from '../render/particles';
+import { WorkFx } from '../render/workFx';
 import { ZombieRenderer } from '../render/zombieRender';
 import { AnimalRenderer } from '../render/animalRender';
 import { QUALITY, type GameRenderer } from '../render/renderer';
@@ -50,6 +51,7 @@ export abstract class Scene implements Ctx {
   R: GameRenderer;
   root = new THREE.Group();
   fx = new Particles();
+  work = new WorkFx(this.fx);
   tracers = new Tracers();
   sig = new SignatureGrid();
   obs = new ObstacleIndex();
@@ -113,6 +115,7 @@ export abstract class Scene implements Ctx {
     this.cars = new CarField(this);
     this.projectiles = new Projectiles(this);
     this.R.scene.add(this.root);
+    this.root.add(this.work.root);
     this.R.scene.add(this.fx.smoke.points);
     this.R.scene.add(this.fx.glow.points);
     this.R.scene.add(this.tracers.mesh);
@@ -433,6 +436,7 @@ export abstract class Scene implements Ctx {
     if (!this.idleCam) for (const p of this.players) p.renderCamera(alpha, dt);
     this.fx.setBudget(QUALITY[R.quality].particles);
     this.fx.update(dt);
+    this.work.update(dt);
     this.tracers.update(dt);
     // Cameras
     for (let i = 0; i < 2; i++) {
@@ -534,6 +538,7 @@ export abstract class Scene implements Ctx {
     this.vehicles.length = 0;
     clearShells();
     this.players.length = 0;
+    this.work.dispose();
     this.root.removeFromParent();
     disposeTree(this.root);
     this.R.scene.remove(this.fx.smoke.points);
