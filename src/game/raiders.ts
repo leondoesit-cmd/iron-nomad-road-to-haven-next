@@ -460,6 +460,7 @@ export class RaiderSystem {
       this.ctx.audio.play('zdie', u.x, u.z, 0.6);
       if (Math.random() < 0.5) this.ctx.addLoot({ scrap: 4 + Math.floor(Math.random() * 5) }, 'raider');
       this.dropGear(u.x, u.z, 'raider');
+      if (Math.random() < 0.2) this.ctx.addLoot({ parts: 1 + Math.floor(Math.random() * 2) }, 'raider');
       return true;
     }
     if (u.state === 'approach') u.state = u.kind === 'sniper' ? 'snipe' : 'fire';

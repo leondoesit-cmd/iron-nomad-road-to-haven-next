@@ -44,6 +44,7 @@ Each leg runs the same five steps, and every decision is shared:
 - **Signature** is the one aggro rule. Engines are **Noise** (heard by the infected in cities) and **Dust** (seen by raiders on
   the road). The meter in the top-left shows your current level. Horns, gunshots, sprinting and night headlights make it worse.
   Parking and walking is quiet.
+- **Hunting**: a kill leaves a carcass. Hold A on it to butcher: meat becomes Rations and big game also pays Scrap from the hide. Carcasses keep for a minute. Everyone eats one Ration per night; whoever goes unfed wakes at 65% health.
 - **Shared stocks**: Fuel, Rations, Scrap, Parts, Tech, Medicine. Fuel and Rations are one pool for both players.
 - **Tether**: stay within about 300 m of your partner. The trailing player gets a slipstream bonus; the leader slows when the
   gap grows.

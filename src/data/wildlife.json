@@ -19,11 +19,11 @@
     },
     "vulture": {
       "name": "Carrion vulture", "temper": "bird", "hp": 14, "armor": 0, "walk": 6, "run": 11, "radius": 0.35, "size": 1.0,
-      "cap": 6, "sight": 30, "meat": 0, "group": [2, 4], "legs": 1, "biomes": ["wasteland", "city"], "themes": ["dust", "salt", "cinder"], "weight": 3, "altitude": 15
+      "cap": 6, "sight": 30, "meat": 1, "group": [2, 4], "legs": 1, "biomes": ["wasteland", "city"], "themes": ["dust", "salt", "cinder"], "weight": 3, "altitude": 15
     },
     "dog": {
       "name": "Feral dog", "temper": "pack", "hp": 32, "armor": 0, "walk": 1.4, "run": 8.2, "radius": 0.32, "size": 1.0,
-      "cap": 5, "sight": 34, "damage": 4.5, "meat": 0, "group": [3, 5], "legs": 1, "biomes": ["wasteland", "city"], "themes": ["dust", "salt", "cinder"], "weight": 2
+      "cap": 5, "sight": 34, "damage": 4.5, "meat": 1, "group": [3, 5], "legs": 1, "biomes": ["wasteland", "city"], "themes": ["dust", "salt", "cinder"], "weight": 2
     },
     "wolf": {
       "name": "Cinder wolf", "temper": "pack", "hp": 58, "armor": 0.05, "walk": 1.5, "run": 9.4, "radius": 0.36, "size": 1.15,

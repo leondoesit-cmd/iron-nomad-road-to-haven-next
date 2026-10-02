@@ -1005,7 +1005,12 @@ export class CampScene extends Scene {
     const eaters = this.players.length;
     const eat = Math.min(c.stocks.rations, eaters);
     c.stocks.rations -= eat;
-    if (eat < eaters) lines.push('Not enough Rations for both of you. You went hungry.');
+    const hungry = new Set<Player>();
+    this.players.forEach((p, i) => {
+      if (i >= eat) hungry.add(p);
+    });
+    if (eat < eaters) lines.push(eaters > 1 && eat > 0 ? 'Only one of you ate. The other went hungry.' : 'No Rations. You went hungry.');
+    else if (c.stocks.rations < eaters) lines.push('That was nearly the last of the Rations: hunt or scavenge before the next camp.');
     // Crew upkeep, loyalty bands, desertions and disputes.
     for (const m of c.crewLive) {
       const def = MERCS.roles[m.role];
@@ -1042,7 +1047,7 @@ export class CampScene extends Scene {
     this.report = { lines, crew };
     // Rest the players.
     for (const p of this.players) {
-      p.hp = p.maxHp;
+      p.hp = hungry.has(p) ? Math.round(p.maxHp * 0.65) : p.maxHp;
       if (p.state === 'downed' || p.state === 'dead') p.state = 'foot';
       p.vehicle = null;
     }
