@@ -126,15 +126,15 @@ const PAD_DEFAULT: PadMap = {
 const KB_DEFAULT: [KeyMap, KeyMap] = [
   {
     moveUp: 'KeyW', moveDown: 'KeyS', moveLeft: 'KeyA', moveRight: 'KeyD',
-    turnLeft: 'KeyQ', turnRight: 'KeyE', fire: 'KeyF', interact: 'KeyG', jump: 'KeyJ', vehicle: 'KeyR', crouch: 'KeyC',
-    sprint: 'ShiftLeft', wheel: 'Tab', reload: 'KeyT', horn: 'KeyH', swap: 'KeyV', prevBuild: 'KeyZ', nextBuild: 'KeyX',
-    view: 'KeyB', camera: 'KeyY', sheet: 'Space', map: 'KeyJ', inventory: 'KeyI',
+    turnLeft: 'KeyZ', turnRight: 'KeyX', fire: 'KeyT', interact: 'KeyE', jump: 'Space', vehicle: 'KeyF', crouch: 'KeyC',
+    sprint: 'ShiftLeft', wheel: 'KeyG', reload: 'KeyR', horn: 'KeyH', swap: 'KeyQ', prevBuild: 'Digit1', nextBuild: 'Digit2',
+    view: 'KeyB', camera: 'KeyY', sheet: 'Tab', map: 'KeyJ', inventory: 'KeyI',
   },
   {
     moveUp: 'ArrowUp', moveDown: 'ArrowDown', moveLeft: 'ArrowLeft', moveRight: 'ArrowRight',
     turnLeft: 'BracketLeft', turnRight: 'BracketRight', fire: 'ShiftRight', interact: 'Slash', jump: 'KeyO', vehicle: 'Enter', crouch: 'Period',
     sprint: 'ControlRight', wheel: 'Backspace', reload: 'Comma', horn: 'KeyM', swap: 'KeyN', prevBuild: 'Semicolon', nextBuild: 'Quote',
-    view: 'KeyP', camera: 'KeyL', sheet: 'Backslash', map: 'KeyK', inventory: 'KeyO',
+    view: 'KeyP', camera: 'KeyL', sheet: 'Backslash', map: 'KeyK', inventory: 'KeyI',
   },
 ];
 

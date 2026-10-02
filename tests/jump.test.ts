@@ -72,7 +72,7 @@ describe('jump bindings', () => {
     const k = defaultBindings();
     const taken = k.kb[0].crouch!;
     assignBinding('kb', k.kb[0], 'jump', taken);
-    expect(k.kb[0].crouch).toBe('KeyJ');
+    expect(k.kb[0].crouch).toBe('Space');
   });
 });
 

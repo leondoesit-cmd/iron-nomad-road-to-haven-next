@@ -65,7 +65,7 @@ const sampleFor = (im: InputManager, seconds: number) => {
 describe('binding tables', () => {
   it('start from the layouts the game always had, plus the new view keys', () => {
     const b = defaultBindings();
-    expect(b.kb[0].fire).toBe('KeyF');
+    expect(b.kb[0].fire).toBe('KeyT');
     expect(b.kb[1].interact).toBe('Slash');
     expect(b.kb[0].view).toBe('KeyB');
     expect(b.pad.vehicle).toBe(Btn.Y);
@@ -87,10 +87,10 @@ describe('binding tables', () => {
 
   it('assigning a key that another action holds swaps the two', () => {
     const b = defaultBindings();
-    const moved = assignBinding('kb', b.kb[0], 'interact', 'KeyR'); // R is vehicle
+    const moved = assignBinding('kb', b.kb[0], 'interact', 'KeyF'); // F is vehicle
     expect(moved).toBe('vehicle');
-    expect(b.kb[0].interact).toBe('KeyR');
-    expect(b.kb[0].vehicle).toBe('KeyG');
+    expect(b.kb[0].interact).toBe('KeyF');
+    expect(b.kb[0].vehicle).toBe('KeyE');
   });
 
   it('on a pad, binding view to the vehicle button is the tap / hold share; elsewhere it unshares', () => {
@@ -127,7 +127,7 @@ describe('binding tables', () => {
   it('only optional keyboard and mouse actions can be unbound', () => {
     const b = defaultBindings();
     expect(clearBinding('kb', b.kb[0], 'fire')).toBe(false);
-    expect(b.kb[0].fire).toBe('KeyF');
+    expect(b.kb[0].fire).toBe('KeyT');
     expect(clearBinding('kb', b.kb[0], 'view')).toBe(true);
     expect(b.kb[0].view).toBeUndefined();
     expect(clearBinding('pad', b.pad, 'view')).toBe(false);
@@ -149,8 +149,8 @@ describe('binding tables', () => {
     const bad = importBindings({ pad: { fire: 99, interact: 'x', view: 9 }, kb: [{ fire: 'Escape', interact: 'KeyW' }, 5], mouse: { fire: 9 } });
     expect(bad.pad.fire).toBe(d.pad.fire); // out of range
     expect(bad.pad.interact).toBe(d.pad.interact); // wrong type
-    expect(bad.kb[0].fire).toBe('KeyF'); // Escape is reserved
-    expect(bad.kb[0].interact).toBe('KeyG'); // KeyW is already moveUp, so the duplicate is refused
+    expect(bad.kb[0].fire).toBe('KeyT'); // Escape is reserved
+    expect(bad.kb[0].interact).toBe('KeyE'); // KeyW is already moveUp, so the duplicate is refused
     expect(bad.mouse.fire).toBe(0);
   });
 
@@ -293,7 +293,7 @@ describe('keyboard and mouse bindings', () => {
     win.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { code: 'KeyJ' }));
     im.pollJoin();
     expect(im.slots[0]).toEqual({ kind: 'kb', set: 1 });
-    win.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { code: 'Space' }));
+    win.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { code: 'Tab' }));
     im.sample(DT);
     expect(im.intents[0].held & (1 << Btn.Back)).not.toBe(0);
   });
@@ -322,8 +322,8 @@ describe('keyboard and mouse bindings', () => {
 
   it('prompts name the key bound on each layout, and follow a rebinding', () => {
     const { im } = kbInput();
-    expect(promptLabel({ kind: 'kb', set: 1 }, 'RT')).toBe('F');
-    expect(promptLabel({ kind: 'kb', set: 1 }, 'A')).toBe('G');
+    expect(promptLabel({ kind: 'kb', set: 1 }, 'RT')).toBe('T');
+    expect(promptLabel({ kind: 'kb', set: 1 }, 'A')).toBe('E');
     expect(promptLabel({ kind: 'kb', set: 2 }, 'Y')).toBe('Enter');
     assignBinding('kb', im.settings.bindings.kb[0], 'interact', 'KeyJ');
     im.bindingsChanged();
@@ -337,14 +337,14 @@ describe('rebinding capture', () => {
     let got: unknown = null;
     im.captureNext('kb', (r) => (got = r));
     expect(im.capturing).toBe(true);
-    key('keydown', 'KeyG'); // would be Interact
-    expect(got).toEqual({ value: 'KeyG' });
+    key('keydown', 'KeyE'); // would be Interact
+    expect(got).toEqual({ value: 'KeyE' });
     expect(im.capturing).toBe(false);
     im.sample(DT);
     expect(im.intents[0].held).toBe(0);
     for (let i = 0; i < 30; i++) im.sample(DT);
-    key('keyup', 'KeyG');
-    key('keydown', 'KeyG');
+    key('keyup', 'KeyE');
+    key('keydown', 'KeyE');
     im.sample(DT);
     expect(im.intents[0].held & (1 << Btn.A)).not.toBe(0);
   });

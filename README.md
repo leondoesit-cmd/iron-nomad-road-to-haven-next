@@ -59,7 +59,7 @@ Each leg runs the same five steps, and every decision is shared:
 ### Solo or split screen
 
 The title screen has a **Players** switch: `2 · SPLIT SCREEN` (the default) or `1 · SOLO`. Solo gives you one scavenger,
-one vehicle and the whole screen. Press A on a pad, or `F` (WASD) or `Right Shift` (arrows) on the keyboard, to take the seat.
+one vehicle and the whole screen. Press A on a pad, or `T` (WASD) or `Right Shift` (arrows) on the keyboard, to take the seat.
 The choice is remembered, and a run keeps the mode it started in: Continue loads a solo save as solo.
 
 What changes when you are alone: there is no partner, so no tether, no revives and no votes. The one vote is yours, with no
@@ -99,11 +99,11 @@ You cannot jump while swimming, carrying a load, mid-action or pinned, and jumpi
 shares A with interact: a press with something to interact with is left to the interact prompt, otherwise it jumps. Landing
 hard is noisy. Jump is a normal rebindable action (Control settings, Move group).
 
-**Keyboard**: solo play can use either layout below. Player 1 uses `W A S D` to move, `Q E` to aim, `F` to fire, `G` to interact, `J` to jump, `R` for vehicles, `C` for
-crouch and lights, `Shift` for sprint and handbrake, `Tab` for the command wheel, `V` to swap tools, `T` to reload or
-honk, `Z X` to cycle build elements, `J` for the map, hold `Space` for the convoy sheet. Player 2 uses the arrow keys, `[ ]` to aim, `Right
+**Keyboard**: solo play can use either layout below. Player 1 uses `W A S D` to move, the mouse to look (`Z X` to aim without it), left click or `T` to fire, right click to aim, `E` to interact, `Space` to jump, `F` for vehicles, `C` for
+crouch and lights, `Shift` for sprint and handbrake, `G` for the command wheel, `Q` to swap tools, `R` to reload, `H` to honk,
+`1 2` to cycle build elements, `J` for the map, `I` for the inventory, hold `Tab` for the convoy sheet. Player 2 uses the arrow keys, `[ ]` to aim, `Right
 Shift` to fire, `/` to interact, `O` to jump, `Enter` for vehicles, `.` for crouch and lights, `Right Ctrl` for sprint and handbrake,
-`Backspace` for the wheel, `N` to swap tools, `,` to reload, `; '` to cycle build elements, `K` for the map, hold `\` for the convoy sheet. Keyboard players get stronger
+`Backspace` for the wheel, `N` to swap tools, `,` to reload, `; '` to cycle build elements, `K` for the map, `I` for the inventory, hold `\` for the convoy sheet. Keyboard players get stronger
 aim assist. `Esc` pauses.
 
 **Map and minimap**: each half has a round minimap under the clock, turned so up is where your camera looks and zoomed
