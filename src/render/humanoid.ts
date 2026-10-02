@@ -1,8 +1,26 @@
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { C } from './palette';
+import { lerp } from '../core/math';
 import { shared } from './dispose';
 import { kitMaterial } from './materials';
+import {
+  DEFAULT_LOOK,
+  drawBody,
+  drawBriefs,
+  drawFace,
+  drawHand,
+  drawHead,
+  drawHips,
+  drawNeck,
+  drawPack,
+  drawShin,
+  drawThigh,
+  drawUpperArm,
+  sleeveColor,
+  trouserColor,
+  type OutfitLook,
+} from './outfit';
 
 const mat = kitMaterial();
 const basicLight = shared(new THREE.MeshBasicMaterial({ color: 0xfff6d0 }));
@@ -11,7 +29,7 @@ const flashGeo = shared(new THREE.IcosahedronGeometry(0.11, 1));
 
 export type PoseKind = 'stand' | 'ride' | 'seat' | 'downed' | 'gun';
 
-interface Palette {
+export interface Palette {
   jacket: number;
   trim: number;
   pants?: number;
@@ -21,6 +39,10 @@ interface Palette {
   scarf?: number;
   /** Raider look: skull mask, spiked pauldrons, no backpack. */
   mask?: boolean;
+  /** What a survivor wears. Absent: the starter kit, which is how every crew member is drawn. */
+  look?: OutfitLook;
+  /** An armband in this colour on the left sleeve, so a survivor in borrowed clothes is still recognisably theirs. */
+  band?: number;
 }
 
 type Part = 'pelvis' | 'torso' | 'head' | 'upperL' | 'upperR' | 'foreL' | 'foreR' | 'thighL' | 'thighR' | 'shinL' | 'shinR';
@@ -32,18 +54,20 @@ function bodyParts(p: Palette): Record<Part, THREE.BufferGeometry> {
   const key = JSON.stringify(p);
   const hit = partCache.get(key);
   if (hit) return hit;
+  const raider = !!p.mask;
+  const look = p.look ?? DEFAULT_LOOK;
   const jacket = S.cloth(p.jacket, 0.55);
-  const jacketDark = S.cloth(new THREE.Color(p.jacket).multiplyScalar(0.62).getHex(), 0.6);
   const trim = S.cloth(p.trim, 0.5);
-  const pants = S.cloth(p.pants ?? 0x3d3f3a, 0.6);
+  const pantsColor = trouserColor(look.legs, p.pants ?? 0x3d3f3a);
+  const pants = S.cloth(raider ? (p.pants ?? 0x3d3f3a) : pantsColor, 0.6);
   const skin = S.skin(p.skin ?? C.skin);
   const leather = S.leather(0x3b2a1e, 0.5);
   const boot = S.leather(0x2a211b, 0.6);
   const glove = S.leather(0x2b2622, 0.4);
   const buckle = S.metal(0x8a8478, 0.4);
   const helmet = p.mask ? S.metal(p.helmet ?? 0x111111, 0.5) : S.paint(p.helmet ?? p.trim, 0.6);
-  const scarf = S.cloth(p.scarf ?? p.trim, 0.45);
-  const raider = !!p.mask;
+  const scarfColor = p.scarf ?? p.trim;
+  const sleeve = raider ? jacket : S.cloth(sleeveColor(look.body, p.jacket), 0.55);
   const mk = (fn: (b: MeshBuilder) => void) => {
     const b = new MeshBuilder();
     b.jitter = 0.03;
@@ -53,22 +77,25 @@ function bodyParts(p: Palette): Record<Part, THREE.BufferGeometry> {
   };
   const parts: Record<Part, THREE.BufferGeometry> = {
     pelvis: mk((b) => {
-      b.rbox(0, -0.02, 0, 0.33, 0.2, 0.21, 0.07, pants);
+      if (!raider && look.legs.style === 'bare') drawBriefs(b);
+      else b.rbox(0, -0.02, 0, 0.33, 0.2, 0.21, 0.07, pants);
       // Belt with buckle and pouches.
       b.rbox(0, 0.07, 0, 0.35, 0.055, 0.23, 0.025, leather);
       b.box(0, 0.07, 0.118, 0.06, 0.045, 0.01, buckle);
       for (const sx of [1, -1]) b.rbox(sx * 0.15, 0.03, 0.06, 0.07, 0.09, 0.06, 0.015, raider ? leather : trim);
       b.rbox(-0.1, 0.03, -0.11, 0.1, 0.09, 0.06, 0.015, leather);
+      if (!raider) drawHips(b, look.body, p.jacket);
     }),
     torso: mk((b) => {
-      // Abdomen and chest: a tapered jacket body.
-      b.limb(0, 0.06, 0, 0, 0.26, 0, 0.14, 0.16, jacket, 14);
-      b.rbox(0, 0.34, 0, 0.4, 0.3, 0.24, 0.1, jacket);
-      for (const sx of [1, -1]) b.sphereAt(sx * 0.19, 0.44, 0, 0.085, jacket);
-      // Collar and zip.
-      b.torus(0, 0.5, 0, 0.085, 0.03, jacketDark, Math.PI / 2, 0, 0, 8, 16);
-      b.box(0, 0.3, 0.121, 0.012, 0.36, 0.008, buckle);
       if (raider) {
+        // Abdomen and chest: a tapered jacket body.
+        const jacketDark = S.cloth(new THREE.Color(p.jacket).multiplyScalar(0.62).getHex(), 0.6);
+        b.limb(0, 0.06, 0, 0, 0.26, 0, 0.14, 0.16, jacket, 14);
+        b.rbox(0, 0.34, 0, 0.4, 0.3, 0.24, 0.1, jacket);
+        for (const sx of [1, -1]) b.sphereAt(sx * 0.19, 0.44, 0, 0.085, jacket);
+        // Collar and zip.
+        b.torus(0, 0.5, 0, 0.085, 0.03, jacketDark, Math.PI / 2, 0, 0, 8, 16);
+        b.box(0, 0.3, 0.121, 0.012, 0.36, 0.008, buckle);
         // Leather harness, spiked pauldrons.
         b.box(0.06, 0.3, 0.125, 0.05, 0.4, 0.01, leather, 0, 0, 0.5);
         b.box(-0.06, 0.3, 0.125, 0.05, 0.4, 0.01, leather, 0, 0, -0.5);
@@ -76,19 +103,14 @@ function bodyParts(p: Palette): Record<Part, THREE.BufferGeometry> {
           b.add('dome', sx * 0.2, 0.46, 0, 0.2, 0.14, 0.2, S.metal(0x2a2826, 0.6), 0, 0, -sx * 0.4);
           for (let i = 0; i < 3; i++) b.add('cone6', sx * (0.2 + i * 0.02), 0.52 + i * 0.01, -0.04 + i * 0.04, 0.035, 0.1, 0.035, S.metal(0x9a9a9a, 0.3), 0, 0, -sx * 0.5);
         }
+        // Scarf wrapped at the neck.
+        drawNeck(b, { style: 'bandana' }, scarfColor);
       } else {
-        // Chest rig with magazine pouches, shoulder straps and a backpack with a bedroll.
-        b.rbox(0, 0.3, 0.115, 0.34, 0.22, 0.05, 0.015, trim);
-        for (const sx of [-1, 0, 1]) b.rbox(sx * 0.1, 0.27, 0.15, 0.085, 0.12, 0.04, 0.012, S.cloth(new THREE.Color(p.trim).multiplyScalar(0.8).getHex(), 0.6));
-        for (const sx of [1, -1]) b.box(sx * 0.12, 0.38, 0.0, 0.05, 0.02, 0.27, leather, 0.0, 0, 0);
-        b.rbox(0, 0.32, -0.19, 0.32, 0.38, 0.16, 0.05, S.cloth(0x4a4636, 0.7));
-        b.rbox(0, 0.22, -0.28, 0.22, 0.16, 0.05, 0.02, S.cloth(0x3e3a2e, 0.7));
-        b.capsule(-0.16, 0.54, -0.19, 0.16, 0.54, -0.19, 0.065, S.cloth(0x5d5a40, 0.6), 10);
-        for (const sx of [1, -1]) b.box(sx * 0.12, 0.54, -0.19, 0.012, 0.14, 0.14, leather);
+        // The garment, the pack on the back, and the neck wrap.
+        drawBody(b, look.body, p.jacket, p.trim);
+        drawPack(b, look.pack);
+        drawNeck(b, look.face, scarfColor);
       }
-      // Scarf wrapped at the neck.
-      b.torus(0, 0.52, 0.01, 0.075, 0.035, scarf, Math.PI / 2, 0, 0, 8, 16);
-      b.box(0.05, 0.43, -0.09, 0.07, 0.16, 0.02, scarf, 0.2, 0, 0.1);
       b.capsule(0, 0.54, 0, 0, 0.62, 0, 0.05, skin, 8);
     }),
     head: mk((b) => {
@@ -101,39 +123,36 @@ function bodyParts(p: Palette): Record<Part, THREE.BufferGeometry> {
         b.add('dome', 0, 0.15, 0, 0.23, 0.17, 0.24, helmet);
         for (let i = 0; i < 5; i++) b.add('cone6', 0, 0.26, -0.08 + i * 0.045, 0.03, 0.09 + (i === 2 ? 0.04 : 0), 0.03, S.metal(0xa0a0a0, 0.3));
       } else {
-        // Nose, ears and a bandana pulled up over the mouth.
+        // Nose and ears, then whatever covers the face, then what is on top.
         b.add('cone6', 0, 0.11, 0.108, 0.035, 0.05, 0.03, skin, -0.25, 0, 0);
         for (const sx of [1, -1]) b.add('sphere', sx * 0.096, 0.1, 0.0, 0.025, 0.05, 0.035, skin);
-        b.add('sphere16', 0, 0.035, 0.035, 0.198, 0.1, 0.195, scarf);
-        b.add('cone6', 0, -0.02, 0.07, 0.11, 0.07, 0.05, scarf, Math.PI, 0, 0);
-        // Helmet with brim, goggles pushed up on it.
-        b.add('dome', 0, 0.14, 0, 0.235, 0.19, 0.25, helmet);
-        b.cyl(0, 0.14, 0, 0.245, 0.02, 0.26, helmet, 0, 0, 0, 16);
-        b.torus(0, 0.19, 0, 0.115, 0.012, S.leather(0x1c1a18, 0.3), Math.PI / 2 - 0.25, 0, 0, 6, 18);
-        for (const sx of [1, -1]) {
-          b.cyl(sx * 0.045, 0.21, 0.105, 0.065, 0.035, 0.065, S.metal(0x2a2a2a, 0.4), Math.PI / 2 - 0.4, 0, 0, 12);
-          b.cyl(sx * 0.045, 0.218, 0.122, 0.052, 0.008, 0.052, S.glass(0x2a4a58), Math.PI / 2 - 0.4, 0, 0, 12);
-        }
+        drawFace(b, look.face, scarfColor);
+        drawHead(b, look.head, p.helmet ?? p.trim, look.face.style === 'goggles');
         // Eyes and brow under the helmet.
         for (const sx of [1, -1]) b.add('sphere', sx * 0.04, 0.115, 0.098, 0.03, 0.018, 0.012, S.skin(0x1a1410));
       }
     }),
-    upperL: mk((b) => upperArm(b, jacket, raider)),
-    upperR: mk((b) => upperArm(b, jacket, raider)),
-    foreL: mk((b) => forearm(b, jacket, glove)),
-    foreR: mk((b) => forearm(b, jacket, glove)),
-    thighL: mk((b) => thigh(b, pants, trim, 1)),
-    thighR: mk((b) => thigh(b, pants, trim, -1)),
-    shinL: mk((b) => shin(b, pants, boot, raider)),
-    shinR: mk((b) => shin(b, pants, boot, raider)),
+    upperL: mk((b) => {
+      upperArm(b, look, sleeve, raider);
+      if (p.band) b.torus(0, -0.12, 0, 0.066, 0.018, S.cloth(p.band, 0.4), Math.PI / 2, 0, 0, 6, 12);
+    }),
+    upperR: mk((b) => upperArm(b, look, sleeve, raider)),
+    foreL: mk((b) => (raider ? forearm(b, jacket, glove) : drawHand(b, look.hands, sleeve, skin))),
+    foreR: mk((b) => (raider ? forearm(b, jacket, glove) : drawHand(b, look.hands, sleeve, skin))),
+    thighL: mk((b) => thigh(b, pants, raider, look, pantsColor, skin, 1)),
+    thighR: mk((b) => thigh(b, pants, raider, look, pantsColor, skin, -1)),
+    shinL: mk((b) => (raider ? shin(b, pants, boot, true) : drawShin(b, look.legs, look.feet, pantsColor, skin))),
+    shinR: mk((b) => (raider ? shin(b, pants, boot, true) : drawShin(b, look.legs, look.feet, pantsColor, skin))),
   };
   partCache.set(key, parts);
   return parts;
 }
 
-function upperArm(b: MeshBuilder, jacket: ReturnType<typeof S.cloth>, raider: boolean) {
-  b.limb(0, -0.02, 0, 0, -0.27, 0, 0.065, 0.054, jacket, 10);
-  if (raider) b.box(0, -0.16, 0, 0.13, 0.04, 0.13, S.leather(0x2a1e16, 0.5));
+function upperArm(b: MeshBuilder, look: OutfitLook, sleeve: ReturnType<typeof S.cloth>, raider: boolean) {
+  if (raider) {
+    b.limb(0, -0.02, 0, 0, -0.27, 0, 0.065, 0.054, sleeve, 10);
+    b.box(0, -0.16, 0, 0.13, 0.04, 0.13, S.leather(0x2a1e16, 0.5));
+  } else drawUpperArm(b, look.body, sleeve);
 }
 
 function forearm(b: MeshBuilder, jacket: ReturnType<typeof S.cloth>, glove: ReturnType<typeof S.leather>) {
@@ -144,12 +163,14 @@ function forearm(b: MeshBuilder, jacket: ReturnType<typeof S.cloth>, glove: Retu
   b.capsule(0.03, -0.24, 0.03, 0.035, -0.28, 0.045, 0.014, glove, 6);
 }
 
-function thigh(b: MeshBuilder, pants: ReturnType<typeof S.cloth>, trim: ReturnType<typeof S.cloth>, side: number) {
-  b.limb(0, 0, 0, 0, -0.42, 0, 0.088, 0.066, pants, 12);
-  // Cargo pocket and a holster strap.
-  b.rbox(side * 0.08, -0.22, 0.0, 0.03, 0.13, 0.1, 0.01, pants);
-  b.torus(0, -0.3, 0, 0.074, 0.008, S.leather(0x2b2018, 0.4), Math.PI / 2, 0, 0, 6, 14);
-  void trim;
+function thigh(b: MeshBuilder, pants: ReturnType<typeof S.cloth>, raider: boolean, look: OutfitLook, pantsColor: number, skin: ReturnType<typeof S.skin>, side: number) {
+  if (raider) {
+    b.limb(0, 0, 0, 0, -0.42, 0, 0.088, 0.066, pants, 12);
+    drawThigh(b, { style: 'work' }, pantsColor, side);
+    return;
+  }
+  b.limb(0, 0, 0, 0, -0.42, 0, 0.088, 0.066, look.legs.style === 'bare' ? skin : pants, 12);
+  drawThigh(b, look.legs, pantsColor, side);
 }
 
 function shin(b: MeshBuilder, pants: ReturnType<typeof S.cloth>, boot: ReturnType<typeof S.leather>, raider: boolean) {
@@ -165,7 +186,7 @@ function shin(b: MeshBuilder, pants: ReturnType<typeof S.cloth>, boot: ReturnTyp
 
 // ------------------------------------------------------------------------------------- weapons
 
-type Held = 'none' | 'pistol' | 'rifle' | 'wrench' | 'jerrycan' | 'crowbar' | 'flare';
+export type Held = 'none' | 'pistol' | 'revolver' | 'smg' | 'sawn' | 'pump' | 'rifle' | 'knife' | 'bat' | 'machete' | 'axe' | 'wrench' | 'jerrycan' | 'crowbar' | 'flare';
 const weaponCache = new Map<Held, THREE.BufferGeometry>();
 
 function weaponGeometry(kind: Exclude<Held, 'none'>): THREE.BufferGeometry {
@@ -182,6 +203,65 @@ function weaponGeometry(kind: Exclude<Held, 'none'>): THREE.BufferGeometry {
       b.box(0, -0.0, 0.085, 0.012, 0.03, 0.04, gun);
       b.cyl(0, 0.035, 0.235, 0.014, 0.02, 0.014, S.metal(0x0a0a0a), Math.PI / 2, 0, 0, 8);
       break;
+    case 'revolver': {
+      const wood = S.wood(0x5a3e28, 0.5);
+      b.rbox(0, 0.035, 0.1, 0.036, 0.05, 0.17, 0.008, gun);
+      b.cyl(0, 0.04, 0.225, 0.022, 0.15, 0.022, gun, Math.PI / 2, 0, 0, 8);
+      b.cyl(0, 0.03, 0.085, 0.052, 0.07, 0.052, S.metal(0x2c2e30, 0.35), Math.PI / 2, 0, 0, 10);
+      b.rbox(0, -0.04, 0.03, 0.032, 0.105, 0.048, 0.01, wood, -0.3, 0, 0);
+      b.box(0, 0.068, 0.0, 0.012, 0.025, 0.03, gun);
+      b.box(0, 0.07, 0.2, 0.01, 0.014, 0.18, gun);
+      break;
+    }
+    case 'smg':
+      b.rbox(0, 0.02, 0.15, 0.045, 0.075, 0.34, 0.01, gun);
+      b.cyl(0, 0.03, 0.38, 0.02, 0.14, 0.02, S.metal(0x0a0a0a), Math.PI / 2, 0, 0, 8);
+      b.rbox(0, -0.1, 0.14, 0.028, 0.17, 0.05, 0.006, gun);
+      b.rbox(0, -0.05, 0.04, 0.032, 0.105, 0.046, 0.008, grip, -0.2, 0, 0);
+      b.box(0, 0.065, 0.16, 0.014, 0.012, 0.3, S.metal(0x3a3c40, 0.4));
+      b.box(0, 0.02, -0.1, 0.018, 0.018, 0.2, gun);
+      b.rbox(0, -0.005, -0.22, 0.03, 0.09, 0.03, 0.008, gun);
+      break;
+    case 'sawn': {
+      const wood = S.wood(0x5a3e28, 0.5);
+      for (const sx of [1, -1]) b.cyl(sx * 0.016, 0.035, 0.2, 0.027, 0.34, 0.027, gun, Math.PI / 2, 0, 0, 8);
+      b.rbox(0, 0.028, 0.02, 0.06, 0.075, 0.1, 0.012, gun);
+      b.rbox(0, -0.03, -0.01, 0.04, 0.1, 0.07, 0.015, wood, 0.35, 0, 0);
+      b.rbox(0, 0.0, 0.14, 0.052, 0.035, 0.12, 0.012, wood);
+      break;
+    }
+    case 'pump': {
+      const wood = S.wood(0x5a3e28, 0.5);
+      b.cyl(0, 0.042, 0.45, 0.026, 0.72, 0.026, gun, Math.PI / 2, 0, 0, 8);
+      b.cyl(0, 0.008, 0.38, 0.022, 0.5, 0.022, gun, Math.PI / 2, 0, 0, 8);
+      b.rbox(0, 0.0, 0.4, 0.042, 0.05, 0.2, 0.012, wood);
+      b.rbox(0, 0.03, 0.05, 0.05, 0.08, 0.22, 0.01, gun);
+      b.rbox(0, -0.01, -0.2, 0.045, 0.1, 0.3, 0.015, wood, 0.1, 0, 0);
+      b.rbox(0, -0.04, 0.0, 0.03, 0.08, 0.05, 0.008, grip, -0.15, 0, 0);
+      break;
+    }
+    case 'knife':
+      b.rbox(0, 0, 0.18, 0.012, 0.038, 0.22, 0.004, S.chrome(0xc4c8cc));
+      b.box(0, 0, 0.065, 0.05, 0.016, 0.014, S.metal(0x2a2a2a, 0.4));
+      b.cyl(0, 0, 0.0, 0.024, 0.12, 0.024, S.wood(0x3a2a1e, 0.5), Math.PI / 2, 0, 0, 8);
+      break;
+    case 'bat':
+      b.frustum(0, 0, 0.4, 0.04, 0.016, 0.9, S.wood(0xb98a52, 0.5), Math.PI / 2, 0, 0, 10);
+      b.cyl(0, 0, 0.1, 0.034, 0.2, 0.034, S.cloth(0x1c1c1c, 0.6), Math.PI / 2, 0, 0, 8);
+      break;
+    case 'machete':
+      b.rbox(0, 0, 0.35, 0.01, 0.07, 0.5, 0.004, S.steel(0x9aa0a4, 0.4));
+      b.box(0, 0.032, 0.62, 0.012, 0.02, 0.1, S.steel(0x9aa0a4, 0.4));
+      b.box(0, 0, 0.09, 0.06, 0.02, 0.014, S.metal(0x2a2a2a, 0.4));
+      b.cyl(0, 0, 0.0, 0.028, 0.14, 0.028, grip, Math.PI / 2, 0, 0, 8);
+      break;
+    case 'axe': {
+      b.cyl(0, 0, 0.36, 0.027, 0.84, 0.027, S.wood(0x8a6a3e, 0.5), Math.PI / 2, 0, 0, 8);
+      b.rbox(0, 0.04, 0.72, 0.042, 0.14, 0.12, 0.01, S.paint(0xb02a1c, 0.5));
+      b.rbox(0, 0.045, 0.8, 0.012, 0.22, 0.075, 0.003, S.chrome(0xc4c8cc));
+      b.box(0, 0.04, 0.63, 0.026, 0.06, 0.07, S.steel(0x8a8e92, 0.4));
+      break;
+    }
     case 'rifle':
       b.rbox(0, 0.02, 0.25, 0.05, 0.08, 0.5, 0.01, gun);
       b.cyl(0, 0.035, 0.62, 0.024, 0.32, 0.024, gun, Math.PI / 2, 0, 0, 8);
@@ -230,31 +310,37 @@ export class Humanoid {
   flash = new THREE.Mesh(flashGeo, flashMat);
   private weapon: THREE.Mesh | null = null;
   private held: Held = 'none';
+  /** 1 at the start of a melee swing, counting down to 0: raises the weapon arm overhead and brings it down. */
+  swing = 0;
   private walkT = 0;
   meshes: THREE.Mesh[] = [];
   /** Everything but the arms and what they hold: hidden from the owner's own first-person view. */
   private bodyMeshes: THREE.Mesh[] = [];
 
+  /** One mesh per body part, so `dress` can swap a survivor's clothes without rebuilding the rig. */
+  private partMesh = {} as Record<Part, THREE.Mesh>;
+
   constructor(pal: Palette) {
     const g = bodyParts(pal);
-    const mk = (geo: THREE.BufferGeometry, parent: THREE.Object3D) => {
-      const m = new THREE.Mesh(geo, mat);
+    const mk = (part: Part, parent: THREE.Object3D) => {
+      const m = new THREE.Mesh(g[part], mat);
       m.castShadow = true;
       parent.add(m);
       this.meshes.push(m);
+      this.partMesh[part] = m;
       return m;
     };
     this.root.add(this.hips);
     this.hips.position.y = 0.92;
-    this.bodyMeshes.push(mk(g.pelvis, this.hips));
+    this.bodyMeshes.push(mk('pelvis', this.hips));
     this.hips.add(this.torso);
-    this.bodyMeshes.push(mk(g.torso, this.torso));
+    this.bodyMeshes.push(mk('torso', this.torso));
     this.torso.add(this.head);
     this.head.position.y = 0.6;
-    this.bodyMeshes.push(mk(g.head, this.head));
+    this.bodyMeshes.push(mk('head', this.head));
     for (const [arm, elbow, upper, fore, sx] of [
-      [this.armL, this.elbowL, g.upperL, g.foreL, 1],
-      [this.armR, this.elbowR, g.upperR, g.foreR, -1],
+      [this.armL, this.elbowL, 'upperL', 'foreL', 1],
+      [this.armR, this.elbowR, 'upperR', 'foreR', -1],
     ] as const) {
       this.torso.add(arm);
       arm.position.set(sx * 0.22, 0.45, 0);
@@ -266,8 +352,8 @@ export class Humanoid {
     this.elbowR.add(this.hand);
     this.hand.position.set(0, -0.27, 0.02);
     for (const [leg, knee, thigh, shin, sx] of [
-      [this.legL, this.kneeL, g.thighL, g.shinL, 1],
-      [this.legR, this.kneeR, g.thighR, g.shinR, -1],
+      [this.legL, this.kneeL, 'thighL', 'shinL', 1],
+      [this.legR, this.kneeR, 'thighR', 'shinR', -1],
     ] as const) {
       this.hips.add(leg);
       leg.position.set(sx * 0.1, -0.02, 0);
@@ -279,6 +365,12 @@ export class Humanoid {
     this.flash.visible = false;
     this.hand.add(this.flash);
     this.flash.position.set(0, 0.03, 0.32);
+  }
+
+  /** Change clothes: swap every body part for the ones this palette draws. Geometry is cached per palette, so this is cheap. */
+  dress(pal: Palette) {
+    const g = bodyParts(pal);
+    for (const part of Object.keys(this.partMesh) as Part[]) this.partMesh[part].geometry = g[part];
   }
 
   /**
@@ -343,6 +435,7 @@ export class Humanoid {
     this.armR.rotation.set(0, 0, 0);
     this.elbowL.rotation.set(0, 0, 0);
     this.elbowR.rotation.set(0, 0, 0);
+    this.hand.rotation.set(0, 0, 0);
     if (pose === 'stand' || pose === 'gun') {
       h.position.y = 0.92 - crouch * 0.32 + bob * 0.03;
       const bend = crouch * 1.1;
@@ -358,6 +451,8 @@ export class Humanoid {
       this.armR.rotation.z = -0.08;
       this.elbowL.rotation.x = -0.25 - run * 0.5;
       this.elbowR.rotation.x = aim > 0.1 ? -0.1 : -0.25 - run * 0.5;
+      // Raised, the forearm points down the sights; the hand turns back so the weapon points the same way instead of at the sky.
+      if (aim > 0.1) this.hand.rotation.x = 1.4 * aim + 0.1;
       if (aim > 0.1) {
         // Support hand comes across to the grip.
         this.armL.rotation.x = -1.2 * aim + lookPitch * 0.45;
@@ -365,6 +460,13 @@ export class Humanoid {
         this.elbowL.rotation.x = -0.55 * aim;
       }
       this.head.rotation.x = lookPitch * 0.4 - this.torso.rotation.x * 0.6;
+      if (this.swing > 0 && !this.carried) {
+        // Wind up overhead, then chop down across the body.
+        const e = 1 - this.swing;
+        this.armR.rotation.x = lerp(-2.7, -0.5, e * e);
+        this.elbowR.rotation.x = lerp(-0.2, -0.9, e);
+        this.torso.rotation.y = lerp(0.45, -0.4, e);
+      }
       if (this.carried) {
         // Both arms cradle the load, elbows in, leaning back a touch against the weight.
         this.armL.rotation.set(-1.05, 0, -0.28);

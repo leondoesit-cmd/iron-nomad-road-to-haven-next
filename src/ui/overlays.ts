@@ -291,8 +291,8 @@ export class Overlays {
     const wasPausedOverlay = g.paused;
     const host = wasPausedOverlay ? this.pauseEl! : this.root;
     const b = g.input.settings.bindings;
-    const pad = (id: keyof typeof PROMPT_ACTION | 'wheel' | 'sheet' | 'view' | 'map') => {
-      const action = id === 'wheel' || id === 'sheet' || id === 'view' || id === 'map' ? id : PROMPT_ACTION[id];
+    const pad = (id: keyof typeof PROMPT_ACTION | 'wheel' | 'sheet' | 'view' | 'map' | 'inventory') => {
+      const action = id === 'wheel' || id === 'sheet' || id === 'view' || id === 'map' || id === 'inventory' ? id : PROMPT_ACTION[id];
       if (action === 'view' && b.pad.view === -2) return `${padLabel(b.pad.vehicle)} tap`;
       if (action === 'vehicle' && viewSharesVehicle(b.pad)) return `${padLabel(b.pad.vehicle)} hold`;
       return padLabel(padPhysical(b.pad, action));
@@ -304,7 +304,7 @@ export class Overlays {
       ['Right stick', 'Aim / look', 'Free look', 'Aim gun', 'Aim reticle'],
       [pair('RT', 'LT'), 'Fire / aim', 'Throttle / brake', 'Fire / zoom', 'Place / remove'],
       [pad('RB'), 'Tap melee · hold takedown', 'Fire front gun', 'Fire', 'Next element'],
-      [pad('LB'), 'Swap tool: gun, wrench (repair), crowbar (strip parts), jerrycan (fuel)', '—', 'Swap weapon', 'Previous element'],
+      [pad('LB'), 'Swap what is in hand along your belt: weapons, wrench (repair), crowbar (strip parts), jerrycan (fuel)', '—', 'Swap weapon', 'Previous element'],
       [pad('A'), 'Interact · hold to loot, repair, strip, siphon, refuel, revive', 'Handbrake', 'Reload', 'Rotate'],
       [pad('B'), 'Crouch', 'Tap lights · hold engine off', 'Cancel', 'Cancel'],
       [pad('X'), 'Reload · hold swap utility · wrench: workbench', 'Tap horn · hold siren', 'Reload', 'Watch post'],
@@ -312,13 +312,14 @@ export class Overlays {
       [pad('view'), 'Switch first / third person', 'Same: look from the cab', 'Same: look along the gun', '—'],
       ['D-pad', 'Tap ping · hold command wheel', 'Same', 'Same', 'Same'],
       [pad('map'), 'Tap map: closer look, whole leg, close', 'Same', 'Same', 'Same'],
+      [pad('inventory'), 'Inventory: change what you wear and hold (the game pauses)', 'Same', 'Same', 'Same'],
       [pair('L3', 'R3'), 'Sprint / reset cam', 'Camera distance / look back', 'Zoom', 'Snap grid'],
       [`Start / ${pad('sheet')}`, 'Pause · hold convoy sheet', 'Same', 'Same', 'Same'],
     ];
     const kbLine = (set: 0 | 1) => {
       const m: KeyMap = b.kb[set];
       const k = (id: keyof KeyMap) => keyLabel(m[id]);
-      return `${set === 0 ? 'P1' : 'P2'}: ${k('moveUp')} ${k('moveLeft')} ${k('moveDown')} ${k('moveRight')} move, ${k('turnLeft')} / ${k('turnRight')} aim, ${k('fire')} fire, ${k('interact')} interact, ${k('vehicle')} vehicle, ${k('view')} first / third person, ${k('crouch')} crouch / lights, ${k('sprint')} sprint / handbrake, ${k('wheel')} wheel, ${k('map')} map, ${k('swap')} swap tool, ${k('prevBuild')} ${k('nextBuild')} cycle build, hold ${k('sheet')} for the convoy sheet`;
+      return `${set === 0 ? 'P1' : 'P2'}: ${k('moveUp')} ${k('moveLeft')} ${k('moveDown')} ${k('moveRight')} move, ${k('turnLeft')} / ${k('turnRight')} aim, ${k('fire')} fire, ${k('interact')} interact, ${k('vehicle')} vehicle, ${k('view')} first / third person, ${k('crouch')} crouch / lights, ${k('sprint')} sprint / handbrake, ${k('wheel')} wheel, ${k('map')} map, ${k('inventory')} inventory, ${k('swap')} swap tool, ${k('prevBuild')} ${k('nextBuild')} cycle build, hold ${k('sheet')} for the convoy sheet`;
     };
     const mouse = `fire ${mouseWord(b.mouse.fire)}, aim ${mouseWord(b.mouse.aim)}, view ${mouseWord(b.mouse.view)}`;
     host.innerHTML = `<div class="menu" style="min-width:900px"><h2>Controls</h2>

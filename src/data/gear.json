@@ -1,0 +1,271 @@
+{
+  "labels": {
+    "head": "Head",
+    "face": "Face",
+    "body": "Body",
+    "hands": "Hands",
+    "legs": "Legs",
+    "feet": "Feet",
+    "back": "Back"
+  },
+  "bagBase": 4,
+  "beltSize": 4,
+  "caps": { "armor": 0.6, "spore": 0.9, "fall": 0.8, "speedLo": -0.25, "speedHi": 0.15, "noiseLo": -0.6, "noiseHi": 0.6 },
+  "items": [
+    {
+      "id": "h_scrap", "name": "Scrap Helmet", "kind": "wear", "slot": "head", "rarity": 1, "weight": 3, "scrap": 4, "starter": true,
+      "blurb": "Beaten tin with a leather band. Better than a skull.",
+      "stats": { "armor": 0.04 },
+      "look": { "style": "helmet", "tint": true }
+    },
+    {
+      "id": "h_cap", "name": "Canvas Cap", "kind": "wear", "slot": "head", "rarity": 1, "weight": 9, "scrap": 2,
+      "blurb": "Sun-bleached and quiet. Nothing to rattle, nothing to protect you.",
+      "stats": { "noise": -0.05 },
+      "look": { "style": "cap", "c": "#6b6a4a" }
+    },
+    {
+      "id": "h_hardhat", "name": "Hard Hat", "kind": "wear", "slot": "head", "rarity": 1, "weight": 7, "scrap": 4, "tags": ["city"],
+      "blurb": "Site-yellow plastic with a dented crown. Stops a falling brick, mostly.",
+      "stats": { "armor": 0.05 },
+      "look": { "style": "hardhat", "c": "#d9a521" }
+    },
+    {
+      "id": "h_hood", "name": "Dust Hood", "kind": "wear", "slot": "head", "rarity": 2, "weight": 5, "scrap": 5, "tags": ["waste"],
+      "blurb": "A heavy wool hood the colour of the road. Hard to hear, harder to spot.",
+      "stats": { "noise": -0.15, "spore": 0.1 },
+      "look": { "style": "hood", "c": "#6a5a44" }
+    },
+    {
+      "id": "h_moto", "name": "Motorcycle Helmet", "kind": "wear", "slot": "head", "rarity": 2, "weight": 4, "scrap": 9, "tags": ["city", "waste"],
+      "blurb": "Full-face, scuffed visor, still holds. Cracked on the left, worn proud.",
+      "stats": { "armor": 0.09, "fall": 0.1, "speed": -0.01 },
+      "look": { "style": "moto", "c": "#2b2f33" }
+    },
+    {
+      "id": "h_riot", "name": "Riot Helmet", "kind": "wear", "slot": "head", "rarity": 3, "weight": 2, "scrap": 16, "tags": ["raider", "vault"],
+      "blurb": "Polycarbonate faceplate and a neck guard. Somebody's last stand.",
+      "stats": { "armor": 0.15, "speed": -0.02, "noise": 0.05 },
+      "look": { "style": "riot", "c": "#1f2428" }
+    },
+
+    {
+      "id": "f_bandana", "name": "Dust Bandana", "kind": "wear", "slot": "face", "rarity": 1, "weight": 3, "scrap": 1, "starter": true,
+      "blurb": "Knotted over the mouth. Keeps the worst of the spores out.",
+      "stats": { "spore": 0.25 },
+      "look": { "style": "bandana", "tint": true }
+    },
+    {
+      "id": "f_goggles", "name": "Dust Goggles", "kind": "wear", "slot": "face", "rarity": 1, "weight": 8, "scrap": 3,
+      "blurb": "Amber lenses and a rubber seam. Squinting less helps you shoot straighter.",
+      "stats": { "steady": -0.08, "spore": 0.1 },
+      "look": { "style": "goggles", "c": "#2a2a2a", "c2": "#d8b04a" }
+    },
+    {
+      "id": "f_resp", "name": "Half-Mask Respirator", "kind": "wear", "slot": "face", "rarity": 2, "weight": 5, "scrap": 8, "tags": ["city"],
+      "blurb": "Twin canisters and a fresh seal. A bloater's cloud is a bad day, not a death.",
+      "stats": { "spore": 0.6 },
+      "look": { "style": "respirator", "c": "#5a6a5a" }
+    },
+    {
+      "id": "f_gas", "name": "Gas Mask", "kind": "wear", "slot": "face", "rarity": 3, "weight": 2, "scrap": 14, "tags": ["vault", "raider"],
+      "blurb": "Military issue with a hose and a wide round lens. You cannot aim through it well.",
+      "stats": { "spore": 0.85, "armor": 0.02, "steady": 0.05 },
+      "look": { "style": "gasmask", "c": "#3a4034" }
+    },
+
+    {
+      "id": "b_jacket", "name": "Patched Jacket", "kind": "wear", "slot": "body", "rarity": 1, "weight": 3, "scrap": 3, "starter": true,
+      "blurb": "Canvas, rivets and a chest rig. Your colours on the shoulders.",
+      "stats": { "armor": 0.03 },
+      "look": { "style": "jacket", "tint": true }
+    },
+    {
+      "id": "b_vest", "name": "Padded Vest", "kind": "wear", "slot": "body", "rarity": 1, "weight": 8, "scrap": 5, "tags": ["waste", "city"],
+      "blurb": "Quilted batting under canvas, and enough pockets to matter.",
+      "stats": { "armor": 0.06, "bag": 1 },
+      "look": { "style": "vest", "c": "#6a6048", "c2": "#4a4636" }
+    },
+    {
+      "id": "b_duster", "name": "Leather Duster", "kind": "wear", "slot": "body", "rarity": 2, "weight": 5, "scrap": 9, "tags": ["waste"],
+      "blurb": "Oiled hide to the knee. Sheds dust and spores; flaps like a flag when you run.",
+      "stats": { "armor": 0.08, "spore": 0.1, "noise": 0.04, "speed": -0.01 },
+      "look": { "style": "duster", "c": "#4a3626", "c2": "#2b1f16" }
+    },
+    {
+      "id": "b_plate", "name": "Plate Carrier", "kind": "wear", "slot": "body", "rarity": 2, "weight": 4, "scrap": 14, "tags": ["raider", "city"],
+      "blurb": "Ceramic front and back plates in an olive carrier. Slows you down; worth it.",
+      "stats": { "armor": 0.16, "speed": -0.03, "bag": 1 },
+      "look": { "style": "plate", "c": "#4b5240", "c2": "#2a2d26" }
+    },
+    {
+      "id": "b_riot", "name": "Riot Armour", "kind": "wear", "slot": "body", "rarity": 3, "weight": 2, "scrap": 26, "tags": ["vault", "raider"],
+      "blurb": "Shell, shoulders and forearm guards. Heavy as a promise, and about as loud.",
+      "stats": { "armor": 0.27, "speed": -0.07, "noise": 0.15 },
+      "look": { "style": "riot", "c": "#262b30", "c2": "#14171a" }
+    },
+
+    {
+      "id": "g_work", "name": "Work Gloves", "kind": "wear", "slot": "hands", "rarity": 1, "weight": 3, "scrap": 1, "starter": true,
+      "blurb": "Stiff leather palms. A fist wearing these hits a little harder.",
+      "stats": { "melee": 0.05 },
+      "look": { "style": "work", "c": "#2b2622" }
+    },
+    {
+      "id": "g_finger", "name": "Fingerless Gloves", "kind": "wear", "slot": "hands", "rarity": 1, "weight": 8, "scrap": 2,
+      "blurb": "Bare fingertips for fast loading, wool everywhere else.",
+      "stats": { "reload": -0.12 },
+      "look": { "style": "fingerless", "c": "#3a2e24" }
+    },
+    {
+      "id": "g_padded", "name": "Padded Gauntlets", "kind": "wear", "slot": "hands", "rarity": 2, "weight": 5, "scrap": 6, "tags": ["raider"],
+      "blurb": "Knuckle plates over thick padding. Swing heavy things harder.",
+      "stats": { "melee": 0.18, "armor": 0.01 },
+      "look": { "style": "padded", "c": "#4a4a46" }
+    },
+    {
+      "id": "g_tac", "name": "Tactical Gloves", "kind": "wear", "slot": "hands", "rarity": 3, "weight": 2, "scrap": 10, "tags": ["vault"],
+      "blurb": "Thin, tacky and black. Your hands stop shaking and the mags go in fast.",
+      "stats": { "reload": -0.2, "steady": -0.1 },
+      "look": { "style": "tactical", "c": "#1c1d1f" }
+    },
+
+    {
+      "id": "l_work", "name": "Work Trousers", "kind": "wear", "slot": "legs", "rarity": 1, "weight": 3, "scrap": 2, "starter": true,
+      "blurb": "Grey drill with a holster strap you never use.",
+      "look": { "style": "work", "c": "#3d3f3a" }
+    },
+    {
+      "id": "l_cargo", "name": "Cargo Trousers", "kind": "wear", "slot": "legs", "rarity": 1, "weight": 8, "scrap": 3, "tags": ["city"],
+      "blurb": "Pockets on pockets. Room for three more things.",
+      "stats": { "bag": 3 },
+      "look": { "style": "cargo", "c": "#6a6446" }
+    },
+    {
+      "id": "l_pad", "name": "Knee-Padded Trousers", "kind": "wear", "slot": "legs", "rarity": 2, "weight": 5, "scrap": 6, "tags": ["city", "waste"],
+      "blurb": "Foam knees and a reinforced seat. Roofs and ledges hurt a lot less.",
+      "stats": { "armor": 0.04, "fall": 0.25 },
+      "look": { "style": "padded", "c": "#33372f" }
+    },
+    {
+      "id": "l_greave", "name": "Plated Greaves", "kind": "wear", "slot": "legs", "rarity": 3, "weight": 2, "scrap": 14, "tags": ["raider", "vault"],
+      "blurb": "Steel shin guards and thigh plates over thick cloth. Clanks.",
+      "stats": { "armor": 0.09, "fall": 0.3, "speed": -0.03 },
+      "look": { "style": "greaves", "c": "#3d3f3a", "c2": "#7a7e82" }
+    },
+
+    {
+      "id": "s_boots", "name": "Worn Boots", "kind": "wear", "slot": "feet", "rarity": 1, "weight": 3, "scrap": 2, "starter": true,
+      "blurb": "Resoled twice. They know every road.",
+      "look": { "style": "boots", "c": "#2a211b" }
+    },
+    {
+      "id": "s_sneak", "name": "Rubber-Soled Sneakers", "kind": "wear", "slot": "feet", "rarity": 1, "weight": 7, "scrap": 3, "tags": ["city"],
+      "blurb": "Gum soles. The dead hear you a lot less when you walk.",
+      "stats": { "noise": -0.35 },
+      "look": { "style": "sneakers", "c": "#5d6b73", "c2": "#d9d4c4" }
+    },
+    {
+      "id": "s_steel", "name": "Steel-Toe Boots", "kind": "wear", "slot": "feet", "rarity": 2, "weight": 5, "scrap": 7, "tags": ["city", "waste"],
+      "blurb": "Work boots with a steel cap. Land hard, kick harder, step loudly.",
+      "stats": { "armor": 0.02, "fall": 0.3, "noise": 0.1 },
+      "look": { "style": "steel", "c": "#24201c", "c2": "#8a8e92" }
+    },
+    {
+      "id": "s_runner", "name": "Trail Runners", "kind": "wear", "slot": "feet", "rarity": 2, "weight": 5, "scrap": 6, "tags": ["waste"],
+      "blurb": "Light, grippy, and nothing like the boots you started in.",
+      "stats": { "speed": 0.06 },
+      "look": { "style": "runners", "c": "#8a4a24", "c2": "#d9c6a0" }
+    },
+
+    {
+      "id": "k_ruck", "name": "Rucksack", "kind": "wear", "slot": "back", "rarity": 1, "weight": 3, "scrap": 5, "starter": true,
+      "blurb": "Canvas pack with a bedroll lashed on top.",
+      "stats": { "bag": 6 },
+      "look": { "style": "ruck", "c": "#4a4636", "c2": "#5d5a40" }
+    },
+    {
+      "id": "k_satchel", "name": "Courier Satchel", "kind": "wear", "slot": "back", "rarity": 1, "weight": 7, "scrap": 3, "tags": ["city"],
+      "blurb": "Strapped across the hip. Less room, but nothing swings and nothing rattles.",
+      "stats": { "bag": 4, "noise": -0.05 },
+      "look": { "style": "satchel", "c": "#6a4a2a" }
+    },
+    {
+      "id": "k_duffel", "name": "Army Duffel", "kind": "wear", "slot": "back", "rarity": 2, "weight": 4, "scrap": 9, "tags": ["raider", "waste"],
+      "blurb": "A canvas sausage the length of your shoulders. Carries half a house and drags like it.",
+      "stats": { "bag": 10, "speed": -0.04 },
+      "look": { "style": "duffel", "c": "#4a5236", "c2": "#2e3322" }
+    },
+    {
+      "id": "k_frame", "name": "Frame Pack", "kind": "wear", "slot": "back", "rarity": 3, "weight": 2, "scrap": 15, "tags": ["vault", "waste"],
+      "blurb": "An alloy frame that spreads the load. Pots and a kettle swing off it.",
+      "stats": { "bag": 14, "speed": -0.02, "noise": 0.05 },
+      "look": { "style": "frame", "c": "#6a5a3a", "c2": "#8a8e92" }
+    },
+
+    {
+      "id": "w_pistol", "name": "9mm Pistol", "kind": "gun", "short": "9MM", "rarity": 1, "weight": 3, "scrap": 6, "starter": true,
+      "blurb": "Twelve rounds and a bad attitude. Keeps up with whatever you throw at it.",
+      "gun": { "dmg": 27, "cd": 0.2, "mag": 12, "reload": 1.3, "spread": 0.03, "adsSpread": 0.008, "range": 75, "noise": 60, "model": "pistol", "sound": "pistol" }
+    },
+    {
+      "id": "w_revolver", "name": ".38 Revolver", "kind": "gun", "short": ".38", "rarity": 2, "weight": 5, "scrap": 10, "tags": ["waste", "raider"],
+      "blurb": "Six slow, heavy rounds. One in the chest settles most arguments, and it punches through plate.",
+      "gun": { "dmg": 55, "cd": 0.52, "mag": 6, "reload": 2.2, "spread": 0.028, "adsSpread": 0.004, "range": 90, "noise": 72, "pierce": 0.3, "model": "revolver", "sound": "pistol" }
+    },
+    {
+      "id": "w_smg", "name": "Scrap SMG", "kind": "gun", "short": "SMG", "rarity": 2, "weight": 4, "scrap": 12, "tags": ["raider", "city"],
+      "blurb": "Welded together from three other guns. Thirty rounds of noise, close in.",
+      "gun": { "dmg": 14, "cd": 0.085, "mag": 30, "reload": 1.9, "spread": 0.055, "adsSpread": 0.026, "range": 55, "noise": 64, "model": "smg", "sound": "mg" }
+    },
+    {
+      "id": "w_sawn", "name": "Sawn-Off Shotgun", "kind": "gun", "short": "SAWN", "rarity": 2, "weight": 4, "scrap": 10, "tags": ["waste", "raider"],
+      "blurb": "Two barrels and no manners. Devastating at arm's length, useless past a hallway.",
+      "gun": { "dmg": 9, "cd": 0.7, "mag": 2, "reload": 2.2, "spread": 0.085, "adsSpread": 0.06, "pellets": 8, "range": 24, "noise": 84, "model": "sawn", "sound": "shotgun" }
+    },
+    {
+      "id": "w_pump", "name": "Pump Shotgun", "kind": "gun", "short": "PUMP", "rarity": 3, "weight": 2, "scrap": 18, "tags": ["vault", "raider"],
+      "blurb": "Six shells and a proper stock. The sound alone clears a street.",
+      "gun": { "dmg": 10, "cd": 0.85, "mag": 6, "reload": 3.0, "spread": 0.06, "adsSpread": 0.035, "pellets": 8, "range": 32, "noise": 88, "model": "pump", "sound": "shotgun" }
+    },
+    {
+      "id": "w_rifle", "name": "Hunting Rifle", "kind": "gun", "short": "RIFLE", "rarity": 3, "weight": 2, "scrap": 20, "tags": ["waste", "vault"],
+      "blurb": "Bolt action and a worn scope. Reaches far, goes through armour, and the whole county hears it.",
+      "gun": { "dmg": 80, "cd": 0.9, "mag": 5, "reload": 2.6, "spread": 0.012, "adsSpread": 0.002, "range": 110, "noise": 90, "pierce": 0.5, "model": "rifle", "sound": "sniper" }
+    },
+
+    {
+      "id": "m_knife", "name": "Hunting Knife", "kind": "melee", "short": "KNIFE", "rarity": 1, "weight": 8, "scrap": 3,
+      "blurb": "Short and quick. Barely makes a sound.",
+      "melee": { "dmg": 30, "cd": 0.32, "reach": 1.6, "noise": 4, "model": "knife" }
+    },
+    {
+      "id": "m_bat", "name": "Baseball Bat", "kind": "melee", "short": "BAT", "rarity": 1, "weight": 7, "scrap": 3, "tags": ["city"],
+      "blurb": "Ash, taped at the grip. One good swing folds a walker.",
+      "melee": { "dmg": 48, "cd": 0.6, "reach": 2.0, "noise": 14, "model": "bat" }
+    },
+    {
+      "id": "m_machete", "name": "Machete", "kind": "melee", "short": "MACHETE", "rarity": 2, "weight": 5, "scrap": 7, "tags": ["waste"],
+      "blurb": "A long, flat, patient blade.",
+      "melee": { "dmg": 58, "cd": 0.5, "reach": 2.0, "noise": 12, "model": "machete" }
+    },
+    {
+      "id": "m_axe", "name": "Fire Axe", "kind": "melee", "short": "AXE", "rarity": 3, "weight": 2, "scrap": 12, "tags": ["city", "vault"],
+      "blurb": "Red head, hickory handle. Slow, and nothing stands up to it.",
+      "melee": { "dmg": 85, "cd": 0.85, "reach": 2.1, "noise": 20, "model": "axe" }
+    },
+
+    {
+      "id": "t_wrench", "name": "Wrench", "kind": "tool", "short": "WRENCH", "tool": "wrench", "rarity": 1, "weight": 4, "scrap": 3, "starter": true,
+      "blurb": "Repairs and opens the field workbench next to your vehicle."
+    },
+    {
+      "id": "t_crowbar", "name": "Crowbar", "kind": "tool", "short": "PRY", "tool": "crowbar", "rarity": 1, "weight": 4, "scrap": 3, "starter": true,
+      "blurb": "Strips tyres, engines and bodywork off wrecks."
+    },
+    {
+      "id": "t_jerrycan", "name": "Jerrycan", "kind": "tool", "short": "CAN", "tool": "jerrycan", "rarity": 1, "weight": 4, "scrap": 3, "starter": true,
+      "blurb": "Siphon fuel and top up tanks. Slows you down a little when held."
+    }
+  ]
+}

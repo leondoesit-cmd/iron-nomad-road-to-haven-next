@@ -3,11 +3,12 @@ import { RAPIER, GROUPS, G, groups, type Collider, type RigidBody } from '../phy
 import { Btn, heldFor, isHeld, wasPressed, type PlayerIntent } from '../input/intents';
 import { promptLabel } from '../input/input';
 import { ChaseCamera, type CamMode } from '../render/camera';
-import { Humanoid } from '../render/humanoid';
+import { Humanoid, type Held, type Palette } from '../render/humanoid';
+import { identityOf, lookOf } from '../render/outfit';
 import { makeCarryModel } from '../render/props';
 import { PLAYER_COLORS } from '../render/palette';
 import { clamp, damp, dampAngle, lerp } from '../core/math';
-import { ENEMIES, partDef, t } from '../data';
+import { ENEMIES, gearDef, partDef, t } from '../data';
 import { roadX } from '../world/terrain';
 import { steerTo, newSteerState } from './aiDrive';
 import { applyRepair, planRepair } from '../sim/repair';
@@ -18,6 +19,8 @@ import type { Ctx } from './ctx';
 import type { Pilot, Vehicle } from './vehicle';
 import type { Interactable } from './interact';
 import { carrySlow, type Carried } from '../sim/carry';
+import { UTILITY_SLOT, damageTaken, effectiveGun, effectiveMelee, heldItem, statsOf, stepSel, type EffectiveGun, type GearItem, type HurtKind, type Loadout, type Resolved } from '../sim/gear';
+import type { MeleeStats } from '../data';
 import { OIL_LOW, pourOil } from '../sim/oil';
 import { dropCarry, haulCandidate, haulKey, haulPrompt, returnCarry, stashBeforeEntering } from './hauling';
 
@@ -43,7 +46,8 @@ const EYE_SWIM = 1.0;
 const SELF_REVIVE_SECONDS = 3.4;
 
 export type PState = 'foot' | 'entering' | 'driving' | 'gunner' | 'downed' | 'dead';
-export type Equip = 'pistol' | 'wrench' | 'crowbar' | 'jerrycan' | 'utility';
+/** What the hands are doing: a firearm, a melee weapon, one of the three tools, or the throwable. Set from the belt. */
+export type Equip = 'gun' | 'melee' | 'wrench' | 'crowbar' | 'jerrycan' | 'utility';
 export type Utility = 'flare' | 'charge' | 'molotov' | 'horn';
 export const UTILITIES: Utility[] = ['flare', 'molotov', 'charge', 'horn'];
 
@@ -74,6 +78,9 @@ const BODY_H = 1.7;
 const BODY_R = 0.3;
 const RAY_STATIC = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
 const _v = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
+const _v4 = new THREE.Vector3();
 const _camE = new THREE.Euler();
 
 export class Player implements Pilot {
@@ -95,9 +102,21 @@ export class Player implements Pilot {
   ownVehicle: Vehicle | null = null;
   human: Humanoid;
   cam = new ChaseCamera();
-  equip: Equip = 'pistol';
+  equip: Equip = 'gun';
   utility: Utility;
-  mag = 12;
+  /** What the gear adds up to: armour, speed, noise, reload and so on. Recomputed whenever the loadout changes. */
+  stats: Resolved = statsOf({ worn: {}, belt: [], sel: 0, bag: [] });
+  /** Seconds left in a melee swing animation, 1 to 0. */
+  swingT = 0;
+  /**
+   * The inventory camera: a slow orbit round the survivor, so what they put on can be seen. `a` is the angle round them
+   * and `side` shifts them off-centre, clear of the panel. The vectors are the eased camera, so it swings in smoothly.
+   */
+  showcase: { a: number; side: number; pos?: THREE.Vector3; look?: THREE.Vector3 } | null = null;
+  /** Which item was in hand at the last `syncEquip`, so swapping one gun for another also cancels a reload. */
+  private heldUid = '';
+  /** Rounds when no gun is on the belt at all. Otherwise the rounds live on the gun, so each keeps its own magazine. */
+  private looseMag = 12;
   reloadT = 0;
   fireCd = 0;
   meleeCd = 0;
@@ -179,8 +198,7 @@ export class Player implements Pilot {
   ) {
     this.utility = ctx.campaign.players[index].utility;
     this.viewFirst = !!ctx.input.settings.firstPerson?.[index];
-    const col = PLAYER_COLORS[index];
-    this.human = new Humanoid({ jacket: col, trim: 0x4a4636, helmet: index === 0 ? 0x3b2a1a : 0x1c2a3a, scarf: index === 0 ? 0x6a3a1c : 0x223448 });
+    this.human = new Humanoid(this.outfit());
     ctx.root.add(this.human.root);
     this.body = ctx.P.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, 1, 0));
     this.collider = ctx.P.world.createCollider(
@@ -198,6 +216,118 @@ export class Player implements Pilot {
       return r ? r.toi : Infinity;
     };
     this.cam.groundAt = (x, z) => ctx.groundAt(x, z);
+    this.refreshGear();
+  }
+
+  // ------------------------------------------------------------------ gear
+
+  /** What this person wears, holds and carries. It lives in the campaign so it is saved and survives scene changes. */
+  get gear(): Loadout {
+    return this.ctx.campaign.players[this.index].gear;
+  }
+
+  /** Rounds in the gun in hand. */
+  get mag(): number {
+    const it = this.gunItem();
+    if (!it) return this.looseMag;
+    if (it.mag === undefined) it.mag = gearDef(it.id).gun!.mag;
+    return it.mag;
+  }
+  set mag(v: number) {
+    const it = this.gunItem();
+    if (it) it.mag = v;
+    else this.looseMag = v;
+  }
+
+  /** The palette for what is being worn right now. Anyone not in their own colours wears an armband in them. */
+  private outfit(): Palette {
+    const body = this.gear.worn.body;
+    const own = !!body && !!gearDef(body.id).look?.tint;
+    return { ...identityOf(this.index), look: lookOf(this.gear.worn), band: own ? undefined : PLAYER_COLORS[this.index] };
+  }
+
+  /** Call after the loadout changes: restat, change clothes, and re-read what is in hand. */
+  refreshGear() {
+    this.stats = statsOf(this.gear);
+    this.human.dress(this.outfit());
+    this.syncEquip();
+  }
+
+  /** What the hands do follows the belt slot in hand. */
+  syncEquip() {
+    const g = this.gear;
+    const it = heldItem(g);
+    if (g.sel >= UTILITY_SLOT || !it) this.equip = 'utility';
+    else {
+      const d = gearDef(it.id);
+      this.equip = d.kind === 'gun' ? 'gun' : d.kind === 'melee' ? 'melee' : d.tool!;
+    }
+    const uid = it?.uid ?? 'utility';
+    if (uid !== this.heldUid) {
+      this.heldUid = uid;
+      this.reloadT = 0;
+      this.action = null;
+    }
+  }
+
+  /** Put a firearm in hand: the one already held if it is one, else the first on the belt. */
+  equipGun() {
+    const g = this.gear;
+    const isGun = (b: GearItem | null | undefined) => !!b && gearDef(b.id).kind === 'gun';
+    if (!(g.sel < UTILITY_SLOT && isGun(g.belt[g.sel]))) {
+      const i = g.belt.findIndex(isGun);
+      if (i >= 0) g.sel = i;
+    }
+    this.syncEquip();
+  }
+
+  /** The gun that `equip === 'gun'` fires: the one in hand, else the first on the belt. */
+  private gunItem(): GearItem | null {
+    const g = this.gear;
+    const cur = g.sel < UTILITY_SLOT ? g.belt[g.sel] : null;
+    if (cur && gearDef(cur.id).kind === 'gun') return cur;
+    return g.belt.find((b) => !!b && gearDef(b.id).kind === 'gun') ?? null;
+  }
+
+  /** Its numbers with this person's gloves and goggles applied. With no gun at all, the starter pistol. */
+  gun(): EffectiveGun {
+    const it = this.gunItem();
+    return effectiveGun(gearDef(it?.id ?? 'w_pistol').gun!, this.stats);
+  }
+
+  /** The melee weapon in hand, or null for bare hands. */
+  private meleeWeapon(): MeleeStats | null {
+    if (this.equip !== 'melee') return null;
+    const it = heldItem(this.gear);
+    return it ? (gearDef(it.id).melee ?? null) : null;
+  }
+
+  /** Damage of a swing with what is in hand, gloves included. */
+  meleeDamage(): number {
+    return effectiveMelee(this.meleeWeapon(), this.stats).dmg;
+  }
+
+  /** The model shown in the hand. */
+  private heldModel(): Held {
+    switch (this.equip) {
+      case 'gun': {
+        const it = this.gunItem();
+        return gearDef(it?.id ?? 'w_pistol').gun!.model;
+      }
+      case 'melee':
+        return this.meleeWeapon()?.model ?? 'none';
+      case 'utility':
+        return this.utility === 'charge' || this.utility === 'horn' ? 'none' : 'flare';
+      default:
+        return this.equip;
+    }
+  }
+
+  /** What is in hand, by name, for the HUD. */
+  heldName(): string {
+    if (this.equip === 'utility') return utilityName(this.utility);
+    const it = heldItem(this.gear) ?? this.gunItem();
+    return it ? gearDef(it.id).name : 'Bare hands';
   }
 
   get targetable() {
@@ -209,7 +339,7 @@ export class Player implements Pilot {
   /** Whether this seat's camera is in first person right now: wanted, and in a state that has eyes to look through. */
   get firstPerson(): boolean {
     // The title-screen demo (autopilot) always runs on the chase camera, whatever the seat last chose.
-    return this.viewFirst && !this.autopilot && !this.buildMode && (this.state === 'foot' || this.state === 'driving' || this.state === 'gunner');
+    return this.viewFirst && !this.showcase && !this.autopilot && !this.buildMode && (this.state === 'foot' || this.state === 'driving' || this.state === 'gunner');
   }
   get partner(): Player | undefined {
     return this.ctx.players[1 - this.index];
@@ -278,10 +408,11 @@ export class Player implements Pilot {
 
   // ------------------------------------------------------------------ damage
 
-  hurt(amount: number, fromX: number, fromZ: number, kind: 'bullet' | 'melee' | 'blast' | 'fall' | 'fire' | 'bite' | 'spore' | 'ram') {
+  hurt(amount: number, fromX: number, fromZ: number, kind: HurtKind) {
     if (this.state === 'dead' || this.invuln > 0) return;
     const ctx = this.ctx;
-    const dmg = amount * (kind === 'bite' || kind === 'melee' ? 1 : 1) * ctx.campaign.difficulty.damage;
+    // What you wear takes a share of the hit: armour for blows, masks for spores, boots and knees for falls.
+    const dmg = amount * ctx.campaign.difficulty.damage * damageTaken(this.stats, kind);
     this.sinceHit = 0;
     this.lastHurtDir = Math.atan2(fromX - this.pos.x, fromZ - this.pos.z);
     // Taking a hit interrupts hold actions such as repairs.
@@ -310,7 +441,7 @@ export class Player implements Pilot {
     this.downT = 0;
     this.pinned = 0;
     this.action = null;
-    this.equip = 'pistol';
+    this.equipGun();
     this.ctx.campaign.stats.downs[this.index]++;
     this.ctx.radio(t('radio.downed', { name: this.name }));
     if (this.partner) this.note('You are down! Wait for your partner to revive you.', 'bad');
@@ -391,7 +522,7 @@ export class Player implements Pilot {
       v.passenger = { index: this.index };
       this.state = 'gunner';
     }
-    this.equip = 'pistol';
+    this.equipGun();
     this.cam.snap();
     this.aimYaw = v.yaw;
     this.aimPitch = 0.05;
@@ -461,6 +592,7 @@ export class Player implements Pilot {
     if (this.fireCd > 0) this.fireCd -= dt;
     if (this.meleeCd > 0) this.meleeCd -= dt;
     if (this.muzzleT > 0) this.muzzleT -= dt;
+    if (this.swingT > 0) this.swingT = Math.max(0, this.swingT - dt / 0.28);
     if (this.reloadT > 0) {
       this.reloadT -= dt;
       if (this.reloadT <= 0) this.finishReload();
@@ -474,6 +606,12 @@ export class Player implements Pilot {
     }
 
     if (wasPressed(it, Btn.View) && (this.state === 'foot' || this.state === 'driving' || this.state === 'gunner') && !this.buildMode) this.toggleView();
+    if (wasPressed(it, Btn.Down)) {
+      if (this.state === 'foot') {
+        this.action = null;
+        this.ctx.openInventory?.(this);
+      } else if (this.state === 'driving' || this.state === 'gunner') this.note('Get out of the vehicle to change your gear', 'info');
+    }
 
     switch (this.state) {
       case 'foot':
@@ -531,11 +669,13 @@ export class Player implements Pilot {
   footSignature(): number {
     if (this.state === 'downed') return 8;
     if (this.state !== 'foot') return 0;
-    if (this.swimming) return this.moveSpeed > 0.5 ? 16 : 5;
-    if (this.waterDepth > 0.3 && this.moveSpeed > 0.5) return 12;
-    if (this.moveSpeed > 4.5) return 20;
-    if (this.moveSpeed > 0.5) return this.crouch ? 3 : 8;
-    return this.crouch ? 2 : 3;
+    // Soft soles and a hood hush every step; plate and steel toes make more of it.
+    const q = 1 + this.stats.noise;
+    if (this.swimming) return (this.moveSpeed > 0.5 ? 16 : 5) * q;
+    if (this.waterDepth > 0.3 && this.moveSpeed > 0.5) return 12 * q;
+    if (this.moveSpeed > 4.5) return 20 * q;
+    if (this.moveSpeed > 0.5) return (this.crouch ? 3 : 8) * q;
+    return (this.crouch ? 2 : 3) * q;
   }
 
   currentSignature(): number {
@@ -584,8 +724,9 @@ export class Player implements Pilot {
     if (this.equip === 'jerrycan') speed *= 0.82;
     if (this.carry) speed *= carrySlow(this.carry);
     if (this.pinned >= ENEMIES.zombieRules.pinAt) speed = 0;
-    // Fatigue from watch duty slows the next day.
+    // Fatigue from watch duty slows the next day; heavy gear slows you and light shoes quicken you.
     speed *= 1 - clamp(this.fatigue, 0, 0.2);
+    speed *= 1 + this.stats.speed;
     this.moveSpeed = damp(this.moveSpeed, Math.hypot(wx, wz) * speed, 14, dt);
     const targetVx = wx * speed;
     const targetVz = wz * speed;
@@ -686,7 +827,7 @@ export class Player implements Pilot {
     }
     // With a mouse, right-click aims and left-click only fires; with Q/E the fire key doubles as aim.
     const kbAds = it.device === 'keyboard' && !it.mouse && isHeld(it, Btn.RT) && !this.carry;
-    this.ads = damp(this.ads, it.lt > 0.3 && this.equip === 'pistol' && !this.carry ? 1 : kbAds ? 1 : 0, 12, dt);
+    this.ads = damp(this.ads, it.lt > 0.3 && this.equip === 'gun' && !this.carry ? 1 : kbAds ? 1 : 0, 12, dt);
     if (it.device === 'keyboard' && !it.mouse) this.aimPitch = damp(this.aimPitch, 0.04, 3, dt);
   }
 
@@ -726,16 +867,13 @@ export class Player implements Pilot {
     return [this.pos.x + Math.sin(f) * 0.45 - Math.cos(f) * 0.18, this.pos.y + (this.crouch ? 0.95 : 1.4), this.pos.z + Math.cos(f) * 0.45 + Math.sin(f) * 0.18];
   }
 
+  /** LB: the next hand on the belt, then the utility, skipping empty slots and a throwable that has run out. */
   private cycleEquip() {
-    const order: Equip[] = ['pistol', 'wrench', 'crowbar', 'jerrycan', 'utility'];
-    let i = order.indexOf(this.equip);
+    const g = this.gear;
     this.action = null;
-    for (let n = 0; n < order.length; n++) {
-      i = (i + 1) % order.length;
-      if (order[i] === 'utility' && this.ctx.campaign.items[this.utility === 'horn' ? 'flare' : (this.utility as 'flare' | 'molotov' | 'charge')] <= 0 && this.utility !== 'horn') continue;
-      break;
-    }
-    this.equip = order[i];
+    const throwable = this.utility === 'horn' || this.ctx.campaign.items[this.utility] > 0;
+    g.sel = stepSel(g, 1, throwable);
+    this.syncEquip();
     this.reloadT = 0;
   }
 
@@ -748,7 +886,7 @@ export class Player implements Pilot {
 
   private finishReload() {
     const camp = this.ctx.campaign;
-    const need = 12 - this.mag;
+    const need = this.gun().mag - this.mag;
     const take = Math.min(need, camp.ammo);
     this.mag += take;
     camp.ammo -= take;
@@ -763,22 +901,27 @@ export class Player implements Pilot {
     }
     // Hands full: no gun, no tools, until it is stowed or put down.
     if (this.carry) return;
-    if (this.equip === 'pistol') {
-      if (wasPressed(it, Btn.X) && this.mag < 12 && this.reloadT <= 0 && ctx.campaign.ammo > 0) {
-        this.reloadT = 1.3;
+    if (this.equip === 'gun') {
+      const gun = this.gun();
+      if (wasPressed(it, Btn.X) && this.mag < gun.mag && this.reloadT <= 0 && ctx.campaign.ammo > 0) {
+        this.reloadT = gun.reload;
         ctx.audio.play('reload', this.pos.x, this.pos.z, 0.5);
       }
-      const wantFire = it.rt > 0.5 && (it.device !== 'pad' || this.ads > 0.0 || true);
+      const wantFire = it.rt > 0.5;
       if (wantFire && this.fireCd <= 0 && this.reloadT <= 0) {
-        if (this.mag > 0) this.firePistol();
+        if (this.mag > 0) this.fireGun(gun);
         else if (ctx.campaign.ammo > 0) {
-          this.reloadT = 1.3;
+          this.reloadT = gun.reload;
         } else if (this.fireCd <= 0) {
           this.fireCd = 0.4;
           this.note('Out of ammo: craft more at camp', 'warn');
         }
       }
       // RB: melee tap, takedown hold.
+      this.updateMelee(dt, it);
+    } else if (this.equip === 'melee') {
+      // A melee weapon swings on the fire trigger as well as on RB.
+      if (it.rt > 0.5 && this.meleeCd <= 0) this.melee();
       this.updateMelee(dt, it);
     } else if (this.equip === 'utility') {
       if (wasPressed(it, Btn.RT)) this.useUtility();
@@ -788,7 +931,7 @@ export class Player implements Pilot {
     }
   }
 
-  private firePistol() {
+  private fireGun(gun: EffectiveGun) {
     const ctx = this.ctx;
     const a = this.computeAim();
     const [mx, my, mz] = this.muzzlePos();
@@ -805,23 +948,29 @@ export class Player implements Pilot {
       dy /= l;
       dz /= l;
     }
-    this.fireCd = 0.2;
+    this.fireCd = gun.cd;
     this.mag--;
     this.muzzleT = 0.12;
-    ctx.combat.shoot(mx, my, mz, dx, dy, dz, {
-      side: 'convoy',
-      damage: 27,
-      spread: lerp(0.03, 0.008, this.ads) * (this.crouch ? 0.7 : 1) * (this.moveSpeed > 3 ? 1.6 : 1),
-      assist: it0(this.intent.aimAssist),
-      noise: 60,
-      range: 75,
-      headshots: true,
-      owner: this,
-    });
-    ctx.fx.flash(mx, my, mz, 0.9);
-    ctx.audio.play('pistol', mx, mz, 0.8);
-    this.cam.addShake(0.05);
-    ctx.input.rumble(this.index, 0.15, 0.3, 50);
+    const spread = lerp(gun.spread, gun.adsSpread, this.ads) * (this.crouch ? 0.7 : 1) * (this.moveSpeed > 3 ? 1.6 : 1);
+    // A shotgun throws a handful of pellets from one shot. The first carries the noise and the aim assist.
+    for (let n = 0; n < gun.pellets; n++) {
+      ctx.combat.shoot(mx, my, mz, dx, dy, dz, {
+        side: 'convoy',
+        damage: gun.dmg,
+        spread,
+        pierce: gun.pierce || undefined,
+        assist: n === 0 ? it0(this.intent.aimAssist) : 0,
+        noise: n === 0 ? gun.noise : 0,
+        range: gun.range,
+        headshots: true,
+        owner: this,
+      });
+    }
+    ctx.fx.flash(mx, my, mz, 0.9 + (gun.pellets > 1 ? 0.3 : 0));
+    ctx.audio.play(gun.sound, mx, mz, 0.8);
+    const kick = Math.min(0.14, (gun.dmg * gun.pellets) / 700);
+    this.cam.addShake(0.04 + kick);
+    ctx.input.rumble(this.index, 0.15 + kick * 2, 0.3, 50);
   }
 
   private updateMelee(dt: number, it: PlayerIntent) {
@@ -849,15 +998,18 @@ export class Player implements Pilot {
 
   private melee() {
     const ctx = this.ctx;
-    this.meleeCd = 0.55;
+    // The weapon in hand sets the damage, reach and pace; gloves add to it. Bare hands are a rifle butt and a bad temper.
+    const w = effectiveMelee(this.meleeWeapon(), this.stats);
+    this.meleeCd = w.cd;
+    this.swingT = 1;
     const f = this.aimYaw;
     const hx = this.pos.x + Math.sin(f) * 1.0;
     const hz = this.pos.z + Math.cos(f) * 1.0;
     ctx.audio.play('swing', this.pos.x, this.pos.z, 0.5);
-    ctx.zombies.meleeHit(this, hx, hz, f, 1.9, 35);
-    ctx.wildlife.meleeHit(this, hx, hz, f, 1.9, 35);
-    ctx.raiders.meleeHit(this, hx, hz, f, 1.9, 35);
-    ctx.sig.emit(this.pos.x, this.pos.z, 12, 'noise');
+    ctx.zombies.meleeHit(this, hx, hz, f, w.reach, w.dmg);
+    ctx.wildlife.meleeHit(this, hx, hz, f, w.reach, w.dmg);
+    ctx.raiders.meleeHit(this, hx, hz, f, w.reach, w.dmg);
+    ctx.sig.emit(this.pos.x, this.pos.z, w.noise, 'noise');
     this.cam.addShake(0.08);
   }
 
@@ -1397,6 +1549,37 @@ export class Player implements Pilot {
       zoom: this.ads,
       eye,
     });
+    if (this.showcase) this.orbitShowcase(dt, target);
+  }
+
+  /** Inventory camera: circle the survivor at arm's length and a little above, looking at the chest. */
+  private orbitShowcase(dt: number, at: { x: number; y: number; z: number }) {
+    const sc = this.showcase!;
+    sc.a += dt * 0.45;
+    const R = 2.7;
+    const want = _v.set(at.x + Math.sin(sc.a) * R, at.y + 1.5, at.z + Math.cos(sc.a) * R);
+    // Indoors or in an alley the orbit can pass through a wall: pull the camera in to what is solid, as the chase camera does.
+    const chest = _v3.set(at.x, at.y + 1.2, at.z);
+    const dir = _v4.copy(want).sub(chest);
+    const len = dir.length();
+    if (len > 0.01) {
+      dir.divideScalar(len);
+      const hit = this.cam.occlude(chest, dir, len);
+      if (hit < len) want.copy(chest).addScaledVector(dir, Math.max(0.9, hit - 0.3));
+    }
+    // The camera's right-hand side, so the survivor can sit off to the left of the frame.
+    const fx = -Math.sin(sc.a);
+    const fz = -Math.cos(sc.a);
+    const look = _v2.set(at.x - fz * sc.side, at.y + 1.0, at.z + fx * sc.side);
+    if (!sc.pos || !sc.look) {
+      sc.pos = this.cam.pos.clone();
+      sc.look = this.cam.look.clone();
+    }
+    const k = 1 - Math.exp(-6 * dt);
+    sc.pos.lerp(want, k);
+    sc.look.lerp(look, k);
+    this.cam.pos.copy(sc.pos);
+    this.cam.look.copy(sc.look);
   }
 
   private _eye = new THREE.Vector3();
@@ -1460,9 +1643,10 @@ export class Player implements Pilot {
     const z = lerp(this.prevPos.z, this.pos.z, alpha);
     h.root.position.set(x, y, z);
     h.root.rotation.y = this.yaw;
-    let aim = this.equip === 'pistol' ? clamp(this.ads + (this.muzzleT > 0 ? 0.7 : 0), 0, 1) : 0;
-    const weapon = this.equip === 'pistol' ? 'pistol' : this.equip === 'wrench' ? 'wrench' : this.equip === 'crowbar' ? 'crowbar' : this.equip === 'jerrycan' ? 'jerrycan' : this.utility === 'charge' ? 'none' : this.utility === 'horn' ? 'none' : 'flare';
-    h.setWeapon(this.state === 'downed' || this.carry ? 'none' : (weapon as 'pistol'));
+    let aim = this.equip === 'gun' ? clamp(this.ads + (this.muzzleT > 0 ? 0.7 : 0), 0, 1) : 0;
+    const weapon = this.heldModel();
+    h.setWeapon(this.state === 'downed' || this.carry ? 'none' : weapon);
+    h.swing = this.swingT;
     // First person: whatever is in hand is held up in front, where the camera can see it.
     if (this.firstPerson && !this.carry && weapon !== 'none') aim = Math.max(aim, 0.75);
     this.syncCarryModel();

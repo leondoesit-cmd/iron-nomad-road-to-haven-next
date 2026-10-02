@@ -28,6 +28,7 @@ export type ActionId =
   | 'view'
   | 'camera'
   | 'wheel'
+  | 'inventory'
   | 'prevBuild'
   | 'nextBuild'
   | 'sheet'
@@ -71,6 +72,7 @@ export const ACTIONS: ActionDef[] = [
   { id: 'view', label: 'First / third person', hint: 'Switch the camera on foot, driving and manning the gun', group: 'camera', pad: Btn.View, btn: [Btn.View], devices: ALL, optional: true },
   { id: 'camera', label: 'Reset camera · look back', hint: 'On foot: recentre · Driving: hold to look behind', group: 'camera', pad: Btn.R3, btn: [Btn.R3], devices: ALL, optional: true },
   { id: 'wheel', label: 'Ping · command wheel', hint: 'Tap to ping, hold for the wheel (aim with the look keys or stick)', group: 'team', pad: Btn.Up, btn: [Btn.Up], devices: ['pad', 'kb'], optional: true },
+  { id: 'inventory', label: 'Inventory', hint: 'Open your gear: change what you wear and hold, and see what you carry', group: 'team', pad: Btn.Down, btn: [Btn.Down], devices: ['pad', 'kb'], optional: true },
   { id: 'prevBuild', label: 'Build: previous', hint: 'Camp build mode on keys (a pad uses LB)', group: 'team', btn: [Btn.Left], devices: ['kb'], optional: true },
   { id: 'nextBuild', label: 'Build: next', hint: 'Camp build mode on keys (a pad uses RB)', group: 'team', btn: [Btn.Right], devices: ['kb'], optional: true },
   { id: 'sheet', label: 'Convoy sheet', hint: 'Hold for the convoy sheet', group: 'team', pad: Btn.Back, btn: [Btn.Back], devices: ALL, optional: true },
@@ -107,6 +109,7 @@ const PAD_DEFAULT: PadMap = {
   view: SHARED,
   camera: Btn.R3,
   wheel: Btn.Up,
+  inventory: Btn.Down,
   sheet: Btn.Back,
   map: Btn.Down,
 };
@@ -116,13 +119,13 @@ const KB_DEFAULT: [KeyMap, KeyMap] = [
     moveUp: 'KeyW', moveDown: 'KeyS', moveLeft: 'KeyA', moveRight: 'KeyD',
     turnLeft: 'KeyQ', turnRight: 'KeyE', fire: 'KeyF', interact: 'KeyG', vehicle: 'KeyR', crouch: 'KeyC',
     sprint: 'ShiftLeft', wheel: 'Tab', reload: 'KeyT', horn: 'KeyH', swap: 'KeyV', prevBuild: 'KeyZ', nextBuild: 'KeyX',
-    view: 'KeyB', camera: 'KeyY', sheet: 'Space', map: 'KeyJ',
+    view: 'KeyB', camera: 'KeyY', sheet: 'Space', map: 'KeyJ', inventory: 'KeyI',
   },
   {
     moveUp: 'ArrowUp', moveDown: 'ArrowDown', moveLeft: 'ArrowLeft', moveRight: 'ArrowRight',
     turnLeft: 'BracketLeft', turnRight: 'BracketRight', fire: 'ShiftRight', interact: 'Slash', vehicle: 'Enter', crouch: 'Period',
     sprint: 'ControlRight', wheel: 'Backspace', reload: 'Comma', horn: 'KeyM', swap: 'KeyN', prevBuild: 'Semicolon', nextBuild: 'Quote',
-    view: 'KeyP', camera: 'KeyL', sheet: 'Backslash', map: 'KeyK',
+    view: 'KeyP', camera: 'KeyL', sheet: 'Backslash', map: 'KeyK', inventory: 'KeyO',
   },
 ];
 
@@ -296,6 +299,7 @@ export const PROMPT_ACTION: Record<string, ActionId> = {
   X: 'reload',
   Y: 'vehicle',
   LB: 'swap',
+  Down: 'inventory',
   RB: 'melee',
   LT: 'aim',
   RT: 'fire',

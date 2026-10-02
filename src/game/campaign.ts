@@ -4,6 +4,7 @@ import { newStocks } from '../sim/resources';
 import { newMerc, type Merc } from '../sim/loyalty';
 import { GARAGE_MAX, PLAYER_PAINT, buildName, buildValue, dismantleYield, freshComp, inventoryCap, installPart, newBuild, type VehicleBuild } from '../sim/garage';
 import { newPart, scrapValue, seedUids, type PartItem } from '../sim/parts';
+import { addToBag, allItems, sanitizeLoadout, scrapOf, starterLoadout, type GearItem, type Loadout } from '../sim/gear';
 
 export interface PlayerSave {
   name: string;
@@ -12,6 +13,8 @@ export interface PlayerSave {
   /** Convoy-owned kit counts are on the campaign; these are per-player toggles. */
   utility: 'flare' | 'charge' | 'molotov' | 'horn';
   alive: boolean;
+  /** What this person wears, holds and carries. */
+  gear: Loadout;
 }
 
 export interface Items {
@@ -77,6 +80,7 @@ export class Campaign {
       vehicle: mopeds[i]?.uid ?? '',
       utility: i === 0 ? 'flare' : 'horn',
       alive: true,
+      gear: starterLoadout(),
     })) as [PlayerSave, PlayerSave];
   }
 
@@ -223,6 +227,21 @@ export class Campaign {
     return this.inventory.splice(i, 1)[0];
   }
 
+  // ------------------------------------------------------------------ personal gear
+
+  /**
+   * A find for one person's bag. If theirs is full it goes to their partner's, and if that is full too (or nobody is
+   * there) it is broken down for Scrap, the same way a full trunk breaks down a spare part.
+   */
+  giveGear(to: number, item: GearItem): { to: 'self' | 'partner' | 'scrap'; scrap: number } {
+    if (addToBag(this.players[to].gear, item)) return { to: 'self', scrap: 0 };
+    const other = 1 - to;
+    if (!this.solo && addToBag(this.players[other].gear, item)) return { to: 'partner', scrap: 0 };
+    const scrap = Math.max(1, scrapOf(item));
+    this.stocks.scrap += scrap;
+    return { to: 'scrap', scrap };
+  }
+
   // ------------------------------------------------------------------ save
 
   serialize() {
@@ -277,11 +296,19 @@ export class Campaign {
       const m = d as ReturnType<Campaign['serialize']>;
       c.garage = m.garage.filter((b) => hasChassis(b.chassis)).map(sanitizeBuild);
       c.inventory = (m.inventory ?? []).filter((p) => hasPart(p.id));
-      c.players = m.players.map((p) => ({ ...p })) as [PlayerSave, PlayerSave];
+      // Reserve every stored id before sanitizing can mint new ones, so a repaired item never collides with a saved one.
+      seedUids(m.players.flatMap((p) => uidsIn((p as Partial<PlayerSave>).gear)));
+      // Saves from before gear existed have no loadout: sanitizing hands out the starter kit.
+      c.players = m.players.map((p) => ({ ...p, gear: sanitizeLoadout((p as Partial<PlayerSave>).gear) })) as [PlayerSave, PlayerSave];
     } else {
       migrateV1(c, d as LegacySave);
     }
-    seedUids([...c.garage.map((b) => b.uid), ...c.inventory.map((p) => p.uid), ...c.garage.flatMap((b) => Object.values(b.fit).map((p) => p!.uid))]);
+    seedUids([
+      ...c.garage.map((b) => b.uid),
+      ...c.inventory.map((p) => p.uid),
+      ...c.garage.flatMap((b) => Object.values(b.fit).map((p) => p!.uid)),
+      ...c.players.flatMap((p) => allItems(p.gear).map((g) => g.uid)),
+    ]);
     c.settleActives();
     for (let i = 0; i < c.count; i++) c.buildOf(i);
     return c;
@@ -294,6 +321,13 @@ export interface LegacySave extends Omit<ReturnType<Campaign['serialize']>, 'pla
   solo?: undefined;
   players: { name: string; tier: number; mods: Record<'engine' | 'armor' | 'wheels' | 'weapon' | 'utility', number>; hpFrac: number; utility: PlayerSave['utility']; alive: boolean }[];
   garage?: undefined;
+}
+
+/** Every `uid` string found anywhere inside a piece of raw save data. */
+function uidsIn(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.flatMap(uidsIn);
+  if (!raw || typeof raw !== 'object') return [];
+  return Object.entries(raw).flatMap(([k, v]) => (k === 'uid' && typeof v === 'string' ? [v] : uidsIn(v)));
 }
 
 const TIER_CHASSIS = ['moped', 'quad', 'buggy', 'truck', 'rig'];
@@ -312,7 +346,7 @@ function migrateV1(c: Campaign, d: LegacySave) {
       if (def) installPart(b, newPart(def.id, 1));
     }
     c.garage.push(b);
-    return { name: p.name, vehicle: b.uid, utility: p.utility, alive: p.alive };
+    return { name: p.name, vehicle: b.uid, utility: p.utility, alive: p.alive, gear: starterLoadout() };
   }) as [PlayerSave, PlayerSave];
 }
 

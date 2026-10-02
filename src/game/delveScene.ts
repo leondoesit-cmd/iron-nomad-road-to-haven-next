@@ -12,7 +12,8 @@ import { Scene, type CompassPin, type SceneServices } from './scene';
 import { Player, type Equip, type Utility } from './player';
 import type { Zombie } from './zombies';
 import type { Infantry } from './raiders';
-import { Rng } from '../core/rng';
+import { Rng, hashString } from '../core/rng';
+import { gearDrop } from '../sim/gear';
 import { delveBounds, known, newDelveBase, newFrame, revealDelve, type MapFrame } from '../ui/mapdata';
 
 /** What a delve remembers between visits, so cleared rooms stay cleared and opened chests stay open. */
@@ -34,9 +35,12 @@ export interface PlayerCarry {
   mag: number;
   equip: Equip;
   utility: Utility;
+  /** The belt slot in hand. The gear itself lives in the campaign, so only the selection needs to cross over. */
+  sel: number;
 }
 
-export const carryOf = (p: Player): PlayerCarry => ({ hp: p.hp, mag: p.mag, equip: p.equip === 'pistol' || p.equip === 'utility' ? p.equip : 'pistol', utility: p.utility });
+/** A tool in hand goes back to the gun on the way down, as it always has. */
+export const carryOf = (p: Player): PlayerCarry => ({ hp: p.hp, mag: p.mag, equip: p.equip === 'gun' || p.equip === 'melee' || p.equip === 'utility' ? p.equip : 'gun', utility: p.utility, sel: p.gear.sel });
 
 /** Footprints (width, depth, height) of decor that blocks the way. */
 const FOOT: Partial<Record<DelveDecor, [number, number, number]>> = {
@@ -169,9 +173,10 @@ export class DelveScene extends Scene {
       const c = carry[i];
       if (c) {
         p.hp = Math.max(c.hp, 1);
-        p.mag = c.mag;
-        p.equip = c.equip;
         p.utility = c.utility;
+        p.gear.sel = c.sel;
+        p.syncEquip();
+        if (c.equip === 'gun') p.equipGun();
       }
       p.ownVehicle = null;
     }
@@ -297,6 +302,9 @@ export class DelveScene extends Scene {
       }
     }
     if (bits.length) by.note(bits.join('  '), 'good');
+    // The hoard always pays in gear; a chest sometimes does. Seeded by the chest, so it cannot be rerolled by reloading.
+    const find = gearDrop(new Rng(hashString(c.id) ^ this.site.seed), c.boss ? 'hoard' : 'chest', { tier: this.site.tier, progress: this.gearProgress });
+    if (find) this.addGear(by, find);
     this.audio.play('loot', c.x, c.z, 0.9);
     this.fx.spark(c.x, 0.8, c.z, 6, 4);
     this.sig.emit(c.x, c.z, 40, 'noise');

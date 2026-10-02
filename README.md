@@ -14,7 +14,7 @@ the blueprint puts in "Beta" and "Final" is listed under [What is not in the sli
 npm install
 npm run dev          # http://127.0.0.1:5174  (or $PORT)
 npm run build        # typecheck + production bundle in dist/
-npm test             # about 400 unit and simulation tests (Vitest)
+npm test             # about 600 unit and simulation tests (Vitest)
 ```
 
 `?leg=L3P` (or any leg id) starts a fresh run straight on that leg, which is how a map is checked without playing up to it.
@@ -49,6 +49,7 @@ Each leg runs the same five steps, and every decision is shared:
   gap grows.
 - **Downed, not dead**: at 0 HP you crawl for 20 s. Your partner can revive you (hold A, faster with a medkit). The run ends
   only when both of you are down, or the last vehicle is lost.
+- **Gear**: you wear, hold and carry a personal kit. Armour, masks and boots change what hurts you; guns, melee weapons and tools sit on a four-slot belt (LB swaps); the bag holds the rest. D-pad ↓ (or `I` / `O`) opens the inventory.
 - **Crew** have a Loyalty meter and a loot cut that is withheld from every pickup. Betrayal is telegraphed by two radio
   warnings and a camp dispute before anyone deserts.
 - **Roadside Encounters** are decided by both players voting in their own half. If you disagree the Encounter Lead decides, and
@@ -73,7 +74,7 @@ The garage and Ledger show one vehicle, and Settings drops the Player 2 and spli
 | Right stick | Aim / look | Free look | Aim gun | Aim reticle |
 | RT / LT | Fire / aim | Throttle / brake | Fire / zoom | Place / remove |
 | RB | Tap melee, hold takedown | Fire front gun | Fire | Next element |
-| LB | Swap tool | | | Previous element |
+| LB | Swap what is in hand along your belt | | | Previous element |
 | A | Interact (hold: loot, repair, refuel, revive) | Handbrake | | Rotate |
 | B | Crouch | Tap lights, hold engine off | | Hold: ready for night |
 | X | Reload (hold: swap utility) | Tap horn, hold siren | | Assign watch post |
@@ -130,13 +131,14 @@ move between releases, so check any call against the pinned versions before reus
 src/
   core/      math, seeded RNG and noise, event bus
   data/      JSON tables (vehicles, enemies, mercs, structures, legs, encounters, strings) + typed access + validation
-  sim/       pure rules with no engine imports: resources, loyalty, signature grid, raid threat, endings, damage, day clock
+  sim/       pure rules with no engine imports: resources, loyalty, signature grid, raid threat, endings, damage, day clock,
+             personal gear (`gear.ts`: wear, belt and bag rules, stats, loot)
   physics/   Rapier world wrapper and the data-driven raycast vehicle controller
   world/     deterministic terrain, leg layout (city grid, set pieces) and per-chunk content; `plans/` has authored city layouts
   render/    renderer and HDR post chain, sky and atmosphere, materials and procedural textures, terrain and road shaders,
-             facades, chunk meshes, far landscape, ground cover, models (vehicles, people, zombies, props), particles, camera
+             facades, chunk meshes, far landscape, ground cover, models (vehicles, people and their outfits, zombies, props), particles, camera
   game/      scene runtime, entities (player, vehicle, zombies, raiders, crew), combat, leg scene, camp scene, game loop
-  ui/        HUD, shared-cursor focus UI, overlays (title, votes, report), the Dawn Ledger, styles
+  ui/        HUD, shared-cursor focus UI, overlays (title, votes, report), the Dawn Ledger, the inventory, styles
   input/     gamepad, keyboard and mouse sampling into per-player intents; `bindings.ts` holds the rebindable action table
   audio/     procedural Web Audio: engines, weapons, stems that crossfade by state
   save/      IndexedDB (with a localStorage mirror), written at every Dawn Ledger
@@ -201,6 +203,20 @@ The plan becomes colliders (`planAabbs`: wall pieces with the doorways left open
 When a player or vehicle is inside, that viewer's roof and all upper storeys are hidden (`BuildingView.setView`, called per view from `LegScene`), so the room can be seen from the chase camera. Furniture is only drawn near the camera. Searchable furniture (fridge, wardrobe, filing cabinet, till, workbench, safe, ...) is a loot container in a per-building `ScavZone`, using the same search-and-noise rules as the city shops. The dead are placed inside some buildings, and zombies route through doorways when a wall is in the way.
 
 Tests: `tests/interiors.test.ts` (reachability, door clearance, walkability by flood fill) and `tests/walk.test.ts` (a Rapier player capsule with the game's character-controller settings walks from the doorstep to every room and up the stairs).
+
+### Gear and the inventory
+
+Each scavenger has a personal kit (`data/gear.json`, `sim/gear.ts`) in three parts, and the inventory screen is where you change it. Press **D-pad ↓** (keyboard: `I` for Player 1, `O` for Player 2; rebindable under Control settings) on foot. The game pauses, the panel opens over the *other* half of the screen, and your own camera swings into a slow orbit of your survivor so every change shows on the model.
+
+- **Wearing** (seven slots: head, face, body, hands, legs, feet, back). Every piece changes both stats and looks. **Armour** cuts the damage from bullets, claws, blasts and rams; **spore guard** (masks) cuts bloater clouds; **fall protection** (boots, knee pads) cuts falls; **speed** and **footstep noise** trade against each other (plate is slow and loud, sneakers are quiet, trail runners are quick); **reload** and **gun spread** come from gloves and goggles; **melee** from gauntlets; and a pack, vest or cargo trousers add **bag slots**. Fire ignores armour. Clothing is built in `render/outfit.ts` from a style and two colours per slot: 31 wearable pieces across the seven slots, in three rarities. Starter pieces use your own colours; any other body armour puts an armband in your colour on the sleeve so you are still recognisable in a split screen.
+- **In hand** (the belt: four slots, plus the utility). The slot in hand decides what the on-foot buttons do, and **LB** steps along the belt, then to the throwable (flare, molotov, charge or decoy horn, chosen with hold-X as before, or in the inventory). The belt holds firearms, melee weapons and the three tools (wrench, crowbar, jerrycan), so carrying a shotgun means leaving the crowbar at home. The belt always keeps one weapon. **Guns** each have their own damage, fire rate, magazine, reload, spread, range, noise and pierce: the 9mm pistol you start with, a .38 revolver (slow, hard-hitting, punches through plate), a scrap SMG, a sawn-off and a pump shotgun (eight pellets a shot, only the first is loud), and a hunting rifle. Every gun keeps its own magazine when you swap. **Melee weapons** (knife, bat, machete, fire axe) swing on RT as well as RB, each with its own damage, reach and pace; bare hands are still the old 35. Hold RB for the silent takedown as before.
+- **The bag.** Four slots plus whatever the pack, vest and pockets add (rucksack +6, duffel +10, frame pack +14). You can't take off a pack whose pockets are holding what's in your bag. From the bag: **wear** (swapping with what is worn), **put in hand** (into a chosen belt slot), **give to your partner**, or **break down** for Scrap. Selecting an item shows what it does and how it compares with what you have on. A medkit button heals you (+60 HP) from the convoy's stock.
+
+The Dawn Ledger has a **Gear** tab with the same screen (switch between the two scavengers at the top), so you can reorganise before you roll out. The screen itself is `InventoryView` in `ui/inventory.ts`, shared by the in-game pause screen and the Ledger tab.
+
+Gear is found, not crafted. A searched shelf or locker (deeper is better), a delve chest (a hoard always pays in rare gear), a car's cabin and trunk (a raider's wagon most often) and a fallen raider's kit can each turn one up. Finds are seeded by the container or car, so reloading can't reroll them, they skew better the further the convoy has come, and they go to your bag, then your partner's, then become Scrap, so nothing is lost on the floor. The loadout is saved with the campaign (`PlayerSave.gear`); older saves get the starter kit, and a damaged save is repaired rather than trusted (`sanitizeLoadout`).
+
+Tests: `tests/gear.test.ts` (the catalogue, capacity and stat rules, equip and unequip, sharing, save repair, loot odds) and `tests/gearplay.test.ts` (real leg scenes: armour, speed and noise, the belt and LB, each gun's numbers and magazine, melee weapons, the inventory key, saves, finds and the inventory camera).
 
 ### Cars, parts and the garage
 
@@ -313,7 +329,7 @@ five endings are implemented and unit tested in `sim/endings.ts`.
 planning, ending selection, day clock, damage model, vehicle handling (acceleration, braking, turning, ride height and a
 stability regression), world generation (determinism, seams, passages, barricades, set pieces), game logic (obstacle index,
 campaign save round trip, input helpers, camera FOV) and rendering helpers (visual terrain detail stays out of the drivable
-corridor, mesh builder attributes, procedural noise). Lakes, boats and delves have theirs (see their section above), and so does the authored city: `tests/petahtikva.test.ts` (the plan lays out and names its streets, Founders' Square, the Great Synagogue, City Hall and the shop stand where the plan says on the streets it says, streets are paved and open, everything on the route is reachable by flood fill, places are announced once). The car system has its own suites: `tests/garage.test.ts` (parts, stats, fitting, repair, salvage, world-car rolls), `tests/cars.test.ts` (Rapier handling of each found chassis, and that the model sits on the ground) `tests/carplay.test.ts` (real leg scenes in Node: streaming, claiming, repairing with held buttons, stripping, siphoning, saving the fleet), `tests/oil.test.ts` (the oil model, planning a fit or stow, old saves) and `tests/haul.test.ts` (real leg scenes: lifting, bolting on, pouring, stowing, dropping, driving over loose items, running dry).
+corridor, mesh builder attributes, procedural noise). Lakes, boats and delves have theirs (see their section above), and so does the authored city: `tests/petahtikva.test.ts` (the plan lays out and names its streets, Founders' Square, the Great Synagogue, City Hall and the shop stand where the plan says on the streets it says, streets are paved and open, everything on the route is reachable by flood fill, places are announced once). The car system has its own suites: `tests/garage.test.ts` (parts, stats, fitting, repair, salvage, world-car rolls), `tests/cars.test.ts` (Rapier handling of each found chassis, and that the model sits on the ground) `tests/carplay.test.ts` (real leg scenes in Node: streaming, claiming, repairing with held buttons, stripping, siphoning, saving the fleet), `tests/oil.test.ts` (the oil model, planning a fit or stow, old saves) and `tests/haul.test.ts` (real leg scenes: lifting, bolting on, pouring, stowing, dropping, driving over loose items, running dry). Personal gear has `tests/gear.test.ts` and `tests/gearplay.test.ts` (see its section above).
 
 The page also exposes `window.__game` with `advance(seconds)` for running the simulation deterministically from the console,
 which is how most of the in-browser checks were done.

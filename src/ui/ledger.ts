@@ -9,6 +9,8 @@ import { moraleOf } from '../sim/loyalty';
 import type { Game } from '../game/game';
 import type { CampScene } from '../game/campScene';
 import { GarageView } from './garage';
+import { InventoryView } from './inventory';
+import { PLAYER_CSS as PCSS } from '../render/palette';
 
 type Act = (player: number) => void;
 
@@ -20,7 +22,10 @@ export class LedgerPanel {
   private acts = new Map<string, Act>();
   private chosen = 0;
   private ready: [boolean, boolean] = [false, false];
-  private tab: 'main' | 'garage' = 'main';
+  private tab: 'main' | 'garage' | 'gear' = 'main';
+  private inv: InventoryView;
+  /** Whose gear the Gear tab shows. */
+  private gearWho = 0;
   private msg = '';
   private garage: GarageView;
 
@@ -32,6 +37,18 @@ export class LedgerPanel {
     private sliceEnd: () => void,
   ) {
     const self = this;
+    this.inv = new InventoryView({
+      get c() {
+        return self.c;
+      },
+      audio: game.audio,
+      slot: (i) => game.input.slots[i],
+      btn: (id, inner, act, enabled = true, cls = '', title = '') => {
+        self.acts.set(id, act);
+        return `<button data-fid="${id}" class="${cls}" ${enabled ? '' : 'disabled'} title="${escapeHtml(title)}">${inner}</button>`;
+      },
+      rerender: () => self.render(),
+    });
     this.garage = new GarageView({
       get c() {
         return self.c;
@@ -117,12 +134,28 @@ export class LedgerPanel {
     const cards = (c.solo ? [0] : [0, 1]).map((i) => this.vehicleCard(i)).join('');
     const mid = `<section><h3>Vehicles</h3>${cards}<div class="mutedtxt">Tanks are filled from the convoy reserve (${c.stocks.fuel.toFixed(1)} FU) when you roll out. Upgrades take effect straight away.</div></section>`;
     const right = `<section><h3>Crew</h3>${this.crewHtml(owedTotal)}<h3>Next road</h3>${this.routeHtml()}</section>`;
-    const tabs = `<span class="tabs">${this.btn('tab-main', 'Ledger', () => this.setTab('main'), true).replace('<button', `<button class="tabbtn${this.tab === 'main' ? ' on' : ''}"`)}${this.btn('tab-garage', `Garage${c.inventory.length ? ` <small>${c.inventory.length} parts</small>` : ''}`, () => this.setTab('garage'), true).replace('<button', `<button class="tabbtn${this.tab === 'garage' ? ' on' : ''}"`)}</span>`;
+    const tabs = `<span class="tabs">${this.btn('tab-main', 'Ledger', () => this.setTab('main'), true).replace('<button', `<button class="tabbtn${this.tab === 'main' ? ' on' : ''}"`)}${this.btn('tab-garage', `Garage${c.inventory.length ? ` <small>${c.inventory.length} parts</small>` : ''}`, () => this.setTab('garage'), true).replace('<button', `<button class="tabbtn${this.tab === 'garage' ? ' on' : ''}"`)}${this.btn('tab-gear', 'Gear', () => this.setTab('gear'), true).replace('<button', `<button class="tabbtn${this.tab === 'gear' ? ' on' : ''}"`)}</span>`;
     const foot = `<div style="grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:2px solid rgba(38,28,16,.4);padding-top:6px">
         <span class="mutedtxt" id="ledger-msg">${escapeHtml(this.msg)}</span>
         <span style="display:flex;gap:10px;align-items:center">${this.readyHtml()}</span>
       </div>`;
-    if (this.tab === 'garage') {
+    if (this.tab === 'gear') {
+      const who = Math.min(this.gearWho, c.count - 1);
+      const pl = this.camp.players[who];
+      this.inv.p = pl;
+      // Who is shown: a switch between the two scavengers (one when solo).
+      const sw = (c.solo ? [0] : [0, 1])
+        .map((i) => this.btn(`gwho${i}`, `<span class="pcolor" style="background:${PCSS[i]}"></span>${escapeHtml(c.players[i].name)}`, () => this.setWho(i), true).replace('<button', `<button class="tabbtn${who === i ? ' on' : ''}"`))
+        .join('');
+      const cols = this.inv.columnsHtml();
+      this.root.innerHTML = `<div class="ledger panel paper inv center">
+        <h2><span>Gear · ${escapeHtml(c.players[who].name)}</span><span class="tabs">${sw}</span>${tabs}<small>DAY ${c.day} · ${whole(c.stocks.scrap)} SCRAP</small></h2>
+        <div class="invbody">${cols}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:2px solid rgba(38,28,16,.4);padding-top:6px">
+          <span class="mutedtxt">${escapeHtml(this.inv.msg || 'Change what you wear and hold before you roll out. D-pad down opens this on the road, too.')}</span>
+          <span style="display:flex;gap:10px;align-items:center">${this.readyHtml()}</span>
+        </div></div>`;
+    } else if (this.tab === 'garage') {
       this.root.innerHTML = `<div class="ledger panel paper gmode">
         <h2><span>Garage · ${escapeHtml(leg.name)}</span>${tabs}<small>DAY ${c.day} · ${whole(c.stocks.scrap)} SCRAP · ${whole(c.stocks.parts)} PARTS · ${whole(c.stocks.tech)} TECH</small></h2>
         <div class="gbody">${this.garage.html()}</div>
@@ -144,10 +177,24 @@ export class LedgerPanel {
     g.focus.setItems(items, keys);
   }
 
-  private setTab(t: 'main' | 'garage') {
+  private setWho(i: number) {
+    if (this.gearWho === i) return;
+    this.gearWho = i;
+    const pl = this.camp.players[i];
+    if (pl) this.inv.reset(pl);
+    this.game.audio.play('click');
+    this.render();
+  }
+
+  private setTab(t: 'main' | 'garage' | 'gear') {
     if (this.tab === t) return;
     this.tab = t;
     this.garage.sel = null;
+    if (t === 'gear') {
+      this.gearWho = Math.min(this.gearWho, this.c.count - 1);
+      const pl = this.camp.players[this.gearWho];
+      if (pl) this.inv.reset(pl);
+    }
     this.setPreview(t === 'garage');
     this.game.audio.play('click');
     this.render();

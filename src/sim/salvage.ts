@@ -2,6 +2,7 @@ import type { PartSlot, Stocks } from '../data';
 import { Rng } from '../core/rng';
 import type { BuildComp } from './garage';
 import { newPart, rollPart, type Fit, type PartItem } from './parts';
+import { gearDrop, type GearItem } from './gear';
 
 /** What is being stripped. Raiders carry better kit than a family car. */
 export type SalvageKind = 'car' | 'raider' | 'wagon' | 'convoy';
@@ -32,6 +33,8 @@ export interface SalvageCtx {
   /** For a lost convoy vehicle: what was bolted to it, and how worn. */
   fit?: Fit;
   comp?: BuildComp;
+  /** How far the convoy has come, 0 to 1. */
+  progress?: number;
 }
 
 export interface SalvageLoot {
@@ -40,6 +43,8 @@ export interface SalvageLoot {
   items: PartItem[];
   /** Oil drained from the sump, in sumps (a can is 0.5). */
   oil: number;
+  /** A piece of personal gear in the cabin or trunk, now and then. */
+  gear?: GearItem;
 }
 
 const CAR_MK = [0.72, 0.24, 0.04];
@@ -110,6 +115,11 @@ export function salvageLoot(stage: number, c: SalvageCtx): SalvageLoot {
         out.stocks = {};
         out.ammo = 0;
         out.items = [];
+      }
+      // Drawn last, so the finds above are the same as they were before there was gear. Raiders' wagons are the best.
+      if (c.kind !== 'convoy') {
+        const g = gearDrop(rng, c.kind === 'wagon' ? 'wreck' : c.kind === 'raider' ? 'raider' : 'trunk', { progress: c.progress });
+        if (g && !(c.burnt && rng.chance(0.55))) out.gear = g;
       }
     }
   }

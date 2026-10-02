@@ -13,7 +13,8 @@ import { QUALITY } from '../render/renderer';
 import { Vehicle } from './vehicle';
 import type { Player } from './player';
 import { DUSK_BELL_AT, DayClock } from '../sim/dayclock';
-import { Rng } from '../core/rng';
+import { Rng, hashString } from '../core/rng';
+import { gearDrop } from '../sim/gear';
 import { disposeTree } from '../render/dispose';
 import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { RARITY_NAMES, newPart, partName } from '../sim/parts';
@@ -269,9 +270,10 @@ export class LegScene extends Scene {
       const c = carry[i];
       if (c) {
         p.hp = Math.max(c.hp, reason === 'rescue' ? p.maxHp * 0.35 : 1);
-        p.mag = c.mag;
-        p.equip = c.equip;
         p.utility = c.utility;
+        p.gear.sel = c.sel;
+        p.syncEquip();
+        if (c.equip === 'gun') p.equipGun();
       }
       p.invuln = 1.5;
     });
@@ -439,6 +441,9 @@ export class LegScene extends Scene {
       run: (p) => {
         c.taken = true;
         this.addLoot(c.loot, 'search');
+        // Seeded by the container, so reloading a chunk never rerolls a find.
+        const find = gearDrop(new Rng(hashString(c.id) ^ Math.imul(this.campaign.seed, 2654435761)), 'search', { depth: c.depth, progress: this.gearProgress, biome: this.biome === 'city' ? 'city' : 'waste' });
+        if (find) this.addGear(p, find);
         this.audio.play('loot', c.x, c.z, 0.8);
         this.removeContainerView(c.id);
         const n = [10, 16, 26][c.depth];

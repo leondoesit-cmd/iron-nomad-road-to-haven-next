@@ -1,4 +1,4 @@
-import { t } from '../data';
+import { gearDef, t } from '../data';
 import { LABEL, whole } from '../sim/resources';
 import { loyaltyBand } from '../sim/loyalty';
 import { SALVAGE_STAGES } from '../sim/salvage';
@@ -457,16 +457,16 @@ export class Hud {
       h.setHtml('equip', `<span class="on">HANDS FULL</span>`);
     } else {
       const eq = p.equip;
-      h.setText('wname', p.reloadT > 0 ? 'RELOADING' : eq === 'pistol' ? 'PISTOL' : eq === 'wrench' ? 'WRENCH' : eq === 'crowbar' ? 'CROWBAR' : eq === 'jerrycan' ? 'JERRYCAN' : p.utility.toUpperCase());
-      if (eq === 'pistol') h.el('ammo').innerHTML = `${p.mag}<small>/${camp.ammo}</small>`;
+      h.setText('wname', p.reloadT > 0 ? 'RELOADING' : p.heldName().toUpperCase());
+      if (eq === 'gun') h.el('ammo').innerHTML = `${p.mag}<small>/${camp.ammo}</small>`;
+      else if (eq === 'melee') h.el('ammo').innerHTML = `<small>${Math.round(p.meleeDamage())} DMG</small>`;
       else if (eq === 'wrench') h.el('ammo').innerHTML = `<small>${whole(camp.stocks.scrap)} SCRAP · ${whole(camp.stocks.parts)} PARTS</small>`;
       else if (eq === 'crowbar') h.el('ammo').innerHTML = `<small>${camp.inventory.length}/${camp.inventoryCap} PARTS</small>`;
       else if (eq === 'jerrycan') h.el('ammo').innerHTML = `<small>${camp.stocks.fuel.toFixed(1)} FU · ${Math.round(camp.items.oil * 100)}% OIL</small>`;
       else h.el('ammo').innerHTML = `<small>${p.utility === 'horn' ? '∞' : camp.items[p.utility as 'flare']}</small>`;
-      h.setHtml(
-        'equip',
-        `<span class="${eq === 'pistol' ? 'on' : ''}">GUN</span><span class="${eq === 'wrench' ? 'on' : ''}">WRENCH</span><span class="${eq === 'crowbar' ? 'on' : ''}">PRY</span><span class="${eq === 'jerrycan' ? 'on' : ''}">CAN</span><span class="${eq === 'utility' ? 'on' : ''}">${p.utility.toUpperCase()}</span>`,
-      );
+      // The belt: what is in each hand slot, with the one in hand lit, then the throwable.
+      const belt = p.gear.belt.map((it, i) => (it ? `<span class="${eq !== 'utility' && p.gear.sel === i ? 'on' : ''}">${gearDef(it.id).short}</span>` : '')).join('');
+      h.setHtml('equip', `${belt}<span class="${eq === 'utility' ? 'on' : ''}">${p.utility.toUpperCase()}</span>`);
     }
     h.setText(
       'stocks',
@@ -497,7 +497,7 @@ export class Hud {
     }
 
     // Reticle: on foot aiming or manning the bed gun.
-    const showRet = (p.state === 'foot' && p.equip === 'pistol' && !p.carry) || p.state === 'gunner';
+    const showRet = (p.state === 'foot' && p.equip === 'gun' && !p.carry) || p.state === 'gunner';
     h.setStyle('reticle', 'display', showRet ? 'block' : 'none');
     h.setStyle('reticle', 'transform', `scale(${1 + (1 - p.ads) * 0.4})`);
 

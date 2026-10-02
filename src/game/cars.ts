@@ -209,6 +209,7 @@ export class CarField {
       burnt: v.wreck,
       fit: b ? { ...b.fit } : undefined,
       comp: b?.comp,
+      progress: ctx.gearProgress,
     };
     const loot = salvageLoot(stage, c);
     const stocks = { ...loot.stocks };
@@ -225,6 +226,7 @@ export class CarField {
     let text = lootText({ ...loot, items: kept, oil }, partName);
     if (scrapped) text += `${text === 'Nothing worth taking' ? '' : ', '}${scrapped} Scrap (no room for the rest)`;
     p.note(text, kept.length || scrapped ? 'good' : 'info');
+    if (loot.gear) ctx.addGear(p, loot.gear);
     // What the car loses.
     if (b) {
       if (stage === 0) {

@@ -8,6 +8,9 @@ import stringsJson from './strings.en.json';
 import partsJson from './parts.json';
 import boatsJson from './boats.json';
 import wildlifeJson from './wildlife.json';
+import { validateGear } from './gear';
+
+export * from './gear';
 
 export type StockId = 'fuel' | 'rations' | 'scrap' | 'parts' | 'tech' | 'medicine';
 export const STOCK_IDS: StockId[] = ['fuel', 'rations', 'scrap', 'parts', 'tech', 'medicine'];
@@ -462,5 +465,6 @@ export function validateData(): string[] {
     }
   }
   for (const el of STRUCTURES.build.elements) need(el.size.length === 3, `build element ${el.id}: size`);
+  errs.push(...validateGear());
   return errs;
 }

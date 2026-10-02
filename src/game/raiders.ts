@@ -5,6 +5,7 @@ import { disposeTree } from '../render/dispose';
 import { C } from '../render/palette';
 import { angleDiff, clamp, damp, dampAngle, wrapAngle } from '../core/math';
 import type { DriveInput } from '../physics/vehicle';
+import { gearDrop } from '../sim/gear';
 import type { Ctx } from './ctx';
 import type { Player } from './player';
 import { Vehicle, type Pilot } from './vehicle';
@@ -428,6 +429,24 @@ export class RaiderSystem {
     return best;
   }
 
+  /** A raider's kit can survive them: it goes to whoever is closest, if anyone is near enough to pick it up. */
+  private dropGear(x: number, z: number, src: 'raider' | 'wreck') {
+    const ctx = this.ctx;
+    const find = gearDrop(ctx.rng, src, { progress: ctx.gearProgress });
+    if (!find) return;
+    let best: Player | null = null;
+    let bd = 45;
+    for (const p of ctx.players) {
+      if (p.state === 'dead') continue;
+      const d = Math.hypot(p.pos.x - x, p.pos.z - z);
+      if (d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    if (best) ctx.addGear(best, find);
+  }
+
   damageInfantry(u: Infantry, amount: number, killer: number): boolean {
     if (u.dead) return false;
     u.hp -= amount * (1 - u.def.armor);
@@ -440,6 +459,7 @@ export class RaiderSystem {
       this.ctx.fx.blood(u.x, u.y + 1, u.z, 8);
       this.ctx.audio.play('zdie', u.x, u.z, 0.6);
       if (Math.random() < 0.5) this.ctx.addLoot({ scrap: 4 + Math.floor(Math.random() * 5) }, 'raider');
+      this.dropGear(u.x, u.z, 'raider');
       return true;
     }
     if (u.state === 'approach') u.state = u.kind === 'sniper' ? 'snipe' : 'fire';
@@ -534,6 +554,7 @@ export class RaiderSystem {
     this.kills++;
     const wagon = v.kind === 'wagon';
     this.ctx.addLoot({ scrap: wagon ? 40 : 14 + Math.floor(Math.random() * 10), parts: wagon ? 10 : 2 }, 'wreck');
+    if (wagon) this.dropGear(v.position.x, v.position.z, 'wreck');
     const pilot = this.pilots.get(v);
     if (pilot) pilot.despawn = false;
   }

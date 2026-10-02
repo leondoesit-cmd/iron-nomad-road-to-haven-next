@@ -9,7 +9,8 @@ import { splitLoot, whole } from '../sim/resources';
 import { DayClock, lightAt } from '../sim/dayclock';
 import { Rng } from '../core/rng';
 import { clamp } from '../core/math';
-import { VEHICLES, STOCK_IDS, type Stocks } from '../data';
+import { LEGS, VEHICLES, STOCK_IDS, gearDef, type Stocks } from '../data';
+import type { GearItem } from '../sim/gear';
 import type { Surface, TerrainDef } from '../world/terrain';
 import type { Aabb } from '../world/layout';
 import type { InputManager } from '../input/input';
@@ -81,6 +82,7 @@ export abstract class Scene implements Ctx {
   bounds: Ctx['bounds'] = null;
   campHook?: Ctx['campHook'];
   openWorkbench?: Ctx['openWorkbench'];
+  openInventory?: Ctx['openInventory'];
   loose?: Ctx['loose'];
   structureHit?: Ctx['structureHit'];
   clock = new DayClock(540, 0.02);
@@ -210,6 +212,35 @@ export abstract class Scene implements Ctx {
     for (const id of STOCK_IDS) if (net[id]) this.lootAcc[id] = (this.lootAcc[id] ?? 0) + (net[id] as number);
     this.lootAccT = 0.5;
     void label;
+  }
+
+  /** How far the convoy has come, 0 to 1. Later finds are better. */
+  get gearProgress(): number {
+    return clamp(this.campaign.history.length / Math.max(1, LEGS.legs.length - 1), 0, 1);
+  }
+
+  /**
+   * A piece of gear found by one person. It goes in their bag; if that is full, their partner's; and if there is
+   * nowhere to put it, it is broken down for Scrap so nothing is ever lost on the floor.
+   */
+  addGear(by: Player, item: GearItem) {
+    const d = gearDef(item.id);
+    const tag = '◆'.repeat(d.rarity);
+    const r = this.campaign.giveGear(by.index, item);
+    if (r.to === 'self') by.note(`Found: ${d.name} ${tag}`, 'good');
+    else if (r.to === 'partner') {
+      const other = by.partner;
+      by.note(`Found: ${d.name} ${tag} (your bag is full, ${other?.name ?? 'your partner'} took it)`, 'info');
+      other?.note(`${by.name} found a ${d.name} ${tag} for you`, 'good');
+    } else by.note(`Found: ${d.name}, but there is no room: +${r.scrap} Scrap`, 'warn');
+    this.audio.play('pickup', by.pos.x, by.pos.z, 0.7);
+    // The first find of a run says where to wear it.
+    if (!this.campaign.flags.gearTip) {
+      this.campaign.flags.gearTip = true;
+      this.tip('gear');
+    }
+    // Anything better than common is worth the radio.
+    if (d.rarity >= 3) this.radio(`${by.name} found something good: ${d.name}.`);
   }
 
   onVehicleDestroyed(v: Vehicle) {
