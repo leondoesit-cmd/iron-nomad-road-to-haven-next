@@ -12,6 +12,7 @@ import type { Stocks } from '../data';
 import type { Player } from './player';
 import type { Vehicle } from './vehicle';
 import type { ZombieSystem } from './zombies';
+import type { PhantomSystem } from './phantoms';
 import type { WildlifeSystem } from './wildlife';
 import type { RaiderSystem } from './raiders';
 import type { CrewSystem } from './crew';
@@ -61,6 +62,8 @@ export interface Ctx {
   players: Player[];
   vehicles: Vehicle[];
   zombies: ZombieSystem;
+  /** What the tripping see that is not there: drawn only for them, and never real. */
+  phantoms: PhantomSystem;
   /** Herds, packs and flocks of wild animals. */
   wildlife: WildlifeSystem;
   raiders: RaiderSystem;

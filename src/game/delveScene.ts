@@ -13,6 +13,7 @@ import { Player, type Equip, type Utility } from './player';
 import type { Zombie } from './zombies';
 import type { Infantry } from './raiders';
 import { Rng } from '../core/rng';
+import { DRUGS, DRUG_IDS } from '../sim/drugs';
 
 /** What a delve remembers between visits, so cleared rooms stay cleared and opened chests stay open. */
 export interface DelveRecord {
@@ -288,11 +289,18 @@ export class DelveScene extends Scene {
       camp.ammo += c.loot.ammo;
       bits.push(`+${c.loot.ammo} rounds`);
     }
-    for (const k of ['medkit', 'charge', 'molotov', 'flare', 'stim', 'painkiller', 'adrenaline', 'haze'] as const) {
+    for (const k of ['medkit', 'charge', 'molotov', 'flare'] as const) {
       const n = c.loot[k];
       if (n) {
         camp.items[k] += n;
         bits.push(`+${n} ${k}`);
+      }
+    }
+    for (const id of DRUG_IDS) {
+      const n = c.loot[id];
+      if (n) {
+        camp.items[id] += n;
+        bits.push(`+${n} ${DRUGS[id].name.toLowerCase()}`);
       }
     }
     if (bits.length) by.note(bits.join('  '), 'good');
@@ -535,6 +543,17 @@ export class DelveScene extends Scene {
       for (const u of this.raiders.units) if (!u.dead && Math.hypot(u.x - p.pos.x, u.z - p.pos.z) < 24) combat = true;
     }
     this.audio.setMusic(combat ? 'combat' : 'stealth');
+  }
+
+  /** Chests still shut and the key, felt through the rock. */
+  protected senseLoot(p: Player, radius: number, add: (x: number, y: number, z: number, kind: 'loot' | 'chest') => void) {
+    const m = this.map;
+    const rec = this.record;
+    for (const c of m.chests) {
+      if (!rec.chests.has(c.id) && Math.hypot(c.x - p.pos.x, c.z - p.pos.z) <= radius) add(c.x, 0.9, c.z, 'chest');
+    }
+    const k = m.keys[0];
+    if (k && !rec.keyTaken && Math.hypot(k.x - p.pos.x, k.z - p.pos.z) <= radius) add(k.x, 0.9, k.z, 'chest');
   }
 
   compassPins(): CompassPin[] {

@@ -1,4 +1,5 @@
-import { Rng } from '../core/rng';
+import { Rng, hash2 } from '../core/rng';
+import type { DrugId } from '../sim/drugs';
 import type { Stocks } from '../data';
 import type { Aabb } from './layout';
 
@@ -86,6 +87,8 @@ export interface Furn {
   solid: boolean;
   /** Searchable: what is inside and what the player is told. */
   loot?: Partial<Stocks>;
+  /** Drugs among the loot. */
+  drugs?: Partial<Record<DrugId, number>>;
   label?: string;
   depth?: 0 | 1 | 2;
 }
@@ -662,9 +665,33 @@ const LABEL: Partial<Record<FurnKind, string>> = {
   crate: 'the crate',
 };
 
+/** What might be tucked away in a piece of furniture. A roll off the furniture's own position, so the build stays as it was. */
+function drugsFor(f: Furn): Partial<Record<DrugId, number>> | undefined {
+  const r = hash2(Math.round(f.x * 10), Math.round(f.z * 10), f.level * 131 + f.seed);
+  switch (f.kind) {
+    case 'vanity':
+      return r < 0.35 ? { painkiller: 1 } : r < 0.4 ? { stim: 1 } : undefined;
+    case 'cooler':
+      return r < 0.3 ? { alcohol: 1 } : undefined;
+    case 'fridge':
+      return r < 0.12 ? { alcohol: 1 } : undefined;
+    case 'dresser':
+      return r < 0.08 ? { weed: 1 } : undefined;
+    case 'wardrobe':
+      return r < 0.06 ? { weed: 1 } : undefined;
+    case 'checkout':
+      return r < 0.1 ? { alcohol: 1 } : undefined;
+    case 'safe':
+      return r < 0.3 ? { alcohol: 1 } : r < 0.45 ? { adrenaline: 1 } : r < 0.53 ? { lsd: 1 } : undefined;
+    default:
+      return undefined;
+  }
+}
+
 function searchable(b: Builder, f: Furn | null, wealth: number, depth: 0 | 1 | 2 = 0, chance = 1) {
   if (!f || !b.rng.chance(chance)) return f;
   f.loot = lootFor(b.rng, f.kind, wealth);
+  f.drugs = drugsFor(f);
   f.label = LABEL[f.kind];
   f.depth = f.kind === 'safe' ? 2 : f.kind === 'locker' || f.kind === 'workbench' || f.kind === 'footlocker' ? 1 : depth;
   return f;

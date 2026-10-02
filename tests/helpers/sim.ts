@@ -46,6 +46,10 @@ export function fakeServices(opts: { onRadio?: (t: string) => void; solo?: boole
       this.sky.mesh.visible = false;
     },
     renderPixelRatio: () => 1,
+    /** What the real renderer keeps per player for a trip. The headless one only needs the clock. */
+    trip: [{ phase: 0 }, { phase: 0 }],
+    setTrip() {},
+    applyTripCamera() {},
   };
   const sounds: string[] = [];
   const audio = {
@@ -55,6 +59,7 @@ export function fakeServices(opts: { onRadio?: (t: string) => void; solo?: boole
     updateEngines: () => {},
     updateMusic: () => {},
     setListeners: () => {},
+    setTrip: () => {},
   };
   const input = {
     intents,

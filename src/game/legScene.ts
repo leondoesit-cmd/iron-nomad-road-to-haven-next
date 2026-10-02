@@ -19,6 +19,7 @@ import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { RARITY_NAMES, newPart, partName } from '../sim/parts';
 import { carriedName, planStow, type Carried, type Loose } from '../sim/carry';
 import { lakeCurrent } from '../world/lakes';
+import { DRUGS, DRUG_IDS } from '../sim/drugs';
 import type { DelveSite } from '../world/delveSites';
 import { newDelveRecord, type DelveRecord, type PlayerCarry } from './delveScene';
 
@@ -406,6 +407,19 @@ export class LegScene extends Scene {
 
   // ------------------------------------------------------------------ scavenging
 
+  /** Drugs found in a search go to the convoy's stores. */
+  private giveDrugs(found: ScavContainer['drugs'], by: Player) {
+    if (!found) return;
+    const bits: string[] = [];
+    for (const id of DRUG_IDS) {
+      const n = found[id];
+      if (!n) continue;
+      this.campaign.items[id] += n;
+      bits.push(`+${n} ${DRUGS[id].name.toLowerCase()}`);
+    }
+    if (bits.length) by.note(bits.join('  '), 'good');
+  }
+
   private addContainer(zone: ScavZone, c: ScavContainer) {
     const depthName = c.label ?? ['front shelves', 'back shelves', 'the deep stock'][c.depth];
     const glint = new THREE.Mesh(
@@ -435,6 +449,7 @@ export class LegScene extends Scene {
       run: (p) => {
         c.taken = true;
         this.addLoot(c.loot, 'search');
+        this.giveDrugs(c.drugs, p);
         this.audio.play('loot', c.x, c.z, 0.8);
         this.removeContainerView(c.id);
         const n = [10, 16, 26][c.depth];
@@ -1180,6 +1195,46 @@ export class LegScene extends Scene {
       view.setDetailDistance(Math.max(0, d - CHUNK * 0.71));
     }
     void alpha;
+  }
+
+  /** The road is kept clear of mushrooms. */
+  protected noMushroomAt(x: number, z: number): boolean {
+    if (super.noMushroomAt(x, z)) return true;
+    const T = this.terrain;
+    return !!T && Math.abs(x - roadX(T, z)) < 5;
+  }
+
+  /** What the tripping can feel through the ground: loose pickups, the good ones in a stronger colour, and unlooted containers. */
+  protected senseLoot(p: Player, radius: number, add: (x: number, y: number, z: number, kind: 'loot' | 'chest') => void) {
+    const cx = p.vehicle ? p.vehicle.position.x : p.pos.x;
+    const cz = p.vehicle ? p.vehicle.position.z : p.pos.z;
+    for (const [, e] of this.pickups) {
+      const s = e.spawn;
+      if (Math.hypot(s.x - cx, s.z - cz) > radius) continue;
+      const rare = s.kind === 'fragment' || s.kind === 'chassis' || (s.kind === 'part' && s.amount >= 2);
+      add(s.x, s.y + 0.6, s.z, rare ? 'chest' : 'loot');
+    }
+    for (const [, ac] of this.activeContainers) {
+      const c = ac.c;
+      if (c.taken || Math.hypot(c.x - cx, c.z - cz) > radius) continue;
+      add(c.x, (c.y ?? this.groundAt(c.x, c.z)) + 0.8, c.z, 'chest');
+    }
+  }
+
+  /** The road ahead, lit: a line of points from just in front of the player to the end of the leg. */
+  protected guidePath(p: Player): { x: number; y: number; z: number }[] {
+    const T = this.terrain;
+    if (!T) return [];
+    const z0 = p.vehicle ? p.vehicle.position.z : p.pos.z;
+    const end = this.src.layout.end.z + 4;
+    const out: { x: number; y: number; z: number }[] = [];
+    for (let k = 0; k < 64; k++) {
+      const z = z0 + 6 + k * 2.6;
+      if (z > end) break;
+      const x = roadX(T, z);
+      out.push({ x, y: this.groundAt(x, z) + 0.35, z });
+    }
+    return out;
   }
 
   protected updateMusicState() {

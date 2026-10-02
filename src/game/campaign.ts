@@ -4,6 +4,7 @@ import { newStocks } from '../sim/resources';
 import { newMerc, type Merc } from '../sim/loyalty';
 import { GARAGE_MAX, PLAYER_PAINT, buildName, buildValue, dismantleYield, freshComp, inventoryCap, installPart, newBuild, type VehicleBuild } from '../sim/garage';
 import { newPart, scrapValue, seedUids, type PartItem } from '../sim/parts';
+import { DrugState, type DrugId, type DrugSave } from '../sim/drugs';
 
 export interface PlayerSave {
   name: string;
@@ -14,16 +15,12 @@ export interface PlayerSave {
   alive: boolean;
 }
 
-export interface Items {
+/** Convoy stores of single-use kit. Every drug is counted here by its id. */
+export interface Items extends Record<DrugId, number> {
   medkit: number;
   molotov: number;
   flare: number;
   charge: number;
-  /** Single-dose drugs, one count per `DrugId`. */
-  stim: number;
-  painkiller: number;
-  adrenaline: number;
-  haze: number;
   /** Engine oil in the trucks, in sumps: one can is half a sump. */
   oil: number;
 }
@@ -51,7 +48,9 @@ export class Campaign {
   hub: string | null = null;
   stocks: Stocks = newStocks(LEGS.start.stocks);
   ammo = LEGS.start.ammo;
-  items: Items = { medkit: 1, molotov: 1, flare: 2, charge: 0, stim: 1, painkiller: 1, adrenaline: 0, haze: 0, oil: 1 };
+  items: Items = { medkit: 1, molotov: 1, flare: 2, charge: 0, painkiller: 1, stim: 1, adrenaline: 0, alcohol: 1, weed: 0, haze: 0, mushrooms: 0, lsd: 0, ayahuasca: 0, oil: 1 };
+  /** What each player has in their blood. Saved, so a trip survives a camp and a reload. */
+  drugs: [DrugState, DrugState] = [new DrugState(), new DrugState()];
   chassis = 0;
   fragments = new Set<number>();
   crew: Merc[] = [];
@@ -255,7 +254,13 @@ export class Campaign {
       flags: this.flags,
       hotCamp: this.hotCamp,
       difficulty: this.difficulty,
+      drugs: this.drugs.map((d) => d.serialize()) as [DrugSave, DrugSave],
     };
+  }
+
+  /** A night's sleep: whatever was in the blood is gone, and the body half forgets. */
+  restDrugs() {
+    for (const d of this.drugs) d.rest();
   }
 
   static deserialize(d: ReturnType<Campaign['serialize']> | LegacySave): Campaign {
@@ -278,6 +283,7 @@ export class Campaign {
     c.flags = d.flags;
     c.hotCamp = d.hotCamp;
     c.difficulty = d.difficulty;
+    if (Array.isArray(d.drugs)) c.drugs = [DrugState.restore(d.drugs[0]), DrugState.restore(d.drugs[1])];
     if ('garage' in d && Array.isArray(d.garage)) {
       const m = d as ReturnType<Campaign['serialize']>;
       c.garage = m.garage.filter((b) => hasChassis(b.chassis)).map(sanitizeBuild);
@@ -294,7 +300,8 @@ export class Campaign {
 }
 
 /** The pre-garage save shape: a tier and five module levels per player. */
-export interface LegacySave extends Omit<ReturnType<Campaign['serialize']>, 'players' | 'garage' | 'inventory' | 'v' | 'solo'> {
+export interface LegacySave extends Omit<ReturnType<Campaign['serialize']>, 'players' | 'garage' | 'inventory' | 'v' | 'solo' | 'drugs'> {
+  drugs?: undefined;
   v: 1;
   solo?: undefined;
   players: { name: string; tier: number; mods: Record<'engine' | 'armor' | 'wheels' | 'weapon' | 'utility', number>; hpFrac: number; utility: PlayerSave['utility']; alive: boolean }[];

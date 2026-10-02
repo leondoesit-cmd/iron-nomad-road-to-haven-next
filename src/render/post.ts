@@ -1,11 +1,16 @@
 import * as THREE from 'three';
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
+import { clamp } from '../core/math';
+import { lookActive, type TripView } from './trip';
 
 /**
  * HDR post chain for the split screen: both views render into one multisampled half-float target, then
  * a bloom mip chain and a composite pass (exposure, ACES, grading, per-half vignette, grain) draw it to
  * the canvas. Every pass clamps its taps to the half the pixel belongs to, so one player's muzzle flash
  * never glows into the other player's view.
+ *
+ * Each half also carries its own trip: hue swim, warp, double vision, kaleidoscope, neon outlines, eyelids and (through a
+ * feedback buffer holding the last frame) motion trails. A half that is not tripping costs nothing extra.
  */
 
 const VERT = /* glsl */ `
@@ -83,6 +88,7 @@ void main() {
 const COMPOSITE_FRAG = /* glsl */ `
 uniform sampler2D tScene;
 uniform sampler2D tBloom;
+uniform sampler2D tPrev;
 uniform float uBloom;
 uniform float uExposure;
 uniform float uVignette;
@@ -93,9 +99,18 @@ uniform float uContrast;
 uniform vec3 uShadowTint;
 uniform vec3 uHighTint;
 uniform vec2 uRes;
+uniform vec2 uTexel;
 uniform float uFade;
+uniform float uHasPrev;
+uniform vec2 uPhase;
+// Per player half, five vec4s each (half A first):
+//   0: hue, saturation, warp, chroma   1: double vision, kaleidoscope, tunnel, pulse
+//   2: blur, edge, glow, dark          3: tint rgb, brightness
+//   4: trail keep, trail zoom, trail hue, on
+uniform vec4 uFx[10];
 varying vec2 vUv;
 ${RECTS}
+vec4 gRect;
 vec3 rrtOdt( vec3 v ) {
   vec3 a = v * ( v + 0.0245786 ) - 0.000090537;
   vec3 b = v * ( 0.983729 * v + 0.4329510 ) + 0.238081;
@@ -114,23 +129,128 @@ float hash( vec2 p ) {
   p3 += dot( p3, p3.yzx + 33.33 );
   return fract( ( p3.x + p3.y ) * p3.z );
 }
+// Rotate a colour's hue about the grey axis.
+vec3 hueRot( vec3 c, float a ) {
+  const vec3 k = vec3( 0.57735027 );
+  float s = sin( a );
+  float co = cos( a );
+  return c * co + cross( k, c ) * s + k * dot( k, c ) * ( 1.0 - co );
+}
+vec3 rainbow( float h ) {
+  return 0.5 + 0.5 * cos( 6.2831853 * ( vec3( 0.0, 0.33, 0.67 ) + h ) );
+}
+// Taps clamp to the half the pixel belongs to, so one player's trip never bleeds into the other's view.
+vec3 sceneAt( vec2 uv ) {
+  return texture2D( tScene, clamp( uv, gRect.xy + uTexel, gRect.zw - uTexel ) ).rgb;
+}
+float lumaAt( vec2 uv ) {
+  return log2( 1.0 + dot( sceneAt( uv ), vec3( 0.2126, 0.7152, 0.0722 ) ) );
+}
 void main() {
-  vec3 c = texture2D( tScene, vUv ).rgb;
-  c += texture2D( tBloom, vUv ).rgb * uBloom;
-  c = aces( c * uExposure / 0.6 );
+  vec4 r = rectFor( vUv );
+  gRect = r;
+  bool inA = vUv.x >= uRectA.x && vUv.x <= uRectA.z && vUv.y >= uRectA.y && vUv.y <= uRectA.w;
+  int hb = inA ? 0 : 5;
+  vec4 f0 = uFx[ hb ];
+  vec4 f1 = uFx[ hb + 1 ];
+  vec4 f2 = uFx[ hb + 2 ];
+  vec4 f3 = uFx[ hb + 3 ];
+  vec4 f4 = uFx[ hb + 4 ];
+  float ph = inA ? uPhase.x : uPhase.y;
+  vec2 span = max( r.zw - r.xy, vec2( 1e-4 ) );
+  vec2 ctr = ( r.xy + r.zw ) * 0.5;
+  vec2 q0 = ( vUv - ctr ) / span;
+  float aspect = span.x * uRes.x / max( span.y * uRes.y, 1.0 );
+  vec2 ax = vec2( aspect, 1.0 );
+  float rr0 = length( q0 * ax ) / length( ax * 0.5 );
+  vec3 col;
+  vec3 bloom;
+  vec3 edgeAdd = vec3( 0.0 );
+  float hueA = 0.0;
+  if ( f4.w > 0.5 ) {
+    vec2 p = q0 * ax;
+    float rr = rr0;
+    // Heartbeat: a thump and a slow swell.
+    float beat = pow( max( 0.0, sin( ph * 5.4 ) ), 6.0 ) * 0.6 + 0.4 * sin( ph * 1.7 );
+    p *= 1.0 - f1.w * 0.018 * beat;
+    // Kaleidoscope: fold the angle into mirrored wedges, more the nearer the edge.
+    if ( f1.y > 0.001 ) {
+      float ang = atan( p.y, p.x );
+      float seg = 6.2831853 / ( 5.0 + floor( f1.y * 4.0 ) );
+      float a2 = abs( mod( ang + ph * 0.06, seg ) - seg * 0.5 ) + ph * 0.02;
+      vec2 pk = length( p ) * vec2( cos( a2 ), sin( a2 ) );
+      p = mix( p, pk, clamp( f1.y * 0.85, 0.0, 0.9 ) * smoothstep( 0.1, 0.65, rr ) );
+    }
+    // Warp: a slow wobble over the whole picture, and ripples that run out from the middle.
+    float w = f0.z;
+    p += w * 0.014 * vec2( sin( p.y * 9.0 + ph * 1.3 ) + 0.5 * sin( p.y * 21.0 - ph * 2.1 ), cos( p.x * 7.0 + ph * 1.1 ) + 0.5 * cos( p.x * 17.0 + ph * 1.9 ) );
+    p *= 1.0 + w * 0.02 * sin( rr * 16.0 - ph * 2.0 );
+    vec2 q1 = p / ax;
+    vec2 uvw = ctr + q1 * span;
+    // Chromatic aberration, bigger toward the edges.
+    float ca = f0.w * 0.014 * ( 0.3 + rr );
+    vec2 off = normalize( q1 + vec2( 1e-5 ) ) * ca * span;
+    col = vec3( sceneAt( uvw + off ).r, sceneAt( uvw ).g, sceneAt( uvw - off ).b );
+    // Double vision: a second image drifting about the first.
+    if ( f1.x > 0.001 ) {
+      vec2 dd = vec2( cos( ph * 0.43 ), sin( ph * 0.57 ) * 0.5 ) * f1.x * 0.028 * span;
+      vec3 col2 = vec3( sceneAt( uvw + dd + off ).r, sceneAt( uvw + dd ).g, sceneAt( uvw + dd - off ).b );
+      col = mix( col, col2, 0.5 * clamp( f1.x * 1.5, 0.0, 1.0 ) );
+    }
+    // Blur: four taps round the sample.
+    if ( f2.x > 0.001 ) {
+      vec2 bo = vec2( f2.x * 0.006 ) * span;
+      col = col * 0.4 + 0.15 * ( sceneAt( uvw + vec2( bo.x, 0.0 ) ) + sceneAt( uvw - vec2( bo.x, 0.0 ) ) + sceneAt( uvw + vec2( 0.0, bo.y ) ) + sceneAt( uvw - vec2( 0.0, bo.y ) ) );
+    }
+    bloom = texture2D( tBloom, clamp( uvw, gRect.xy, gRect.zw ) ).rgb * ( 1.0 + f2.z * 4.0 );
+    // Neon outlines, drifting through the colours.
+    if ( f2.y > 0.001 ) {
+      vec2 e = uTexel * 1.6;
+      float gx = lumaAt( uvw + vec2( e.x, 0.0 ) ) - lumaAt( uvw - vec2( e.x, 0.0 ) );
+      float gy = lumaAt( uvw + vec2( 0.0, e.y ) ) - lumaAt( uvw - vec2( 0.0, e.y ) );
+      float eg = clamp( length( vec2( gx, gy ) ) * 1.6, 0.0, 1.0 );
+      edgeAdd = rainbow( ph * 0.15 + rr * 0.8 + eg * 0.2 ) * eg * f2.y * 1.6;
+    }
+    // Hue swim: swirls across the picture and over time.
+    hueA = f0.x * ( 1.4 * sin( ph * 0.37 ) + 1.1 * sin( rr * 5.0 - ph * 0.8 + q0.x * 2.0 ) );
+  } else {
+    col = texture2D( tScene, vUv ).rgb;
+    bloom = texture2D( tBloom, vUv ).rgb;
+  }
+  vec3 c = col + bloom * uBloom;
+  c = aces( c * uExposure * ( f4.w > 0.5 ? 1.0 + f3.w : 1.0 ) / 0.6 );
   c = toSRGB( c );
   float l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
-  c = mix( vec3( l ), c, uSaturation );
+  c = mix( vec3( l ), c, uSaturation * ( f4.w > 0.5 ? max( 0.0, 1.0 + f0.y ) : 1.0 ) );
+  if ( f4.w > 0.5 ) {
+    c = hueRot( c, hueA );
+    c *= 1.0 + f3.rgb;
+    c += edgeAdd;
+  }
   c *= mix( uShadowTint, uHighTint, smoothstep( 0.05, 0.75, l ) );
   c = clamp( ( c - 0.5 ) * uContrast + 0.5, 0.0, 1.0 );
-  vec4 r = rectFor( vUv );
-  vec2 q = ( vUv - r.xy ) / max( r.zw - r.xy, vec2( 1e-4 ) ) - 0.5;
-  float aspect = ( r.z - r.x ) * uRes.x / max( ( r.w - r.y ) * uRes.y, 1.0 );
-  vec2 dq = q * vec2( aspect, 1.0 );
-  float rv = length( dq ) / length( vec2( aspect, 1.0 ) * 0.5 );
-  c *= 1.0 - uVignette * smoothstep( 0.45, 1.05, rv );
+  c *= 1.0 - ( uVignette + ( f4.w > 0.5 ? f1.z * 0.6 : 0.0 ) ) * smoothstep( 0.45 - ( f4.w > 0.5 ? f1.z * 0.2 : 0.0 ), 1.05, rr0 );
+  if ( f4.w > 0.5 ) {
+    // Eyelids closing from top and bottom, and the room going dark.
+    float lid = smoothstep( 1.0 - f2.w * 1.15, 1.12 - f2.w * 1.15, abs( q0.y ) * 2.0 );
+    c *= ( 1.0 - lid ) * ( 1.0 - f2.w * 0.4 );
+    // Trails: the last frame, zoomed a hair and slid round the colour wheel, laid under this one.
+    if ( f4.x > 0.001 && uHasPrev > 0.5 ) {
+      vec2 puv = clamp( ctr + q0 * ( 1.0 - f4.y ) * span, r.xy, r.zw );
+      vec3 prev = hueRot( texture2D( tPrev, puv ).rgb, f4.z );
+      c = mix( c, prev, f4.x );
+    }
+  }
   c += ( hash( vUv * uRes + fract( uTime * 13.17 ) * 97.0 ) - 0.5 ) * uGrain;
   gl_FragColor = vec4( c * uFade, 1.0 );
+}`;
+
+const COPY_FRAG = /* glsl */ `
+uniform sampler2D tSrc;
+uniform float uFade;
+varying vec2 vUv;
+void main() {
+  gl_FragColor = vec4( texture2D( tSrc, vUv ).rgb * uFade, 1.0 );
 }`;
 
 export interface PostParams {
@@ -156,6 +276,14 @@ export class PostFX {
   private downMat: THREE.ShaderMaterial;
   private upMat: THREE.ShaderMaterial;
   private compMat: THREE.ShaderMaterial;
+  private copyMat: THREE.ShaderMaterial;
+  /** The last composited frame and the one being drawn, for trails. Allocated only while someone is leaving them. */
+  private hist: THREE.WebGLRenderTarget[] = [];
+  private histIdx = 0;
+  private histValid = false;
+  /** Five vec4s per half, in the layout the composite shader reads. */
+  private fx = Array.from({ length: 10 }, () => new THREE.Vector4());
+  private phase = new THREE.Vector2();
   private rectA = new THREE.Vector4(0, 0, 0.5, 1);
   private rectB = new THREE.Vector4(0.5, 0, 1, 1);
   width = 0;
@@ -210,6 +338,11 @@ export class PostFX {
         uHighTint: { value: new THREE.Color(1, 1, 1) },
         uRes: { value: new THREE.Vector2(1, 1) },
         uFade: { value: 1 },
+        tPrev: { value: null },
+        uHasPrev: { value: 0 },
+        uTexel: { value: new THREE.Vector2(1, 1) },
+        uPhase: { value: this.phase },
+        uFx: { value: this.fx },
         ...rects,
       },
       vertexShader: VERT,
@@ -217,6 +350,46 @@ export class PostFX {
       depthTest: false,
       depthWrite: false,
     });
+    this.copyMat = new THREE.ShaderMaterial({
+      uniforms: { tSrc: { value: null }, uFade: { value: 1 } },
+      vertexShader: VERT,
+      fragmentShader: COPY_FRAG,
+      depthTest: false,
+      depthWrite: false,
+    });
+  }
+
+  /**
+   * Set one half's trip for this frame from a `TripView`. `dt` is the real frame time, so trails fade by the clock, not
+   * the frame rate.
+   */
+  setTrip(i: number, t: TripView, dt: number) {
+    const l = t.look;
+    const o = (i === 0 ? 0 : 1) * 5;
+    const on = t.active && lookActive(l);
+    this.phase.setComponent(i === 0 ? 0 : 1, t.phase);
+    if (!on) {
+      for (let k = 0; k < 5; k++) this.fx[o + k].set(0, 0, 0, 0);
+      return;
+    }
+    const keep = l.trail > 0.01 ? Math.exp(-Math.max(dt, 1 / 240) / (l.trail * 0.35)) : 0;
+    this.fx[o].set(l.hue, l.sat, l.warp, l.chroma);
+    this.fx[o + 1].set(l.dbl, l.kaleido, l.tunnel, l.pulse);
+    this.fx[o + 2].set(l.blur, l.edge, l.glow, l.dark);
+    this.fx[o + 3].set(l.tintR, l.tintG, l.tintB, l.bright);
+    this.fx[o + 4].set(clamp(keep, 0, 0.97), l.trail * 0.006 + l.kaleido * 0.004, l.hue * 0.03, 1);
+  }
+
+  private wantTrails() {
+    return this.fx[4].x > 0.001 || this.fx[9].x > 0.001;
+  }
+
+  private ensureHist(w: number, h: number) {
+    if (this.hist.length === 2 && this.hist[0].width === w && this.hist[0].height === h) return;
+    for (const t of this.hist) t.dispose();
+    const opts = { type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, magFilter: THREE.LinearFilter, minFilter: THREE.LinearFilter, generateMipmaps: false };
+    this.hist = [new THREE.WebGLRenderTarget(w, h, opts), new THREE.WebGLRenderTarget(w, h, opts)];
+    this.histValid = false;
   }
 
   setSize(w: number, h: number) {
@@ -292,16 +465,39 @@ export class PostFX {
     u.uShadowTint.value.copy(p.shadowTint);
     u.uHighTint.value.copy(p.highTint);
     u.uRes.value.set(outW, outH);
-    u.uFade.value = fade;
+    u.uTexel.value.set(1 / this.width, 1 / this.height);
     this.quad.material = cm;
-    gl.setRenderTarget(null);
-    this.quad.render(gl);
+    if (this.wantTrails()) {
+      // Draw into the history buffer (with the previous frame laid under it), then copy that to the screen.
+      this.ensureHist(Math.max(4, Math.round(outW)), Math.max(4, Math.round(outH)));
+      const prev = this.hist[this.histIdx];
+      const next = this.hist[1 - this.histIdx];
+      u.uFade.value = 1;
+      u.tPrev.value = prev.texture;
+      u.uHasPrev.value = this.histValid ? 1 : 0;
+      gl.setRenderTarget(next);
+      this.quad.render(gl);
+      this.copyMat.uniforms.tSrc.value = next.texture;
+      this.copyMat.uniforms.uFade.value = fade;
+      this.quad.material = this.copyMat;
+      gl.setRenderTarget(null);
+      this.quad.render(gl);
+      this.histIdx = 1 - this.histIdx;
+      this.histValid = true;
+    } else {
+      u.uFade.value = fade;
+      u.uHasPrev.value = 0;
+      this.histValid = false;
+      gl.setRenderTarget(null);
+      this.quad.render(gl);
+    }
     gl.autoClear = prevAuto;
   }
 
   dispose() {
     this.hdr.dispose();
-    for (const t of [...this.down, ...this.up]) t.dispose();
+    for (const t of [...this.down, ...this.up, ...this.hist]) t.dispose();
+    this.copyMat.dispose();
     this.downMat.dispose();
     this.upMat.dispose();
     this.compMat.dispose();

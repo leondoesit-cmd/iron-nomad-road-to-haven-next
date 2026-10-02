@@ -1,5 +1,5 @@
 import { t } from '../data';
-import { DRUGS } from '../sim/drugs';
+import { DRUGS, DRUG_IDS } from '../sim/drugs';
 import { LABEL, whole } from '../sim/resources';
 import { loyaltyBand } from '../sim/loyalty';
 import { SALVAGE_STAGES } from '../sim/salvage';
@@ -59,6 +59,7 @@ class PlayerHud {
       <div class="gray" data-k="gray"></div>
       <div class="vignette" data-k="vig"></div>
       <div class="drugfx" data-k="drugfx"></div>
+      <div class="belt" data-k="belt"></div>
       <div class="corner tl">
         <div class="tag"><span class="pcolor" style="background:${color}"></span><span data-k="name"></span></div>
         <div class="sigrow"><div class="sig" data-k="sigbar"><div class="fill" data-k="sigfill"></div></div><span class="val" data-k="sigval">0</span></div>
@@ -101,6 +102,7 @@ class PlayerHud {
     </div>`;
     this.root = host.firstElementChild as HTMLElement;
     host.querySelectorAll<HTMLElement>('[data-k]').forEach((el) => this.q.set(el.dataset.k!, el));
+    this.q.set('root', this.root);
     this.compass = this.q.get('compass') as unknown as HTMLCanvasElement;
     this.cctx = this.compass.getContext('2d')!;
     this.q.get('name')!.textContent = '';
@@ -124,7 +126,10 @@ class PlayerHud {
     const key = `${k}:${prop}`;
     if (this.last.get(key) === v) return;
     this.last.set(key, v);
-    (this.q.get(k)!.style as unknown as Record<string, string>)[prop] = v;
+    const style = this.q.get(k)!.style;
+    // Custom properties (the --trip and --haze the stylesheet reads) only take through setProperty.
+    if (prop.startsWith('--')) style.setProperty(prop, v);
+    else (style as unknown as Record<string, string>)[prop] = v;
   }
   setClass(k: string, v: string) {
     const key = `${k}:class`;
@@ -320,13 +325,14 @@ export class Hud {
     const step = this.acc;
     this.acc = 0;
     void step;
-    const pins = scene.compassPins();
+    const basePins = scene.compassPins();
     const leg = scene.mode === 'leg' ? (scene as LegScene) : null;
     for (let i = 0; i < 2; i++) {
       const h = this.huds[i];
       const p = scene.players[i];
       if (!p) continue;
-      this.updateOne(h, p, scene, pins, leg, slots[i] ?? null, extras);
+      const reveal = scene.revealPins(p);
+      this.updateOne(h, p, scene, reveal.length ? basePins.concat(reveal) : basePins, leg, slots[i] ?? null, extras);
     }
   }
 
@@ -351,12 +357,9 @@ export class Hud {
     if (leg && leg.hordeCountdown(p) > 0) chips.push(`<span class="chip bad">HORDE ${formatClock(leg.hordeCountdown(p))}</span>`);
     for (const s of p.drugs.status()) chips.push(`<span class="chip ${s.kind}">${s.text}</span>`);
     const dsel = p.drugs.selected;
-    if (p.state === 'foot' && scene.campaign.items[dsel] > 0) chips.push(`<span class="chip">${btnLabel(slot, 'Down')} ${DRUGS[dsel].name.toUpperCase()} ×${scene.campaign.items[dsel]}</span>`);
+    if ((p.state === 'foot' || p.state === 'driving') && !p.beltOpen && scene.campaign.items[dsel] > 0) chips.push(`<span class="chip">${btnLabel(slot, 'Down')} ${DRUGS[dsel].name.toUpperCase()} ×${scene.campaign.items[dsel]}</span>`);
     h.setHtml('chips', chips.join(''));
-    // Drugs bend the picture: a hue swim and blur that grows with the haze.
-    const haze = Math.round(p.drugs.mods().haze * 20) / 20;
-    h.setClass('drugfx', haze > 0 ? 'on' : '');
-    h.setStyle('drugfx', '--haze', String(haze));
+    this.updateTrip(h, p, scene, slot);
 
     // Compass
     const cam = p.cam;
@@ -589,6 +592,39 @@ export class Hud {
         .join('') + `<div style="left:50%;top:50%;transform:translate(-50%,-50%);color:#b97d2c">CREW ORDERS</div>`,
     );
     void slot;
+  }
+
+  /** The drug belt, and the parts of a trip that live on the HUD: it sways, and (without the post chain) the picture gets a CSS filter. */
+  private updateTrip(h: PlayerHud, p: Player, scene: Scene, slot: Slot | null) {
+    const d = p.drugs;
+    const look = d.look();
+    const m = d.mods();
+    // The HUD itself loses its footing.
+    const trip = Math.round(clamp(m.trip + m.sway * 0.6 + look.warp * 0.4, 0, 1) * 10) / 10;
+    h.setClass('root', trip > 0.15 ? 'tripping' : '');
+    h.setStyle('root', '--trip', String(trip));
+    // On low quality there is no post chain, so the lens effects fall back to a filter over the picture.
+    const fallback = !scene.R.usePost;
+    const haze = Math.round(clamp(look.hue * 0.6 + look.warp * 0.5 + look.sat * 0.3 + look.blur + look.dbl * 0.5, 0, 1) * 20) / 20;
+    const dark = Math.round(look.dark * 20) / 20;
+    h.setClass('drugfx', fallback && (haze > 0 || dark > 0) ? 'on' : '');
+    h.setStyle('drugfx', '--haze', String(haze));
+    h.setStyle('drugfx', '--dark', String(dark));
+    if (!p.beltOpen) {
+      h.setStyle('belt', 'display', 'none');
+      return;
+    }
+    const items = scene.campaign.items;
+    const sel = d.selected;
+    const slots = DRUG_IDS.map((id) => {
+      const def = DRUGS[id];
+      const n = items[id];
+      return `<div class="slot${id === sel ? ' sel' : ''}${n <= 0 ? ' none' : ''}" style="--dc:${def.color}"><b>${def.glyph}</b><i>${n}</i></div>`;
+    }).join('');
+    const def = DRUGS[sel];
+    const hint = p.state === 'driving' ? `hold to cycle · release, then tap ${btnLabel(slot, 'Down')} to take` : `◀ ▶ to choose · release to close · tap ${btnLabel(slot, 'Down')} to take`;
+    h.setHtml('belt', `<div class="slots">${slots}</div><div class="slotname" style="color:${def.color}">${def.name} ×${items[sel]}</div><div class="slotblurb">${def.blurb}</div><div class="slothint">${hint}</div>`);
+    h.setStyle('belt', 'display', 'flex');
   }
 
   private updateSheet(h: PlayerHud, p: Player, scene: Scene, leg: LegScene | null) {

@@ -21,6 +21,8 @@ uniform float uTime;
 uniform float uCloud;
 uniform float uEnv;
 uniform float uScatter;
+// Trip, set per view: x aurora and rings, y the eye, z phase (seconds), w stars in daylight.
+uniform vec4 uTrip;
 varying vec3 vDir;
 
 float h12( vec2 p ) {
@@ -88,13 +90,56 @@ void main() {
   // HDR sun disc, left out of the environment capture so reflections don't double the sun light.
   float disc = smoothstep( 0.99962, 0.9998, mu ) * day * ( 1.0 - uEnv ) * ( 1.0 - g );
   col += uSunColor * disc * 60.0;
-  if ( uNight > 0.01 ) {
+  float starK = max( uNight, uTrip.w );
+  if ( starK > 0.01 ) {
     vec3 sp = floor( d * 240.0 );
     float tw = 0.6 + 0.4 * sin( uTime * 2.3 + h13( sp + 3.1 ) * 40.0 );
     float s = step( 0.9983, h13( sp ) ) * smoothstep( 0.03, 0.35, y ) * tw;
-    col += vec3( 0.85, 0.9, 1.0 ) * s * uNight * 3.0 * ( 1.0 - uEnv );
+    col += vec3( 0.85, 0.9, 1.0 ) * s * starK * 3.0 * ( 1.0 - uEnv );
     float md = dot( d, uMoonDir );
     col += vec3( 0.75, 0.8, 0.95 ) * ( smoothstep( 0.99935, 0.9996, md ) * 5.0 * ( 1.0 - uEnv ) + pow( max( md, 0.0 ), 24.0 ) * 0.06 ) * uNight;
+  }
+  if ( uTrip.x > 0.001 || uTrip.y > 0.001 ) {
+    float tp = uTrip.z;
+    float above = smoothstep( -0.02, 0.25, y );
+    if ( uTrip.x > 0.001 ) {
+      // Aurora curtains in colour-cycling bands, and mandala rings about the zenith.
+      vec2 ap = d.xz / ( y + 0.4 );
+      float w = vnoise( ap * 1.3 + vec2( tp * 0.04, - tp * 0.03 ) );
+      float band = pow( sin( ap.x * 2.0 + w * 6.0 + tp * 0.3 ) * 0.5 + 0.5, 3.0 );
+      float band2 = pow( sin( ap.y * 2.6 - w * 5.0 - tp * 0.22 ) * 0.5 + 0.5, 4.0 );
+      vec3 ac = 0.5 + 0.5 * cos( 6.2831853 * ( vec3( 0.0, 0.33, 0.67 ) + ap.x * 0.12 + w * 0.6 + tp * 0.05 ) );
+      col += ac * ( band + band2 * 0.7 ) * above * uTrip.x * ( 0.45 + 0.4 * uNight );
+      float ang = atan( d.z, d.x );
+      float zr = acos( clamp( y, -1.0, 1.0 ) );
+      float ring = sin( zr * 22.0 - tp * 0.8 ) * sin( ang * 8.0 + tp * 0.2 + zr * 6.0 );
+      col += ac * smoothstep( 0.55, 1.0, ring ) * smoothstep( 0.0, 0.5, y ) * uTrip.x * 0.35;
+    }
+    if ( uTrip.y > 0.001 ) {
+      // An eye, fixed in the sky, with a pupil that breathes and a slow blink.
+      vec3 ed = normalize( vec3( 0.28, 0.58, 0.76 ) );
+      vec3 ex = normalize( cross( ed, vec3( 0.0, 1.0, 0.0 ) ) );
+      vec3 ey = cross( ex, ed );
+      float ca = dot( d, ed );
+      if ( ca > 0.0 ) {
+        float R = 0.55;
+        vec2 lp = vec2( dot( d, ex ), dot( d, ey ) );
+        float bl = pow( max( 0.0, sin( tp * 0.2 ) ), 40.0 );
+        vec2 el = vec2( lp.x, lp.y * ( 1.0 + bl * 8.0 ) );
+        float alm = pow( abs( el.x ) / R, 2.2 ) + abs( el.y ) / ( R * 0.55 );
+        if ( alm < 1.0 ) {
+          float la = atan( lp.y, lp.x );
+          float rad = length( lp ) / ( R * 0.55 );
+          float pupil = smoothstep( 0.3 + 0.05 * sin( tp * 0.7 ), 0.26, rad );
+          float iris = smoothstep( 1.0, 0.85, rad );
+          float fib = 0.5 + 0.5 * sin( la * 30.0 + sin( la * 7.0 + tp * 0.5 ) * 1.5 );
+          vec3 ic = mix( vec3( 0.9, 0.55, 0.1 ), vec3( 0.2, 0.8, 0.5 ), rad ) * ( 0.6 + 0.8 * fib );
+          vec3 eyeCol = mix( vec3( 0.95, 0.93, 0.85 ), ic, iris );
+          eyeCol = mix( eyeCol, vec3( 0.0 ), pupil );
+          col = mix( col, eyeCol * 1.4, smoothstep( 1.0, 0.8, alm ) * uTrip.y * 0.9 * above );
+        }
+      }
+    }
   }
   gl_FragColor = vec4( col, 1.0 );
 }`;
@@ -118,6 +163,7 @@ export class SkyDome {
     uCloud: { value: 0.35 },
     uEnv: { value: 0 },
     uScatter: { value: 0.5 },
+    uTrip: { value: new THREE.Vector4() },
   };
   private material: THREE.ShaderMaterial;
   private envScene = new THREE.Scene();

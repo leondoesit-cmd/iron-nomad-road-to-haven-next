@@ -1,13 +1,16 @@
 import * as THREE from 'three';
 import { DEG, lerp } from '../core/math';
 import type { LightState } from '../sim/dayclock';
-import { installAtmosphere, setAtmosphere } from './atmosphere';
+import { ATMO, installAtmosphere, setAtmosphere } from './atmosphere';
 import { GLOBALS, KIT } from './materials';
 import { PostFX } from './post';
 import { SkyDome } from './sky';
+import { BREATH, installBreath, newTripView, resetCamera, shiftHue, tripCamera, tripTempo, lookActive, type TripView } from './trip';
+import type { Look } from '../sim/drugs';
 
 // Fog chunks must be replaced before the first material compiles.
 installAtmosphere();
+installBreath();
 
 export type QualityPreset = 'low' | 'medium' | 'high';
 export interface QualitySpec {
@@ -109,6 +112,22 @@ export class GameRenderer {
   /** 0..1 fade to black applied in the composite (scene transitions). */
   fade = 1;
   private floatOk = true;
+  /** Each player's trip, as the renderer sees it: what to bend in their view, and the clock it runs on. */
+  trip: [TripView, TripView] = [newTripView(), newTripView()];
+  /** Baseline sky, fog and light, put back after a view that bent them. */
+  private tripSaved = {
+    zenith: new THREE.Color(),
+    horizon: new THREE.Color(),
+    sunColor: new THREE.Color(),
+    ground: new THREE.Color(),
+    fog: new THREE.Color(),
+    fogNear: 0,
+    fogFar: 0,
+    hemiSky: new THREE.Color(),
+    hemiGround: new THREE.Color(),
+    sun: new THREE.Color(),
+    atmo: { x: 0, y: 0, z: 0 },
+  };
 
   constructor(public canvas: HTMLCanvasElement) {
     this.gl = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance', stencil: false });
@@ -149,6 +168,96 @@ export class GameRenderer {
     });
     this.resize();
     window.addEventListener('resize', () => this.resize());
+  }
+
+  /**
+   * Set one player's trip for this frame. Their half of the picture gets the post effects, their sky, fog and light get
+   * recoloured and their ground starts to breathe, all in their own view only.
+   */
+  setTrip(i: number, look: Look, dt: number) {
+    const t = this.trip[i];
+    t.look = look;
+    t.active = lookActive(look);
+    t.phase += dt * tripTempo(look);
+    this.post?.setTrip(i, t, dt);
+  }
+
+  /** Roll and breathe this player's camera for the view about to be drawn (or put it square again). */
+  applyTripCamera(i: number) {
+    const t = this.trip[i];
+    const cam = this.views[i].camera;
+    if (t.active) tripCamera(cam, t.look, t.phase);
+    else resetCamera(cam);
+  }
+
+  /** Bend the sky, fog, light and ground for a view that is tripping. Returns whether it did, so `endTripView` knows to undo. */
+  private beginTripView(i: number): boolean {
+    const t = this.trip[i];
+    if (!t.active) return false;
+    const l = t.look;
+    const ph = t.phase;
+    const s = this.tripSaved;
+    const u = this.sky.uniforms;
+    s.zenith.copy(u.uZenith.value);
+    s.horizon.copy(u.uHorizon.value);
+    s.sunColor.copy(u.uSunColor.value);
+    s.ground.copy(u.uGround.value);
+    s.fog.copy(this.fog.color);
+    s.fogNear = this.fog.near;
+    s.fogFar = this.fog.far;
+    s.hemiSky.copy(this.hemi.color);
+    s.hemiGround.copy(this.hemi.groundColor);
+    s.sun.copy(this.sun.color);
+    s.atmo.x = ATMO.sunCol.x;
+    s.atmo.y = ATMO.sunCol.y;
+    s.atmo.z = ATMO.sunCol.z;
+    // The world heaves, and the sky grows an aurora, rings and (for the vine) an eye.
+    BREATH.x = l.breathe * 0.16;
+    BREATH.y = ph;
+    u.uTrip.value.set(l.sky, l.eye, ph, l.sky > 0.15 ? Math.min(1, l.sky) : 0);
+    // The light drifts round the colour wheel, so everything it touches does too.
+    const turn = l.hue * 0.3 * Math.sin(ph * 0.21);
+    const sat = l.sat * 0.25;
+    shiftHue(u.uZenith.value, turn, sat);
+    shiftHue(u.uHorizon.value, turn * 1.1, sat);
+    shiftHue(u.uSunColor.value, turn * 1.5, sat);
+    shiftHue(u.uGround.value, turn, sat);
+    for (const c of [u.uZenith.value, u.uHorizon.value, u.uSunColor.value]) {
+      c.r *= 1 + l.tintR;
+      c.g *= 1 + l.tintG;
+      c.b *= 1 + l.tintB;
+    }
+    this.fog.color.copy(u.uHorizon.value);
+    // Tunnel vision closes the fog in.
+    this.fog.near *= 1 - 0.4 * l.tunnel;
+    this.fog.far *= 1 - 0.45 * l.tunnel;
+    shiftHue(this.hemi.color, turn * 1.2, sat);
+    shiftHue(this.hemi.groundColor, turn * 1.2, sat);
+    shiftHue(this.sun.color, turn * 1.5, sat);
+    ATMO.sunCol.x = this.sun.color.r;
+    ATMO.sunCol.y = this.sun.color.g;
+    ATMO.sunCol.z = this.sun.color.b;
+    return true;
+  }
+
+  private endTripView() {
+    const s = this.tripSaved;
+    const u = this.sky.uniforms;
+    u.uZenith.value.copy(s.zenith);
+    u.uHorizon.value.copy(s.horizon);
+    u.uSunColor.value.copy(s.sunColor);
+    u.uGround.value.copy(s.ground);
+    this.fog.color.copy(s.fog);
+    this.fog.near = s.fogNear;
+    this.fog.far = s.fogFar;
+    this.hemi.color.copy(s.hemiSky);
+    this.hemi.groundColor.copy(s.hemiGround);
+    this.sun.color.copy(s.sun);
+    ATMO.sunCol.x = s.atmo.x;
+    ATMO.sunCol.y = s.atmo.y;
+    ATMO.sunCol.z = s.atmo.z;
+    BREATH.x = 0;
+    u.uTrip.value.set(0, 0, 0, 0);
   }
 
   get usePost() {
@@ -456,7 +565,9 @@ export class GameRenderer {
     this.sky.mesh.position.copy(v.camera.position);
     this.aimShadow(v);
     for (const cb of this.onBeforeView) cb(i, v.camera);
+    const bent = this.beginTripView(i);
     this.gl.render(this.scene, v.camera);
+    if (bent) this.endTripView();
     for (const cb of this.onAfterView) cb(i);
   }
 }
