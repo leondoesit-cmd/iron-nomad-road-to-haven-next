@@ -71,6 +71,10 @@ const WALK = 3.4;
 const SPRINT = 5.9;
 const CROUCH = 1.7;
 const BODY_H = 1.7;
+/** Jump: take-off speed (about 1 m of height at gravity 22), the grace after leaving a ledge, and how early a press still counts. */
+const JUMP_V = 6.6;
+const COYOTE = 0.1;
+const JUMP_BUFFER = 0.12;
 const BODY_R = 0.3;
 const RAY_STATIC = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
 const _v = new THREE.Vector3();
@@ -88,6 +92,14 @@ export class Player implements Pilot {
   ads = 0;
   crouch = false;
   grounded = true;
+  /** Seconds since the feet last touched ground, and the time left on a buffered jump press. */
+  private airT = 0;
+  private jumpBuf = 0;
+  /** Horizontal velocity carried through the air (steering only nudges it). */
+  private hvx = 0;
+  private hvz = 0;
+  /** 0 on the ground, 1 in the air; eased so the tuck in the pose does not snap. */
+  private airVis = 0;
   moveSpeed = 0;
   hp = 100;
   maxHp = 100;
@@ -604,6 +616,7 @@ export class Player implements Pilot {
 
     this.updateTools(dt, it);
     this.updateInteractions(dt, it);
+    this.updateJump(dt, it);
 
     // Pick up swap: LB cycles equipment.
     if (!this.buildMode && wasPressed(it, Btn.LB)) {
@@ -622,10 +635,41 @@ export class Player implements Pilot {
     // Ground hazards: spore clouds are handled by the zombie system.
   }
 
+  /**
+   * Jump. A press is remembered for a moment and a ledge walked off still allows one, so it feels forgiving. On a pad the
+   * button is shared with interact, so a press that has something to interact with is left to that.
+   */
+  private updateJump(dt: number, it: PlayerIntent) {
+    this.jumpBuf = wasPressed(it, Btn.Jump) ? JUMP_BUFFER : Math.max(0, this.jumpBuf - dt);
+    if (this.jumpBuf <= 0 || this.airT > COYOTE || this.vy > 1) return;
+    if (this.swimming || this.carry || this.action || this.buildMode || this.pinned >= ENEMIES.zombieRules.pinAt) return;
+    if (wasPressed(it, Btn.A) && this.prompt?.button === 'A') {
+      this.jumpBuf = 0;
+      return;
+    }
+    this.jumpBuf = 0;
+    this.vy = JUMP_V;
+    this.airT = COYOTE + 1;
+    this.grounded = false;
+    this.crouch = false;
+    this.ctx.audio.play('swing', this.pos.x, this.pos.z, 0.25);
+  }
+
   private moveBody(dt: number, vx: number, vz: number) {
     const ctx = this.ctx;
+    // Airborne, the feet cannot push: the take-off velocity carries, and the stick only bends it.
+    if (this.grounded || this.swimming) {
+      this.hvx = vx;
+      this.hvz = vz;
+    } else {
+      this.hvx = damp(this.hvx, vx, 4, dt);
+      this.hvz = damp(this.hvz, vz, 4, dt);
+      vx = this.hvx;
+      vz = this.hvz;
+    }
     this.vy -= 22 * dt;
     if (this.vy < -30) this.vy = -30;
+    const fallV = this.vy;
     let desired = { x: vx * dt, y: this.vy * dt, z: vz * dt };
     if (this.swimming) {
       // Afloat: no gravity, ease toward the surface so the head stays out and the body bobs a little.
@@ -641,9 +685,21 @@ export class Player implements Pilot {
     }
     this.kcc.computeColliderMovement(this.collider, desired, undefined, RAY_STATIC);
     const m = this.kcc.computedMovement();
+    const wasGrounded = this.grounded;
     this.grounded = this.kcc.computedGrounded();
+    if (this.vy > 0 && m.y < desired.y - 1e-3) this.vy = 0; // head against a ceiling
     if (this.grounded && this.vy < 0) this.vy = 0;
     if (this.swimming) this.grounded = false;
+    if (this.grounded) {
+      if (!wasGrounded && fallV < -5 && !this.swimming) {
+        // Landing: a thud and a puff of dust, louder the harder it came down.
+        const k = clamp((-fallV - 5) / 12, 0, 1);
+        ctx.audio.play('thud', this.pos.x, this.pos.z, 0.15 + 0.3 * k);
+        ctx.fx.puff(this.pos.x, this.pos.y + 0.05, this.pos.z, 0.62, 0.55, 0.44, 0.5 + 0.5 * k, 0.5);
+        ctx.sig.emit(this.pos.x, this.pos.z, 6 + 8 * k, 'noise');
+      }
+      this.airT = 0;
+    } else this.airT += dt;
     // The body is the capsule centre: update our feet position from it.
     const t = this.body.translation();
     const nx = t.x + m.x;
@@ -782,6 +838,60 @@ export class Player implements Pilot {
     } else {
       this.updateMelee(dt, it);
     }
+  }
+
+  /** Seat x offset on the chassis: the cab seats when the model has them, else the moped's centreline. */
+  private seatSide(v: Vehicle, seat: 'driver' | 'passenger'): number {
+    return v.def.seat ? v.def.seat[seat][0] : seat === 'driver' ? 0 : 0.2;
+  }
+
+  /** Drive-by: fire the sidearm from a moving vehicle, sharing the pistol's magazine and reload. */
+  private fireFromSeat(v: Vehicle, muzzle: [number, number, number]) {
+    const ctx = this.ctx;
+    if (this.fireCd > 0 || this.reloadT > 0) return;
+    if (this.mag <= 0) {
+      if (ctx.campaign.ammo > 0) {
+        this.reloadT = 1.3;
+        ctx.audio.play('reload', this.pos.x, this.pos.z, 0.5);
+      } else {
+        this.fireCd = 0.4;
+        this.note('Out of ammo: craft more at camp', 'warn');
+      }
+      return;
+    }
+    const a = this.computeAim(v);
+    const [mx, my, mz] = muzzle;
+    let dx = this.aimPoint.x - mx;
+    let dy = this.aimPoint.y - my;
+    let dz = this.aimPoint.z - mz;
+    const l = Math.hypot(dx, dy, dz);
+    if (l < 2.5) {
+      dx = a.dx;
+      dy = a.dy;
+      dz = a.dz;
+    } else {
+      dx /= l;
+      dy /= l;
+      dz /= l;
+    }
+    this.fireCd = 0.22;
+    this.mag--;
+    this.muzzleT = 0.12;
+    ctx.combat.shoot(mx, my, mz, dx, dy, dz, {
+      side: 'convoy',
+      damage: 24,
+      // Shooting off a bouncing seat is loose, and worse the faster the ride goes.
+      spread: 0.05 + Math.min(0.05, Math.abs(v.speed) * 0.003),
+      assist: it0(this.intent.aimAssist) * 0.8,
+      noise: 60,
+      range: 65,
+      headshots: true,
+      owner: this,
+    });
+    ctx.fx.flash(mx, my, mz, 0.9);
+    ctx.audio.play('pistol', mx, mz, 0.8);
+    this.cam.addShake(0.04);
+    ctx.input.rumble(this.index, 0.12, 0.25, 50);
   }
 
   private firePistol() {
@@ -1171,6 +1281,8 @@ export class Player implements Pilot {
     }
     // Fire the vehicle gun. T2 fires along the nose; T3's gun belongs to the gunner.
     if (v.def.weapon === 'frontLMG' && (isHeld(it, Btn.RB) || (it.device === 'pad' && false))) v.fireGun(dt);
+    // No mounted gun on this ride: RB is a drive-by with the sidearm, aimed where the camera looks.
+    else if (!v.weapon && isHeld(it, Btn.RB)) this.fireFromSeat(v, v.body.toWorld(this.seatSide(v, 'driver'), 1.1, 0.2));
     // Camera toggles
     if (wasPressed(it, Btn.L3)) this.camFar = !this.camFar;
     this.lookBack = isHeld(it, Btn.R3);
@@ -1228,7 +1340,8 @@ export class Player implements Pilot {
     const a = this.computeAim(v);
     v.gunAim = { x: this.aimPoint.x, y: this.aimPoint.y, z: this.aimPoint.z };
     const firing = it.rt > 0.5 || isHeld(it, Btn.RB);
-    if (firing) {
+    if (firing && !v.weapon) this.fireFromSeat(v, v.body.toWorld(this.seatSide(v, 'passenger'), 1.1, 0.2));
+    else if (firing) {
       // Direction from the muzzle to where the reticle lands.
       const m = new THREE.Vector3();
       v.visual.muzzle.updateWorldMatrix(true, false);
@@ -1462,7 +1575,8 @@ export class Player implements Pilot {
     // First person: whatever is in hand is held up in front, where the camera can see it.
     if (this.firstPerson && !this.carry && weapon !== 'none') aim = Math.max(aim, 0.75);
     this.syncCarryModel();
-    h.update(dt, this.state === 'downed' ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch);
+    this.airVis = damp(this.airVis, this.state === 'foot' && !this.grounded && !this.swimming && this.airT > 0.06 ? 1 : 0, 16, dt);
+    h.update(dt, this.state === 'downed' ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch, this.airVis);
     h.muzzle(this.muzzleT > 0.05);
     if (this.invuln > 0) h.root.visible = Math.floor(this.invuln * 12) % 2 === 0;
   }
