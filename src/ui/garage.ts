@@ -385,7 +385,13 @@ export class Workbench {
     this.acts.clear();
     const body = this.view.html();
     this.root.classList.add('on');
-    this.root.innerHTML = `<div class="ledger panel paper bench">
+    // Split screen: keep the bench inside the opener's own half so the other player's view stays visible.
+    let place = '';
+    if (!g.campaign.solo) {
+      const first = this.owner === 0;
+      place = g.R.layout === 'horizontal' ? (first ? 'inset:2% 12% 52% 12%' : 'inset:52% 12% 2% 12%') : first ? 'inset:3% 52% 3% 2%' : 'inset:3% 2% 3% 52%';
+    }
+    this.root.innerHTML = `<div class="ledger panel paper bench" style="${place}">
       <h2><span>Workbench · ${escapeHtml(v.def.name)}</span><small>${escapeHtml(g.campaign.players[this.owner].name.toUpperCase())} · THE GAME IS PAUSED</small></h2>
       <div class="gbody">${body}</div>
       <div class="benchfoot"><span class="mutedtxt">${escapeHtml(this.msg)}</span>${this.btnHtml('benchdone', 'Back to the road', () => this.close())}</div>
