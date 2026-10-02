@@ -213,6 +213,8 @@ export interface LegDef {
   /** Ground palette for wasteland legs. */
   theme?: 'dust' | 'salt' | 'cinder';
   endHub?: string;
+  /** City legs only: the id of an authored city plan (`world/plans`) that replaces the random block grid. */
+  plan?: string;
   campSites: string[];
   sets: SetPiece[];
 }

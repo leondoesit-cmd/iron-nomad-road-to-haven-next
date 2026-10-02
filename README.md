@@ -17,6 +17,8 @@ npm run build        # typecheck + production bundle in dist/
 npm test             # about 400 unit and simulation tests (Vitest)
 ```
 
+`?leg=L3P` (or any leg id) starts a fresh run straight on that leg, which is how a map is checked without playing up to it.
+
 Chrome or Edge are the reference browsers. Gamepads are only exposed to secure contexts, so use `localhost`, `127.0.0.1`
 or HTTPS. Add `?debug` to the URL for a frame-time and draw-call readout and data validation at boot.
 
@@ -119,7 +121,7 @@ src/
   data/      JSON tables (vehicles, enemies, mercs, structures, legs, encounters, strings) + typed access + validation
   sim/       pure rules with no engine imports: resources, loyalty, signature grid, raid threat, endings, damage, day clock
   physics/   Rapier world wrapper and the data-driven raycast vehicle controller
-  world/     deterministic terrain, leg layout (city grid, set pieces) and per-chunk content
+  world/     deterministic terrain, leg layout (city grid, set pieces) and per-chunk content; `plans/` has authored city layouts
   render/    renderer and HDR post chain, sky and atmosphere, materials and procedural textures, terrain and road shaders,
              facades, chunk meshes, far landscape, ground cover, models (vehicles, people, zombies, props), particles, camera
   game/      scene runtime, entities (player, vehicle, zombies, raiders, crew), combat, leg scene, camp scene, game loop
@@ -233,6 +235,22 @@ Going down is a hold-A at the mouth and takes both players, on foot. The surface
 
 Tests: `tests/lakes.test.ts` (planning, determinism, docks, island access, shore and bed surfaces), `tests/boat.test.ts` (floating, thrust, turning, braking, running aground, backing off a beach), `tests/delve.test.ts` (every theme and tier is connected, populated, sealable and wall-collided; the city metro headhouse), `tests/scene.test.ts` (a boarded boat on a real lake, swimming, vehicle flooding, going down a delve and coming back up).
 
+### Petah Tikva Center: an authored city
+
+Leg 3 has a third road, **Petah Tikva Center** (`L3P`), a recreation of the old centre of Petah Tikva, "Em HaMoshavot" (Mother of the Colonies). It is a city leg whose block grid is drawn by hand instead of rolled: `legs.json` names a `plan`, and `world/plans/petahTikva.ts` holds it (`world/cityPlan.ts` has the types). A plan keeps the usual skeleton (a boulevard down the middle, building columns either side, cross streets between blocks) so physics, zombies, camps and set pieces all keep working, and replaces the dice with fixed block lengths, strip widths, named streets and landmark lots.
+
+What is on the map, driving north up Haim Ozer Street from Jabotinsky Road:
+
+- **Named streets**, each announced the first time you drive into it: Haim Ozer (the spine), Jabotinsky, Herzl, Stampfer, HaBaron Hirsch, Pinsker, Ussishkin, Hovevei Zion, Rothschild and HaHistadrut. Cross streets and side streets are paved asphalt (`TerrainDef.streets` also makes them asphalt underfoot).
+- **Founders' Square** (כיכר המייסדים): a paved level beside Haim Ozer and a raised lawn behind it, a fountain where the first well was dug, five founders' plaques, benches and dead trees, with an encounter, *The First Well*, at the pump.
+- **The Great Synagogue** (בית הכנסת הגדול) across Hovevei Zion Street from the square: a long hall with a pitched tile roof, a cupola and a four-column portico.
+- **City Hall**, drawn from a photograph: a tall square tower with bands of narrow windows and a lattice mast, a four-storey wing with an entrance canopy and a blue and yellow sign over it, and a six-storey wing with a colonnade, sun-shade ledges and air-conditioning units, round a tarmac car park with painted bays and parked cars that opens onto the street.
+- **Shawarma Malabes** (שווארמה מלאבס), directly across the street from City Hall: a drawn shopfront (black sign band, two white-framed boards, the red kosher badge, flame-and-knives logos, an open front with the counter and spit) with tables and chairs out on the sidewalk and something to eat inside.
+
+What is real and what is not: the street names, which streets bound Founders' Square, what the square contains, that the Great Synagogue is on Hovevei Zion Street and City Hall on Haim Ozer Street, and the shape of City Hall and of the shop's front, come from published descriptions and photographs. Which side of the spine things are on, every distance, block depth and building height, and the straightening of the real street pattern onto one spine are invented to fit the engine. It is a recreation in the spirit of a game level, not a survey; the tables in `petahTikva.ts` are meant to be redrawn.
+
+**Shopfront art.** `render/shopFront.ts` draws the shop's front on a canvas at load time, like every other texture here. It is a redraw from a photograph, with the phone numbers left off. To use a real image instead, save it as `public/shops/malabes.png` (the whole panel, 14 m by 4.8 m, so 70:24, with transparency above the sign band if wanted): it replaces the drawing once it has loaded, and with no file there the drawing stays.
+
 ## Rendering
 
 Everything on screen is generated in code at load time: no meshes, images or audio files ship with the game.
@@ -284,7 +302,7 @@ five endings are implemented and unit tested in `sim/endings.ts`.
 planning, ending selection, day clock, damage model, vehicle handling (acceleration, braking, turning, ride height and a
 stability regression), world generation (determinism, seams, passages, barricades, set pieces), game logic (obstacle index,
 campaign save round trip, input helpers, camera FOV) and rendering helpers (visual terrain detail stays out of the drivable
-corridor, mesh builder attributes, procedural noise). Lakes, boats and delves have theirs (see their section above). The car system has its own suites: `tests/garage.test.ts` (parts, stats, fitting, repair, salvage, world-car rolls), `tests/cars.test.ts` (Rapier handling of each found chassis, and that the model sits on the ground) `tests/carplay.test.ts` (real leg scenes in Node: streaming, claiming, repairing with held buttons, stripping, siphoning, saving the fleet), `tests/oil.test.ts` (the oil model, planning a fit or stow, old saves) and `tests/haul.test.ts` (real leg scenes: lifting, bolting on, pouring, stowing, dropping, driving over loose items, running dry).
+corridor, mesh builder attributes, procedural noise). Lakes, boats and delves have theirs (see their section above), and so does the authored city: `tests/petahtikva.test.ts` (the plan lays out and names its streets, Founders' Square, the Great Synagogue, City Hall and the shop stand where the plan says on the streets it says, streets are paved and open, everything on the route is reachable by flood fill, places are announced once). The car system has its own suites: `tests/garage.test.ts` (parts, stats, fitting, repair, salvage, world-car rolls), `tests/cars.test.ts` (Rapier handling of each found chassis, and that the model sits on the ground) `tests/carplay.test.ts` (real leg scenes in Node: streaming, claiming, repairing with held buttons, stripping, siphoning, saving the fleet), `tests/oil.test.ts` (the oil model, planning a fit or stow, old saves) and `tests/haul.test.ts` (real leg scenes: lifting, bolting on, pouring, stowing, dropping, driving over loose items, running dry).
 
 The page also exposes `window.__game` with `advance(seconds)` for running the simulation deterministically from the console,
 which is how most of the in-browser checks were done.

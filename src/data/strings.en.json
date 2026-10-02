@@ -48,6 +48,7 @@
   "tip.dust": "Dust is Signature: faster means a longer plume. Raiders read it from far away.",
   "tip.ambush": "Raiders! Outturn the buggies. Hold Y to bail, A to handbrake, X to blow the horn.",
   "tip.city": "Cities listen. Engines are Noise. Park, dismount and thread the alleys quietly.",
+  "tip.petah": "Petah Tikva, the Mother of Colonies. Haim Ozer is the spine and the old streets run off it in a tight grid: Stampfer, HaBaron Hirsch, Hovevei Zion. Park up, walk the lanes, and keep the engine quiet near the square.",
   "tip.fuel": "Low fuel: get out (hold Y), swap to the jerrycan (LB), then hold A at your vehicle to pour.",
   "tip.repair": "Damaged? Swap to the wrench and hold A at your vehicle. A partner's covering fire is the plan.",
   "tip.loot": "Hold A at containers to search. Searching is loud. Deeper shelves are better and louder.",
@@ -142,6 +143,15 @@
   "enc.pharmacy_looters.drive_off.result": "They scatter. The noise you made does not.",
   "enc.pharmacy_looters.join": "Split the haul",
   "enc.pharmacy_looters.join.result": "Fair is fair. Mostly.",
+
+  "enc.founders_well.title": "The First Well",
+  "enc.founders_well.text": "Somebody has bolted a hand pump to the old fountain in the square, right where the founders dug the first well in 1878. Six survivors are filling jugs and arguing about the line. They have already looked at your tanks.",
+  "enc.founders_well.trade": "Pay a fair price for a fill (10 Scrap)",
+  "enc.founders_well.trade.result": "They top up your jugs and tell you which streets stay quiet after dark.",
+  "enc.founders_well.guard": "Hold the line for them",
+  "enc.founders_well.guard.result": "You stand watch until the queue is gone. Someone leaves a jar of olives on your bumper. The pump was louder than anyone planned.",
+  "enc.founders_well.take": "Take the pump by force",
+  "enc.founders_well.take.result": "The queue scatters. The five plaques watch you do it.",
 
   "enc.survivors_cellar.title": "Voices Below",
   "enc.survivors_cellar.text": "Knocking from a cellar door welded shut from the outside. Someone is alive in there. Someone also welded it.",

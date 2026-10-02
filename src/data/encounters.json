@@ -71,6 +71,15 @@
       ]
     },
     {
+      "id": "founders_well",
+      "biome": "city",
+      "choices": [
+        { "id": "trade", "effects": { "stocks": { "scrap": -10, "rations": 3, "medicine": 1 }, "axes": { "trust": 1 }, "loyalty": 1 } },
+        { "id": "guard", "effects": { "stocks": { "rations": 2 }, "axes": { "mercy": 2, "trust": 1 }, "loyalty": 1, "zombies": 5 } },
+        { "id": "take", "effects": { "stocks": { "scrap": 14, "rations": 4 }, "axes": { "mercy": -2, "notoriety": 3 }, "loyalty": -2, "ambush": 1 } }
+      ]
+    },
+    {
       "id": "survivors_cellar",
       "biome": "city",
       "choices": [

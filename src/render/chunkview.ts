@@ -8,8 +8,9 @@ import { FacadeBuilder, facadeMaterial } from './facade';
 import { crate, plate, spareTyre } from './parts';
 import { buildScatter } from './scatter';
 import { kitMaterial } from './materials';
+import { SHOP_H, SHOP_W, shopFrontMaterial, type ShopId } from './shopFront';
 import { CELL, CELLS, CHUNK, corridorHalf, heightAt, normalAt, roadX, surfaceAt, waterAt, type TerrainDef } from '../world/terrain';
-import type { ChunkData } from '../world/chunkgen';
+import type { BuildingSpec, ChunkData } from '../world/chunkgen';
 import type { Aabb } from '../world/layout';
 import { BOULEVARD_HALF, SIDEWALK } from '../world/layout';
 import { GROUPS, type Collider, type PhysicsWorld } from '../physics/physics';
@@ -425,6 +426,7 @@ export class ChunkView {
 
   private buildBuildings(data: ChunkData, mats: ChunkMaterials) {
     if (data.blocks.length && (data.cx === 0 || data.cx === -1)) this.buildSidewalks(data);
+    if (data.patches.length) this.buildPatches(data, mats);
     if (!data.buildings.length) return;
     const fb = new FacadeBuilder();
     const det = new MeshBuilder();
@@ -434,25 +436,29 @@ export class ChunkView {
       const seed = hash2(Math.round(a.minX * 2), Math.round(a.minZ * 2), 77);
       const tall = bs.floors >= 9;
       const k = hash2(Math.round(a.minX), Math.round(a.maxZ), 78);
-      const style = tall ? (k < 0.35 ? 3 : k < 0.75 ? 0 : 2) : k < 0.45 ? 1 : k < 0.75 ? 2 : 0;
-      const tint = new THREE.Color(FACADE_TINT[style][Math.floor(seed * FACADE_TINT[style].length) % FACADE_TINT[style].length]);
-      const face = BOULEVARD_HALF + 4 > Math.min(Math.abs(a.minX), Math.abs(a.maxX)) ? (a.minX > 0 ? 'w' : 'e') : null;
-      this.buildingShell(fb, det, a.minX, a.maxX, a.minZ, a.maxZ, 0, a.y1, tint, style, seed, true, face);
+      const style = bs.style ?? (tall ? (k < 0.35 ? 3 : k < 0.75 ? 0 : 2) : k < 0.45 ? 1 : k < 0.75 ? 2 : 0);
+      const tint = new THREE.Color(bs.tint ?? FACADE_TINT[style][Math.floor(seed * FACADE_TINT[style].length) % FACADE_TINT[style].length]);
+      // A shopfront with its own sign takes the place of the awnings.
+      const face = !bs.shop && BOULEVARD_HALF + 4 > Math.min(Math.abs(a.minX), Math.abs(a.maxX)) ? (a.minX > 0 ? 'w' : 'e') : null;
+      // A pitched roof replaces the flat slab and parapet; a landmark has no shopfront band.
+      this.buildingShell(fb, det, a.minX, a.maxX, a.minZ, a.maxZ, 0, a.y1, tint, style, seed, true, face, { pitched: bs.role === 'synagogue', noShops: !!bs.role });
+      if (bs.role) this.landmarkExtras(det, bs, tint);
+      if (bs.shop) this.shopFront(bs, bs.shop as ShopId);
       if (bs.stepped) {
         const inset = 3;
         if (a.maxX - a.minX > inset * 3 && a.maxZ - a.minZ > inset * 3) {
           this.buildingShell(fb, det, a.minX + inset, a.maxX - inset, a.minZ + inset, a.maxZ - inset, a.y1, a.y1 + 6.6, tint, style, seed + 0.31, false, null);
         }
       }
-      this.rooftop(det, a.minX, a.maxX, a.minZ, a.maxZ, a.y1 + (bs.stepped ? 6.6 : 0), seed, bs.stepped ? 3 : 0);
-      if (style === 1 && seed > 0.4 && a.y1 > 9) this.fireEscape(det, a, seed);
+      if (!bs.role) this.rooftop(det, a.minX, a.maxX, a.minZ, a.maxZ, a.y1 + (bs.stepped ? 6.6 : 0), seed, bs.stepped ? 3 : 0);
+      if (style === 1 && seed > 0.4 && a.y1 > 9 && !bs.role) this.fireEscape(det, a, seed);
     }
     if (!fb.empty) this.addMesh(fb.build(), facadeMaterial(), true, true);
     if (!det.empty) this.addMesh(det.build(), mats.roofs, true, true);
   }
 
   /** Walls, ledges, cornice, parapet and (on the boulevard side) shopfront awnings for one block. */
-  private buildingShell(fb: FacadeBuilder, det: MeshBuilder, x0: number, x1: number, z0: number, z1: number, y0: number, y1: number, tint: THREE.Color, style: number, seed: number, ground: boolean, shopFace: 'w' | 'e' | null) {
+  private buildingShell(fb: FacadeBuilder, det: MeshBuilder, x0: number, x1: number, z0: number, z1: number, y0: number, y1: number, tint: THREE.Color, style: number, seed: number, ground: boolean, shopFace: 'w' | 'e' | null, civic: { pitched?: boolean; noShops?: boolean } = {}) {
     const floorH = 3.3;
     const target = style === 3 ? 1.6 : 2.6 + seed * 0.7;
     const cell = (len: number) => len / Math.max(1, Math.round(len / target));
@@ -464,7 +470,8 @@ export class ChunkView {
       const [ax, az] = corners[i];
       const [bx, bz] = corners[i + 1];
       const len = Math.hypot(bx - ax, bz - az);
-      fb.wall(ax, az, bx, bz, ground ? y0 : y0, y1, 0, tint, style, seed * 97 + i * 0.37, floorH, cell(len));
+      // A landmark has no shopfront band: shifting the wall's v coordinate makes its ground floor an ordinary storey.
+      fb.wall(ax, az, bx, bz, y0, y1, 0, tint, style, seed * 97 + i * 0.37, floorH, cell(len), civic.noShops ? -floorH * 1.3 : 0);
       u += len;
     }
     void yb;
@@ -500,19 +507,21 @@ export class ChunkView {
     det.box(x0 - 0.12, y1 - ct / 2, cz, 0.24, ct, d + 0.3, trim);
     // Roof slab and parapet with coping; some parapets broken away.
     det.box(cx, y1 + 0.02, cz, w - 0.1, 0.06, d - 0.1, S.concrete(C.concreteDark, 0.8));
-    const ph = 0.9;
-    const parapet = (px: number, pz: number, sx: number, sz: number) => {
-      det.box(px, y1 + ph / 2, pz, sx, ph, sz, wallC);
-      det.box(px, y1 + ph + 0.04, pz, sx + 0.08, 0.08, sz + 0.08, trim);
-    };
-    const gap = hash2(Math.round(x0), Math.round(z0), 5) > 0.7;
-    parapet(cx, z1 - 0.15, w, 0.3);
-    if (gap) {
-      parapet(x0 + w * 0.2, z0 + 0.15, w * 0.4, 0.3);
-      parapet(x1 - w * 0.15, z0 + 0.15, w * 0.3, 0.3);
-    } else parapet(cx, z0 + 0.15, w, 0.3);
-    parapet(x1 - 0.15, cz, 0.3, d - 0.6);
-    parapet(x0 + 0.15, cz, 0.3, d - 0.6);
+    if (!civic.pitched) {
+      const ph = 0.9;
+      const parapet = (px: number, pz: number, sx: number, sz: number) => {
+        det.box(px, y1 + ph / 2, pz, sx, ph, sz, wallC);
+        det.box(px, y1 + ph + 0.04, pz, sx + 0.08, 0.08, sz + 0.08, trim);
+      };
+      const gap = hash2(Math.round(x0), Math.round(z0), 5) > 0.7;
+      parapet(cx, z1 - 0.15, w, 0.3);
+      if (gap) {
+        parapet(x0 + w * 0.2, z0 + 0.15, w * 0.4, 0.3);
+        parapet(x1 - w * 0.15, z0 + 0.15, w * 0.3, 0.3);
+      } else parapet(cx, z0 + 0.15, w, 0.3);
+      parapet(x1 - 0.15, cz, 0.3, d - 0.6);
+      parapet(x0 + 0.15, cz, 0.3, d - 0.6);
+    }
     // Awnings over the shopfronts that face the boulevard.
     if (ground && shopFace) {
       const fx = shopFace === 'w' ? x0 : x1;
@@ -641,6 +650,233 @@ export class ChunkView {
     g.computeBoundingSphere();
     this.addMesh(g, pavingMaterial(), false, true);
     this.addMesh(kerb.build(), kitMaterial(), false, true);
+  }
+
+  /** Planned city legs: asphalt side and cross streets, paved plazas and lawns, clipped to this chunk. */
+  private buildPatches(data: ChunkData, mats: ChunkMaterials) {
+    const bx0 = data.cx * CHUNK;
+    const bz0 = data.cz * CHUNK;
+    const quads = (kind: 'asphalt' | 'paving') => {
+      const verts: number[] = [];
+      const nors: number[] = [];
+      const uvs: number[] = [];
+      const tans: number[] = [];
+      const idx: number[] = [];
+      for (const p of data.patches) {
+        if (p.kind !== kind) continue;
+        const x0 = Math.max(p.x0, bx0);
+        const x1 = Math.min(p.x1, bx0 + CHUNK);
+        const z0 = Math.max(p.z0, bz0);
+        const z1 = Math.min(p.z1, bz0 + CHUNK);
+        if (x1 - x0 < 0.05 || z1 - z0 < 0.05) continue;
+        // An east-west street runs its texture along x; a north-south one along z. The two keep the same handedness.
+        const eastWest = p.x1 - p.x0 > p.z1 - p.z0;
+        const y = kind === 'asphalt' ? 0.034 : 0.032;
+        const base = verts.length / 3;
+        for (const [x, z] of [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]) {
+          verts.push(x, y, z);
+          nors.push(0, 1, 0);
+          if (eastWest) {
+            uvs.push((z - p.z0) / (p.z1 - p.z0), -x / ROAD_REPEAT);
+            tans.push(0, 0, 1);
+          } else {
+            uvs.push((x - p.x0) / (p.x1 - p.x0), z / ROAD_REPEAT);
+            tans.push(1, 0, 0);
+          }
+        }
+        idx.push(base, base + 3, base + 2, base, base + 2, base + 1);
+      }
+      if (!idx.length) return null;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      g.setAttribute('normal', new THREE.Float32BufferAttribute(nors, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      g.setAttribute('rtan', new THREE.Float32BufferAttribute(tans, 3));
+      g.setIndex(idx);
+      g.computeBoundingSphere();
+      return g;
+    };
+    const asphalt = quads('asphalt');
+    if (asphalt) this.addMesh(asphalt, mats.road, false, true);
+    const paving = quads('paving');
+    if (paving) this.addMesh(paving, pavingMaterial(), false, true);
+    // Lawns: a low sod slab, dull and dry. Two tones so a big one is not a flat sheet.
+    const turf = new MeshBuilder();
+    turf.jitter = 0.03;
+    for (const p of data.patches) {
+      if (p.kind !== 'lawn') continue;
+      const x0 = Math.max(p.x0, bx0);
+      const x1 = Math.min(p.x1, bx0 + CHUNK);
+      const z0 = Math.max(p.z0, bz0);
+      const z1 = Math.min(p.z1, bz0 + CHUNK);
+      if (x1 - x0 < 0.05 || z1 - z0 < 0.05) continue;
+      const nx = Math.max(1, Math.round((x1 - x0) / 6));
+      const nz = Math.max(1, Math.round((z1 - z0) / 6));
+      for (let i = 0; i < nx; i++) {
+        for (let j = 0; j < nz; j++) {
+          const k = hash2(Math.round(x0) + i * 7, Math.round(z0) + j * 11, 61);
+          const col = k < 0.5 ? 0x5d8a35 : k < 0.8 ? 0x6e9040 : 0x4f7a30;
+          const sx = (x1 - x0) / nx;
+          const sz = (z1 - z0) / nz;
+          turf.box(x0 + (i + 0.5) * sx, 0.05, z0 + (j + 0.5) * sz, sx + 0.02, 0.1, sz + 0.02, S.cloth(col, 0.9));
+        }
+      }
+    }
+    if (!turf.empty) this.addMesh(turf.build(), kitMaterial(), false, true);
+    // Tarmac: dark worn slabs, for a car park. The painted bays are props laid on top.
+    const tar = new MeshBuilder();
+    for (const p of data.patches) {
+      if (p.kind !== 'tarmac') continue;
+      const x0 = Math.max(p.x0, bx0);
+      const x1 = Math.min(p.x1, bx0 + CHUNK);
+      const z0 = Math.max(p.z0, bz0);
+      const z1 = Math.min(p.z1, bz0 + CHUNK);
+      if (x1 - x0 < 0.05 || z1 - z0 < 0.05) continue;
+      const nx = Math.max(1, Math.round((x1 - x0) / 5));
+      const nz = Math.max(1, Math.round((z1 - z0) / 5));
+      for (let i = 0; i < nx; i++) {
+        for (let j = 0; j < nz; j++) {
+          const k = hash2(Math.round(x0) + i * 5, Math.round(z0) + j * 9, 41);
+          const col = k < 0.4 ? 0x3a3b3d : k < 0.75 ? 0x424345 : 0x353638;
+          const sx = (x1 - x0) / nx;
+          const sz = (z1 - z0) / nz;
+          tar.box(x0 + (i + 0.5) * sx, 0.02, z0 + (j + 0.5) * sz, sx + 0.02, 0.04, sz + 0.02, S.concrete(col, 0.8));
+        }
+      }
+    }
+    if (!tar.empty) this.addMesh(tar.build(), kitMaterial(), false, true);
+  }
+
+  /** A shopfront's drawn sign: one flat panel standing just off the wall that faces the boulevard. */
+  private shopFront(bs: BuildingSpec, id: ShopId) {
+    const a = bs.aabb;
+    const onPositiveSide = a.minX > 0;
+    const geo = new THREE.PlaneGeometry(SHOP_W, SHOP_H);
+    geo.rotateY(onPositiveSide ? -Math.PI / 2 : Math.PI / 2);
+    geo.translate(onPositiveSide ? a.minX - 0.14 : a.maxX + 0.14, SHOP_H / 2, (a.minZ + a.maxZ) / 2);
+    this.addMesh(geo, shopFrontMaterial(id), false, false);
+  }
+
+  /**
+   * What makes a landmark that landmark. The Great Synagogue: a pitched tile roof, a cupola and a four-column portico.
+   * City Hall, from a photograph: a tall tower with rows of narrow windows and a mast, a four-storey wing with an entrance
+   * canopy and a sign over it, and a six-storey wing with a colonnade, sun-shade ledges and air-conditioning units.
+   */
+  private landmarkExtras(det: MeshBuilder, bs: BuildingSpec, tint: THREE.Color) {
+    const a = bs.aabb;
+    const cx = (a.minX + a.maxX) / 2;
+    const cz = (a.minZ + a.maxZ) / 2;
+    const w = a.maxX - a.minX;
+    const d = a.maxZ - a.minZ;
+    const y1 = a.y1;
+    const stone = S.concrete(tint.clone().multiplyScalar(1.06).getHex(), 0.5);
+    const stoneDark = S.concrete(tint.clone().multiplyScalar(0.78).getHex(), 0.7);
+    // The facade frame: `out` runs away from the front wall, `lat` along it from its middle.
+    const front = bs.front ?? 'e';
+    const ew = front === 'w' || front === 'e';
+    const sgn = front === 'e' || front === 'n' ? 1 : -1;
+    const face = front === 'e' ? a.maxX : front === 'w' ? a.minX : front === 'n' ? a.maxZ : a.minZ;
+    const latLen = ew ? d : w;
+    const latMid = ew ? cz : cx;
+    const box = (out: number, y: number, lat: number, dOut: number, h: number, dLat: number, color: Parameters<MeshBuilder['box']>[6]) => {
+      const o = face + sgn * out;
+      if (ew) det.box(o, y, latMid + lat, dOut, h, dLat, color);
+      else det.box(latMid + lat, y, o, dLat, h, dOut, color);
+    };
+    if (bs.role === 'synagogue') {
+      // Pitched tile roof running the length of the hall, a ridge cap, and a small copper-green cupola.
+      const rise = 3.6;
+      const half = w / 2 + 0.6;
+      det.extrude(`gable:${Math.round(w * 10)}`, () => {
+        const sh = new THREE.Shape();
+        sh.moveTo(-half, 0);
+        sh.lineTo(half, 0);
+        sh.lineTo(0, rise);
+        sh.closePath();
+        return sh;
+      }, d + 1.2, 0, cx, y1 + 0.05, cz, S.paint(0x9a4a2e, 0.85));
+      det.box(cx, y1 + 0.05 + rise, cz, 0.35, 0.22, d + 1.3, stoneDark);
+      det.cyl(cx, y1 + rise + 0.9, cz, 2.8, 1.8, 2.8, stone, 0, 0, 0, 10);
+      det.add('dome', cx, y1 + rise + 1.8, cz, 3.2, 2.2, 3.2, S.metal(0x6f9a86, 0.55));
+      det.rod(cx, y1 + rise + 3.8, cz, cx, y1 + rise + 4.8, cz, 0.05, S.metal(0xcfa84a, 0.4), 6);
+      // Portico: four columns under a pediment, three steps up from the forecourt.
+      for (const dz of [-4.4, -1.5, 1.5, 4.4]) {
+        box(1.7, 0.2, dz, 1.3, 0.4, 1.3, stoneDark);
+        det.cyl(face + sgn * 1.7, 4.4, cz + dz, 0.9, 8.0, 0.9, stone, 0, 0, 0, 12);
+        box(1.7, 8.6, dz, 1.45, 0.4, 1.45, stone);
+      }
+      box(1.9, y1 - 0.65, 0, 3.8, 1.0, 11.8, stone);
+      det.extrude('pediment', () => {
+        const sh = new THREE.Shape();
+        sh.moveTo(-5.9, 0);
+        sh.lineTo(5.9, 0);
+        sh.lineTo(0, 1.9);
+        sh.closePath();
+        return sh;
+      }, 3.8, 0, face + sgn * 1.9, y1 - 0.15, cz, stone, 0, Math.PI / 2, 0);
+      for (let i = 0; i < 3; i++) box(3.9 + i * 0.6, 0.09 * (3 - i), 0, 0.6, 0.18 * (3 - i), 12 - i * 0.5, stoneDark);
+      box(0.05, 1.9, 0, 0.14, 3.6, 2.6, S.wood(0x3a2a1e, 0.7));
+    } else if (bs.role === 'hallTower') {
+      // Two bands of narrow windows near the top on every face, corner piers, a plant room and a lattice mast.
+      const slit = S.glass(0x0e1418);
+      const band = (y: number, h: number) => {
+        for (const [fx, fz, alongX] of [[a.minX, cz, false], [a.maxX, cz, false], [cx, a.minZ, true], [cx, a.maxZ, true]] as const) {
+          const out = fx === a.minX && !alongX ? -0.05 : fx === a.maxX && !alongX ? 0.05 : 0;
+          const outZ = fz === a.minZ && alongX ? -0.05 : fz === a.maxZ && alongX ? 0.05 : 0;
+          const n = 7;
+          for (let i = 0; i < n; i++) {
+            const t = (i - (n - 1) / 2) * 1.1;
+            if (alongX) det.box(cx + t, y, fz + outZ, 0.55, h, 0.1, slit);
+            else det.box(fx + out, y, cz + t, 0.1, h, 0.55, slit);
+          }
+        }
+      };
+      band(y1 - 3.4, 2.4);
+      band(y1 - 6.8, 2.4);
+      for (const [px, pz] of [[a.minX, a.minZ], [a.maxX, a.minZ], [a.minX, a.maxZ], [a.maxX, a.maxZ]]) det.box(px, y1 / 2, pz, 0.6, y1, 0.6, stoneDark);
+      det.box(cx, y1 + 1.2, cz, w * 0.5, 2.4, d * 0.5, stone);
+      const mastY = y1 + 2.4;
+      for (const [mx, mz] of [[-0.35, -0.35], [0.35, -0.35], [-0.35, 0.35], [0.35, 0.35]]) det.rod(cx + mx, mastY, cz + mz, cx + mx * 0.4, mastY + 11, cz + mz * 0.4, 0.04, S.steel(0x6a6e70, 0.5), 5);
+      for (let k = 1; k < 8; k++) {
+        const y = mastY + k * 1.4;
+        const r = 0.35 * (1 - (k * 1.4) / 11) + 0.14;
+        det.rod(cx - r, y, cz - r, cx + r, y, cz - r, 0.02, S.steel(0x6a6e70, 0.5), 4);
+        det.rod(cx + r, y, cz - r, cx + r, y, cz + r, 0.02, S.steel(0x6a6e70, 0.5), 4);
+      }
+      det.sphereAt(cx, mastY + 11.2, cz, 0.1, S.glow(0xff3a2a, 2));
+    } else if (bs.role === 'hallWing') {
+      // A deep entrance canopy on slim columns with a blue and yellow sign band over it, and an arcade along the rest.
+      box(3.0, 4.15, 0, 6.0, 0.3, 13, stone);
+      for (const lat of [-5.6, -1.9, 1.9, 5.6]) box(5.6, 2.05, lat, 0.5, 4.1, 0.5, stone);
+      box(5.9, 5.0, 0, 0.3, 1.0, 13, S.paint(0x1e3f7a, 0.5));
+      box(5.97, 4.62, 0, 0.3, 0.16, 13, S.paint(0xe0b020, 0.5));
+      for (let lat = -latLen / 2 + 3; lat < latLen / 2 - 2; lat += 4.6) {
+        if (Math.abs(lat) < 7.5) continue;
+        box(1.3, 1.95, lat, 0.45, 3.9, 0.45, stone);
+      }
+      box(1.5, 3.95, 0, 3.0, 0.2, latLen - 4, stoneDark);
+      for (let i = 0; i < 3; i++) box(6.5 + i * 0.6, 0.09 * (3 - i), 0, 0.6, 0.18 * (3 - i), 14 - i * 0.5, stoneDark);
+      box(0.06, 2.1, 0, 0.14, 4.2, 6.5, S.glass(0x10181e));
+      for (const [ex, ez, ew2, ed] of [[cx, a.minZ + 0.1, w, 0.2], [cx, a.maxZ - 0.1, w, 0.2]]) det.box(ex, y1 + 0.5, ez, ew2, 1.0, ed, stoneDark);
+    } else if (bs.role === 'hallSide') {
+      // Long facade towards the car park: colonnade under a shade slab, sun-shade ledges above every window row,
+      // and air-conditioning units here and there; a railing round the roof.
+      for (let lat = -latLen / 2 + 2.4; lat < latLen / 2 - 1; lat += 4.8) box(1.5, 1.95, lat, 0.5, 3.9, 0.5, stone);
+      box(1.7, 3.95, 0, 3.4, 0.2, latLen, stoneDark);
+      const ac = S.paint(0xe6e6e0, 0.6);
+      for (let k = 1; k < bs.floors; k++) {
+        box(0.5, k * 3.3 + 1.15, 0, 1.0, 0.12, latLen, stone);
+        for (let lat = -latLen / 2 + 1.6; lat < latLen / 2 - 1; lat += 3.2) {
+          if (hash2(Math.round(lat * 3) + k * 31, Math.round(face), 14) < 0.32) box(0.35, k * 3.3 + 0.55, lat, 0.7, 0.55, 0.9, ac);
+        }
+      }
+      const rail = S.steel(0x7a7e80, 0.5);
+      det.box(cx, y1 + 1.0, a.minZ + 0.1, w, 0.05, 0.05, rail);
+      det.box(cx, y1 + 1.0, a.maxZ - 0.1, w, 0.05, 0.05, rail);
+      det.box(a.minX + 0.1, y1 + 1.0, cz, 0.05, 0.05, d, rail);
+      det.box(a.maxX - 0.1, y1 + 1.0, cz, 0.05, 0.05, d, rail);
+      for (let t = 0; t < 1.001; t += 1 / Math.max(2, Math.round(w / 2.5))) det.box(a.minX + t * w, y1 + 0.5, a.maxZ - 0.1, 0.05, 1.0, 0.05, rail);
+    }
   }
 
   private buildProps(data: ChunkData, mats: ChunkMaterials, city: boolean) {

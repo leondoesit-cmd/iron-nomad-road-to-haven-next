@@ -81,6 +81,9 @@ export class LegScene extends Scene {
   activeContainers = new Map<string, { glint: THREE.Mesh; c: ScavContainer }>();
   doneEncounters = new Set<string>();
   shownTips = new Set<string>();
+  /** Planned city legs: the places and streets already announced, and when the last announcement was. */
+  private placesShown = new Set<string>();
+  private placeAt = -99;
   bellBanner = 0;
   pendingResult = false;
   endReached = false;
@@ -925,7 +928,37 @@ export class LegScene extends Scene {
     this.pendingResult = false;
   }
 
+  /** Planned city legs: name Founders' Square, the Great Synagogue and each named street the first time a player is in it. */
+  private updatePlaces() {
+    const L = this.src.layout;
+    const plan = L.plan;
+    if (!plan || this.time < 6 || this.time - this.placeAt < 3.5) return;
+    for (const p of this.players) {
+      if (p.state === 'dead') continue;
+      const x = p.vehicle?.position.x ?? p.pos.x;
+      const z = p.vehicle?.position.z ?? p.pos.z;
+      for (const pl of L.places) {
+        if (this.placesShown.has(pl.id) || Math.hypot(x - pl.x, z - pl.z) > pl.r) continue;
+        this.placesShown.add(pl.id);
+        this.placeAt = this.time;
+        this.services.onBanner?.(pl.name, pl.sub);
+        return;
+      }
+      for (const st of L.streets) {
+        if (!st.street || this.placesShown.has(st.street)) continue;
+        if (x < st.x0 || x > st.x1 || z < st.z0 || z > st.z1) continue;
+        const named = plan.streets.find((q) => q.id === st.street);
+        if (!named) continue;
+        this.placesShown.add(st.street);
+        this.placeAt = this.time;
+        this.services.onBanner?.(named.name, named.sub);
+        return;
+      }
+    }
+  }
+
   private updateTips() {
+    this.updatePlaces();
     let maxZ = -Infinity;
     for (const p of this.players) maxZ = Math.max(maxZ, p.pos.z);
     for (const tp of this.src.layout.tips) {

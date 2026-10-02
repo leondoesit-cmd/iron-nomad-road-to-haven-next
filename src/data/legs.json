@@ -5,7 +5,7 @@
   },
   "route": {
     "start": "L1",
-    "next": { "L1": ["L2W", "L2C"], "L2W": ["L3W", "L3C"], "L2C": ["L3W", "L3C"], "L3W": [], "L3C": [] }
+    "next": { "L1": ["L2W", "L2C"], "L2W": ["L3W", "L3C", "L3P"], "L2C": ["L3W", "L3C", "L3P"], "L3W": [], "L3C": [], "L3P": [] }
   },
   "hubs": {
     "dustwell": {
@@ -156,6 +156,37 @@
         { "at": 2500, "type": "hordeStreet" },
         { "at": 2800, "type": "radioFragment", "n": 4 },
         { "at": 3000, "type": "scavengeZone", "kind": "parking", "side": -1 }
+      ]
+    },
+    {
+      "id": "L3P",
+      "plan": "petahTikva",
+      "index": 3,
+      "act": 1,
+      "name": "Petah Tikva Center",
+      "subtitle": "Leg 3 - The old moshava, Haim Ozer Street",
+      "biome": "city",
+      "length": 1300,
+      "seed": 7306,
+      "baseThreat": 20,
+      "dayLength": 720,
+      "endHub": "rustgate",
+      "campSites": ["plaza", "carPark"],
+      "sets": [
+        { "at": 90, "type": "tip", "id": "petah" },
+        { "at": 196, "type": "scavengeZone", "kind": "pharmacy", "side": -1 },
+        { "at": 262, "type": "barricade", "grade": "flimsy" },
+        { "at": 330, "type": "hordeStreet" },
+        { "at": 450, "type": "encounter", "id": "founders_well", "side": 1 },
+        { "at": 520, "type": "scavengeZone", "kind": "depot", "side": 1 },
+        { "at": 640, "type": "barricade", "grade": "reinforced" },
+        { "at": 720, "type": "chassisWreck" },
+        { "at": 766, "type": "scavengeZone", "kind": "pharmacy", "side": 1 },
+        { "at": 880, "type": "encounter", "id": "survivors_cellar", "side": -1 },
+        { "at": 950, "type": "hordeStreet" },
+        { "at": 1013, "type": "scavengeZone", "kind": "parking", "side": -1 },
+        { "at": 1110, "type": "radioFragment", "n": 4 },
+        { "at": 1180, "type": "encounter", "id": "lost_courier", "side": 1 }
       ]
     }
   ]
