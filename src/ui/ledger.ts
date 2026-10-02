@@ -2,6 +2,7 @@ import { LEGS, MERCS, VEHICLES, PARTS, legById, STRUCTURES, type Cost, type Stoc
 import { FocusUI, type FocusItem } from './focus';
 import { escapeHtml } from './hud';
 import { PLAYER_CSS } from '../render/palette';
+import { DRUG_IDS } from '../sim/drugs';
 import { LABEL, RECIPES, canAfford, checkTierUp, costText, spend, whole } from '../sim/resources';
 import { buildName, defOf, maxHpOf, needsService, rebuildOnto, serviceBuild, serviceCost, statsOf } from '../sim/garage';
 import { loyaltyBand, settleCut } from '../sim/loyalty';
@@ -108,6 +109,7 @@ export class LedgerPanel {
     const left = `<section><h3>Stores</h3>${stocksHtml}
       <div class="stockrow"><span>Ammo</span><b>${c.ammo}</b></div>
       <div class="stockrow"><span>Medkits / Flares / Molotovs / Charges</span><b>${c.items.medkit}/${c.items.flare}/${c.items.molotov}/${c.items.charge}</b></div>
+      <div class="stockrow"><span>Stims / Painkillers / Adrenaline / Haze</span><b>${c.items.stim}/${c.items.painkiller}/${c.items.adrenaline}/${c.items.haze}</b></div>
       <div class="stockrow"><span>Salvaged chassis</span><b>${c.chassis}</b></div>
       <div class="stockrow"><span>Radio fragments</span><b>${c.fragments.size}/4</b></div>
       <h3>Crafting</h3>
@@ -326,6 +328,7 @@ export class LedgerPanel {
     if (y.molotov) this.c.items.molotov += y.molotov;
     if (y.flare) this.c.items.flare += y.flare;
     if (y.charge) this.c.items.charge += y.charge;
+    for (const d of DRUG_IDS) if (y[d]) this.c.items[d] += y[d] as number;
     this.ok(`Crafted: ${r.name}`);
   }
 

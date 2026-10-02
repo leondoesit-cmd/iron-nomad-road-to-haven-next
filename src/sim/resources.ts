@@ -117,12 +117,16 @@ export interface Recipe {
   id: string;
   name: string;
   cost: Cost;
-  yields: { ammo?: number; medkit?: number; molotov?: number; flare?: number; charge?: number };
+  yields: { ammo?: number; medkit?: number; molotov?: number; flare?: number; charge?: number; stim?: number; painkiller?: number; adrenaline?: number; haze?: number };
 }
 export const RECIPES: Recipe[] = [
   { id: 'ammo', name: 'Ammo (30 rounds)', cost: { scrap: 5 }, yields: { ammo: 30 } },
   { id: 'medkit', name: 'Medkit', cost: { medicine: 2 }, yields: { medkit: 1 } },
   { id: 'molotov', name: 'Molotov', cost: { fuel: 1 }, yields: { molotov: 1 } },
   { id: 'flare', name: 'Flare', cost: { tech: 1 }, yields: { flare: 2 } },
+  { id: 'stim', name: 'Stim', cost: { medicine: 1, tech: 1 }, yields: { stim: 1 } },
+  { id: 'painkiller', name: 'Painkillers (2)', cost: { medicine: 1 }, yields: { painkiller: 2 } },
+  { id: 'adrenaline', name: 'Adrenaline', cost: { medicine: 2, tech: 1 }, yields: { adrenaline: 1 } },
+  { id: 'haze', name: 'Spore haze (2)', cost: { rations: 1, medicine: 1 }, yields: { haze: 2 } },
   { id: 'charge', name: 'Breaching charge', cost: { tech: 5, scrap: 4 }, yields: { charge: 1 } },
 ];

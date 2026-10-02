@@ -72,7 +72,7 @@ The garage and Ledger show one vehicle, and Settings drops the Player 2 and spli
 | RT / LT | Fire / aim | Throttle / brake | Fire / zoom | Place / remove |
 | RB | Tap melee, hold takedown | Fire front gun | Fire | Next element |
 | LB | Swap tool | | | Previous element |
-| A | Interact (hold: loot, repair, refuel, revive) | Handbrake | | Rotate |
+| A | Tap: jump (when nothing is in reach). Hold: loot, repair, refuel, revive | Handbrake | | Rotate |
 | B | Crouch | Tap lights, hold engine off | | Hold: ready for night |
 | X | Reload (hold: swap utility) | Tap horn, hold siren | | Assign watch post |
 | Y | Tap: switch first / third person. Hold: enter a vehicle | Tap: switch view. Hold: exit, or bail at speed | Tap: switch view. Hold: exit | |
@@ -88,10 +88,22 @@ and the vehicle action share Y: a quick tap switches the view, holding it (about
 the prompt says *Hold*. Rebind either one and the share goes away. On the keyboard the view keys are `B` (Player 1) and `P`
 (Player 2), and the middle mouse button.
 
-**Keyboard**: solo play can use either layout below. Player 1 uses `W A S D` to move, `Q E` to aim, `F` to fire, `G` to interact, `R` for vehicles, `C` for
+**Jumping**: on foot you can jump about a metre. The take-off speed carries through the air (a sprint jump goes furthest) and the
+stick only bends it, a press just before landing or just after walking off a ledge still counts, and a ceiling stops the rise.
+You cannot jump while swimming, carrying a load, mid-action or pinned, and jumping from a crouch stands you up. On a pad, jump
+shares A with interact: a press with something to interact with is left to the interact prompt, otherwise it jumps. Landing
+hard is noisy. Jump is a normal rebindable action (Control settings, Move group).
+
+**Drugs**: four single-dose consumables, taken with the use button (D-pad ↓ on a pad, `U` for player 1, `K` for player 2): tap to take
+the selected one, hold to pick the next. *Stim* (faster, then a slow comedown), *Painkillers* (half damage for 90s), *Adrenaline*
+(heal 30, near-immunity for 12s, then a hard crash) and *Spore haze* (quieter and slow-healing while the screen swims). Craft them in the
+Ledger or find them in delve chests. Every dose adds toxicity (past 1 you are overdosing and bleeding health until it fades) and a
+little dependence (go without for ~90s and the shakes, slowdown and visual swim of withdrawal set in, until you take another).
+
+**Keyboard**: solo play can use either layout below. Player 1 uses `W A S D` to move, `Q E` to aim, `F` to fire, `G` to interact, `J` to jump, `R` for vehicles, `C` for
 crouch and lights, `Shift` for sprint and handbrake, `Tab` for the command wheel, `V` to swap tools, `T` to reload or
 honk, `Z X` to cycle build elements, hold `Space` for the convoy sheet. Player 2 uses the arrow keys, `[ ]` to aim, `Right
-Shift` to fire, `/` to interact, `Enter` for vehicles, `.` for crouch and lights, `Right Ctrl` for sprint and handbrake,
+Shift` to fire, `/` to interact, `O` to jump, `Enter` for vehicles, `.` for crouch and lights, `Right Ctrl` for sprint and handbrake,
 `Backspace` for the wheel, `N` to swap tools, `,` to reload, `; '` to cycle build elements, hold `\` for the convoy sheet. Keyboard players get stronger
 aim assist. `Esc` pauses.
 

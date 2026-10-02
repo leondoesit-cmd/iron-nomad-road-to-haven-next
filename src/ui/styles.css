@@ -1478,3 +1478,22 @@ button:disabled {
   color: #c9bd9f;
   font-size: 0.6em;
 }
+
+/* Drugs: the picture swims. backdrop-filter bends whatever the viewport is drawing behind the HUD. */
+.drugfx {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.8s;
+}
+.drugfx.on {
+  opacity: 1;
+  backdrop-filter: hue-rotate(calc(var(--haze, 0) * 70deg)) saturate(calc(1 + var(--haze, 0) * 0.9)) blur(calc(var(--haze, 0) * 1.6px));
+  animation: drugswim 5s ease-in-out infinite;
+}
+@keyframes drugswim {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  33% { transform: scale(calc(1 + var(--haze, 0) * 0.025)) rotate(calc(var(--haze, 0) * 0.6deg)); }
+  66% { transform: scale(calc(1 - var(--haze, 0) * 0.015)) rotate(calc(var(--haze, 0) * -0.5deg)); }
+}

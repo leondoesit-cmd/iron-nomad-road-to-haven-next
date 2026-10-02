@@ -288,7 +288,7 @@ export class DelveScene extends Scene {
       camp.ammo += c.loot.ammo;
       bits.push(`+${c.loot.ammo} rounds`);
     }
-    for (const k of ['medkit', 'charge', 'molotov', 'flare'] as const) {
+    for (const k of ['medkit', 'charge', 'molotov', 'flare', 'stim', 'painkiller', 'adrenaline', 'haze'] as const) {
       const n = c.loot[k];
       if (n) {
         camp.items[k] += n;

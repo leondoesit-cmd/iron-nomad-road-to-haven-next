@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RAPIER, GROUPS, G, groups, type Collider, type RigidBody } from '../physics/physics';
-import { Btn, heldFor, isHeld, wasPressed, type PlayerIntent } from '../input/intents';
+import { Btn, heldFor, isHeld, wasPressed, wasReleased, type PlayerIntent } from '../input/intents';
 import { promptLabel } from '../input/input';
 import { ChaseCamera, type CamMode } from '../render/camera';
 import { Humanoid } from '../render/humanoid';
@@ -13,6 +13,7 @@ import { steerTo, newSteerState } from './aiDrive';
 import { applyRepair, planRepair } from '../sim/repair';
 import { SALVAGE_STAGES } from '../sim/salvage';
 import { costText, spend } from '../sim/resources';
+import { DRUGS, DrugState, type DrugId } from '../sim/drugs';
 import type { DriveInput } from '../physics/vehicle';
 import type { Ctx } from './ctx';
 import type { Pilot, Vehicle } from './vehicle';
@@ -71,6 +72,10 @@ const WALK = 3.4;
 const SPRINT = 5.9;
 const CROUCH = 1.7;
 const BODY_H = 1.7;
+/** Jump: take-off speed (about 1 m of height at gravity 22), the grace after leaving a ledge, and how early a press still counts. */
+const JUMP_V = 6.6;
+const COYOTE = 0.1;
+const JUMP_BUFFER = 0.12;
 const BODY_R = 0.3;
 const RAY_STATIC = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
 const _v = new THREE.Vector3();
@@ -88,6 +93,14 @@ export class Player implements Pilot {
   ads = 0;
   crouch = false;
   grounded = true;
+  /** Seconds since the feet last touched ground, and the time left on a buffered jump press. */
+  private airT = 0;
+  private jumpBuf = 0;
+  /** Horizontal velocity carried through the air (steering only nudges it). */
+  private hvx = 0;
+  private hvz = 0;
+  /** 0 on the ground, 1 in the air; eased so the tuck in the pose does not snap. */
+  private airVis = 0;
   moveSpeed = 0;
   hp = 100;
   maxHp = 100;
@@ -151,6 +164,11 @@ export class Player implements Pilot {
   muzzleT = 0;
   throwHeld = 0;
   fatigue = 0;
+  /** What this body has taken, and what it is doing about it. */
+  drugs = new DrugState();
+  /** Seconds the use button has been down, to tell a tap (take) from a hold (pick the next drug). */
+  private useHold = 0;
+  private poisonT = 0;
   /** Where the aim ray currently lands (for the reticle and the gun). */
   aimPoint = new THREE.Vector3();
   aimDist = 60;
@@ -279,7 +297,7 @@ export class Player implements Pilot {
   hurt(amount: number, fromX: number, fromZ: number, kind: 'bullet' | 'melee' | 'blast' | 'fall' | 'fire' | 'bite' | 'spore' | 'ram') {
     if (this.state === 'dead' || this.invuln > 0) return;
     const ctx = this.ctx;
-    const dmg = amount * (kind === 'bite' || kind === 'melee' ? 1 : 1) * ctx.campaign.difficulty.damage;
+    const dmg = amount * ctx.campaign.difficulty.damage * this.drugs.mods().damage;
     this.sinceHit = 0;
     this.lastHurtDir = Math.atan2(fromX - this.pos.x, fromZ - this.pos.z);
     // Taking a hit interrupts hold actions such as repairs.
@@ -450,6 +468,7 @@ export class Player implements Pilot {
     if (this.hitCooldown > 0) this.hitCooldown -= dt;
     if (this.invuln > 0) this.invuln -= dt;
     this.sinceHit += dt;
+    this.updateDrugs(dt, it);
     for (const n of this.notes) n.t -= dt;
     while (this.notes.length && this.notes[0].t <= 0) this.notes.shift();
     this.commandWheel = isHeld(it, Btn.Up) && this.state !== 'dead';
@@ -499,8 +518,57 @@ export class Player implements Pilot {
     this.signatureShown = this.currentSignature();
     if (this.state === 'foot' || this.state === 'downed') {
       const s = this.footSignature();
-      if (s > 0) ctx.sig.emit(this.pos.x, this.pos.z, s * ctx.signatureMult, 'noise');
+      if (s > 0) ctx.sig.emit(this.pos.x, this.pos.z, s * ctx.signatureMult * this.drugs.mods().noise, 'noise');
     }
+  }
+
+  /** Taking drugs: tap the use button to take the selected one, hold it to pick the next. Then the body does its thing. */
+  private updateDrugs(dt: number, it: PlayerIntent) {
+    const d = this.drugs;
+    const items = this.ctx.campaign.items;
+    const can = (this.state === 'foot' || this.state === 'driving' || this.state === 'gunner') && !this.buildMode;
+    if (can && isHeld(it, Btn.Down)) {
+      const was = this.useHold;
+      this.useHold += dt;
+      if (was < 0.5 && this.useHold >= 0.5) {
+        const id = d.cycle((x) => items[x]);
+        this.note(`${DRUGS[id].name} selected (${items[id]})`, 'info');
+      }
+    } else {
+      if (can && this.useHold > 0 && this.useHold < 0.5 && wasReleased(it, Btn.Down)) this.takeDrug(d.selected);
+      this.useHold = 0;
+    }
+    d.update(dt);
+    if (this.state === 'dead' || this.state === 'downed') return;
+    const m = d.mods();
+    if (m.regen > 0 && this.hp < this.maxHp && this.state !== 'driving' && this.state !== 'gunner') this.heal(m.regen * dt);
+    if (m.shake > 0.05) this.cam.addShake(m.shake * 0.02 * dt * 60);
+    if (m.poison > 0) {
+      this.poisonT -= dt;
+      if (this.poisonT <= 0) {
+        this.poisonT = 0.5;
+        this.hp = Math.max(0, this.hp - m.poison * 0.5);
+        if (this.hp <= 0) this.goDown();
+      }
+    } else this.poisonT = 0;
+  }
+
+  /** Take one dose from the convoy's stores. */
+  takeDrug(id: DrugId) {
+    const items = this.ctx.campaign.items;
+    if (items[id] <= 0) {
+      this.note(`No ${DRUGS[id].name.toLowerCase()} left`, 'warn');
+      return false;
+    }
+    items[id]--;
+    const r = this.drugs.dose(id);
+    if (r.heal) this.heal(r.heal);
+    this.ctx.audio.play('loot', this.pos.x, this.pos.z, 0.4);
+    this.note(`${DRUGS[id].name}: ${DRUGS[id].blurb}`, 'good');
+    if (r.relieved) this.note('The shakes ease off', 'info');
+    if (r.overdose) this.note('Too much. Your heart is trying to leave', 'bad');
+    else if (this.drugs.toxicity > 0.7) this.note('Your hands are shaking: one more could be too many', 'warn');
+    return true;
   }
 
   /** Switch between the chase camera and the eyes, and remember the choice for the next leg. */
@@ -582,6 +650,7 @@ export class Player implements Pilot {
     if (this.pinned >= ENEMIES.zombieRules.pinAt) speed = 0;
     // Fatigue from watch duty slows the next day.
     speed *= 1 - clamp(this.fatigue, 0, 0.2);
+    speed *= this.drugs.mods().speed;
     this.moveSpeed = damp(this.moveSpeed, Math.hypot(wx, wz) * speed, 14, dt);
     const targetVx = wx * speed;
     const targetVz = wz * speed;
@@ -604,6 +673,7 @@ export class Player implements Pilot {
 
     this.updateTools(dt, it);
     this.updateInteractions(dt, it);
+    this.updateJump(dt, it);
 
     // Pick up swap: LB cycles equipment.
     if (!this.buildMode && wasPressed(it, Btn.LB)) {
@@ -622,10 +692,41 @@ export class Player implements Pilot {
     // Ground hazards: spore clouds are handled by the zombie system.
   }
 
+  /**
+   * Jump. A press is remembered for a moment and a ledge walked off still allows one, so it feels forgiving. On a pad the
+   * button is shared with interact, so a press that has something to interact with is left to that.
+   */
+  private updateJump(dt: number, it: PlayerIntent) {
+    this.jumpBuf = wasPressed(it, Btn.Jump) ? JUMP_BUFFER : Math.max(0, this.jumpBuf - dt);
+    if (this.jumpBuf <= 0 || this.airT > COYOTE || this.vy > 1) return;
+    if (this.swimming || this.carry || this.action || this.buildMode || this.pinned >= ENEMIES.zombieRules.pinAt) return;
+    if (wasPressed(it, Btn.A) && this.prompt?.button === 'A') {
+      this.jumpBuf = 0;
+      return;
+    }
+    this.jumpBuf = 0;
+    this.vy = JUMP_V;
+    this.airT = COYOTE + 1;
+    this.grounded = false;
+    this.crouch = false;
+    this.ctx.audio.play('swing', this.pos.x, this.pos.z, 0.25);
+  }
+
   private moveBody(dt: number, vx: number, vz: number) {
     const ctx = this.ctx;
+    // Airborne, the feet cannot push: the take-off velocity carries, and the stick only bends it.
+    if (this.grounded || this.swimming) {
+      this.hvx = vx;
+      this.hvz = vz;
+    } else {
+      this.hvx = damp(this.hvx, vx, 4, dt);
+      this.hvz = damp(this.hvz, vz, 4, dt);
+      vx = this.hvx;
+      vz = this.hvz;
+    }
     this.vy -= 22 * dt;
     if (this.vy < -30) this.vy = -30;
+    const fallV = this.vy;
     let desired = { x: vx * dt, y: this.vy * dt, z: vz * dt };
     if (this.swimming) {
       // Afloat: no gravity, ease toward the surface so the head stays out and the body bobs a little.
@@ -641,9 +742,21 @@ export class Player implements Pilot {
     }
     this.kcc.computeColliderMovement(this.collider, desired, undefined, RAY_STATIC);
     const m = this.kcc.computedMovement();
+    const wasGrounded = this.grounded;
     this.grounded = this.kcc.computedGrounded();
+    if (this.vy > 0 && m.y < desired.y - 1e-3) this.vy = 0; // head against a ceiling
     if (this.grounded && this.vy < 0) this.vy = 0;
     if (this.swimming) this.grounded = false;
+    if (this.grounded) {
+      if (!wasGrounded && fallV < -5 && !this.swimming) {
+        // Landing: a thud and a puff of dust, louder the harder it came down.
+        const k = clamp((-fallV - 5) / 12, 0, 1);
+        ctx.audio.play('thud', this.pos.x, this.pos.z, 0.15 + 0.3 * k);
+        ctx.fx.puff(this.pos.x, this.pos.y + 0.05, this.pos.z, 0.62, 0.55, 0.44, 0.5 + 0.5 * k, 0.5);
+        ctx.sig.emit(this.pos.x, this.pos.z, 6 + 8 * k, 'noise');
+      }
+      this.airT = 0;
+    } else this.airT += dt;
     // The body is the capsule centre: update our feet position from it.
     const t = this.body.translation();
     const nx = t.x + m.x;
@@ -1462,7 +1575,8 @@ export class Player implements Pilot {
     // First person: whatever is in hand is held up in front, where the camera can see it.
     if (this.firstPerson && !this.carry && weapon !== 'none') aim = Math.max(aim, 0.75);
     this.syncCarryModel();
-    h.update(dt, this.state === 'downed' ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch);
+    this.airVis = damp(this.airVis, this.state === 'foot' && !this.grounded && !this.swimming && this.airT > 0.06 ? 1 : 0, 16, dt);
+    h.update(dt, this.state === 'downed' ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch, this.airVis);
     h.muzzle(this.muzzleT > 0.05);
     if (this.invuln > 0) h.root.visible = Math.floor(this.invuln * 12) % 2 === 0;
   }

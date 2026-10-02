@@ -1,4 +1,5 @@
 import { t } from '../data';
+import { DRUGS } from '../sim/drugs';
 import { LABEL, whole } from '../sim/resources';
 import { loyaltyBand } from '../sim/loyalty';
 import { SALVAGE_STAGES } from '../sim/salvage';
@@ -57,6 +58,7 @@ class PlayerHud {
     <div class="hud" style="--pc:${color}">
       <div class="gray" data-k="gray"></div>
       <div class="vignette" data-k="vig"></div>
+      <div class="drugfx" data-k="drugfx"></div>
       <div class="corner tl">
         <div class="tag"><span class="pcolor" style="background:${color}"></span><span data-k="name"></span></div>
         <div class="sigrow"><div class="sig" data-k="sigbar"><div class="fill" data-k="sigfill"></div></div><span class="val" data-k="sigval">0</span></div>
@@ -347,7 +349,14 @@ export class Hud {
     if (p.pinned >= 2) chips.push('<span class="chip bad">PINNED</span>');
     if (p.crouch && p.state === 'foot') chips.push('<span class="chip good">CROUCHED</span>');
     if (leg && leg.hordeCountdown(p) > 0) chips.push(`<span class="chip bad">HORDE ${formatClock(leg.hordeCountdown(p))}</span>`);
+    for (const s of p.drugs.status()) chips.push(`<span class="chip ${s.kind}">${s.text}</span>`);
+    const dsel = p.drugs.selected;
+    if (p.state === 'foot' && scene.campaign.items[dsel] > 0) chips.push(`<span class="chip">${btnLabel(slot, 'Down')} ${DRUGS[dsel].name.toUpperCase()} ×${scene.campaign.items[dsel]}</span>`);
     h.setHtml('chips', chips.join(''));
+    // Drugs bend the picture: a hue swim and blur that grows with the haze.
+    const haze = Math.round(p.drugs.mods().haze * 20) / 20;
+    h.setClass('drugfx', haze > 0 ? 'on' : '');
+    h.setStyle('drugfx', '--haze', String(haze));
 
     // Compass
     const cam = p.cam;
@@ -601,7 +610,7 @@ export class Hud {
           })
           .join('')
       : '<div style="opacity:.7">No crew yet. Hire at a Waypoint.</div>';
-    const items = `FLARES ${c.items.flare} · MOLOTOVS ${c.items.molotov} · CHARGES ${c.items.charge} · MEDKITS ${c.items.medkit} · AMMO ${c.ammo}`;
+    const items = `FLARES ${c.items.flare} · MOLOTOVS ${c.items.molotov} · CHARGES ${c.items.charge} · MEDKITS ${c.items.medkit} · STIMS ${c.items.stim} · PAINKILLERS ${c.items.painkiller} · ADRENALINE ${c.items.adrenaline} · HAZE ${c.items.haze} · AMMO ${c.ammo}`;
     const route = leg ? `${leg.leg.name.toUpperCase()} · ${Math.round(leg.leg.length - (p.vehicle?.position.z ?? p.pos.z))} m TO CAMP` : 'CAMP';
     h.setHtml(
       'sheet',

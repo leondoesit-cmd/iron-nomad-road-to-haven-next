@@ -19,6 +19,11 @@ export interface Items {
   molotov: number;
   flare: number;
   charge: number;
+  /** Single-dose drugs, one count per `DrugId`. */
+  stim: number;
+  painkiller: number;
+  adrenaline: number;
+  haze: number;
   /** Engine oil in the trucks, in sumps: one can is half a sump. */
   oil: number;
 }
@@ -46,7 +51,7 @@ export class Campaign {
   hub: string | null = null;
   stocks: Stocks = newStocks(LEGS.start.stocks);
   ammo = LEGS.start.ammo;
-  items: Items = { medkit: 1, molotov: 1, flare: 2, charge: 0, oil: 1 };
+  items: Items = { medkit: 1, molotov: 1, flare: 2, charge: 0, stim: 1, painkiller: 1, adrenaline: 0, haze: 0, oil: 1 };
   chassis = 0;
   fragments = new Set<number>();
   crew: Merc[] = [];
