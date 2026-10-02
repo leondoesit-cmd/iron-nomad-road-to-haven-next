@@ -1,3 +1,6 @@
+import * as THREE from 'three';
+import { modelKey } from '../render/workFx';
+import { sitePos } from './hauling';
 import { partName, type PartItem } from '../sim/parts';
 import { rollCar, type CarStatus } from '../sim/cars';
 import { SALVAGE_STAGES, lootText, salvageLoot, type SalvageCtx, type SalvageKind } from '../sim/salvage';
@@ -227,6 +230,13 @@ export class CarField {
     if (scrapped) text += `${text === 'Nothing worth taking' ? '' : ', '}${scrapped} Scrap (no room for the rest)`;
     p.note(text, kept.length || scrapped ? 'good' : 'info');
     if (loot.gear) ctx.addGear(p, loot.gear);
+    {
+      const site = sitePos(v, (['wheel', 'hood', 'flank', 'rear'] as const)[Math.min(3, stage)]);
+      const hand = new THREE.Vector3(p.pos.x, p.pos.y + 1, p.pos.z);
+      ctx.work.burst(site, 1, 0.9);
+      if (kept.length) ctx.work.spill(kept.map(modelKey), site, hand);
+      if (text !== 'Nothing worth taking') ctx.work.label(text, '#ffd27a', site.clone().add(new THREE.Vector3(0, 0.9, 0)));
+    }
     // What the car loses.
     if (b) {
       if (stage === 0) {

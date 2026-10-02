@@ -22,7 +22,7 @@ import { carrySlow, type Carried } from '../sim/carry';
 import { UTILITY_SLOT, damageTaken, effectiveGun, effectiveMelee, heldItem, statsOf, stepSel, type EffectiveGun, type GearItem, type HurtKind, type Loadout, type Resolved } from '../sim/gear';
 import type { MeleeStats } from '../data';
 import { OIL_LOW, pourOil } from '../sim/oil';
-import { dropCarry, haulCandidate, haulKey, haulPrompt, returnCarry, stashBeforeEntering } from './hauling';
+import { dropCarry, sitePos, haulCandidate, haulKey, haulPrompt, returnCarry, stashBeforeEntering } from './hauling';
 
 export interface Cand {
   kind: string;
@@ -1295,6 +1295,9 @@ export class Player implements Pilot {
         this.note(msg, 'good');
         if (job.kind === 'engine' && v.health.comp.engine >= 0.1) v.startFail = '';
         ctx.audio.play('wrench', v.position.x, v.position.z, 0.7);
+        const at = sitePos(v, job.kind === 'engine' ? 'hood' : job.kind === 'tire' ? 'wheel' : 'flank');
+        ctx.work.burst(at, 1, 0.8);
+        ctx.work.label(msg, '#7ddc7a', at.add(new THREE.Vector3(0, 0.8, 0)));
       },
       tick: () => {
         if (Math.random() < 0.15) ctx.fx.spark(v.position.x, v.position.y + 0.8, v.position.z, 2, 3);
@@ -1773,7 +1776,7 @@ export class Player implements Pilot {
 
   /** Show what is in the arms, rebuilding the model only when it changes kind. */
   private syncCarryModel() {
-    const c = this.carry;
+    const c = this.ctx.work.holding(this.index) ? null : this.carry;
     const key = !c ? '' : c.kind === 'part' ? `part${partDef(c.item.id).mk}` : c.kind;
     if (key === this.carryKey) return;
     this.carryKey = key;
