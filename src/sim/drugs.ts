@@ -436,7 +436,7 @@ export const DRUGS: Record<DrugId, DrugDef> = {
     on: { sight: 1, trip: 1, phantoms: 0.5, speed: 0.85, shake: 0.15, aggro: 0.8, spread: 1.4, regen: 0.3, sway: 0.25 },
     front: { nausea: 1.5 },
     down: { speed: 0.9, shake: 0.1 },
-    look: { hue: 0.5, sat: 0.7, warp: 0.7, chroma: 0.4, kaleido: 0.8, trail: 0.45, edge: 0.65, pulse: 0.45, glow: 0.5, breathe: 1, sky: 1, eye: 1, spores: 0.8, tunnel: 0.15, tintG: 0.03, tintB: 0.05, tempo: -0.2 },
+    look: { hue: 0.5, sat: 0.6, warp: 0.5, chroma: 0.3, kaleido: 0.45, trail: 0.35, edge: 0.4, pulse: 0.4, glow: 0.4, breathe: 1, sky: 1, eye: 1, spores: 0.8, tunnel: 0.15, tintG: 0.03, tintB: 0.05, tempo: -0.2 },
     lookDown: { hue: 0.1, glow: 0.15, dark: 0.05 },
   },
 };
