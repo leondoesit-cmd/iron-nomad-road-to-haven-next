@@ -355,7 +355,7 @@ describe('the inventory key', () => {
     const { h, sc, p } = scene();
     const open = vi.fn();
     sc.openInventory = open;
-    tap(h, sc, 0, Btn.Down);
+    tap(h, sc, 0, Btn.Inventory);
     expect(open).toHaveBeenCalledWith(p);
   });
 
@@ -364,7 +364,7 @@ describe('the inventory key', () => {
     const open = vi.fn();
     sc.openInventory = open;
     p.state = 'driving';
-    tap(h, sc, 0, Btn.Down);
+    tap(h, sc, 0, Btn.Inventory);
     expect(open).not.toHaveBeenCalled();
     expect(p.notes.some((n) => /Get out/.test(n.text))).toBe(true);
   });
@@ -375,12 +375,12 @@ describe('the inventory key', () => {
     im.autoJoinKeyboard();
     const key = (type: 'keydown' | 'keyup', code: string) => win.dispatchEvent(Object.assign(new Event(type, { cancelable: true }), { code, repeat: false }));
     const b = defaultBindings();
-    expect(b.pad.inventory).toBe(Btn.Down);
-    expect(b.kb[0].inventory).toBe('KeyI');
-    expect(b.kb[1].inventory).toBe('KeyO');
-    key('keydown', 'KeyI');
+    expect(b.pad.inventory).toBe(Btn.Left);
+    expect(b.kb[0].inventory).toBe('Digit3');
+    expect(b.kb[1].inventory).toBe('KeyI');
+    key('keydown', 'Digit3');
     im.sample(DT);
-    expect(im.intents[0].pressed & (1 << Btn.Down)).not.toBe(0);
+    expect(im.intents[0].pressed & (1 << Btn.Inventory)).not.toBe(0);
   });
 });
 
@@ -394,7 +394,7 @@ describe('at camp', () => {
     expect(p.buildMode).toBe(true);
     const open = vi.fn();
     sc.openInventory = open;
-    tap(h, sc as unknown as LegScene, 0, Btn.Down);
+    tap(h, sc as unknown as LegScene, 0, Btn.Inventory);
     expect(open).toHaveBeenCalledWith(p);
     // Somebody holding a tool while building is armed when the raid comes.
     p.gear.sel = 1;

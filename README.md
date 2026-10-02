@@ -50,7 +50,7 @@ Each leg runs the same five steps, and every decision is shared:
   gap grows.
 - **Downed, not dead**: at 0 HP you crawl for 20 s. Your partner can revive you (hold A, faster with a medkit). The run ends
   only when both of you are down, or the last vehicle is lost.
-- **Gear**: you wear, hold and carry a personal kit. Armour, masks and boots change what hurts you; guns, melee weapons and tools sit on a four-slot belt (LB swaps); the bag holds the rest. D-pad ↓ (or `I` / `O`) opens the inventory.
+- **Gear**: you wear, hold and carry a personal kit. Armour, masks and boots change what hurts you; guns, melee weapons and tools sit on a four-slot belt (LB swaps); the bag holds the rest. D-pad ← (or `3` / `I`) opens the inventory.
 - **Crew** have a Loyalty meter and a loot cut that is withheld from every pickup. Betrayal is telegraphed by two radio
   warnings and a camp dispute before anyone deserts.
 - **Roadside Encounters** are decided by both players voting in their own half. If you disagree the Encounter Lead decides, and
@@ -81,7 +81,9 @@ The garage and Ledger show one vehicle, and Settings drops the Player 2 and spli
 | X | Reload (hold: swap utility) | Tap horn, hold siren | | Assign watch post |
 | Y | Tap: switch first / third person. Hold: enter a vehicle | Tap: switch view. Hold: exit, or bail at speed | Tap: switch view. Hold: exit | |
 | D-pad ↑ | Tap ping, hold command wheel | | | |
-| D-pad ↓ | Tap map: closer look, whole leg, close | Same | Same | Same |
+| D-pad ↓ | Tap to take the selected drug, hold to open the belt | Same | Same | Same |
+| D-pad → | Tap map: closer look, whole leg, close | Same | Same | Same |
+| D-pad ← | Inventory: change what you wear and hold (the game pauses) | Same | Same | Same |
 | L3 / R3 | Sprint / reset camera | Camera distance / look back | | |
 | Start / Back | Pause / hold for convoy sheet | | | |
 
@@ -99,7 +101,7 @@ You cannot jump while swimming, carrying a load, mid-action or pinned, and jumpi
 shares A with interact: a press with something to interact with is left to the interact prompt, otherwise it jumps. Landing
 hard is noisy. Jump is a normal rebindable action (Control settings, Move group).
 
-**Drugs**: nine consumables, taken with the use button (D-pad ↓ on a pad, `U` for player 1, `K` for player 2). Tap it to take
+**Drugs**: nine consumables, taken with the use button (D-pad ↓ on a pad, `4` for player 1, `U` for player 2). Tap it to take
 the selected one. Hold it to open the belt, then lean left or right to pick (the feet stay put while your hands are in your pockets);
 let go to close it. The belt is also where the counts are. Each player's blood is saved with the campaign, so a trip carries on across
 a camp, a delve and a reload; a night's sleep clears it, and half-clears the habit.
@@ -150,16 +152,16 @@ shelves, depot stock, medicine cabinets, coolers and safes; buy a few at a trade
 
 **Keyboard**: solo play can use either layout below. Player 1 uses `W A S D` to move, the mouse to look (`Z X` to aim without it), left click or `T` to fire, right click to aim, `E` to interact, `Space` to jump, `F` for vehicles, `C` for
 crouch and lights, `Shift` for sprint and handbrake, `G` for the command wheel, `Q` to swap tools, `R` to reload, `H` to honk,
-`1 2` to cycle build elements, `J` for the map, `I` for the inventory, hold `Tab` for the convoy sheet. Player 2 uses the arrow keys, `[ ]` to aim, `Right
+`1 2` to cycle build elements, `V` for the map, `3` for the inventory, `4` to take a drug, hold `Tab` for the convoy sheet. Player 2 uses the arrow keys, `[ ]` to aim, `Right
 Shift` to fire, `/` to interact, `O` to jump, `Enter` for vehicles, `.` for crouch and lights, `Right Ctrl` for sprint and handbrake,
-`Backspace` for the wheel, `N` to swap tools, `,` to reload, `; '` to cycle build elements, `K` for the map, `I` for the inventory, hold `\` for the convoy sheet. Keyboard players get stronger
+`Backspace` for the wheel, `N` to swap tools, `,` to reload, `; '` to cycle build elements, `K` for the map, `I` for the inventory, `U` to take a drug, hold `\` for the convoy sheet. Keyboard players get stronger
 aim assist. `Esc` pauses.
 
 **Map and minimap**: each half has a round minimap under the clock, turned so up is where your camera looks and zoomed
 out as you speed up. It shows the road, the ground, both convoys and the places worth a trip: camp, Encounters, scavenge
 zones, roadside places, docks, ways underground, parked rides of yours, mined ground and any pings. Targets that are out of
 range stay on the rim as small markers so the way to them is never lost. The dead appear on it only once they are chasing and
-raiders only once they are on the road, so a map never gives away a sleeping horde. Tap the map button (D-pad down, `J` or
+raiders only once they are on the road, so a map never gives away a sleeping horde. Tap the map button (D-pad right, `V` or
 `K`) to open the larger map over your half, tap again for the whole leg, and once more to close it. The whole-leg view runs
 north up in a tall half and turns to run along the screen in a wide one. Roadside places, docks and ways underground are
 drawn once the convoy has come within sight of them and stay on the map after that. Underground the map is drawn only where
@@ -262,7 +264,7 @@ Tests: `tests/interiors.test.ts` (reachability, door clearance, walkability by f
 
 ### Gear and the inventory
 
-Each scavenger has a personal kit (`data/gear.json`, `sim/gear.ts`) in three parts, and the inventory screen is where you change it. Press **D-pad ↓** (keyboard: `I` for Player 1, `O` for Player 2; rebindable under Control settings) on foot. The game pauses, the panel opens over the *other* half of the screen, and your own camera swings into a slow orbit of your survivor so every change shows on the model.
+Each scavenger has a personal kit (`data/gear.json`, `sim/gear.ts`) in three parts, and the inventory screen is where you change it. Press **D-pad ←** (keyboard: `3` for Player 1, `I` for Player 2; rebindable under Control settings) on foot. The game pauses, the panel opens over the *other* half of the screen, and your own camera swings into a slow orbit of your survivor so every change shows on the model.
 
 - **Wearing** (seven slots: head, face, body, hands, legs, feet, back). Every piece changes both stats and looks. **Armour** cuts the damage from bullets, claws, blasts and rams; **spore guard** (masks) cuts bloater clouds; **fall protection** (boots, knee pads) cuts falls; **speed** and **footstep noise** trade against each other (plate is slow and loud, sneakers are quiet, trail runners are quick); **reload** and **gun spread** come from gloves and goggles; **melee** from gauntlets; and a pack, vest or cargo trousers add **bag slots**. Fire ignores armour. Clothing is built in `render/outfit.ts` from a style and two colours per slot: 31 wearable pieces across the seven slots, in three rarities. Starter pieces use your own colours; any other body armour puts an armband in your colour on the sleeve so you are still recognisable in a split screen.
 - **In hand** (the belt: four slots, plus the utility). The slot in hand decides what the on-foot buttons do, and **LB** steps along the belt, then to the throwable (flare, molotov, charge or decoy horn, chosen with hold-X as before, or in the inventory). The belt holds firearms, melee weapons and the three tools (wrench, crowbar, jerrycan), so carrying a shotgun means leaving the crowbar at home. The belt always keeps one weapon. **Guns** each have their own damage, fire rate, magazine, reload, spread, range, noise and pierce: the 9mm pistol you start with, a .38 revolver (slow, hard-hitting, punches through plate), a scrap SMG, a sawn-off and a pump shotgun (eight pellets a shot, only the first is loud), and a hunting rifle. Every gun keeps its own magazine when you swap. **Melee weapons** (knife, bat, machete, fire axe) swing on RT as well as RB, each with its own damage, reach and pace; bare hands are still the old 35. Hold RB for the silent takedown as before.

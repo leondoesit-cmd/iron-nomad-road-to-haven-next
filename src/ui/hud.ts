@@ -340,7 +340,7 @@ export class Hud {
       const w = Math.round(hostW * 0.9);
       const hh = Math.max(120, hostH - top - bottom);
       h.setStyle('mapfull', 'top', `${top}px`);
-      h.painter.full(h.el('mapcv') as HTMLCanvasElement, frame, mv, mode, w, hh, `${btnLabel(slot, 'Down')} · ${next}`, this.uiScale);
+      h.painter.full(h.el('mapcv') as HTMLCanvasElement, frame, mv, mode, w, hh, `${btnLabel(slot, 'Right')} · ${next}`, this.uiScale);
     }
   }
 

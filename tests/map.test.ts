@@ -201,10 +201,10 @@ describe('a delve map', () => {
 });
 
 describe('the map button', () => {
-  it('is bound to the D-pad down on a pad and to its own key on each keyboard layout', () => {
+  it('is bound to the D-pad right on a pad and to its own key on each keyboard layout', () => {
     const b = defaultBindings();
-    expect(b.pad.map).toBe(Btn.Down);
-    expect(ACTION_BY_ID.map.pad).toBe(Btn.Down);
+    expect(b.pad.map).toBe(Btn.Right);
+    expect(ACTION_BY_ID.map.pad).toBe(Btn.Map);
     expect(b.kb[0].map).toBeTruthy();
     expect(b.kb[1].map).toBeTruthy();
     expect(b.kb[0].map).not.toBe(b.kb[1].map);
@@ -214,7 +214,7 @@ describe('the map button', () => {
     const b = defaultBindings();
     const all = [...Object.values(b.kb[0]), ...Object.values(b.kb[1])];
     expect(new Set(all).size).toBe(all.length);
-    const pads = ACTIONS.filter((a) => a.devices.includes('pad') && a.id !== 'view').map((a) => b.pad[a.id]);
+    const pads = ACTIONS.filter((a) => a.devices.includes('pad') && a.id !== 'view' && a.id !== 'jump').map((a) => b.pad[a.id]); // jump deliberately rides on interact
     expect(new Set(pads).size).toBe(pads.length);
   });
 });
@@ -273,7 +273,7 @@ describe('maps in a running scene', () => {
     const p = sc.players[0];
     expect(p.mapMode).toBe(0);
     const tap = () => {
-      h.intents[0].pressed |= 1 << Btn.Down;
+      h.intents[0].pressed |= 1 << Btn.Map;
       sc.tick(1 / 60);
       h.intents[0].pressed = 0;
       sc.tick(1 / 60);

@@ -630,7 +630,8 @@ export class Player implements Pilot {
     while (this.notes.length && this.notes[0].t <= 0) this.notes.shift();
     this.commandWheel = isHeld(it, Btn.Up) && this.state !== 'dead';
     this.sheet = isHeld(it, Btn.Back) && heldFor(it, Btn.Back) > 0.25;
-    if (wasPressed(it, Btn.Map) && this.state !== 'dead') this.mapMode = (this.mapMode + 1) % this.ctx.mapModes;
+    const beltBusy = this.useHold > 0 || this.beltOpen;
+    if (wasPressed(it, Btn.Map) && !beltBusy && this.state !== 'dead') this.mapMode = (this.mapMode + 1) % this.ctx.mapModes;
     else if (this.mapMode >= this.ctx.mapModes) this.mapMode = 0;
     if (this.fireCd > 0) this.fireCd -= dt;
     if (this.meleeCd > 0) this.meleeCd -= dt;
@@ -649,7 +650,7 @@ export class Player implements Pilot {
     }
 
     if (wasPressed(it, Btn.View) && (this.state === 'foot' || this.state === 'driving' || this.state === 'gunner') && !this.buildMode) this.toggleView();
-    if (wasPressed(it, Btn.Inventory)) {
+    if (wasPressed(it, Btn.Inventory) && !beltBusy) {
       if (this.state === 'foot') {
         this.action = null;
         this.ctx.openInventory?.(this);
