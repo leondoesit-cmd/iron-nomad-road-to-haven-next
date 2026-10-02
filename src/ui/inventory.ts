@@ -24,6 +24,8 @@ import {
 } from '../sim/gear';
 import { UTILITIES, utilityName, type Player } from '../game/player';
 import type { Game } from '../game/game';
+import type { Campaign } from '../game/campaign';
+import type { Slot } from '../input/input';
 import { btnLabel, escapeHtml } from './hud';
 import type { FocusItem } from './focus';
 
@@ -35,71 +37,47 @@ const UTILITY_SHORT: Record<(typeof UTILITIES)[number], string> = { flare: 'Flar
 /** Medkits heal this much when used on yourself from the inventory. */
 export const MEDKIT_HEAL = 60;
 
-/**
- * The inventory: what one person wears, holds on their belt, and carries in their bag. Opens over the game, pauses it,
- * and puts the owner's camera into a slow orbit of their survivor so every change shows. The owner alone has a cursor.
- */
-export class InventoryScreen {
-  private acts = new Map<string, Act>();
-  private p: Player | null = null;
-  /** The item shown in the detail column. */
-  private sel: string | null = null;
-  private msg = '';
-  private side: 'left' | 'right' | 'center' = 'right';
-  private prevTick: typeof this.game.focus.onTick = null;
+/** What a view needs from whatever hosts it: the pause screen, or the Dawn Ledger's Gear tab. */
+export interface InventoryHost {
+  c: Campaign;
+  audio: { play(id: string): void };
+  /** The input slot of a seat, for naming its buttons. */
+  slot(i: number): Slot | null;
+  btn(id: string, inner: string, act: Act, enabled?: boolean, cls?: string, title?: string): string;
+  rerender(): void;
+}
 
-  constructor(
-    private game: Game,
-    private root: HTMLElement,
-    private onClose: () => void,
-  ) {}
+/**
+ * One person's gear as three columns: what they wear, what is in hand and in the bag, and the selected item with
+ * what can be done to it. Pure HTML plus actions; the host owns focus and rendering.
+ */
+export class InventoryView {
+  p: Player | null = null;
+  /** The item shown in the detail column. */
+  sel: string | null = null;
+  msg = '';
+
+  constructor(private host: InventoryHost) {}
 
   private get c() {
-    return this.game.campaign;
+    return this.host.c;
   }
   private get loadout() {
     return this.p!.gear;
   }
 
-  open(p: Player) {
+  reset(p: Player) {
     this.p = p;
     this.sel = null;
     this.msg = '';
-    p.moveSpeed = 0;
-    const R = this.game.R;
-    // Put the panel on the other half of the screen, so the survivor stays in view in their own.
-    this.side = R.seats === 1 ? 'right' : R.layout === 'vertical' ? (p.index === 0 ? 'right' : 'left') : 'center';
-    p.showcase = { a: p.yaw + 0.55, side: R.seats === 1 ? 1.0 : 0 };
-    const f = this.game.focus;
-    f.active = true;
-    f.owner = p.index;
-    f.cursor[p.index] = 0;
-    f.onCancel = () => this.close();
-    this.prevTick = f.onTick;
-    f.onTick = (input) => {
-      // X: do the obvious thing with the item under the cursor.
-      if (!wasPressed(input.intents[p.index], Btn.X)) return;
-      const id = f.items[f.cursor[p.index]]?.el.dataset.fid ?? '';
-      const [zone, key] = id.split(':');
-      if (zone === 'bag') this.act(equipFromBag(this.loadout, key));
-      else if (zone === 'worn') this.act(unequipWorn(this.loadout, key as WearSlot));
-      else if (zone === 'belt') this.act(unequipBelt(this.loadout, Number(key)));
-    };
-    this.render();
   }
 
-  close() {
-    const f = this.game.focus;
-    f.clear();
-    f.active = false;
-    f.owner = null;
-    f.onCancel = () => {};
-    f.onTick = this.prevTick;
-    if (this.p) this.p.showcase = null;
-    this.root.innerHTML = '';
-    this.root.classList.remove('on');
-    this.p = null;
-    this.onClose();
+  /** X: do the obvious thing with the item under the cursor, given its focus id. */
+  quick(id: string) {
+    const [zone, key] = id.split(':');
+    if (zone === 'bag') this.act(equipFromBag(this.loadout, key));
+    else if (zone === 'worn') this.act(unequipWorn(this.loadout, key as WearSlot));
+    else if (zone === 'belt') this.act(unequipBelt(this.loadout, Number(key)));
   }
 
   // ------------------------------------------------------------------ actions
@@ -107,9 +85,9 @@ export class InventoryScreen {
   /** Run a loadout change, report it, and bring the survivor and the screen up to date. */
   private act(r: Result) {
     this.msg = r.ok ? r.note : r.reason;
-    this.game.audio.play(r.ok ? 'confirm' : 'deny');
+    this.host.audio.play(r.ok ? 'confirm' : 'deny');
     if (r.ok) this.p!.refreshGear();
-    this.render();
+    this.host.rerender();
   }
 
   private scrap(uid: string) {
@@ -135,8 +113,8 @@ export class InventoryScreen {
     this.c.items.medkit--;
     p.heal(MEDKIT_HEAL);
     this.msg = `Patched up: +${MEDKIT_HEAL} HP`;
-    this.game.audio.play('confirm');
-    this.render();
+    this.host.audio.play('confirm');
+    this.host.rerender();
   }
 
   private pickUtility(u: (typeof UTILITIES)[number]) {
@@ -146,15 +124,14 @@ export class InventoryScreen {
     this.loadout.sel = UTILITY_SLOT;
     p.syncEquip();
     this.msg = `${utilityName(u)} in hand`;
-    this.game.audio.play('confirm');
-    this.render();
+    this.host.audio.play('confirm');
+    this.host.rerender();
   }
 
   // ------------------------------------------------------------------ rendering
 
   private btn(id: string, inner: string, act: Act, enabled = true, cls = '', title = ''): string {
-    this.acts.set(id, act);
-    return `<button data-fid="${id}" class="${cls}" ${enabled ? '' : 'disabled'} title="${escapeHtml(title)}">${inner}</button>`;
+    return this.host.btn(id, inner, act, enabled, cls, title);
   }
 
   private rarityDot(d: GearDef) {
@@ -163,7 +140,7 @@ export class InventoryScreen {
 
   /** The name of a button as this person's own controller or keyboard calls it. */
   private key(btn: string): string {
-    return btnLabel(this.game.input.slots[this.p!.index], btn);
+    return btnLabel(this.host.slot(this.p!.index), btn);
   }
 
   /** One short line of what an item does, for the small buttons. */
@@ -188,23 +165,18 @@ export class InventoryScreen {
       () => {
         this.sel = it.uid;
         this.msg = '';
-        this.render();
+        this.host.rerender();
       },
       true,
       `slotbtn r${d.rarity}${on}${hl}`,
     );
   }
 
-  render() {
-    const g = this.game;
-    const p = this.p;
-    if (!p) return;
+  /** The three columns. */
+  columnsHtml(): string {
+    const p = this.p!;
     const L = this.loadout;
-    const keys = g.focus.keys();
-    this.acts.clear();
     const stats = statsOf(L);
-    const name = escapeHtml(this.c.players[p.index].name.toUpperCase());
-    const col = PLAYER_CSS[p.index];
 
     // ---- wearing
     const wear = WEAR_SLOTS.map((slot) => this.itemBtn('worn', slot, L.worn[slot] ?? null, GEAR.labels[slot], false)).join('');
@@ -238,14 +210,8 @@ export class InventoryScreen {
     add('Melee', stats.melee, true);
     add('Spread', stats.steady, false);
 
-    const hurt = p.hp < p.maxHp - 0.5;
-    const meds = this.c.items.medkit;
-    const medBtn = this.btn('heal', `Medkit <em>×${meds}</em>`, () => this.heal(), meds > 0 && hurt, '', hurt ? (meds > 0 ? `Patch yourself up: +${MEDKIT_HEAL} HP` : 'No medkits: craft some at camp') : 'You are not hurt');
 
-    this.root.classList.add('on');
-    this.root.innerHTML = `<div class="ledger panel paper inv ${this.side}">
-      <h2><span><span class="pcolor" style="background:${col}"></span>Inventory · ${name}</span><small>THE GAME IS PAUSED</small></h2>
-      <div class="invbody">
+    return `
         <section class="invcol">
           <h3>Wearing</h3>
           <div class="invlist">${wear}</div>
@@ -258,18 +224,15 @@ export class InventoryScreen {
           <h3>Bag <small class="${over}">${L.bag.length}/${cap}</small></h3>
           <div class="invbag">${cells.join('')}</div>
         </section>
-        <section class="invcol detail">${this.detailHtml()}</section>
-      </div>
-      <div class="benchfoot"><span class="mutedtxt">${escapeHtml(this.msg || `${this.key('A')} select · ${this.key('X')} wear or take off · ${this.key('B')} close`)}</span><span class="invfoot">${medBtn}${this.btn('invdone', 'Back to the road', () => this.close())}</span></div>
-    </div>`;
-    this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));
-    const items: FocusItem[] = [];
-    this.root.querySelectorAll<HTMLElement>('[data-fid]').forEach((el) => {
-      const act = this.acts.get(el.dataset.fid!);
-      if (act) items.push({ el, press: (pl) => act(pl), disabled: (el as HTMLButtonElement).disabled });
-    });
-    g.focus.setItems(items, keys);
-    g.focus.active = true;
+        <section class="invcol detail">${this.detailHtml()}</section>`;
+  }
+
+  /** The medkit button, for the footer. */
+  footHtml(): string {
+    const p = this.p!;
+    const hurt = p.hp < p.maxHp - 0.5;
+    const meds = this.c.items.medkit;
+    return this.btn('heal', `Medkit <em>×${meds}</em>`, () => this.heal(), meds > 0 && hurt, '', hurt ? (meds > 0 ? `Patch yourself up: +${MEDKIT_HEAL} HP` : 'No medkits: craft some at camp') : 'You are not hurt');
   }
 
   /** The right-hand column: what the selected item is, how it compares with what is worn, and what can be done with it. */
@@ -321,8 +284,8 @@ export class InventoryScreen {
         L.sel = spot.i;
         p.syncEquip();
         this.msg = `${d.name} in hand`;
-        this.game.audio.play('confirm');
-        this.render();
+        this.host.audio.play('confirm');
+        this.host.rerender();
       }, L.sel !== spot.i));
       acts.push(this.btn('a-stow', 'Stow it in the bag', () => this.act(unequipBelt(L, spot.i))));
       const others = Array.from({ length: BELT_SIZE }, (_, i) => i).filter((i) => i !== spot.i);
@@ -332,5 +295,102 @@ export class InventoryScreen {
       acts.push(`<div class="mutedtxt">Move to belt slot:</div><div class="chips">${mv}</div>`);
     }
     return `${lines.join('')}<div class="invacts">${acts.join('')}</div>`;
+  }
+}
+
+
+/**
+ * The inventory screen: opens over the game, pauses it, and puts the owner's camera into a slow orbit of their
+ * survivor so every change shows. The owner alone has a cursor.
+ */
+export class InventoryScreen implements InventoryHost {
+  private acts = new Map<string, Act>();
+  private view = new InventoryView(this);
+  private p: Player | null = null;
+  private side: 'left' | 'right' | 'center' = 'right';
+  private prevTick: typeof this.game.focus.onTick = null;
+
+  constructor(
+    private game: Game,
+    private root: HTMLElement,
+    private onClose: () => void,
+  ) {}
+
+  get c() {
+    return this.game.campaign;
+  }
+  get audio() {
+    return this.game.audio;
+  }
+  slot(i: number) {
+    return this.game.input.slots[i];
+  }
+  btn(id: string, inner: string, act: Act, enabled = true, cls = '', title = ''): string {
+    this.acts.set(id, act);
+    return `<button data-fid="${id}" class="${cls}" ${enabled ? '' : 'disabled'} title="${escapeHtml(title)}">${inner}</button>`;
+  }
+  rerender() {
+    this.render();
+  }
+
+  open(p: Player) {
+    this.p = p;
+    this.view.reset(p);
+    p.moveSpeed = 0;
+    const R = this.game.R;
+    // Put the panel on the other half of the screen, so the survivor stays in view in their own.
+    this.side = R.seats === 1 ? 'right' : R.layout === 'vertical' ? (p.index === 0 ? 'right' : 'left') : 'center';
+    p.showcase = { a: p.yaw + 0.55, side: R.seats === 1 ? 1.0 : 0 };
+    const f = this.game.focus;
+    f.active = true;
+    f.owner = p.index;
+    f.cursor[p.index] = 0;
+    f.onCancel = () => this.close();
+    this.prevTick = f.onTick;
+    f.onTick = (input) => {
+      if (wasPressed(input.intents[p.index], Btn.X)) this.view.quick(f.items[f.cursor[p.index]]?.el.dataset.fid ?? '');
+    };
+    this.render();
+  }
+
+  close() {
+    const f = this.game.focus;
+    f.clear();
+    f.active = false;
+    f.owner = null;
+    f.onCancel = () => {};
+    f.onTick = this.prevTick;
+    if (this.p) this.p.showcase = null;
+    this.root.innerHTML = '';
+    this.root.classList.remove('on');
+    this.p = null;
+    this.onClose();
+  }
+
+  render() {
+    const g = this.game;
+    const p = this.p;
+    if (!p) return;
+    const keys = g.focus.keys();
+    this.acts.clear();
+    const name = escapeHtml(this.c.players[p.index].name.toUpperCase());
+    const v = this.view;
+    const hint = v.msg || `${btnLabel(this.slot(p.index), 'A')} select · ${btnLabel(this.slot(p.index), 'X')} wear or take off · ${btnLabel(this.slot(p.index), 'B')} close`;
+    // The columns first: building them registers the buttons' actions.
+    const cols = v.columnsHtml();
+    this.root.classList.add('on');
+    this.root.innerHTML = `<div class="ledger panel paper inv ${this.side}">
+      <h2><span><span class="pcolor" style="background:${PLAYER_CSS[p.index]}"></span>Inventory · ${name}</span><small>THE GAME IS PAUSED</small></h2>
+      <div class="invbody">${cols}</div>
+      <div class="benchfoot"><span class="mutedtxt">${escapeHtml(hint)}</span><span class="invfoot">${v.footHtml()}${this.btn('invdone', 'Back to the road', () => this.close())}</span></div>
+    </div>`;
+    this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));
+    const items: FocusItem[] = [];
+    this.root.querySelectorAll<HTMLElement>('[data-fid]').forEach((el) => {
+      const act = this.acts.get(el.dataset.fid!);
+      if (act) items.push({ el, press: (pl) => act(pl), disabled: (el as HTMLButtonElement).disabled });
+    });
+    g.focus.setItems(items, keys);
+    g.focus.active = true;
   }
 }
