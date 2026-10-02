@@ -111,7 +111,10 @@ describe('binding tables', () => {
     assignBinding('pad', b.pad, 'interact', Btn.B);
     assignBinding('pad', b.pad, 'swap', Btn.RT);
     assignBinding('pad', b.pad, 'vehicle', Btn.A); // vehicle takes A from crouch, crouch takes Y, and the shared view follows vehicle
-    const used = Object.values(b.pad).filter((v) => v !== SHARED);
+    // Jump rides on interact on purpose, so it is not counted.
+    const used = Object.entries(b.pad)
+      .filter(([a, v]) => v !== SHARED && a !== 'jump')
+      .map(([, v]) => v);
     expect(new Set(used).size).toBe(used.length);
     expect(b.pad.interact).toBe(Btn.B);
     expect(b.pad.fire).toBe(Btn.LB);

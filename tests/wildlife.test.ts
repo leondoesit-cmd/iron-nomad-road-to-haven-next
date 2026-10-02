@@ -119,15 +119,28 @@ describe('shots and meat', () => {
     expect(W.rayTest(0, 0.5, 0, 0, 0, 1, 50)?.animal).toBe(boar);
     expect(W.rayTest(0, 2.5, 0, 0, 0, 1, 50)).toBeNull();
   });
-  it('killing a meat animal pays rations once, killing a dog pays none', () => {
+  it('killing a meat animal pays rations once, killing a vulture pays one ration', () => {
     const { W, loot } = world([player(0, 0)]);
     const deer = W.spawn('deer', 0, 20);
     expect(W.damage(deer, 500, { fromX: 0, fromZ: 0, killer: 0 })).toBe(true);
-    expect(loot).toEqual([{ rations: WILDLIFE.species.deer.meat }]);
+    expect(loot).toEqual([{ rations: WILDLIFE.species.deer.meat, scrap: Math.floor(WILDLIFE.species.deer.meat / 2) }]);
     W.damage(deer, 500, { fromX: 0, fromZ: 0, killer: 0 });
     expect(loot.length).toBe(1);
     const dog = W.spawn('dog', 0, 20);
     W.damage(dog, 500, { fromX: 0, fromZ: 0, killer: 0 });
+    expect(loot[1]).toEqual({ rations: 1 });
+  });
+  it('with an interact registry the kill leaves a carcass that pays when butchered', () => {
+    const { ctx, W, loot } = world([player(0, 0)]);
+    const adds: any[] = [];
+    (ctx as any).interact = { add: (i: any) => adds.push(i), remove: () => {} };
+    const boar = W.spawn('boar', 0, 20);
+    W.damage(boar, 500, { fromX: 0, fromZ: 0, killer: 0 });
+    expect(loot.length).toBe(0);
+    expect(adds.length).toBe(1);
+    adds[0].run(player(0, 19));
+    expect(loot).toEqual([{ rations: WILDLIFE.species.boar.meat, scrap: 2 }]);
+    adds[0].run(player(0, 19));
     expect(loot.length).toBe(1);
   });
   it('carcasses lie about for a while and are then cleared', () => {

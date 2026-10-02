@@ -14,6 +14,11 @@ const HEIGHT: Record<AnimalKind, number> = { hare: 0.35, deer: 1.3, vulture: 0.4
 
 let aid = 1;
 
+/** Hides and tusks fetch scrap from the big game. */
+function hideScrap(a: Animal) {
+  return a.def.meat >= 4 ? Math.floor(a.def.meat / 2) : 0;
+}
+
 export class Animal {
   id = aid++;
   def: AnimalDef;
@@ -38,6 +43,9 @@ export class Animal {
   fearZ = 0;
   dead = false;
   deadT = 0;
+  /** Seconds the body lies about: edible carcasses wait twice as long to be butchered. */
+  keepFor = WILDLIFE.rules.corpseSeconds;
+  butchered = false;
   fall = 0;
   phase: number;
   flap: number;
@@ -319,10 +327,52 @@ export class WildlifeSystem {
     ctx.fx.blood(a.x, a.y + a.height * 0.6, a.z, 6);
     ctx.audio.play(a.def.temper === 'bird' ? 'caw' : a.def.temper === 'prey' ? 'yelp' : 'growl', a.x, a.z, 0.9);
     if (a.flying) a.y = ctx.groundAt(a.x, a.z) + 0.15;
-    if (a.def.meat > 0) {
-      ctx.addLoot({ rations: a.def.meat }, 'hunt');
-      ctx.notify(-1, t('hunt.meat', { name: a.def.name, n: a.def.meat }), 'good');
+    if (a.def.meat > 0) this.leaveCarcass(a);
+  }
+
+  private butcherTime(a: Animal) {
+    return 0.8 + a.def.meat * 0.25;
+  }
+
+  /** The kill leaves a carcass to hold A on. Without an interact registry (tests) it is taken on the spot. */
+  private leaveCarcass(a: Animal) {
+    const ctx = this.ctx;
+    if (!ctx.interact) {
+      this.butcher(a, null);
+      return;
     }
+    a.keepFor = WILDLIFE.rules.corpseSeconds * 2;
+    ctx.interact.add({
+      id: `carcass:${a.id}`,
+      x: a.x,
+      z: a.z,
+      r: 2.4,
+      prompt: `Hold to butcher ${a.def.name} (${a.def.meat} rations${hideScrap(a) ? `, ${hideScrap(a)} scrap` : ''})`,
+      dur: this.butcherTime(a),
+      priority: 1,
+      enabled: () => a.dead && !a.butchered,
+      onTick: () => {
+        // The smell and the commotion carry a little.
+        ctx.sig?.emit(a.x, a.z, 14, 'noise');
+        return true;
+      },
+      run: (p) => this.butcher(a, p),
+    });
+  }
+
+  private butcher(a: Animal, by: Player | null) {
+    if (a.butchered) return;
+    a.butchered = true;
+    const ctx = this.ctx;
+    ctx.interact?.remove(`carcass:${a.id}`);
+    const gross: Partial<Record<'rations' | 'scrap', number>> = { rations: a.def.meat };
+    const scrap = hideScrap(a);
+    if (scrap) gross.scrap = scrap;
+    ctx.addLoot(gross, 'hunt');
+    ctx.fx.blood(a.x, a.y + 0.3, a.z, 3);
+    ctx.audio.play('pickup', a.x, a.z, 0.8);
+    ctx.notify(-1, t('hunt.meat', { name: a.def.name, n: a.def.meat }) + (scrap ? ` +${scrap} scrap from the hide.` : ''), 'good');
+    if (by) a.deadT = Math.max(a.deadT, a.keepFor - 4);
   }
 
   blast(x: number, z: number, radius: number, damage: number, killer: number) {
@@ -426,7 +476,6 @@ export class WildlifeSystem {
     const anyone = ctx.players.some((p) => p.alive);
     if (!anyone) return;
     const act = WILDLIFE.rules.activeRadius;
-    const keep = WILDLIFE.rules.corpseSeconds;
     for (let i = this.list.length - 1; i >= 0; i--) {
       const a = this.list[i];
       if (a.dead) {
@@ -436,7 +485,8 @@ export class WildlifeSystem {
         a.vz = damp(a.vz, 0, 6, dt);
         a.x += a.vx * dt;
         a.z += a.vz * dt;
-        if (a.deadT > keep) {
+        if (a.deadT > a.keepFor) {
+          ctx.interact?.remove(`carcass:${a.id}`);
           this.list[i] = this.list[this.list.length - 1];
           this.list.pop();
         }
@@ -1081,7 +1131,7 @@ export class WildlifeSystem {
       }
       if (!seen) continue;
       drawn++;
-      const sink = a.dead ? Math.max(0, a.deadT - (WILDLIFE.rules.corpseSeconds - 3)) * 0.2 : 0;
+      const sink = a.dead ? Math.max(0, a.deadT - (a.keepFor - 3)) * 0.2 : 0;
       const roll = a.dead ? a.fall * (Math.PI / 2) * (a.id % 2 ? 1 : -1) * 0.95 : 0;
       // Lying on its side puts the body a little off the ground, not through it.
       const lift = a.dead && !a.flying ? a.fall * 0.04 : 0;
