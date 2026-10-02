@@ -21,6 +21,7 @@ import { carriedName, planStow, type Carried, type Loose } from '../sim/carry';
 import { lakeCurrent } from '../world/lakes';
 import type { DelveSite } from '../world/delveSites';
 import { newDelveRecord, type DelveRecord, type PlayerCarry } from './delveScene';
+import { LegMapBaker, SITE_LABEL, minefieldOutline, newFrame, roadLine, type MapFrame } from '../ui/mapdata';
 
 interface PickupEntity {
   spawn: PickupSpawn;
@@ -1227,6 +1228,49 @@ export class LegScene extends Scene {
     for (const l of this.terrain!.lakes) if (l.dock && nearAny(l.dock.shoreX, l.dock.shoreZ, 420)) pins.push({ x: l.dock.shoreX, z: l.dock.shoreZ, kind: 'dock', label: 'DOCK' });
     for (const d of this.src.layout.delves) if (nearAny(d.x, d.z, 420)) pins.push({ x: d.x, z: d.z, kind: 'delve', label: d.theme === 'cave' ? 'CAVE' : d.theme === 'mine' ? 'MINE' : d.theme === 'bunker' ? 'BUNKER' : 'METRO' });
     return pins;
+  }
+
+  // ------------------------------------------------------------------ map
+
+  /** The map button steps through: minimap alone, a larger local map, the whole leg. */
+  mapModes = 3;
+  private mapBaker: LegMapBaker | null = null;
+  private frame: MapFrame | null = null;
+  /** Places the convoy has come within sight of: they stay on the map once seen. */
+  private mapSeen = new Set<string>();
+
+  mapFrame(pins: CompassPin[]): MapFrame | null {
+    const T = this.terrain!;
+    let f = this.frame;
+    if (!f) {
+      const baker = (this.mapBaker = new LegMapBaker(T, this.src.layout));
+      f = this.frame = newFrame('leg');
+      f.title = this.leg.name;
+      f.base = baker.base;
+      f.bounds = baker.bounds;
+      f.road = roadLine(T);
+      f.roadHalf = T.roadHalf;
+      f.hazards = T.minefields.map((m) => minefieldOutline(T, m.z0, m.z1, m.halfWidth));
+      f.radiusMin = this.biome === 'city' ? 80 : 150;
+      f.radiusMax = this.biome === 'city' ? 170 : 320;
+      f.overview = true;
+    }
+    // A few milliseconds a frame until the ground is baked.
+    if (this.mapBaker && !this.mapBaker.base.done) this.mapBaker.step(3);
+    this.fillMapActors(f, true, f.radiusMax);
+    // Places show once someone has been near enough to see them, and stay.
+    const nearAny = (x: number, z: number, r: number) => this.players.some((p) => Math.hypot((p.vehicle?.position.x ?? p.pos.x) - x, (p.vehicle?.position.z ?? p.pos.z) - z) < r);
+    for (const s of T.sites) if (SITE_LABEL[s.kind] && !this.mapSeen.has(`s${s.x}:${s.z}`) && nearAny(s.x, s.z, 480)) this.mapSeen.add(`s${s.x}:${s.z}`);
+    for (const d of this.src.layout.delves) if (!this.mapSeen.has(`d${d.id}`) && nearAny(d.x, d.z, 420)) this.mapSeen.add(`d${d.id}`);
+    for (const l of T.lakes) if (l.dock && !this.mapSeen.has(`l${l.id}`) && nearAny(l.dock.shoreX, l.dock.shoreZ, 420)) this.mapSeen.add(`l${l.id}`);
+    f.pins.length = 0;
+    for (const p of pins) if (p.kind !== 'dock' && p.kind !== 'delve') f.pins.push({ x: p.x, z: p.z, kind: p.kind, label: p.label });
+    for (const s of T.sites) if (this.mapSeen.has(`s${s.x}:${s.z}`)) f.pins.push({ x: s.x, z: s.z, kind: 'site', label: SITE_LABEL[s.kind] });
+    for (const l of T.lakes) if (l.dock && this.mapSeen.has(`l${l.id}`)) f.pins.push({ x: l.dock.shoreX, z: l.dock.shoreZ, kind: 'dock', label: 'DOCK' });
+    for (const d of this.src.layout.delves) {
+      if (this.mapSeen.has(`d${d.id}`)) f.pins.push({ x: d.x, z: d.z, kind: 'delve', label: d.theme === 'cave' ? 'CAVE' : d.theme === 'mine' ? 'MINE' : d.theme === 'bunker' ? 'BUNKER' : 'METRO' });
+    }
+    return f;
   }
 
   /** HUD helper: nearest active scavenge zone horde countdown affecting a player. */

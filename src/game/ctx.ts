@@ -49,6 +49,8 @@ export interface Ctx {
   biome: 'wasteland' | 'city';
   mode: 'leg' | 'camp' | 'delve';
   terrain: TerrainDef | null;
+  /** How many views the map button steps through: 1 is the minimap alone. */
+  mapModes: number;
   campaign: Campaign;
   audio: AudioEngine;
   input: InputManager;

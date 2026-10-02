@@ -32,6 +32,8 @@ import { WildlifeSystem } from './wildlife';
 import { LABEL } from '../sim/resources';
 import { disposeTree } from '../render/dispose';
 import type { DelveSite } from '../world/delveSites';
+import { PLAYER_CSS } from '../render/palette';
+import type { MapFrame } from '../ui/mapdata';
 
 export interface SceneServices {
   R: GameRenderer;
@@ -56,6 +58,8 @@ export abstract class Scene implements Ctx {
   abstract biome: 'wasteland' | 'city';
   abstract mode: 'leg' | 'camp' | 'delve';
   terrain: TerrainDef | null = null;
+  /** The map button steps through this many views (minimap alone, then larger ones). */
+  mapModes = 1;
   campaign: Campaign;
   audio: AudioEngine;
   input: InputManager;
@@ -519,6 +523,32 @@ export abstract class Scene implements Ctx {
 
   /** Pins for the HUD compass: world markers other than the partner. */
   abstract compassPins(): CompassPin[];
+
+  /** What the HUD needs to draw this scene's minimap and map, refreshed in place; null where a scene has no map. */
+  mapFrame(pins: CompassPin[]): MapFrame | null {
+    void pins;
+    return null;
+  }
+
+  /**
+   * The moving parts every map shows: both players, the crew, and (when `foes`) the dead who are on to you and raiders
+   * on foot. Foes are shown only once they are chasing, so a map never gives away a sleeping horde.
+   */
+  protected fillMapActors(f: MapFrame, foes: boolean, reach = 160) {
+    f.movers.length = 0;
+    f.blips.length = 0;
+    for (const p of this.players) {
+      const v = p.vehicle;
+      f.movers.push({ seat: p.index, x: v ? v.position.x : p.pos.x, z: v ? v.position.z : p.pos.z, yaw: v ? v.yaw : p.yaw, color: PLAYER_CSS[p.index] });
+    }
+    for (const v of this.vehicles) if (v.kind === 'crew' && !v.wreck) f.blips.push({ x: v.position.x, z: v.position.z, kind: 'crew' });
+    if (!foes) return;
+    const r2 = reach * reach;
+    const near = (x: number, z: number) => this.players.some((p) => p.state !== 'dead' && (x - (p.vehicle ? p.vehicle.position.x : p.pos.x)) ** 2 + (z - (p.vehicle ? p.vehicle.position.z : p.pos.z)) ** 2 <= r2);
+    // Each of them once, however many of us are close.
+    for (const zb of this.zombies.list) if (zb.chasing && !zb.dead && f.blips.length < 80 && near(zb.x, zb.z)) f.blips.push({ x: zb.x, z: zb.z, kind: 'foe' });
+    for (const u of this.raiders.units) if (!u.dead && f.blips.length < 80 && near(u.x, u.z)) f.blips.push({ x: u.x, z: u.z, kind: 'foe' });
+  }
 
   dispose() {
     this.disposed = true;
