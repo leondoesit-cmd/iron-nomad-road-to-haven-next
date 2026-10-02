@@ -259,21 +259,55 @@ const COLOR = /* glsl */ `
 }
 `;
 
-function patchVertex(shader: THREE.WebGLProgramParametersWithUniforms, uniforms: Record<string, THREE.IUniform>) {
+/** Phantoms are drawn with the same body, as translucent shimmering ghosts. These carry the per-instance fade and colour seed. */
+const GHOST_VERT_PARS = /* glsl */ `
+varying float vGhost;
+varying float vGhostSeed;
+`;
+const GHOST_VERT_MAIN = /* glsl */ `
+vGhost = aKind.w;
+vGhostSeed = aKind.y;
+`;
+const GHOST_FRAG_PARS = /* glsl */ `
+varying float vGhost;
+varying float vGhostSeed;
+uniform float uTime;
+uniform float uGhostTint;
+`;
+/** After the lit colour is made: swap a share of it for a drifting rainbow and apply the fade. */
+const GHOST_FRAG = /* glsl */ `
+#include <opaque_fragment>
+{
+  vec3 rainbow = 0.5 + 0.5 * cos( 6.2831 * ( vec3( 0.0, 0.33, 0.67 ) + uTime * 0.2 + vGhostSeed ) );
+  float rim = 0.35 + 0.65 * pow( 1.0 - abs( dot( normalize( vNormal ), normalize( vViewPosition ) ) ), 1.5 );
+  gl_FragColor.rgb = mix( gl_FragColor.rgb, rainbow * ( 0.5 + rim ) + gl_FragColor.rgb * 0.25, 0.65 * uGhostTint );
+  gl_FragColor.a *= vGhost * mix( 0.55, 1.0, rim );
+}
+`;
+
+function patchVertex(shader: THREE.WebGLProgramParametersWithUniforms, uniforms: Record<string, THREE.IUniform>, ghost = false) {
   Object.assign(shader.uniforms, uniforms);
   shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', `#include <common>\n${PARS}`)
+    .replace('#include <common>', `#include <common>\n${PARS}${ghost ? GHOST_VERT_PARS : ''}`)
     .replace('#include <beginnormal_vertex>', NORMAL)
-    .replace('#include <begin_vertex>', BEGIN);
+    .replace('#include <begin_vertex>', BEGIN + (ghost ? GHOST_VERT_MAIN : ''));
   if (shader.vertexShader.includes('#include <color_vertex>')) shader.vertexShader = shader.vertexShader.replace('#include <color_vertex>', COLOR);
 }
 
 const linear = (hex: number) => new THREE.Color(hex);
 
+export interface ZombieRendererOpts {
+  /** Draw as translucent shimmering phantoms: no shadows, per-instance fade, drifting colour. */
+  ghost?: boolean;
+  /** Most instances at once. */
+  max?: number;
+}
+
 export class ZombieRenderer {
   mesh: THREE.InstancedMesh;
-  private anim = new Float32Array(MAX_ZOMBIES * 4);
-  private kind = new Float32Array(MAX_ZOMBIES * 4);
+  private max: number;
+  private anim: Float32Array;
+  private kind: Float32Array;
   private animAttr: THREE.InstancedBufferAttribute;
   private kindAttr: THREE.InstancedBufferAttribute;
   private uniforms: Record<string, THREE.IUniform> = {
@@ -290,7 +324,12 @@ export class ZombieRenderer {
   private s = new THREE.Vector3();
   count = 0;
 
-  constructor() {
+  constructor(opts: ZombieRendererOpts = {}) {
+    const ghost = !!opts.ghost;
+    this.max = opts.max ?? MAX_ZOMBIES;
+    this.anim = new Float32Array(this.max * 4);
+    this.kind = new Float32Array(this.max * 4);
+    this.uniforms.uGhostTint = { value: 1 };
     const geo = zombieGeometry();
     this.animAttr = new THREE.InstancedBufferAttribute(this.anim, 4);
     this.animAttr.setUsage(THREE.DynamicDrawUsage);
@@ -299,20 +338,34 @@ export class ZombieRenderer {
     geo.setAttribute('aAnim', this.animAttr);
     geo.setAttribute('aKind', this.kindAttr);
     const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+    if (ghost) {
+      mat.transparent = true;
+      mat.depthWrite = false;
+    }
     mat.onBeforeCompile = (shader) => {
-      patchVertex(shader, this.uniforms);
+      patchVertex(shader, this.uniforms, ghost);
       applyKit(shader, false);
+      if (ghost) {
+        shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>\n${GHOST_FRAG_PARS}`).replace('#include <opaque_fragment>', GHOST_FRAG);
+      }
     };
-    mat.customProgramCacheKey = () => 'zombie';
-    this.mesh = new THREE.InstancedMesh(geo, mat, MAX_ZOMBIES);
-    // Shadows use the same skeleton animation.
-    const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
-    depth.onBeforeCompile = (shader) => patchVertex(shader, this.uniforms);
-    depth.customProgramCacheKey = () => 'zombieDepth';
-    this.mesh.customDepthMaterial = depth;
+    mat.customProgramCacheKey = () => (ghost ? 'zombieGhost' : 'zombie');
+    this.mesh = new THREE.InstancedMesh(geo, mat, this.max);
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.mesh.castShadow = true;
-    this.mesh.receiveShadow = true;
+    if (ghost) {
+      // Nothing casts a shadow for a thing that is not there.
+      this.mesh.castShadow = false;
+      this.mesh.receiveShadow = false;
+      this.mesh.renderOrder = 4;
+    } else {
+      // Shadows use the same skeleton animation.
+      const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+      depth.onBeforeCompile = (shader) => patchVertex(shader, this.uniforms);
+      depth.customProgramCacheKey = () => 'zombieDepth';
+      this.mesh.customDepthMaterial = depth;
+      this.mesh.castShadow = true;
+      this.mesh.receiveShadow = true;
+    }
     this.mesh.frustumCulled = false;
     this.mesh.count = 0;
   }
@@ -324,8 +377,8 @@ export class ZombieRenderer {
   /**
    * Add one instance. `fall` runs 0..1 for the death animation (topples backwards and sinks).
    */
-  push(kind: ZombieKind, scale: number, x: number, y: number, z: number, yaw: number, phase: number, stride: number, chase: number, fall: number, variant: number) {
-    if (this.count >= MAX_ZOMBIES) return;
+  push(kind: ZombieKind, scale: number, x: number, y: number, z: number, yaw: number, phase: number, stride: number, chase: number, fall: number, variant: number, alpha = 1) {
+    if (this.count >= this.max) return;
     const i = this.count++;
     this.p.set(x, y, z);
     this.e.set(-fall * (Math.PI / 2) * 0.95, yaw, 0, 'YXZ');
@@ -340,6 +393,12 @@ export class ZombieRenderer {
     this.kind[i * 4] = KIND_ID[kind];
     this.kind[i * 4 + 1] = (variant % 5) / 5 + 0.1;
     this.kind[i * 4 + 2] = 0.86 + (variant % 5) * 0.05;
+    this.kind[i * 4 + 3] = alpha;
+  }
+
+  /** Ghosts only: how much of the colour is rainbow (1 is plainly unreal, 0 is nearly the real thing). */
+  setGhostTint(v: number) {
+    this.uniforms.uGhostTint.value = v;
   }
 
   end(time: number) {

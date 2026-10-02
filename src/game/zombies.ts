@@ -760,7 +760,9 @@ export class ZombieSystem {
         }
       }
     }
-    const seesTarget = !!tgt && tgt.d < sight * (tgt.vehicle ? 1.4 : tgt.player && tgt.player.crouch ? 0.5 : 1) && !ctx.obs.segmentBlocked(zb.x, zb.z, tgt.x, tgt.z, 1.1);
+    // The stoned are easy to miss; the drunk are easy to find.
+    const notice = tgt?.player ? tgt.player.drugs.mods().aggro : 1;
+    const seesTarget = !!tgt && tgt.d < sight * notice * (tgt.vehicle ? 1.4 : tgt.player && tgt.player.crouch ? 0.5 : 1) && !ctx.obs.segmentBlocked(zb.x, zb.z, tgt.x, tgt.z, 1.1);
     switch (zb.state) {
       case 'dormant':
         if (seesTarget && tgt && tgt.d < 4.5) this.startChase(zb, tgt);

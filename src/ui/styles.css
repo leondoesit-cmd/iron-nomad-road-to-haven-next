@@ -1697,3 +1697,99 @@ button:disabled {
 .invcol h3.rname.r3 {
   color: #c4741a;
 }
+
+/* Drugs: the picture swims. backdrop-filter bends whatever the viewport is drawing behind the HUD. */
+.drugfx {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.8s;
+}
+.drugfx.on {
+  opacity: 1;
+  backdrop-filter: hue-rotate(calc(var(--haze, 0) * 70deg)) saturate(calc(1 + var(--haze, 0) * 0.9)) blur(calc(var(--haze, 0) * 1.6px)) brightness(calc(1 - var(--dark, 0) * 0.9));
+  animation: drugswim 5s ease-in-out infinite;
+}
+@keyframes drugswim {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  33% { transform: scale(calc(1 + var(--haze, 0) * 0.025)) rotate(calc(var(--haze, 0) * 0.6deg)); }
+  66% { transform: scale(calc(1 - var(--haze, 0) * 0.015)) rotate(calc(var(--haze, 0) * -0.5deg)); }
+}
+
+/* The drug belt: open while the use button is held. */
+.hud .belt {
+  position: absolute;
+  left: 50%;
+  bottom: 24%;
+  transform: translateX(-50%);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 12px;
+  background: rgba(8, 6, 4, 0.72);
+  border: 1px solid var(--panel-line);
+  max-width: 92%;
+}
+.belt .slots {
+  display: flex;
+  gap: 5px;
+}
+.belt .slot {
+  position: relative;
+  width: calc(34px * var(--u));
+  height: calc(40px * var(--u));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--dc);
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--dc);
+  transition: transform 0.08s;
+}
+.belt .slot b {
+  font-size: 1.15em;
+}
+.belt .slot i {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  font-style: normal;
+  font-size: 0.6em;
+  color: var(--paper);
+}
+.belt .slot.sel {
+  transform: scale(1.22);
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 0 10px var(--dc);
+}
+.belt .slot.none {
+  opacity: 0.35;
+}
+.belt .slotname {
+  font-size: 0.8em;
+  letter-spacing: 0.14em;
+}
+.belt .slotblurb {
+  font-size: 0.55em;
+  max-width: 34em;
+  text-align: center;
+  color: var(--paper);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+.belt .slothint {
+  font-size: 0.5em;
+  opacity: 0.7;
+}
+
+/* A tripping HUD does not sit still. */
+.hud.tripping .corner {
+  animation: hudsway 7s ease-in-out infinite;
+}
+@keyframes hudsway {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  25% { transform: translate(calc(var(--trip, 0) * 3px), calc(var(--trip, 0) * -2px)) rotate(calc(var(--trip, 0) * 0.5deg)); }
+  75% { transform: translate(calc(var(--trip, 0) * -3px), calc(var(--trip, 0) * 2px)) rotate(calc(var(--trip, 0) * -0.5deg)); }
+}

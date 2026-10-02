@@ -1,5 +1,6 @@
 import { partDef, type LegDef, type SetPiece, type Stocks, type ZombieKind } from '../data';
 import { rollPartSpec } from '../sim/parts';
+import type { DrugId } from '../sim/drugs';
 import { OIL_CAN } from '../sim/oil';
 import { Rng, hash2 } from '../core/rng';
 import { makeTerrainDef, roadX, heightAt, roadSlope, keepOutZ, waterAt, type Site, type TerrainDef } from './terrain';
@@ -137,6 +138,8 @@ export interface ScavContainer {
   z: number;
   depth: 0 | 1 | 2;
   loot: Partial<Stocks>;
+  /** Drugs among the loot. Rolled apart from everything else, so adding one never reshuffles a map. */
+  drugs?: Partial<Record<DrugId, number>>;
   taken: boolean;
   /** What the prompt calls it ('the fridge'); defaults to the depth name. */
   label?: string;
@@ -935,6 +938,18 @@ export class LegLayoutImpl implements LegLayout {
       const px = side === 1 ? lot.x0 + frac * w : lot.x1 - frac * w;
       const pz = cz + rng.range(-0.38, 0.38) * d;
       zone.containers.push({ id: this.id('lc'), x: px, z: pz, depth, loot: table[kind](depth, rng), taken: false });
+    }
+    // Pharmacies and hospitals keep pills; depots keep a bottle or two somewhere.
+    const dr = new Rng(this.leg.seed * 977 + Math.floor(s.at) + 5);
+    for (const c of zone.containers) {
+      const give = (id: DrugId, p: number, n = 1) => {
+        if (dr.chance(p)) c.drugs = { ...c.drugs, [id]: (c.drugs?.[id] ?? 0) + n };
+      };
+      if (kind === 'pharmacy' || kind === 'hospital') {
+        give('painkiller', 0.4, c.depth === 0 ? 1 : 2);
+        if (c.depth >= 1) give('stim', 0.3);
+        if (c.depth === 2) give('adrenaline', 0.4);
+      } else if (kind === 'depot' && c.depth >= 1) give('alcohol', 0.35, 2);
     }
     this.zones.push(zone);
     // Ruined walls on three sides (back and two flanks). The open face looks at the boulevard.

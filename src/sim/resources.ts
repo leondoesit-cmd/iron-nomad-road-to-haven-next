@@ -1,4 +1,5 @@
 import { STOCK_IDS, VEHICLES, type Cost, type StockId, type Stocks } from '../data';
+import type { DrugId } from './drugs';
 
 export function newStocks(init?: Partial<Stocks>): Stocks {
   return { fuel: 0, rations: 0, scrap: 0, parts: 0, tech: 0, medicine: 0, ...init };
@@ -117,12 +118,21 @@ export interface Recipe {
   id: string;
   name: string;
   cost: Cost;
-  yields: { ammo?: number; medkit?: number; molotov?: number; flare?: number; charge?: number };
+  yields: { ammo?: number; medkit?: number; molotov?: number; flare?: number; charge?: number } & Partial<Record<DrugId, number>>;
 }
 export const RECIPES: Recipe[] = [
   { id: 'ammo', name: 'Ammo (30 rounds)', cost: { scrap: 5 }, yields: { ammo: 30 } },
   { id: 'medkit', name: 'Medkit', cost: { medicine: 2 }, yields: { medkit: 1 } },
   { id: 'molotov', name: 'Molotov', cost: { fuel: 1 }, yields: { molotov: 1 } },
   { id: 'flare', name: 'Flare', cost: { tech: 1 }, yields: { flare: 2 } },
+  { id: 'stim', name: 'Stim', cost: { medicine: 1, tech: 1 }, yields: { stim: 1 } },
+  { id: 'painkiller', name: 'Painkillers (2)', cost: { medicine: 1 }, yields: { painkiller: 2 } },
+  { id: 'adrenaline', name: 'Adrenaline', cost: { medicine: 2, tech: 1 }, yields: { adrenaline: 1 } },
+  { id: 'haze', name: 'Spore haze (2)', cost: { medicine: 1, scrap: 3 }, yields: { haze: 2 } },
+  { id: 'alcohol', name: 'Moonshine (2)', cost: { rations: 1, scrap: 2 }, yields: { alcohol: 2 } },
+  { id: 'weed', name: 'Weed (3)', cost: { rations: 1, scrap: 3 }, yields: { weed: 3 } },
+  { id: 'mushrooms', name: 'Mushrooms (2)', cost: { rations: 2 }, yields: { mushrooms: 2 } },
+  { id: 'lsd', name: 'LSD (2)', cost: { medicine: 2, tech: 2 }, yields: { lsd: 2 } },
+  { id: 'ayahuasca', name: 'Ayahuasca', cost: { rations: 2, medicine: 2, tech: 1 }, yields: { ayahuasca: 1 } },
   { id: 'charge', name: 'Breaching charge', cost: { tech: 5, scrap: 4 }, yields: { charge: 1 } },
 ];

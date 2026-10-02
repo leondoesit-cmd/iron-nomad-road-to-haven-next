@@ -33,7 +33,8 @@ export type ActionId =
   | 'prevBuild'
   | 'nextBuild'
   | 'sheet'
-  | 'map';
+  | 'map'
+  | 'use';
 
 export interface ActionDef {
   id: ActionId;
@@ -74,11 +75,12 @@ export const ACTIONS: ActionDef[] = [
   { id: 'view', label: 'First / third person', hint: 'Switch the camera on foot, driving and manning the gun', group: 'camera', pad: Btn.View, btn: [Btn.View], devices: ALL, optional: true },
   { id: 'camera', label: 'Reset camera · look back', hint: 'On foot: recentre · Driving: hold to look behind', group: 'camera', pad: Btn.R3, btn: [Btn.R3], devices: ALL, optional: true },
   { id: 'wheel', label: 'Ping · command wheel', hint: 'Tap to ping, hold for the wheel (aim with the look keys or stick)', group: 'team', pad: Btn.Up, btn: [Btn.Up], devices: ['pad', 'kb'], optional: true },
-  { id: 'inventory', label: 'Inventory', hint: 'Open your gear: change what you wear and hold, and see what you carry', group: 'team', pad: Btn.Down, btn: [Btn.Down], devices: ['pad', 'kb'], optional: true },
+  { id: 'inventory', label: 'Inventory', hint: 'Open your gear: change what you wear and hold, and see what you carry', group: 'team', pad: Btn.Inventory, btn: [Btn.Inventory], devices: ['pad', 'kb'], optional: true },
   { id: 'prevBuild', label: 'Build: previous', hint: 'Camp build mode on keys (a pad uses LB)', group: 'team', btn: [Btn.Left], devices: ['kb'], optional: true },
   { id: 'nextBuild', label: 'Build: next', hint: 'Camp build mode on keys (a pad uses RB)', group: 'team', btn: [Btn.Right], devices: ['kb'], optional: true },
+  { id: 'use', label: 'Take drug', hint: 'Tap to take the selected drug · hold to pick the next one', group: 'combat', pad: Btn.Down, btn: [Btn.Down], devices: ALL, optional: true },
   { id: 'sheet', label: 'Convoy sheet', hint: 'Hold for the convoy sheet', group: 'team', pad: Btn.Back, btn: [Btn.Back], devices: ALL, optional: true },
-  { id: 'map', label: 'Map', hint: 'Tap to open the map: a closer look, then the whole leg, then close', group: 'team', pad: Btn.Down, btn: [Btn.Down], devices: ALL, optional: true },
+  { id: 'map', label: 'Map', hint: 'Tap to open the map: a closer look, then the whole leg, then close', group: 'team', pad: Btn.Map, btn: [Btn.Map], devices: ALL, optional: true },
 ];
 
 export const ACTION_BY_ID = Object.fromEntries(ACTIONS.map((a) => [a.id, a])) as Record<ActionId, ActionDef>;
@@ -118,9 +120,10 @@ const PAD_DEFAULT: PadMap = {
   view: SHARED,
   camera: Btn.R3,
   wheel: Btn.Up,
-  inventory: Btn.Down,
+  inventory: Btn.Left,
   sheet: Btn.Back,
-  map: Btn.Down,
+  map: Btn.Right,
+  use: Btn.Down,
 };
 
 const KB_DEFAULT: [KeyMap, KeyMap] = [
@@ -128,13 +131,13 @@ const KB_DEFAULT: [KeyMap, KeyMap] = [
     moveUp: 'KeyW', moveDown: 'KeyS', moveLeft: 'KeyA', moveRight: 'KeyD',
     turnLeft: 'KeyZ', turnRight: 'KeyX', fire: 'KeyT', interact: 'KeyE', jump: 'Space', vehicle: 'KeyF', crouch: 'KeyC',
     sprint: 'ShiftLeft', wheel: 'KeyG', reload: 'KeyR', horn: 'KeyH', swap: 'KeyQ', prevBuild: 'Digit1', nextBuild: 'Digit2',
-    view: 'KeyB', camera: 'KeyY', sheet: 'Tab', map: 'KeyJ', inventory: 'KeyI',
+    view: 'KeyB', camera: 'KeyY', sheet: 'Tab', map: 'KeyV', inventory: 'Digit3', use: 'Digit4',
   },
   {
     moveUp: 'ArrowUp', moveDown: 'ArrowDown', moveLeft: 'ArrowLeft', moveRight: 'ArrowRight',
     turnLeft: 'BracketLeft', turnRight: 'BracketRight', fire: 'ShiftRight', interact: 'Slash', jump: 'KeyO', vehicle: 'Enter', crouch: 'Period',
     sprint: 'ControlRight', wheel: 'Backspace', reload: 'Comma', horn: 'KeyM', swap: 'KeyN', prevBuild: 'Semicolon', nextBuild: 'Quote',
-    view: 'KeyP', camera: 'KeyL', sheet: 'Backslash', map: 'KeyK', inventory: 'KeyI',
+    view: 'KeyP', camera: 'KeyL', sheet: 'Backslash', map: 'KeyK', inventory: 'KeyI', use: 'KeyU',
   },
 ];
 
@@ -313,13 +316,14 @@ export const PROMPT_ACTION: Record<string, ActionId> = {
   X: 'reload',
   Y: 'vehicle',
   LB: 'swap',
-  Down: 'inventory',
   RB: 'melee',
   LT: 'aim',
   RT: 'fire',
   L3: 'sprint',
   R3: 'camera',
-  Down: 'map',
+  Down: 'use',
+  Left: 'inventory',
+  Right: 'map',
 };
 
 // --------------------------------------------------------------------------------------- persistence

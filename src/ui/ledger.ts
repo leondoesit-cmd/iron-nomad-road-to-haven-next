@@ -2,6 +2,7 @@ import { LEGS, MERCS, VEHICLES, PARTS, legById, STRUCTURES, type Cost, type Stoc
 import { FocusUI, type FocusItem } from './focus';
 import { escapeHtml } from './hud';
 import { PLAYER_CSS } from '../render/palette';
+import { DRUG_IDS, DRUGS, type DrugId } from '../sim/drugs';
 import { LABEL, RECIPES, canAfford, checkTierUp, costText, spend, whole } from '../sim/resources';
 import { buildName, defOf, maxHpOf, needsService, rebuildOnto, serviceBuild, serviceCost, statsOf } from '../sim/garage';
 import { loyaltyBand, settleCut } from '../sim/loyalty';
@@ -121,14 +122,20 @@ export class LedgerPanel {
     const stocksHtml = (['fuel', 'rations', 'scrap', 'parts', 'tech', 'medicine'] as StockId[])
       .map((k) => `<div class="stockrow"><span>${LABEL[k]}</span><b>${k === 'fuel' ? c.stocks[k].toFixed(1) : whole(c.stocks[k])}</b></div>`)
       .join('');
+    const drugsHtml = DRUG_IDS.filter((d) => c.items[d] > 0).map((d) => `${DRUGS[d].name} ${c.items[d]}`).join(' · ') || 'Nothing';
+    const isDrug = (r: (typeof RECIPES)[number]) => DRUG_IDS.some((d) => r.yields[d]);
+    const craftBtns = (list: typeof RECIPES) => list.map((r) => this.btn(`craft-${r.id}`, `${r.name} <span class="cost">${costText(r.cost)}</span>`, () => this.craft(r.id), canAfford(c.stocks, r.cost))).join('');
     const owedTotal = c.crewLive.reduce((a, m) => a + Object.values(m.owed).reduce((x, y) => x + (y ?? 0), 0), 0);
     const left = `<section><h3>Stores</h3>${stocksHtml}
       <div class="stockrow"><span>Ammo</span><b>${c.ammo}</b></div>
       <div class="stockrow"><span>Medkits / Flares / Molotovs / Charges</span><b>${c.items.medkit}/${c.items.flare}/${c.items.molotov}/${c.items.charge}</b></div>
+      <div class="stockrow"><span>Pharmacy</span><b>${drugsHtml}</b></div>
       <div class="stockrow"><span>Salvaged chassis</span><b>${c.chassis}</b></div>
       <div class="stockrow"><span>Radio fragments</span><b>${c.fragments.size}/4</b></div>
       <h3>Crafting</h3>
-      <div class="card"><div class="btns">${RECIPES.map((r) => this.btn(`craft-${r.id}`, `${r.name} <span class="cost">${costText(r.cost)}</span>`, () => this.craft(r.id), canAfford(c.stocks, r.cost))).join('')}</div></div>
+      <div class="card"><div class="btns">${craftBtns(RECIPES.filter((r) => !isDrug(r)))}</div></div>
+      <h3>Still &amp; apothecary</h3>
+      <div class="card"><div class="btns">${craftBtns(RECIPES.filter(isDrug))}</div><div class="mutedtxt">Taken from the belt on the road: tap the use button, hold it to choose. Mixing is on you.</div></div>
       ${hub?.features.includes('trade') ? `<h3>Trader</h3><div class="card"><div class="btns">${this.tradeButtons()}</div></div>` : ''}
       </section>`;
     const cards = (c.solo ? [0] : [0, 1]).map((i) => this.vehicleCard(i)).join('');
@@ -210,7 +217,27 @@ export class LedgerPanel {
       { id: 'tech', label: '2 Tech', cost: { scrap: 20 }, give: { tech: 2 } },
       { id: 'parts', label: '4 Parts', cost: { scrap: 16 }, give: { parts: 4 } },
     ];
-    return offers
+    // The trader has a few things behind the counter, and does not talk about the rest.
+    const pharmacy: { id: DrugId; n: number; cost: Cost }[] = [
+      { id: 'alcohol', n: 2, cost: { scrap: 12 } },
+      { id: 'weed', n: 2, cost: { scrap: 16 } },
+      { id: 'painkiller', n: 2, cost: { scrap: 14 } },
+      { id: 'mushrooms', n: 1, cost: { scrap: 18 } },
+    ];
+    const drugBtns = pharmacy.map((o) =>
+      this.btn(
+        `buy-${o.id}`,
+        `Buy ${o.n} ${DRUGS[o.id].name} <span class="cost">${costText(o.cost)}</span>`,
+        () => {
+          if (!this.buyCost(o.cost)) return this.deny('Not enough Scrap');
+          this.c.items[o.id] += o.n;
+          this.ok(`Bought ${o.n} ${DRUGS[o.id].name}`);
+        },
+        canAfford(this.c.stocks, o.cost),
+      ),
+    );
+    return (
+      offers
       .map((o) =>
         this.btn(
           `buy-${o.id}`,
@@ -223,7 +250,9 @@ export class LedgerPanel {
           canAfford(this.c.stocks, o.cost),
         ),
       )
-      .join('');
+      .concat(drugBtns)
+      .join('')
+    );
   }
 
   private vehicleCard(i: number) {
@@ -373,6 +402,7 @@ export class LedgerPanel {
     if (y.molotov) this.c.items.molotov += y.molotov;
     if (y.flare) this.c.items.flare += y.flare;
     if (y.charge) this.c.items.charge += y.charge;
+    for (const d of DRUG_IDS) if (y[d]) this.c.items[d] += y[d] as number;
     this.ok(`Crafted: ${r.name}`);
   }
 

@@ -3,6 +3,7 @@ import type { Stocks, ZombieKind } from '../data';
 import type { Aabb, PropKind } from './layout';
 import { newAabbId } from './layout';
 import type { DelveTheme } from './delveSites';
+import type { DrugId } from '../sim/drugs';
 
 /**
  * The places under the ground. A delve is a flat grid of 2 m cells (solid or floor) generated from a seed: caves
@@ -16,13 +17,57 @@ import type { DelveTheme } from './delveSites';
 
 export const CELL = 2;
 
-export interface ChestLoot {
+export interface ChestLoot extends Partial<Record<DrugId, number>> {
   stocks: Partial<Stocks>;
   ammo?: number;
   medkit?: number;
   charge?: number;
   molotov?: number;
   flare?: number;
+}
+
+/** What the dark keeps in its pockets, by theme. Rolled on its own stream so adding a drug never reshuffles a map. */
+function drugLoot(theme: DelveTheme, r: Rng, hoard: boolean): Partial<Record<DrugId, number>> {
+  const out: Partial<Record<DrugId, number>> = {};
+  const add = (id: DrugId, p: number, lo = 1, hi = 1) => {
+    if (r.chance(p)) out[id] = (out[id] ?? 0) + r.int(lo, hi);
+  };
+  if (hoard) {
+    add('stim', 1);
+    add('adrenaline', 0.8);
+    add('haze', 0.6);
+    add('alcohol', 0.7, 1, 2);
+    if (theme === 'cave') add('ayahuasca', 0.65);
+    if (theme === 'cave') add('mushrooms', 0.8, 1, 2);
+    if (theme === 'metro') add('lsd', 0.6, 1, 2);
+    if (theme === 'bunker') add('painkiller', 0.8, 2, 3);
+    if (theme === 'mine') add('weed', 0.5, 1, 3);
+    return out;
+  }
+  switch (theme) {
+    case 'cave':
+      add('mushrooms', 0.35, 1, 2);
+      add('weed', 0.15);
+      add('alcohol', 0.15);
+      break;
+    case 'mine':
+      add('alcohol', 0.4, 1, 2);
+      add('painkiller', 0.25);
+      add('stim', 0.15);
+      break;
+    case 'bunker':
+      add('painkiller', 0.45, 1, 2);
+      add('stim', 0.25);
+      add('adrenaline', 0.15);
+      add('alcohol', 0.15);
+      break;
+    default:
+      add('weed', 0.25);
+      add('alcohol', 0.25);
+      add('haze', 0.15);
+      add('lsd', 0.08);
+  }
+  return out;
 }
 
 export type DelveRoomRole = 'start' | 'hall' | 'lair' | 'loot' | 'key' | 'boss';
@@ -608,7 +653,9 @@ class Gen {
       bunker: ['an ammunition locker', 'a medical cabinet', 'a supply crate', 'a sealed footlocker'],
       metro: ['a ticket-office safe', 'a luggage cage', 'a vending machine', 'a maintenance locker'],
     };
-    const loot = (): ChestLoot => {
+    const drng = new Rng(m.seed * 40503 + tier * 977 + 11);
+    const loot = (): ChestLoot => ({ ...baseLoot(), ...drugLoot(theme, drng, false) });
+    const baseLoot = (): ChestLoot => {
       const s = (n: number) => Math.round(n * (0.8 + tier * 0.35));
       switch (theme) {
         case 'cave':
@@ -636,7 +683,7 @@ class Gen {
       }
     }
     // The hoard behind the boss.
-    const hoard: ChestLoot = { stocks: { tech: 3 + tier, medicine: 2, parts: 14 + tier * 6, scrap: 30 + tier * 14, rations: 3 }, ammo: 30 + tier * 10, medkit: 1 + (tier > 1 ? 1 : 0), charge: 1 };
+    const hoard: ChestLoot = { stocks: { tech: 3 + tier, medicine: 2, parts: 14 + tier * 6, scrap: 30 + tier * 14, rations: 3 }, ammo: 30 + tier * 10, medkit: 1 + (tier > 1 ? 1 : 0), charge: 1, ...drugLoot(theme, drng, true) };
     const br = m.rooms.find((r) => r.role === 'boss');
     if (br) {
       let hx = m.boss.x + (br.x1 - br.x0) * CELL * 0.28;

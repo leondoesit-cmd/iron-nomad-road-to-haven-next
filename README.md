@@ -99,6 +99,55 @@ You cannot jump while swimming, carrying a load, mid-action or pinned, and jumpi
 shares A with interact: a press with something to interact with is left to the interact prompt, otherwise it jumps. Landing
 hard is noisy. Jump is a normal rebindable action (Control settings, Move group).
 
+**Drugs**: nine consumables, taken with the use button (D-pad ↓ on a pad, `U` for player 1, `K` for player 2). Tap it to take
+the selected one. Hold it to open the belt, then lean left or right to pick (the feet stay put while your hands are in your pockets);
+let go to close it. The belt is also where the counts are. Each player's blood is saved with the campaign, so a trip carries on across
+a camp, a delve and a reload; a night's sleep clears it, and half-clears the habit.
+
+| Drug | Works for | Good | Bad |
+|---|---|---|---|
+| **Painkillers** | 90 s | half damage | a sore comedown |
+| **Stim** | 40 s | 25% faster | worse aim; a slow, shaky crash |
+| **Adrenaline** | 12 s | heals 30, takes 70% less damage, **wakes you from anything** | a hard crash; very toxic |
+| **Moonshine** | 70 s *a drink*, stacks to six | liquid courage: tougher, hits harder | sway, double vision, a worse shot, loud, and past four drinks you **pass out** (a hard hit wakes you). A hangover scales with how much you had |
+| **Weed** | 80 s, stacks to three | slow and quiet: the dead lose interest; settles the stomach | slower, hungry (**the munchies cost an extra ration at camp**) |
+| **Spore haze** | 60 s | quiet, slow regeneration | hard to put down |
+| **Mushrooms** | 110 s | feel the living through the walls (about 50 m of mycelium: the dead, animals, raiders, loot) | the stomach turns on the way up; the giggles; things in the corner of your eye |
+| **LSD** | 150 s | auras on the dead, a little faster | phantoms, flashbacks, floaty feet, worse aim; tolerance builds fast |
+| **Ayahuasca** | 210 s | the vine purges you (clears toxicity and booze), then shows you **everything** within about 85 m: the dead, the loot, the pins the map never shows and the road ahead lit up | helpless while it purges; slow; amplifies everything else in you |
+
+Effects come on over an onset, peak, taper and comedown, not a switch. Every dose adds **toxicity** (past 1 you are overdosing and
+bleeding health until it fades), a little **dependence** (go without for ~90 s and the shakes, slowdown and visual swim of withdrawal set
+in until you take another) and **tolerance** (the same dose lands softer next time). Drinking steadily is fine; six at once is not.
+
+**Mixing is the game inside the game.** Some pairs do something on their own while both are working: *Couchlock* (alcohol + weed: a
+stealthy slug), *Zen Focus* (stim + weed: steady hands), *Dreamscape* (weed + LSD: the things that are not there turn friendly and dance
+round you), *Giggle Fit* (weed + mushrooms), *Deep Trip* (LSD + mushrooms), *Spirit Walk* (mushrooms + ayahuasca), *Wired* (alcohol +
+stim: the stim hides the drunk, the drunk does not care), *Overdrive*, *Purge Fest*. Some are dangerous: alcohol and painkillers
+(*Liver Roulette*), two stimulants (*Heart Race*), and anything stimulating on top of the vine. Ayahuasca makes everything else in you
+hit harder and cost more, and its purge can undo a drink problem. Adrenaline sobers you up. The HUD names each blend as it starts.
+
+**What you see and what changes**, only in the tripping player's own half of the screen: hue swim and swirl, wavy warp, chromatic
+aberration, double vision, neon outlines, kaleidoscope folds toward the edges, motion trails that slide round the colour wheel (a
+feedback buffer), a breathing heartbeat, tunnel vision, eyelids closing as you pass out, a rolling camera when drunk. In the world: the
+ground and every wall swell and sink, the sky grows an aurora, mandala rings and (for the vine) an eye with a pupil that breathes and
+a slow blink, stars come out in daylight, the light and fog drift round the colour wheel, spores and smoke float round you, giant glowing
+mushrooms grow up out of the ground, and the road ahead lights up under the vine. Sound goes to cotton wool for the mellow and a warbling
+echo for the rest. The HUD itself loses its footing. (Without the post chain, on Low quality, the lens effects fall back to a CSS filter.)
+
+**Phantoms** are things that are not there. They are drawn only into your own view, shimmer and cast no shadow (less the deeper you
+are in: at the top they look almost real), never appear on the compass, and the real dead do not react to them. They cannot hurt you,
+and shots go through them: every round spent on one is wasted and **noisy**, and the real dead hear it. They dissolve if you look
+straight at them for a moment, walk into them or swing at them. Under the vine they come as tall spirits; with weed and LSD they dance.
+
+The body also does things on its own: vomiting (a few seconds helpless, and loud), stumbling, a hiccup, a song or a laugh at the wrong
+moment (all noise the dead can hear), flashbacks that turn the visuals up, a paranoid something-behind-you. Drunk driving wanders the
+wheel; pass out behind it and the car coasts to a stop.
+
+Find them in delve chests (caves keep mushrooms and sometimes the vine; metros keep LSD; bunkers keep pills), in pharmacy and hospital
+shelves, depot stock, medicine cabinets, coolers and safes; buy a few at a trader; make them at the Ledger's still. The numbers
+(durations, strengths, toxicity, dependence, tolerance, every blend) are all in `src/sim/drugs.ts`.
+
 **Keyboard**: solo play can use either layout below. Player 1 uses `W A S D` to move, the mouse to look (`Z X` to aim without it), left click or `T` to fire, right click to aim, `E` to interact, `Space` to jump, `F` for vehicles, `C` for
 crouch and lights, `Shift` for sprint and handbrake, `G` for the command wheel, `Q` to swap tools, `R` to reload, `H` to honk,
 `1 2` to cycle build elements, `J` for the map, `I` for the inventory, hold `Tab` for the convoy sheet. Player 2 uses the arrow keys, `[ ]` to aim, `Right

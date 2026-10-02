@@ -1001,16 +1001,20 @@ export class CampScene extends Scene {
     // Fatigue from watch duty.
     for (const w of this.watchers) if (w && w !== 'crew') w.fatigue = 0.12;
     for (const p of this.players) if (!this.watchers.includes(p)) p.fatigue = 0;
-    // Rations: one per person per night.
-    const eaters = this.players.length;
+    // Rations: one per person per night, and an extra one for anyone who has the munchies.
+    const munch = this.players.filter((p) => p.drugs.munchies).length;
+    const eaters = this.players.length + munch;
     const eat = Math.min(c.stocks.rations, eaters);
     c.stocks.rations -= eat;
     const hungry = new Set<Player>();
     this.players.forEach((p, i) => {
       if (i >= eat) hungry.add(p);
     });
+    if (munch) lines.push(`The munchies cost ${munch} extra ration${munch > 1 ? 's' : ''}.`);
     if (eat < eaters) lines.push(eaters > 1 && eat > 0 ? 'Only one of you ate. The other went hungry.' : 'No Rations. You went hungry.');
     else if (c.stocks.rations < eaters) lines.push('That was nearly the last of the Rations: hunt or scavenge before the next camp.');
+    // A night's sleep takes whatever was in the blood.
+    c.restDrugs();
     // Crew upkeep, loyalty bands, desertions and disputes.
     for (const m of c.crewLive) {
       const def = MERCS.roles[m.role];

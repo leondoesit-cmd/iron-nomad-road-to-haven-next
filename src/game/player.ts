@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RAPIER, GROUPS, G, groups, type Collider, type RigidBody } from '../physics/physics';
-import { Btn, heldFor, isHeld, wasPressed, type PlayerIntent } from '../input/intents';
+import { Btn, NAV, heldFor, isHeld, wasPressed, wasReleased, type PlayerIntent } from '../input/intents';
 import { promptLabel } from '../input/input';
 import { ChaseCamera, type CamMode } from '../render/camera';
 import { Humanoid, type Held, type Palette } from '../render/humanoid';
@@ -14,6 +14,7 @@ import { steerTo, newSteerState } from './aiDrive';
 import { applyRepair, planRepair } from '../sim/repair';
 import { SALVAGE_STAGES } from '../sim/salvage';
 import { costText, spend } from '../sim/resources';
+import { DRUGS, type DrugEvent, type DrugId, type DrugState } from '../sim/drugs';
 import type { DriveInput } from '../physics/vehicle';
 import type { Ctx } from './ctx';
 import type { Pilot, Vehicle } from './vehicle';
@@ -80,6 +81,8 @@ const JUMP_V = 6.6;
 const COYOTE = 0.1;
 const JUMP_BUFFER = 0.12;
 const BODY_R = 0.3;
+/** Seconds the use button is held before the drug belt opens. */
+const BELT_HOLD = 0.35;
 const RAY_STATIC = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -184,6 +187,16 @@ export class Player implements Pilot {
   muzzleT = 0;
   throwHeld = 0;
   fatigue = 0;
+  /** Seconds the use button has been down, to tell a tap (take) from a hold (open the belt). */
+  private useHold = 0;
+  /** The drug belt is open: the hands are in the pockets, and the feet stay put. */
+  beltOpen = false;
+  private poisonT = 0;
+  /** Seconds left retching, or otherwise out of it. No moving, no shooting. */
+  stunT = 0;
+  /** A stumble in progress: sideways lurch, and which way. */
+  private lurchT = 0;
+  private lurchDir = 1;
   /** Where the aim ray currently lands (for the reticle and the gun). */
   aimPoint = new THREE.Vector3();
   aimDist = 60;
@@ -342,6 +355,10 @@ export class Player implements Pilot {
     return it ? gearDef(it.id).name : 'Bare hands';
   }
 
+  /** What this body has taken, and what it is doing about it. It lives on the campaign, so it outlasts the scene. */
+  get drugs(): DrugState {
+    return this.ctx.campaign.drugs[this.index];
+  }
   get targetable() {
     return (this.state === 'foot' || this.state === 'entering' || this.state === 'downed') && this.invuln <= 0;
   }
@@ -415,7 +432,16 @@ export class Player implements Pilot {
       }
     }
     void dt;
-    return { steer: it.move[0], throttle, brake, handbrake: it.handbrake };
+    // Slumped over the wheel, or heaving out of the window: no hands on anything.
+    if (this.drugs.passedOut || this.stunT > 0) return { steer: 0, throttle: 0, brake: 0.25, handbrake: false };
+    // Drunk driving: the wheel wanders.
+    let steer = it.move[0];
+    const sway = this.drugs.mods().sway;
+    if (sway > 0.02) {
+      const t = this.ctx.time + this.index * 7.3;
+      steer = clamp(steer + (Math.sin(t * 1.1) + 0.6 * Math.sin(t * 2.7 + 0.9)) * 0.3 * sway, -1, 1);
+    }
+    return { steer, throttle, brake, handbrake: it.handbrake };
   }
 
   // ------------------------------------------------------------------ damage
@@ -424,7 +450,9 @@ export class Player implements Pilot {
     if (this.state === 'dead' || this.invuln > 0) return;
     const ctx = this.ctx;
     // What you wear takes a share of the hit: armour for blows, masks for spores, boots and knees for falls.
-    const dmg = amount * ctx.campaign.difficulty.damage * damageTaken(this.stats, kind);
+    const dmg = amount * ctx.campaign.difficulty.damage * damageTaken(this.stats, kind) * this.drugs.mods().damage;
+    // Something hurts enough to wake you.
+    if (dmg > 6 && this.drugs.passedOut) this.drugs.wake();
     this.sinceHit = 0;
     this.lastHurtDir = Math.atan2(fromX - this.pos.x, fromZ - this.pos.z);
     // Taking a hit interrupts hold actions such as repairs.
@@ -449,6 +477,8 @@ export class Player implements Pilot {
 
   private goDown() {
     dropCarry(this);
+    this.beltOpen = false;
+    this.stunT = 0;
     this.state = 'downed';
     this.downT = 0;
     this.pinned = 0;
@@ -595,11 +625,12 @@ export class Player implements Pilot {
     if (this.hitCooldown > 0) this.hitCooldown -= dt;
     if (this.invuln > 0) this.invuln -= dt;
     this.sinceHit += dt;
+    this.updateDrugs(dt, it);
     for (const n of this.notes) n.t -= dt;
     while (this.notes.length && this.notes[0].t <= 0) this.notes.shift();
     this.commandWheel = isHeld(it, Btn.Up) && this.state !== 'dead';
     this.sheet = isHeld(it, Btn.Back) && heldFor(it, Btn.Back) > 0.25;
-    if (wasPressed(it, Btn.Down) && this.state !== 'dead') this.mapMode = (this.mapMode + 1) % this.ctx.mapModes;
+    if (wasPressed(it, Btn.Map) && this.state !== 'dead') this.mapMode = (this.mapMode + 1) % this.ctx.mapModes;
     else if (this.mapMode >= this.ctx.mapModes) this.mapMode = 0;
     if (this.fireCd > 0) this.fireCd -= dt;
     if (this.meleeCd > 0) this.meleeCd -= dt;
@@ -618,7 +649,7 @@ export class Player implements Pilot {
     }
 
     if (wasPressed(it, Btn.View) && (this.state === 'foot' || this.state === 'driving' || this.state === 'gunner') && !this.buildMode) this.toggleView();
-    if (wasPressed(it, Btn.Down)) {
+    if (wasPressed(it, Btn.Inventory)) {
       if (this.state === 'foot') {
         this.action = null;
         this.ctx.openInventory?.(this);
@@ -653,8 +684,141 @@ export class Player implements Pilot {
     this.signatureShown = this.currentSignature();
     if (this.state === 'foot' || this.state === 'downed') {
       const s = this.footSignature();
-      if (s > 0) ctx.sig.emit(this.pos.x, this.pos.z, s * ctx.signatureMult, 'noise');
+      if (s > 0) ctx.sig.emit(this.pos.x, this.pos.z, s * ctx.signatureMult * this.drugs.mods().noise, 'noise');
     }
+  }
+
+  /**
+   * Taking drugs. Tap the use button to take the selected one; hold it to open the belt, then lean left or right to pick
+   * (the feet stay put while the hands are in the pockets). Then the body does what the blood tells it to.
+   */
+  private updateDrugs(dt: number, it: PlayerIntent) {
+    const d = this.drugs;
+    const items = this.ctx.campaign.items;
+    const living = this.state === 'foot' || this.state === 'driving' || this.state === 'gunner';
+    const can = living && !this.buildMode && !d.passedOut && this.stunT <= 0;
+    const down = can && isHeld(it, Btn.Down);
+    if (down) {
+      const was = this.useHold;
+      this.useHold += dt;
+      if (this.state === 'driving') {
+        // The stick is steering, so a held button just walks the belt, a slot at a time.
+        this.beltOpen = this.useHold >= BELT_HOLD;
+        if (this.useHold >= 0.6 && Math.floor(this.useHold / 0.6) > Math.floor(was / 0.6)) d.step(1);
+      } else if (this.useHold >= BELT_HOLD) this.beltOpen = true;
+      if (this.beltOpen && this.state !== 'driving') {
+        if (it.nav & NAV.left) d.step(-1);
+        if (it.nav & NAV.right) d.step(1);
+      }
+    } else {
+      if (can && this.useHold > 0 && !this.beltOpen && wasReleased(it, Btn.Down)) this.takeDrug(d.selected);
+      this.useHold = 0;
+      this.beltOpen = false;
+    }
+    d.update(dt);
+    for (const e of d.takeEvents()) this.onDrugEvent(e);
+    if (this.stunT > 0) this.stunT -= dt;
+    if (this.lurchT > 0) this.lurchT -= dt;
+    if (this.state === 'dead' || this.state === 'downed') return;
+    const m = d.mods();
+    if (m.regen > 0 && this.hp < this.maxHp && this.state === 'foot') this.heal(m.regen * dt);
+    if (m.shake > 0.05) this.cam.addShake(m.shake * 0.02 * dt * 60);
+    if (m.poison > 0) {
+      this.poisonT -= dt;
+      if (this.poisonT <= 0) {
+        this.poisonT = 0.5;
+        this.hp = Math.max(0, this.hp - m.poison * 0.5);
+        if (this.hp <= 0) this.goDown();
+      }
+    } else this.poisonT = 0;
+  }
+
+  /** Take one dose from the convoy's stores. */
+  takeDrug(id: DrugId) {
+    const items = this.ctx.campaign.items;
+    const def = DRUGS[id];
+    if (items[id] <= 0) {
+      this.note(`No ${def.name.toLowerCase()} left`, 'warn');
+      this.ctx.audio.play('deny');
+      return false;
+    }
+    items[id]--;
+    const r = this.drugs.dose(id);
+    if (r.heal) this.heal(r.heal);
+    this.ctx.audio.play(id === 'alcohol' || id === 'ayahuasca' ? 'gulp' : id === 'weed' || id === 'haze' ? 'toke' : 'pill', this.pos.x, this.pos.z, 0.5);
+    this.note(`${def.name}: ${def.blurb}`, 'good');
+    for (const n of r.notes) this.note(n, 'warn');
+    if (r.relieved) this.note('The shakes ease off', 'info');
+    if (!r.overdose && this.drugs.toxicity > 0.7) this.note('Your hands are shaking: one more could be too many', 'warn');
+    return true;
+  }
+
+  /** Things the blood makes happen. */
+  private onDrugEvent(e: DrugEvent) {
+    switch (e.type) {
+      case 'vomit':
+        this.vomit(e.purge);
+        break;
+      case 'stumble':
+        this.lurchT = 0.45;
+        this.lurchDir = e.dir;
+        this.cam.addShake(0.25);
+        this.ctx.sig.emit(this.pos.x, this.pos.z, 8 * this.drugs.mods().noise, 'noise');
+        break;
+      case 'outburst':
+        this.outburst(e.kind, e.loud);
+        break;
+      case 'blackout':
+        this.passOut();
+        break;
+      case 'wake':
+        this.note('You come to', 'info');
+        break;
+      case 'surge':
+        this.note('Everything turns up', 'warn');
+        break;
+      case 'paranoia':
+        this.ctx.phantoms.startle(this);
+        break;
+      case 'blend':
+        this.note(e.on ? `${e.name}: ${e.blurb}` : `${e.name} fades`, e.on ? 'good' : 'info');
+        break;
+      case 'overdose':
+        this.note('Overdose: your body is shutting down', 'bad');
+        break;
+      case 'warn':
+        this.note(e.text, 'warn');
+        break;
+    }
+  }
+
+  private vomit(purge: boolean) {
+    if (this.state !== 'foot' && this.state !== 'driving' && this.state !== 'gunner') return;
+    const ctx = this.ctx;
+    this.stunT = purge ? 3 : 2.2;
+    this.action = null;
+    this.crouch = false;
+    ctx.fx.blood(this.pos.x + Math.sin(this.yaw) * 0.5, this.pos.y + 1.2, this.pos.z + Math.cos(this.yaw) * 0.5, 7, [0.5, 0.58, 0.16]);
+    ctx.audio.play('retch', this.pos.x, this.pos.z, 0.7);
+    ctx.sig.emit(this.pos.x, this.pos.z, 26 * this.drugs.mods().noise, 'noise');
+    this.cam.addShake(0.3);
+    this.note(purge ? 'The vine takes it out of you' : 'You throw up', purge ? 'info' : 'warn');
+  }
+
+  private outburst(kind: 'laugh' | 'hiccup' | 'sing', loud: number) {
+    const ctx = this.ctx;
+    ctx.audio.play(kind, this.pos.x, this.pos.z, 0.6);
+    ctx.sig.emit(this.pos.x, this.pos.z, loud * this.drugs.mods().noise, 'noise');
+    this.cam.addShake(0.12);
+    this.note(kind === 'laugh' ? 'You burst out laughing' : kind === 'hiccup' ? 'Hic' : 'You are singing. Loudly', 'warn');
+  }
+
+  private passOut() {
+    this.action = null;
+    this.crouch = false;
+    this.stunT = 0;
+    dropCarry(this);
+    this.note('The floor comes up to meet you', 'bad');
   }
 
   /** Switch between the chase camera and the eyes, and remember the choice for the next leg. */
@@ -697,12 +861,23 @@ export class Player implements Pilot {
 
   // ------------------------------------------------------------------ on foot
 
+  /** Passed out cold: nothing works until you come round, or something hurts enough to wake you. */
+  private updateAsleep(dt: number) {
+    this.moveSpeed = damp(this.moveSpeed, 0, 10, dt);
+    this.moveBody(dt, 0, 0);
+    this.prompt = { text: `Passed out… ${Math.ceil(this.drugs.blackout)}s`, progress: clamp(1 - this.drugs.blackout / 9, 0, 1), button: 'A' };
+  }
+
   private updateFoot(dt: number, it: PlayerIntent) {
     const ctx = this.ctx;
+    if (this.drugs.passedOut) return this.updateAsleep(dt);
+    const dm = this.drugs.mods();
+    // Retching, or rummaging through the pockets for the next dose: the hands and feet are busy.
+    const busy = this.stunT > 0;
     this.updateAim(dt, it);
     // Movement relative to the camera.
-    let mx = it.move[0];
-    let my = it.move[1];
+    let mx = busy || this.beltOpen ? 0 : it.move[0];
+    let my = busy || this.beltOpen ? 0 : it.move[1];
     const mag = Math.hypot(mx, my);
     if (mag > 1) {
       mx /= mag;
@@ -718,7 +893,15 @@ export class Player implements Pilot {
     let wx = fx * my + rx * mx;
     let wz = fz * my + rz * mx;
     const aiming = this.ads > 0.35;
-    const wantSprint = it.sprint && my > 0.3 && !aiming && !this.crouch && this.equip !== 'jerrycan' && !this.carry;
+    // Drunk: the body drifts sideways of where it is going, and a stumble throws it further.
+    if (dm.sway > 0.02 || this.lurchT > 0) {
+      const t = ctx.time + this.index * 7.3;
+      const drift = (Math.sin(t * 1.3) + 0.6 * Math.sin(t * 2.9 + 1.7)) * 0.55 * dm.sway * Math.max(1, Math.hypot(wx, wz) * 3.4);
+      const lurch = this.lurchT > 0 ? this.lurchDir * 3.2 * (this.lurchT / 0.45) : 0;
+      wx += rx * (drift + lurch) * 0.3;
+      wz += rz * (drift + lurch) * 0.3;
+    }
+    const wantSprint = !busy && it.sprint && my > 0.3 && !aiming && !this.crouch && this.equip !== 'jerrycan' && !this.carry;
     // Crouch is a toggle on B (or hold, per the control settings), cancelled by sprint.
     if (this.ctx.input.settings.toggleCrouch?.[this.index] === false) this.crouch = isHeld(it, Btn.B);
     else if (wasPressed(it, Btn.B)) this.crouch = !this.crouch;
@@ -739,7 +922,9 @@ export class Player implements Pilot {
     // Fatigue from watch duty slows the next day; heavy gear slows you and light shoes quicken you.
     speed *= 1 - clamp(this.fatigue, 0, 0.2);
     speed *= 1 + this.stats.speed;
-    this.moveSpeed = damp(this.moveSpeed, Math.hypot(wx, wz) * speed, 14, dt);
+    speed *= dm.speed;
+    // Tripping is floaty: the feet take longer to agree with the stick.
+    this.moveSpeed = damp(this.moveSpeed, Math.hypot(wx, wz) * speed, 14 / (1 + dm.trip * 1.2), dt);
     const targetVx = wx * speed;
     const targetVz = wz * speed;
     // Facing: toward the aim when aiming or shooting, otherwise toward travel.
@@ -759,12 +944,14 @@ export class Player implements Pilot {
       }
     } else this.pinBreak = Math.max(0, this.pinBreak - dt * 0.3);
 
-    this.updateTools(dt, it);
-    this.updateInteractions(dt, it);
-    this.updateJump(dt, it);
+    if (!busy) {
+      this.updateTools(dt, it);
+      this.updateInteractions(dt, it);
+      this.updateJump(dt, it);
+    }
 
     // Pick up swap: LB cycles equipment.
-    if (!this.buildMode && wasPressed(it, Btn.LB)) {
+    if (!busy && !this.buildMode && wasPressed(it, Btn.LB)) {
       if (this.carry) this.note('Hands full: stow it or put it down first', 'info');
       else this.cycleEquip();
     }
@@ -774,7 +961,7 @@ export class Player implements Pilot {
     }
     if (wasPressed(it, Btn.R3)) this.cam.snap();
     // Y: enter / exit.
-    if (wasPressed(it, Btn.Y)) {
+    if (!busy && wasPressed(it, Btn.Y)) {
       if (!this.tryEnter()) this.note('No vehicle in reach', 'info');
     }
     // Ground hazards: spore clouds are handled by the zombie system.
@@ -1061,7 +1248,7 @@ export class Player implements Pilot {
     this.fireCd = gun.cd;
     this.mag--;
     this.muzzleT = 0.12;
-    const spread = lerp(gun.spread, gun.adsSpread, this.ads) * (this.crouch ? 0.7 : 1) * (this.moveSpeed > 3 ? 1.6 : 1);
+    const spread = lerp(gun.spread, gun.adsSpread, this.ads) * (this.crouch ? 0.7 : 1) * (this.moveSpeed > 3 ? 1.6 : 1) * this.drugs.mods().spread;
     // A shotgun throws a handful of pellets from one shot. The first carries the noise and the aim assist.
     for (let n = 0; n < gun.pellets; n++) {
       ctx.combat.shoot(mx, my, mz, dx, dy, dz, {
@@ -1070,7 +1257,7 @@ export class Player implements Pilot {
         spread,
         pierce: gun.pierce || undefined,
         assist: n === 0 ? it0(this.intent.aimAssist) : 0,
-        noise: n === 0 ? gun.noise : 0,
+        noise: n === 0 ? gun.noise * this.drugs.mods().noise : 0,
         range: gun.range,
         headshots: true,
         owner: this,
@@ -1079,6 +1266,7 @@ export class Player implements Pilot {
     ctx.fx.flash(mx, my, mz, 0.9 + (gun.pellets > 1 ? 0.3 : 0));
     ctx.audio.play(gun.sound, mx, mz, 0.8);
     const kick = Math.min(0.14, (gun.dmg * gun.pellets) / 700);
+    ctx.phantoms.onShot(this, a.ox, a.oy, a.oz, a.dx, a.dy, a.dz);
     this.cam.addShake(0.04 + kick);
     ctx.input.rumble(this.index, 0.15 + kick * 2, 0.3, 50);
   }
@@ -1116,10 +1304,12 @@ export class Player implements Pilot {
     const hx = this.pos.x + Math.sin(f) * 1.0;
     const hz = this.pos.z + Math.cos(f) * 1.0;
     ctx.audio.play('swing', this.pos.x, this.pos.z, 0.5);
-    ctx.zombies.meleeHit(this, hx, hz, f, w.reach, w.dmg);
-    ctx.wildlife.meleeHit(this, hx, hz, f, w.reach, w.dmg);
-    ctx.raiders.meleeHit(this, hx, hz, f, w.reach, w.dmg);
-    ctx.sig.emit(this.pos.x, this.pos.z, w.noise, 'noise');
+    const dm = this.drugs.mods();
+    ctx.zombies.meleeHit(this, hx, hz, f, w.reach, w.dmg * dm.melee);
+    ctx.wildlife.meleeHit(this, hx, hz, f, w.reach, w.dmg * dm.melee);
+    ctx.raiders.meleeHit(this, hx, hz, f, w.reach, w.dmg * dm.melee);
+    ctx.phantoms.onSwing(this, hx, hz);
+    ctx.sig.emit(this.pos.x, this.pos.z, w.noise * dm.noise, 'noise');
     this.cam.addShake(0.08);
   }
 
@@ -1427,6 +1617,11 @@ export class Player implements Pilot {
     const p = v.position;
     this.pos.set(p.x, p.y, p.z);
     this.body.setTranslation({ x: p.x, y: p.y + 1.0, z: p.z }, false);
+    // Slumped over the wheel or heaving out of the window: no horn, no gun, no getting out.
+    if (this.drugs.passedOut || this.stunT > 0) {
+      this.lookBack = false;
+      return;
+    }
     // Horn / siren
     if (wasPressed(it, Btn.X)) {
       v.hornT = 0.6;
@@ -1487,6 +1682,7 @@ export class Player implements Pilot {
     const p = v.gunnerPos();
     this.pos.set(p[0], p[1] - 0.2, p[2]);
     this.body.setTranslation({ x: p[0], y: p[1], z: p[2] }, false);
+    if (this.drugs.passedOut || this.stunT > 0) return;
     // Aim the bed gun with the right stick (keyboard turns with Q/E).
     this.ads = damp(this.ads, it.lt > 0.3 ? 1 : 0, 10, dt);
     const sens = lerp(2.6, 1.4, this.ads) * this.lookGain(it);
@@ -1628,7 +1824,7 @@ export class Player implements Pilot {
       target = { x: _v.x, y: _v.y - 1.0, z: _v.z, yaw: v.yaw, speed: Math.abs(v.speed), topSpeed: v.topSpeed };
       dist = 4.4;
       height = 1.9;
-    } else if (this.state === 'downed' || this.state === 'dead') {
+    } else if (this.state === 'downed' || this.state === 'dead' || (this.state === 'foot' && this.drugs.passedOut)) {
       mode = 'downed';
     }
     // Mouse movement not yet consumed by a 60 Hz tick is applied here so the view turns every frame.
@@ -1641,6 +1837,14 @@ export class Player implements Pilot {
       const k = this.mouseScale();
       aimYaw -= pend[0] * k;
       aimPitch = clamp(aimPitch + pend[1] * k, first ? -1.3 : -0.55, first ? 1.3 : 0.8);
+    }
+    // Drunk and tripping hands: the aim wanders, a little less when braced against the sights.
+    const sway = this.drugs.mods().sway;
+    if (sway > 0.02 && (this.state === 'foot' || this.state === 'gunner')) {
+      const t = this.ctx.time + this.index * 7.3;
+      const k = sway * (1 - 0.35 * this.ads);
+      aimYaw += (Math.sin(t * 0.9) * 0.04 + Math.sin(t * 2.3 + 1.1) * 0.015) * k;
+      aimPitch = clamp(aimPitch + (Math.sin(t * 1.1 + 1.3) * 0.025 + Math.sin(t * 2.9) * 0.01) * k, first ? -1.3 : -0.55, first ? 1.3 : 0.8);
     }
     let lookYaw = -this.lookIn[0] * 1.1;
     let lookPitch = this.lookIn[1];
@@ -1752,6 +1956,7 @@ export class Player implements Pilot {
   syncVisual(alpha: number, dt: number) {
     const h = this.human;
     const showOnFoot = this.state === 'foot' || this.state === 'downed' || this.state === 'entering';
+    const lying = this.state === 'downed' || (this.state === 'foot' && this.drugs.passedOut);
     h.root.visible = showOnFoot;
     if (!showOnFoot) return;
     const x = lerp(this.prevPos.x, this.pos.x, alpha);
@@ -1761,13 +1966,13 @@ export class Player implements Pilot {
     h.root.rotation.y = this.yaw;
     let aim = this.equip === 'gun' ? clamp(this.ads + (this.muzzleT > 0 ? 0.7 : 0), 0, 1) : 0;
     const weapon = this.heldModel();
-    h.setWeapon(this.state === 'downed' || this.carry ? 'none' : weapon);
+    h.setWeapon(lying || this.carry ? 'none' : weapon);
     h.swing = this.swingT;
     // First person: whatever is in hand is held up in front, where the camera can see it.
     if (this.firstPerson && !this.carry && weapon !== 'none') aim = Math.max(aim, 0.75);
     this.syncCarryModel();
     this.airVis = damp(this.airVis, this.state === 'foot' && !this.grounded && !this.swimming && this.airT > 0.06 ? 1 : 0, 16, dt);
-    h.update(dt, this.state === 'downed' ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch, this.airVis);
+    h.update(dt, lying ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch, this.airVis);
     h.muzzle(this.muzzleT > 0.05);
     if (this.invuln > 0) h.root.visible = Math.floor(this.invuln * 12) % 2 === 0;
   }

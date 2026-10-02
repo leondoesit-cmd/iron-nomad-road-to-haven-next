@@ -30,7 +30,15 @@ export type SoundId =
   | 'radio'
   | 'build'
   | 'alarm'
-  | 'siren';
+  | 'siren'
+  | 'retch'
+  | 'laugh'
+  | 'hiccup'
+  | 'sing'
+  | 'whisper'
+  | 'gulp'
+  | 'toke'
+  | 'pill';
 
 export type MusicState = 'none' | 'travel' | 'stealth' | 'combat' | 'camp' | 'raid';
 
@@ -67,6 +75,8 @@ export class AudioEngine {
   musicBus!: GainNode;
   buses: GainNode[] = [];
   private pans: StereoPannerNode[] = [];
+  /** Per player: a low-pass for the cotton-wool of being high, and a warbling echo for the rest. */
+  private trip: { filt: BiquadFilterNode; fb: GainNode; wet: GainNode; delay: DelayNode; lfo: OscillatorNode; lfoGain: GainNode }[] = [];
   private noiseBuf: AudioBuffer | null = null;
   listeners: { x: number; z: number }[] = [{ x: 0, z: 0 }, { x: 0, z: 0 }];
   muted = false;
@@ -109,9 +119,29 @@ export class AudioEngine {
       const g = ctx.createGain();
       const p = ctx.createStereoPanner();
       p.pan.value = i === 0 ? -0.35 : 0.35;
-      g.connect(p).connect(this.sfx);
+      // bus -> low-pass -> pan, with a feedback echo hanging off the low-pass for the psychedelics.
+      const filt = ctx.createBiquadFilter();
+      filt.type = 'lowpass';
+      filt.frequency.value = 22000;
+      const delay = ctx.createDelay(1);
+      delay.delayTime.value = 0.27;
+      const fb = ctx.createGain();
+      fb.gain.value = 0;
+      const wet = ctx.createGain();
+      wet.gain.value = 0;
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 0.31 + i * 0.07;
+      const lfoGain = ctx.createGain();
+      lfoGain.gain.value = 0;
+      lfo.connect(lfoGain).connect(delay.delayTime);
+      lfo.start();
+      g.connect(filt).connect(p).connect(this.sfx);
+      filt.connect(delay);
+      delay.connect(fb).connect(delay);
+      delay.connect(wet).connect(p);
       this.buses.push(g);
       this.pans.push(p);
+      this.trip.push({ filt, fb, wet, delay, lfo, lfoGain });
     }
     const len = ctx.sampleRate * 2;
     this.noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
@@ -131,6 +161,20 @@ export class AudioEngine {
   setMuted(m: boolean) {
     this.muted = m;
     if (this.master) this.master.gain.value = m ? 0 : this.volume;
+  }
+
+  /** How high a player is, as the ears hear it: `muffle` closes the low-pass, `echo` opens the warbling delay. Both 0..1. */
+  setTrip(i: number, muffle: number, echo: number) {
+    const ctx = this.ctx;
+    const t = this.trip[i];
+    if (!ctx || !t) return;
+    const m = clamp(muffle, 0, 1);
+    const e = clamp(echo, 0, 1);
+    const now = ctx.currentTime;
+    t.filt.frequency.setTargetAtTime(22000 * Math.pow(1 - m, 2.2) + 500, now, 0.25);
+    t.fb.gain.setTargetAtTime(e * 0.5, now, 0.25);
+    t.wet.gain.setTargetAtTime(e * 0.5, now, 0.25);
+    t.lfoGain.gain.setTargetAtTime(e * 0.012, now, 0.25);
   }
 
   setListeners(l: { x: number; z: number }[]) {
@@ -407,6 +451,39 @@ export class AudioEngine {
       case 'alarm':
         for (let k = 0; k < 4; k++) this.tone(out, t0 + k * 0.28, 'sawtooth', 520, 520, 0.22, 0.01, 0.2);
         this.duck(1.4, 0.55);
+        break;
+      case 'retch':
+        // A heave and a splatter.
+        this.tone(out, t0, 'sawtooth', 130, 70, 0.4, 0.04, 0.3);
+        this.burst(out, t0 + 0.28, 'lowpass', 700, 0.7, 0.35, 0.01, 0.35);
+        this.tone(out, t0 + 0.55, 'sawtooth', 110, 60, 0.3, 0.03, 0.25);
+        break;
+      case 'laugh':
+        for (let k = 0; k < 5; k++) this.tone(out, t0 + k * 0.12, 'sawtooth', 520 - k * 30 + Math.random() * 40, 380 - k * 25, 0.22, 0.01, 0.09);
+        break;
+      case 'hiccup':
+        this.tone(out, t0, 'triangle', 240, 520, 0.3, 0.004, 0.07);
+        this.burst(out, t0, 'bandpass', 900, 1.5, 0.12, 0.002, 0.05);
+        break;
+      case 'sing':
+        for (const [k, f] of [[0, 330], [0.3, 392], [0.6, 349], [0.9, 294]] as const) this.tone(out, t0 + k, 'triangle', f * (0.96 + Math.random() * 0.08), f, 0.25, 0.04, 0.28);
+        break;
+      case 'whisper':
+        this.burst(out, t0, 'bandpass', 3200, 2.5, 0.18, 0.25, 0.7);
+        this.burst(out, t0 + 0.2, 'bandpass', 2400, 3, 0.12, 0.2, 0.6);
+        break;
+      case 'gulp':
+        this.tone(out, t0, 'sine', 220, 120, 0.3, 0.01, 0.09);
+        this.tone(out, t0 + 0.14, 'sine', 200, 110, 0.25, 0.01, 0.09);
+        this.burst(out, t0, 'lowpass', 500, 0.6, 0.12, 0.01, 0.2);
+        break;
+      case 'toke':
+        this.burst(out, t0, 'bandpass', 1400, 0.8, 0.25, 0.25, 0.4);
+        this.tone(out, t0 + 0.55, 'sine', 90, 70, 0.1, 0.01, 0.2);
+        break;
+      case 'pill':
+        this.tone(out, t0, 'square', 1500, 1100, 0.15, 0.001, 0.03);
+        this.burst(out, t0 + 0.05, 'bandpass', 2200, 1, 0.1, 0.002, 0.06);
         break;
       case 'radio': {
         this.burst(out, t0, 'bandpass', 2600, 1.2, 0.22, 0.01, 0.28);

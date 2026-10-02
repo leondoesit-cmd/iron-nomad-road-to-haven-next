@@ -20,9 +20,13 @@ export const Btn = {
   View: 16,
   /** Not a physical button: jump, driven by whatever the player binds to it (A on a pad, shared with interact). */
   Jump: 17,
+  /** Not a physical button: the map, driven by whatever the player binds to it (D-pad right on a pad). */
+  Map: 18,
+  /** Not a physical button: the inventory, driven by whatever the player binds to it (D-pad left on a pad). */
+  Inventory: 19,
 } as const;
-/** Logical buttons, including View and Jump. */
-export const BTN_COUNT = 18;
+/** Logical buttons, including View, Jump, Map and Inventory. */
+export const BTN_COUNT = 20;
 export type BtnName = keyof typeof Btn;
 
 export type DeviceKind = 'pad' | 'keyboard';

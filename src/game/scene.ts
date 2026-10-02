@@ -30,6 +30,9 @@ import { RaiderSystem } from './raiders';
 import { Vehicle, type Faction } from './vehicle';
 import type { VehicleBuild } from '../sim/garage';
 import { ZombieSystem } from './zombies';
+import { PhantomSystem } from './phantoms';
+import { PlayerFx, type Mark } from '../render/playerFx';
+import { NO_LOOK, senseSpec } from '../sim/drugs';
 import { WildlifeSystem } from './wildlife';
 import { LABEL } from '../sim/resources';
 import { disposeTree } from '../render/dispose';
@@ -75,6 +78,7 @@ export abstract class Scene implements Ctx {
   players: Player[] = [];
   vehicles: Vehicle[] = [];
   zombies: ZombieSystem;
+  phantoms: PhantomSystem;
   wildlife: WildlifeSystem;
   raiders: RaiderSystem;
   crew: CrewSystem;
@@ -91,6 +95,10 @@ export abstract class Scene implements Ctx {
   structureHit?: Ctx['structureHit'];
   clock = new DayClock(540, 0.02);
   protected zr = new ZombieRenderer();
+  /** Phantoms are drawn with their own translucent copy of the body, into one player's view at a time. */
+  protected ghosts = new ZombieRenderer({ ghost: true, max: 24 });
+  /** Per-player world effects of a trip: spores, sense marks, giant mushrooms. */
+  protected playerFx: PlayerFx;
   protected ar = new AnimalRenderer();
   protected spots: THREE.SpotLight[] = [];
   protected frustums = [new THREE.Frustum(), new THREE.Frustum()];
@@ -117,6 +125,8 @@ export abstract class Scene implements Ctx {
     this.rng = new Rng(svc.campaign.seed * 977 + svc.campaign.day * 131);
     this.combat = new Combat(this);
     this.zombies = new ZombieSystem(this);
+    this.phantoms = new PhantomSystem(this);
+    this.playerFx = new PlayerFx(this.R);
     this.wildlife = new WildlifeSystem(this);
     this.raiders = new RaiderSystem(this);
     this.crew = new CrewSystem(this);
@@ -128,6 +138,9 @@ export abstract class Scene implements Ctx {
     this.R.scene.add(this.fx.glow.points);
     this.R.scene.add(this.tracers.mesh);
     this.root.add(this.zr.mesh);
+    this.ghosts.mesh.visible = false;
+    this.root.add(this.ghosts.mesh);
+    this.root.add(this.playerFx.group);
     this.root.add(this.ar.group);
     this.installViewHooks();
     // Constant light count: two headlight spots always exist, off by default.
@@ -141,8 +154,17 @@ export abstract class Scene implements Ctx {
   }
 
   /** A first-person camera sits inside its own player, so that player is hidden from that view only. */
-  private beforeViewHook = (i: number) => this.players[i]?.beginOwnView();
-  private afterViewHook = (i: number) => this.players[i]?.endOwnView();
+  private beforeViewHook = (i: number) => {
+    this.players[i]?.beginOwnView();
+    // Whatever this player is seeing that is not there goes in just for their view.
+    this.ghosts.mesh.visible = this.players[i] ? this.phantoms.render(i, this.ghosts, this.time) > 0 : false;
+    if (this.players[i]) this.playerFx.beginView(i, this.R.views[i].camera);
+  };
+  private afterViewHook = (i: number) => {
+    this.players[i]?.endOwnView();
+    this.ghosts.mesh.visible = false;
+    this.playerFx.endView();
+  };
 
   protected installViewHooks() {
     this.R.onBeforeView[2] = this.beforeViewHook;
@@ -392,6 +414,7 @@ export abstract class Scene implements Ctx {
     this.time += dt;
     for (const v of this.vehicles) v.snapshotPrev();
     for (const p of this.players) p.update(dt);
+    this.phantoms.update(dt);
     // Vehicles (convoy and raiders) apply driver intent and step wheel models.
     for (const v of this.vehicles) v.update(dt);
     this.cars.update(dt);
@@ -486,6 +509,7 @@ export abstract class Scene implements Ctx {
       v.active = true;
       p.cam.apply(v.camera);
       R.setViewMode(i, p.firstPerson, this.input.settings.fpFov);
+      this.syncTrip(i, p, dt);
       v.focus.set(p.pos.x, p.pos.y, p.pos.z);
       if (p.vehicle) v.focus.set(p.vehicle.position.x, p.vehicle.position.y, p.vehicle.position.z);
       v.camera.updateMatrixWorld();
@@ -498,6 +522,102 @@ export abstract class Scene implements Ctx {
     const n = this.players.length;
     this.wildlife.render(this.ar, this.frustums.slice(0, n), QUALITY[R.quality].zombies / 2, R.views.slice(0, n).map((v) => v.camera.position));
     this.zombies.render(this.zr, this.time, this.frustums.slice(0, n), QUALITY[R.quality].zombies, R.views.slice(0, n).map((v) => v.camera.position));
+  }
+
+  /**
+   * One player's trip, for this frame: the renderer bends their picture and their sky, and their world effects
+   * (spores, auras, mushrooms) move. Nothing here touches anyone else's view.
+   */
+  protected syncTrip(i: number, p: Player, dt: number) {
+    const R = this.R;
+    const look = p.drugs.look();
+    R.setTrip(i, look, dt);
+    R.applyTripCamera(i);
+    const at = p.vehicle ? p.vehicle.position : p.pos;
+    const sight = p.drugs.mods().sight;
+    const marks = sight > 0.05 && p.alive ? this.senseMarks(p, sight) : NO_MARKS;
+    this.sensed[i] = marks;
+    this.playerFx.update(
+      i,
+      dt,
+      look,
+      R.trip[i].phase,
+      at,
+      (x, z) => this.groundAt(x, z),
+      (x, z) => this.noMushroomAt(x, z),
+      marks,
+    );
+    for (const pop of this.phantoms.pops[i]) this.playerFx.burst(i, pop.x, pop.y, pop.z, pop.seed);
+    this.phantoms.pops[i].length = 0;
+  }
+
+  /** What each player's sense showed this frame. */
+  private sensed: [Mark[], Mark[]] = [NO_MARKS, NO_MARKS];
+
+  /** Deep sense (the vine) also marks the compass: everything it can see, including what the map never shows. */
+  revealPins(p: Player): CompassPin[] {
+    if (p.drugs.mods().sight < 0.85) return [];
+    const pins: CompassPin[] = [];
+    for (const m of this.sensed[p.index]) {
+      if (m.kind === 'zombie' || m.kind === 'hunter') pins.push({ x: m.x, z: m.z, kind: 'threat', label: '' });
+      else if (m.kind === 'raider') pins.push({ x: m.x, z: m.z, kind: 'ambush', label: '' });
+      else if (m.kind === 'chest') pins.push({ x: m.x, z: m.z, kind: 'chest', label: '$' });
+      else if (m.kind === 'loot') pins.push({ x: m.x, z: m.z, kind: 'part', label: '·' });
+    }
+    return pins;
+  }
+
+  /** Mushrooms stay off the road and out of the water. */
+  protected noMushroomAt(x: number, z: number): boolean {
+    return !!this.waterAt(x, z);
+  }
+
+  /** What a player's sense shows: the living through the walls, the loot, and (deep in) the road ahead. */
+  protected senseMarks(p: Player, sight: number): Mark[] {
+    const spec = senseSpec(sight);
+    const out: Mark[] = [];
+    if (spec.radius <= 0) return out;
+    const cx = p.vehicle ? p.vehicle.position.x : p.pos.x;
+    const cz = p.vehicle ? p.vehicle.position.z : p.pos.z;
+    const gain = 0.35 + 0.65 * sight;
+    const fade = (x: number, z: number) => gain * clamp(1 - Math.hypot(x - cx, z - cz) / spec.radius, 0.12, 1);
+    if (spec.zombies) {
+      this.zombies.forEachNear(cx, cz, spec.radius, (z) => {
+        if (out.length < 100) out.push({ x: z.x, y: z.y + 1.1 * z.def.scale, z: z.z, kind: z.chasing ? 'hunter' : 'zombie', strength: fade(z.x, z.z) });
+      });
+    }
+    if (spec.animals) {
+      this.wildlife.forEachNear(cx, cz, spec.radius, (a) => {
+        if (out.length < 110) out.push({ x: a.x, y: a.y + a.height * 0.5, z: a.z, kind: 'animal', strength: fade(a.x, a.z) });
+      });
+    }
+    if (spec.raiders) {
+      for (const u of this.raiders.units) {
+        if (u.dead || out.length >= 120) continue;
+        if (Math.hypot(u.x - cx, u.z - cz) <= spec.radius) out.push({ x: u.x, y: u.y + 1.1, z: u.z, kind: 'raider', strength: fade(u.x, u.z) });
+      }
+    }
+    if (spec.loot) this.senseLoot(p, spec.radius, (x, y, z, kind) => out.length < 132 && out.push({ x, y, z, kind, strength: fade(x, z) }));
+    if (spec.guide) {
+      for (const g of this.guidePath(p)) {
+        if (out.length >= 140) break;
+        out.push({ x: g.x, y: g.y, z: g.z, kind: 'path', strength: gain });
+      }
+    }
+    return out;
+  }
+
+  /** Loot within sense range, for the scene that has some. */
+  protected senseLoot(p: Player, radius: number, add: (x: number, y: number, z: number, kind: 'loot' | 'chest') => void) {
+    void p;
+    void radius;
+    void add;
+  }
+
+  /** A line of points along the way forward, for the vine to light up. Scenes with a road give one. */
+  protected guidePath(p: Player): { x: number; y: number; z: number }[] {
+    void p;
+    return NO_PATH;
   }
 
   /** Nobody left standing, so the run is over. With a partner that is both of you down; solo it is bleeding out. */
@@ -560,6 +680,12 @@ export abstract class Scene implements Ctx {
       });
     }
     this.audio.setListeners(this.players.map((p) => ({ x: p.vehicle?.position.x ?? p.pos.x, z: p.vehicle?.position.z ?? p.pos.z })));
+    // Being high changes what you hear: cotton wool for the mellow, a warbling echo for the rest.
+    this.players.forEach((p, i) => {
+      const l = p.drugs.look();
+      const drunk = Math.min(1, p.drugs.drinks / 6);
+      this.audio.setTrip(i, clamp(l.blur * 1.1 + l.dark * 0.8 + drunk * 0.45 + l.glow * 0.2, 0, 0.85), clamp(l.trail * 0.7 + l.kaleido * 0.5 + l.warp * 0.3 + l.dbl * 0.3, 0, 0.9));
+    });
     this.audio.updateEngines(list, dt);
     this.audio.updateMusic(dt);
     this.updateMusicState();
@@ -623,10 +749,18 @@ export abstract class Scene implements Ctx {
     disposeTree(this.tracers.mesh);
     for (const s of this.spots) s.dispose();
     this.zr.mesh.dispose();
+    this.ghosts.mesh.dispose();
+    this.phantoms.clear();
+    this.playerFx.dispose();
+    this.R.setTrip(0, NO_LOOK, 0);
+    this.R.setTrip(1, NO_LOOK, 0);
     this.ar.dispose();
     this.audio.silenceEngines();
   }
 }
+
+const NO_MARKS: Mark[] = [];
+const NO_PATH: { x: number; y: number; z: number }[] = [];
 
 export interface CompassPin {
   x: number;

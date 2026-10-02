@@ -15,6 +15,7 @@ import type { Infantry } from './raiders';
 import { Rng, hashString } from '../core/rng';
 import { gearDrop } from '../sim/gear';
 import { delveBounds, known, newDelveBase, newFrame, revealDelve, type MapFrame } from '../ui/mapdata';
+import { DRUGS, DRUG_IDS } from '../sim/drugs';
 
 /** What a delve remembers between visits, so cleared rooms stay cleared and opened chests stay open. */
 export interface DelveRecord {
@@ -301,6 +302,13 @@ export class DelveScene extends Scene {
         bits.push(`+${n} ${k}`);
       }
     }
+    for (const id of DRUG_IDS) {
+      const n = c.loot[id];
+      if (n) {
+        camp.items[id] += n;
+        bits.push(`+${n} ${DRUGS[id].name.toLowerCase()}`);
+      }
+    }
     if (bits.length) by.note(bits.join('  '), 'good');
     // The hoard always pays in gear; a chest sometimes does. Seeded by the chest, so it cannot be rerolled by reloading.
     const find = gearDrop(new Rng(hashString(c.id) ^ this.site.seed), c.boss ? 'hoard' : 'chest', { tier: this.site.tier, progress: this.gearProgress });
@@ -567,6 +575,17 @@ export class DelveScene extends Scene {
     // The way out is always known; everything else shows once the ground under it has been seen.
     for (const p of pins) if (p.kind === 'exit' || known(f.base!, p.x, p.z)) f.pins.push({ x: p.x, z: p.z, kind: p.kind, label: p.label });
     return f;
+  }
+
+  /** Chests still shut and the key, felt through the rock. */
+  protected senseLoot(p: Player, radius: number, add: (x: number, y: number, z: number, kind: 'loot' | 'chest') => void) {
+    const m = this.map;
+    const rec = this.record;
+    for (const c of m.chests) {
+      if (!rec.chests.has(c.id) && Math.hypot(c.x - p.pos.x, c.z - p.pos.z) <= radius) add(c.x, 0.9, c.z, 'chest');
+    }
+    const k = m.keys[0];
+    if (k && !rec.keyTaken && Math.hypot(k.x - p.pos.x, k.z - p.pos.z) <= radius) add(k.x, 0.9, k.z, 'chest');
   }
 
   compassPins(): CompassPin[] {

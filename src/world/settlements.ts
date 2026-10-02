@@ -186,7 +186,7 @@ export class SiteBuilder {
     const containers: ScavContainer[] = [];
     plan.furn.forEach((f, i) => {
       if (!f.loot) return;
-      containers.push({ id: `${this.def.seed}:${this.site.kind}${Math.round(this.site.z)}:${bi}:${i}`, x: f.x, z: f.z, depth: f.depth ?? 0, loot: f.loot, taken: false, label: f.label, y: levelBase(plan, f.level) + f.h + 0.55 });
+      containers.push({ id: `${this.def.seed}:${this.site.kind}${Math.round(this.site.z)}:${bi}:${i}`, x: f.x, z: f.z, depth: f.depth ?? 0, loot: f.loot, drugs: f.drugs, taken: false, label: f.label, y: levelBase(plan, f.level) + f.h + 0.55 });
     });
     const cx = (plan.x0 + plan.x1) / 2;
     const cz = (plan.z0 + plan.z1) / 2;
