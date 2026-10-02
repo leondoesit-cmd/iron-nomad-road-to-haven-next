@@ -36,6 +36,8 @@ import type { DelveSite } from '../world/delveSites';
 import { PLAYER_CSS } from '../render/palette';
 import type { MapFrame } from '../ui/mapdata';
 
+const _flashDir = new THREE.Vector3();
+
 export interface SceneServices {
   R: GameRenderer;
   audio: AudioEngine;
@@ -523,6 +525,17 @@ export abstract class Scene implements Ctx {
         // A roof light bar throws further and brighter.
         s.intensity = 480 * (0.35 + light.night) * (1 + v.stats.light);
         s.distance = 70 * (1 + 0.5 * v.stats.light);
+      } else if (p && p.state === 'foot' && light.night > 0.15) {
+        // Head flashlight: from the shoulder along the view, fading in with dusk.
+        const d = this.R.views[i].camera.getWorldDirection(_flashDir);
+        s.position.set(p.pos.x + d.x * 0.5, p.pos.y + 1.5, p.pos.z + d.z * 0.5);
+        s.target.position.set(s.position.x + d.x * 20, s.position.y + d.y * 20 - 1.2, s.position.z + d.z * 20);
+        s.target.updateMatrixWorld();
+        s.angle = 0.6;
+        s.penumbra = 0.8;
+        s.distance = 40;
+        s.color.set(0xfff2d4);
+        s.intensity = 160 * light.night;
       } else s.intensity = 0;
     }
   }

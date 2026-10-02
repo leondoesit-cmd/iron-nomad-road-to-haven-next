@@ -65,7 +65,7 @@ const PAL = {
     dawnSky: [0.95, 0.72, 0.55] as RGB,
     daySky: [0.82, 0.78, 0.7] as RGB,
     duskSky: [0.9, 0.45, 0.3] as RGB,
-    nightSky: [0.03, 0.05, 0.1] as RGB,
+    nightSky: [0.06, 0.09, 0.17] as RGB,
     sun: [1.0, 0.86, 0.68] as RGB,
     sunLow: [1.0, 0.55, 0.3] as RGB,
     moon: [0.4, 0.5, 0.8] as RGB,
@@ -74,7 +74,7 @@ const PAL = {
     dawnSky: [0.7, 0.72, 0.68] as RGB,
     daySky: [0.62, 0.68, 0.64] as RGB,
     duskSky: [0.75, 0.5, 0.32] as RGB,
-    nightSky: [0.02, 0.04, 0.07] as RGB,
+    nightSky: [0.05, 0.08, 0.14] as RGB,
     sun: [0.95, 0.92, 0.8] as RGB,
     sunLow: [1.0, 0.6, 0.35] as RGB,
     moon: [0.35, 0.45, 0.7] as RGB,
@@ -95,16 +95,16 @@ export function lightAt(t: number, biome: 'wasteland' | 'city'): LightState {
   sky = mix(sky, p.nightSky, night);
   const sunLowness = Math.max(dawn, dusk);
   const sunColor = mix(mix(p.sun, p.sunLow, sunLowness), p.moon, night);
-  const sunIntensity = lerp(3.4, 0.5, night) * lerp(1, 0.8, sunLowness);
-  const hemiIntensity = lerp(1.7, 0.55, night);
-  const fog = mix(sky, [0.02, 0.03, 0.06], night * 0.5);
+  const sunIntensity = lerp(3.4, 1.2, night) * lerp(1, 0.8, sunLowness);
+  const hemiIntensity = lerp(1.7, 1.0, night);
+  const fog = mix(sky, [0.02, 0.03, 0.06], night * 0.35);
   return {
     elevation: lerp(Math.max(0.34, elevation), 0.55, night),
     azimuth: lerp(-0.6, 1.2, clamp01(t)),
     sunColor,
     sunIntensity,
     hemiSky: mix(sky, [0.35, 0.45, 0.7], night * 0.7),
-    hemiGround: mix([0.35, 0.28, 0.2], [0.04, 0.05, 0.08], night),
+    hemiGround: mix([0.35, 0.28, 0.2], [0.08, 0.1, 0.15], night),
     hemiIntensity,
     fog,
     sky,

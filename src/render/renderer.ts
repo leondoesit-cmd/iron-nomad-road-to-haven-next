@@ -319,13 +319,13 @@ export class GameRenderer {
       .copy(this.sun.color)
       .multiplyScalar(this.sun.intensity * 0.22)
       .add(_z.copy(this.hemi.color).multiplyScalar(this.hemi.intensity * 0.9 + 0.12));
-    KIT.uGlow.value = 1 + l.night * 1.5;
+    KIT.uGlow.value = 1 + l.night * 0.9;
     // Exposure opens up a little at night so headlights read without crushing everything else.
     if (this.post) {
       const p = this.post.params;
-      p.exposure = lerp(1.0, 1.55, l.night);
+      p.exposure = lerp(1.0, 1.7, l.night);
       p.saturation = lerp(city ? 0.92 : 1.04, 0.85, l.night);
-      p.bloom = lerp(0.05, 0.09, l.night);
+      p.bloom = lerp(0.025, 0.035, l.night);
       if (city) {
         p.shadowTint.setRGB(0.95, 0.99, 1.04);
         p.highTint.setRGB(1.01, 1.0, 0.97);
@@ -354,12 +354,12 @@ export class GameRenderer {
     _z.set(0x000000);
     setAtmosphere(this.sunDir, _z, 0, 0, 0.1, 0);
     GLOBALS.uLight.value.copy(this.hemi.color).multiplyScalar(o.ambient * 0.6 + 0.12);
-    KIT.uGlow.value = 2.4;
+    KIT.uGlow.value = 1.6;
     if (this.post) {
       const p = this.post.params;
       p.exposure = o.exposure;
       p.saturation = 0.9;
-      p.bloom = 0.16;
+      p.bloom = 0.07;
       p.shadowTint.setRGB(0.92, 0.98, 1.06);
       p.highTint.setRGB(1.04, 1.0, 0.94);
     }

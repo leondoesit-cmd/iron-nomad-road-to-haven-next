@@ -373,8 +373,8 @@ export class Hud {
       h.setStyle('legme', 'left', `${clamp(myPos.z / L, 0, 1) * 100}%`);
       h.setStyle('legdusk', 'left', '72%');
       const sec = leg.clock.secondsToDark;
-      h.setText('clock', formatClock(sec));
-      h.setText('daytag', leg.clock.dusk ? (leg.clock.night ? 'NIGHT' : 'TO DARK') : 'TO DUSK BELL');
+      h.setText('clock', leg.clock.night ? '+' + formatClock((leg.clock.t - 1) * leg.clock.dayLength) : formatClock(sec));
+      h.setText('daytag', leg.clock.dusk ? (leg.clock.night ? 'INTO THE NIGHT' : 'TO DARK') : 'TO DUSK BELL');
       h.setStyle('legbar', 'display', '');
     } else {
       h.setStyle('legbar', 'display', 'none');
