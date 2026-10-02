@@ -987,6 +987,60 @@ export class Player implements Pilot {
     }
   }
 
+  /** Seat x offset on the chassis: the cab seats when the model has them, else the moped's centreline. */
+  private seatSide(v: Vehicle, seat: 'driver' | 'passenger'): number {
+    return v.def.seat ? v.def.seat[seat][0] : seat === 'driver' ? 0 : 0.2;
+  }
+
+  /** Drive-by: fire the sidearm from a moving vehicle, sharing the pistol's magazine and reload. */
+  private fireFromSeat(v: Vehicle, muzzle: [number, number, number]) {
+    const ctx = this.ctx;
+    if (this.fireCd > 0 || this.reloadT > 0) return;
+    if (this.mag <= 0) {
+      if (ctx.campaign.ammo > 0) {
+        this.reloadT = 1.3;
+        ctx.audio.play('reload', this.pos.x, this.pos.z, 0.5);
+      } else {
+        this.fireCd = 0.4;
+        this.note('Out of ammo: craft more at camp', 'warn');
+      }
+      return;
+    }
+    const a = this.computeAim(v);
+    const [mx, my, mz] = muzzle;
+    let dx = this.aimPoint.x - mx;
+    let dy = this.aimPoint.y - my;
+    let dz = this.aimPoint.z - mz;
+    const l = Math.hypot(dx, dy, dz);
+    if (l < 2.5) {
+      dx = a.dx;
+      dy = a.dy;
+      dz = a.dz;
+    } else {
+      dx /= l;
+      dy /= l;
+      dz /= l;
+    }
+    this.fireCd = 0.22;
+    this.mag--;
+    this.muzzleT = 0.12;
+    ctx.combat.shoot(mx, my, mz, dx, dy, dz, {
+      side: 'convoy',
+      damage: 24,
+      // Shooting off a bouncing seat is loose, and worse the faster the ride goes.
+      spread: 0.05 + Math.min(0.05, Math.abs(v.speed) * 0.003),
+      assist: it0(this.intent.aimAssist) * 0.8,
+      noise: 60,
+      range: 65,
+      headshots: true,
+      owner: this,
+    });
+    ctx.fx.flash(mx, my, mz, 0.9);
+    ctx.audio.play('pistol', mx, mz, 0.8);
+    this.cam.addShake(0.04);
+    ctx.input.rumble(this.index, 0.12, 0.25, 50);
+  }
+
   private fireGun(gun: EffectiveGun) {
     const ctx = this.ctx;
     const a = this.computeAim();
@@ -1383,6 +1437,8 @@ export class Player implements Pilot {
     }
     // Fire the vehicle gun. T2 fires along the nose; T3's gun belongs to the gunner.
     if (v.def.weapon === 'frontLMG' && (isHeld(it, Btn.RB) || (it.device === 'pad' && false))) v.fireGun(dt);
+    // No mounted gun on this ride: RB is a drive-by with the sidearm, aimed where the camera looks.
+    else if (!v.weapon && isHeld(it, Btn.RB)) this.fireFromSeat(v, v.body.toWorld(this.seatSide(v, 'driver'), 1.1, 0.2));
     // Camera toggles
     if (wasPressed(it, Btn.L3)) this.camFar = !this.camFar;
     this.lookBack = isHeld(it, Btn.R3);
@@ -1440,7 +1496,8 @@ export class Player implements Pilot {
     const a = this.computeAim(v);
     v.gunAim = { x: this.aimPoint.x, y: this.aimPoint.y, z: this.aimPoint.z };
     const firing = it.rt > 0.5 || isHeld(it, Btn.RB);
-    if (firing) {
+    if (firing && !v.weapon) this.fireFromSeat(v, v.body.toWorld(this.seatSide(v, 'passenger'), 1.1, 0.2));
+    else if (firing) {
       // Direction from the muzzle to where the reticle lands.
       const m = new THREE.Vector3();
       v.visual.muzzle.updateWorldMatrix(true, false);

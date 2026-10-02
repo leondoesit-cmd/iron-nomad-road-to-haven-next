@@ -73,7 +73,7 @@ The garage and Ledger show one vehicle, and Settings drops the Player 2 and spli
 | Left stick | Move | Steer | | Move |
 | Right stick | Aim / look | Free look | Aim gun | Aim reticle |
 | RT / LT | Fire / aim | Throttle / brake | Fire / zoom | Place / remove |
-| RB | Tap melee, hold takedown | Fire front gun | Fire | Next element |
+| RB | Tap melee, hold takedown | Fire front gun, or the sidearm if the ride has none (drive-by) | Fire | Next element |
 | LB | Swap what is in hand along your belt | | | Previous element |
 | A | Tap: jump (when nothing is in reach). Hold: loot, repair, refuel, revive | Handbrake | | Rotate |
 | B | Crouch | Tap lights, hold engine off | | Hold: ready for night |
