@@ -110,6 +110,8 @@ export class Player implements Pilot {
   commandWheel = false;
   private lookIn: [number, number] = [0, 0];
   sheet = false;
+  /** The map view: 0 is the minimap alone, 1 a larger local map, 2 the whole leg. Each tap of the map button steps on. */
+  mapMode = 0;
   // state timers
   downT = 0;
   reviveProgress = 0;
@@ -454,6 +456,8 @@ export class Player implements Pilot {
     while (this.notes.length && this.notes[0].t <= 0) this.notes.shift();
     this.commandWheel = isHeld(it, Btn.Up) && this.state !== 'dead';
     this.sheet = isHeld(it, Btn.Back) && heldFor(it, Btn.Back) > 0.25;
+    if (wasPressed(it, Btn.Down) && this.state !== 'dead') this.mapMode = (this.mapMode + 1) % this.ctx.mapModes;
+    else if (this.mapMode >= this.ctx.mapModes) this.mapMode = 0;
     if (this.fireCd > 0) this.fireCd -= dt;
     if (this.meleeCd > 0) this.meleeCd -= dt;
     if (this.muzzleT > 0) this.muzzleT -= dt;

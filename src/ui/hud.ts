@@ -12,34 +12,13 @@ import type { CampScene } from '../game/campScene';
 import type { Player } from '../game/player';
 import type { Vehicle } from '../game/vehicle';
 import { promptLabel, type Slot } from '../input/input';
+import type { MapFrame } from './mapdata';
+import { MapPainter, PIN_COLOR } from './minimap';
 
 /** The key or button a prompt names, as this seat has it bound. */
 export function btnLabel(slot: Slot | null, btn: string): string {
   return promptLabel(slot, btn);
 }
-
-const PIN_COLOR: Record<CompassPin['kind'], string> = {
-  end: '#ffe08a',
-  encounter: '#ff9a4a',
-  zone: '#8ad8ff',
-  ping: '#ffffff',
-  ambush: '#ff4a3a',
-  camp: '#ffe08a',
-  fragment: '#3ad0ff',
-  chassis: '#3aa0ff',
-  threat: '#ff4a3a',
-  watch: '#7ddc7a',
-  sector: '#ffb454',
-  hub: '#ffe08a',
-  dock: '#5ad8ff',
-  delve: '#c89aff',
-  chest: '#ffd24a',
-  key: '#7dffb0',
-  lock: '#ff7a5a',
-  exit: '#ffe08a',
-  part: '#ffb454',
-  ride: '#7ddc7a',
-};
 
 class PlayerHud {
   root: HTMLElement;
@@ -48,6 +27,7 @@ class PlayerHud {
   private compass: HTMLCanvasElement;
   private cctx: CanvasRenderingContext2D;
   private dpr = 1;
+  readonly painter = new MapPainter();
   constructor(
     host: HTMLElement,
     public index: number,
@@ -67,6 +47,7 @@ class PlayerHud {
         <canvas class="compass" data-k="compass"></canvas>
         <div class="legbar" data-k="legbar"><div class="fill" data-k="legfill"></div><div class="dusk" data-k="legdusk"></div><div class="me" data-k="legme"></div></div>
         <div class="tag"><span class="clock" data-k="clock"></span> <span data-k="daytag"></span></div>
+        <canvas class="minimap" data-k="minimap"></canvas>
       </div>
       <div class="corner bl">
         <div class="tag" data-k="vname">ON FOOT</div>
@@ -88,6 +69,7 @@ class PlayerHud {
         <div class="prompt alt" data-k="prompt2"><span class="btn x" data-k="pbtn2">X</span><span data-k="ptext2"></span></div>
       </div>
       <div class="reticle" data-k="reticle"></div>
+      <div class="mapfull" data-k="mapfull"><canvas data-k="mapcv"></canvas></div>
       <div class="msgs"><div class="sub" data-k="sub"></div><div class="tipbox" data-k="tip"></div></div>
       <div class="banner" data-k="banner"></div>
       <div class="tether" data-k="tether">PARTNER TOO FAR: REGROUP</div>
@@ -319,16 +301,42 @@ export class Hud {
     this.acc = 0;
     void step;
     const pins = scene.compassPins();
+    const frame = scene.mapFrame(pins);
     const leg = scene.mode === 'leg' ? (scene as LegScene) : null;
     for (let i = 0; i < 2; i++) {
       const h = this.huds[i];
       const p = scene.players[i];
       if (!p) continue;
-      this.updateOne(h, p, scene, pins, leg, slots[i] ?? null, extras);
+      this.updateOne(h, p, scene, pins, leg, slots[i] ?? null, extras, frame, step);
     }
   }
 
-  private updateOne(h: PlayerHud, p: Player, scene: Scene, pins: CompassPin[], leg: LegScene | null, slot: Slot | null, extras: HudExtras) {
+  /** The corner minimap, or the larger map when the seat has opened it. */
+  private updateMap(h: PlayerHud, p: Player, scene: Scene, frame: MapFrame | null, slot: Slot | null, view: { x: number; z: number; yaw: number }, dt: number) {
+    const mode = frame ? p.mapMode : 0;
+    const hostW = h.root.clientWidth || 640;
+    const hostH = h.root.clientHeight || 360;
+    const v = p.vehicle;
+    const mv = { seat: p.index, x: view.x, z: view.z, yaw: view.yaw, speed: v ? Math.abs(v.speed) : p.moveSpeed, color: PLAYER_CSS[p.index] };
+    h.setStyle('minimap', 'display', frame && mode === 0 ? 'block' : 'none');
+    h.setStyle('mapfull', 'display', frame && mode > 0 ? 'block' : 'none');
+    if (!frame) return;
+    if (mode === 0) {
+      const size = Math.round(clamp(Math.min(150 * this.uiScale, hostH * 0.3, hostW * 0.3), 84, 200));
+      h.painter.mini(h.el('minimap') as HTMLCanvasElement, frame, mv, size, dt);
+    } else {
+      const next = mode + 1 < scene.mapModes ? (frame.mode === 'leg' ? 'WHOLE LEG' : 'WIDER') : 'CLOSE';
+      // Below the compass and clock, above the vehicle and weapon blocks, so the corners stay readable around it.
+      const top = Math.round(clamp(hostH * 0.14, 36, 96 * this.uiScale));
+      const bottom = Math.round(clamp(hostH * 0.14, 36, 120 * this.uiScale));
+      const w = Math.round(hostW * 0.9);
+      const hh = Math.max(120, hostH - top - bottom);
+      h.setStyle('mapfull', 'top', `${top}px`);
+      h.painter.full(h.el('mapcv') as HTMLCanvasElement, frame, mv, mode, w, hh, `${btnLabel(slot, 'Down')} · ${next}`, this.uiScale);
+    }
+  }
+
+  private updateOne(h: PlayerHud, p: Player, scene: Scene, pins: CompassPin[], leg: LegScene | null, slot: Slot | null, extras: HudExtras, frame: MapFrame | null, dt: number) {
     const camp = scene.campaign;
     const v = p.vehicle;
     const partner = scene.players[1 - p.index];
@@ -355,6 +363,7 @@ export class Hud {
     const myPos = { x: v ? v.position.x : p.pos.x, z: v ? v.position.z : p.pos.z };
     const pp = partner ? (partner.vehicle ? partner.vehicle.position : partner.pos) : null;
     h.drawCompass(cyaw, pins, myPos, pp ? { x: pp.x, z: pp.z } : null, PLAYER_CSS[p.index], PLAYER_CSS[1 - p.index], this.uiScale);
+    this.updateMap(h, p, scene, frame, slot, { x: myPos.x, z: myPos.z, yaw: cyaw }, dt);
 
     // Leg progress and clock
     const prog = extras.legProgress?.(p);

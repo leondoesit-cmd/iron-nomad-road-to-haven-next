@@ -13,6 +13,7 @@ import { Player, type Equip, type Utility } from './player';
 import type { Zombie } from './zombies';
 import type { Infantry } from './raiders';
 import { Rng } from '../core/rng';
+import { delveBounds, known, newDelveBase, newFrame, revealDelve, type MapFrame } from '../ui/mapdata';
 
 /** What a delve remembers between visits, so cleared rooms stay cleared and opened chests stay open. */
 export interface DelveRecord {
@@ -535,6 +536,29 @@ export class DelveScene extends Scene {
       for (const u of this.raiders.units) if (!u.dead && Math.hypot(u.x - p.pos.x, u.z - p.pos.z) < 24) combat = true;
     }
     this.audio.setMusic(combat ? 'combat' : 'stealth');
+  }
+
+  /** The delve's map: only the ground the party has walked near, so a cave is drawn as it is found. */
+  mapModes = 2;
+  private frame: MapFrame | null = null;
+
+  mapFrame(pins: CompassPin[]): MapFrame | null {
+    let f = this.frame;
+    if (!f) {
+      f = this.frame = newFrame('delve');
+      f.title = this.site.name;
+      f.base = newDelveBase(this.map);
+      f.bounds = delveBounds(this.map);
+      f.radiusMin = 26;
+      f.radiusMax = 44;
+    }
+    for (const p of this.players) if (p.alive) revealDelve(f.base!, this.map, p.pos.x, p.pos.z, 9);
+    this.fillMapActors(f, true, 60);
+    for (const u of this.units) if (!u.unit.dead && f.blips.length < 80 && this.players.some((p) => p.alive && Math.hypot(u.unit.x - p.pos.x, u.unit.z - p.pos.z) < 40)) f.blips.push({ x: u.unit.x, z: u.unit.z, kind: 'foe' });
+    f.pins.length = 0;
+    // The way out is always known; everything else shows once the ground under it has been seen.
+    for (const p of pins) if (p.kind === 'exit' || known(f.base!, p.x, p.z)) f.pins.push({ x: p.x, z: p.z, kind: p.kind, label: p.label });
+    return f;
   }
 
   compassPins(): CompassPin[] {

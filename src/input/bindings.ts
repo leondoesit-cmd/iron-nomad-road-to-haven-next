@@ -30,7 +30,8 @@ export type ActionId =
   | 'wheel'
   | 'prevBuild'
   | 'nextBuild'
-  | 'sheet';
+  | 'sheet'
+  | 'map';
 
 export interface ActionDef {
   id: ActionId;
@@ -73,6 +74,7 @@ export const ACTIONS: ActionDef[] = [
   { id: 'prevBuild', label: 'Build: previous', hint: 'Camp build mode on keys (a pad uses LB)', group: 'team', btn: [Btn.Left], devices: ['kb'], optional: true },
   { id: 'nextBuild', label: 'Build: next', hint: 'Camp build mode on keys (a pad uses RB)', group: 'team', btn: [Btn.Right], devices: ['kb'], optional: true },
   { id: 'sheet', label: 'Convoy sheet', hint: 'Hold for the convoy sheet', group: 'team', pad: Btn.Back, btn: [Btn.Back], devices: ALL, optional: true },
+  { id: 'map', label: 'Map', hint: 'Tap to open the map: a closer look, then the whole leg, then close', group: 'team', pad: Btn.Down, btn: [Btn.Down], devices: ALL, optional: true },
 ];
 
 export const ACTION_BY_ID = Object.fromEntries(ACTIONS.map((a) => [a.id, a])) as Record<ActionId, ActionDef>;
@@ -106,6 +108,7 @@ const PAD_DEFAULT: PadMap = {
   camera: Btn.R3,
   wheel: Btn.Up,
   sheet: Btn.Back,
+  map: Btn.Down,
 };
 
 const KB_DEFAULT: [KeyMap, KeyMap] = [
@@ -113,13 +116,13 @@ const KB_DEFAULT: [KeyMap, KeyMap] = [
     moveUp: 'KeyW', moveDown: 'KeyS', moveLeft: 'KeyA', moveRight: 'KeyD',
     turnLeft: 'KeyQ', turnRight: 'KeyE', fire: 'KeyF', interact: 'KeyG', vehicle: 'KeyR', crouch: 'KeyC',
     sprint: 'ShiftLeft', wheel: 'Tab', reload: 'KeyT', horn: 'KeyH', swap: 'KeyV', prevBuild: 'KeyZ', nextBuild: 'KeyX',
-    view: 'KeyB', camera: 'KeyY', sheet: 'Space',
+    view: 'KeyB', camera: 'KeyY', sheet: 'Space', map: 'KeyJ',
   },
   {
     moveUp: 'ArrowUp', moveDown: 'ArrowDown', moveLeft: 'ArrowLeft', moveRight: 'ArrowRight',
     turnLeft: 'BracketLeft', turnRight: 'BracketRight', fire: 'ShiftRight', interact: 'Slash', vehicle: 'Enter', crouch: 'Period',
     sprint: 'ControlRight', wheel: 'Backspace', reload: 'Comma', horn: 'KeyM', swap: 'KeyN', prevBuild: 'Semicolon', nextBuild: 'Quote',
-    view: 'KeyP', camera: 'KeyL', sheet: 'Backslash',
+    view: 'KeyP', camera: 'KeyL', sheet: 'Backslash', map: 'KeyK',
   },
 ];
 
@@ -298,6 +301,7 @@ export const PROMPT_ACTION: Record<string, ActionId> = {
   RT: 'fire',
   L3: 'sprint',
   R3: 'camera',
+  Down: 'map',
 };
 
 // --------------------------------------------------------------------------------------- persistence

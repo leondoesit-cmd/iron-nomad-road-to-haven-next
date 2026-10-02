@@ -78,7 +78,8 @@ The garage and Ledger show one vehicle, and Settings drops the Player 2 and spli
 | B | Crouch | Tap lights, hold engine off | | Hold: ready for night |
 | X | Reload (hold: swap utility) | Tap horn, hold siren | | Assign watch post |
 | Y | Tap: switch first / third person. Hold: enter a vehicle | Tap: switch view. Hold: exit, or bail at speed | Tap: switch view. Hold: exit | |
-| D-pad | Tap ping, hold command wheel | | | |
+| D-pad ↑ | Tap ping, hold command wheel | | | |
+| D-pad ↓ | Tap map: closer look, whole leg, close | Same | Same | Same |
 | L3 / R3 | Sprint / reset camera | Camera distance / look back | | |
 | Start / Back | Pause / hold for convoy sheet | | | |
 
@@ -92,10 +93,20 @@ the prompt says *Hold*. Rebind either one and the share goes away. On the keyboa
 
 **Keyboard**: solo play can use either layout below. Player 1 uses `W A S D` to move, `Q E` to aim, `F` to fire, `G` to interact, `R` for vehicles, `C` for
 crouch and lights, `Shift` for sprint and handbrake, `Tab` for the command wheel, `V` to swap tools, `T` to reload or
-honk, `Z X` to cycle build elements, hold `Space` for the convoy sheet. Player 2 uses the arrow keys, `[ ]` to aim, `Right
+honk, `Z X` to cycle build elements, `J` for the map, hold `Space` for the convoy sheet. Player 2 uses the arrow keys, `[ ]` to aim, `Right
 Shift` to fire, `/` to interact, `Enter` for vehicles, `.` for crouch and lights, `Right Ctrl` for sprint and handbrake,
-`Backspace` for the wheel, `N` to swap tools, `,` to reload, `; '` to cycle build elements, hold `\` for the convoy sheet. Keyboard players get stronger
+`Backspace` for the wheel, `N` to swap tools, `,` to reload, `; '` to cycle build elements, `K` for the map, hold `\` for the convoy sheet. Keyboard players get stronger
 aim assist. `Esc` pauses.
+
+**Map and minimap**: each half has a round minimap under the clock, turned so up is where your camera looks and zoomed
+out as you speed up. It shows the road, the ground, both convoys and the places worth a trip: camp, Encounters, scavenge
+zones, roadside places, docks, ways underground, parked rides of yours, mined ground and any pings. Targets that are out of
+range stay on the rim as small markers so the way to them is never lost. The dead appear on it only once they are chasing and
+raiders only once they are on the road, so a map never gives away a sleeping horde. Tap the map button (D-pad down, `J` or
+`K`) to open the larger map over your half, tap again for the whole leg, and once more to close it. The whole-leg view runs
+north up in a tall half and turns to run along the screen in a wide one. Roadside places, docks and ways underground are
+drawn once the convoy has come within sight of them and stay on the map after that. Underground the map is drawn only where
+the party has walked, and at camp it is a radar of the watch posts. The map button is rebindable like the rest.
 
 **Control settings** (title and pause menu, between Settings and Controls). Every action can be rebound for the gamepad, each
 keyboard layout and the mouse, in separate tabs: pick a row, press the new button, key or mouse button. Binding something that is

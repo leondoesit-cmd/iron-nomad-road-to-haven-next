@@ -291,8 +291,8 @@ export class Overlays {
     const wasPausedOverlay = g.paused;
     const host = wasPausedOverlay ? this.pauseEl! : this.root;
     const b = g.input.settings.bindings;
-    const pad = (id: keyof typeof PROMPT_ACTION | 'wheel' | 'sheet' | 'view') => {
-      const action = id === 'wheel' || id === 'sheet' || id === 'view' ? id : PROMPT_ACTION[id];
+    const pad = (id: keyof typeof PROMPT_ACTION | 'wheel' | 'sheet' | 'view' | 'map') => {
+      const action = id === 'wheel' || id === 'sheet' || id === 'view' || id === 'map' ? id : PROMPT_ACTION[id];
       if (action === 'view' && b.pad.view === -2) return `${padLabel(b.pad.vehicle)} tap`;
       if (action === 'vehicle' && viewSharesVehicle(b.pad)) return `${padLabel(b.pad.vehicle)} hold`;
       return padLabel(padPhysical(b.pad, action));
@@ -311,13 +311,14 @@ export class Overlays {
       [pad('Y'), 'Enter any vehicle (abandoned cars become yours) · hold bail out', 'Exit · hold to bail at speed', 'Exit', 'Build wheel'],
       [pad('view'), 'Switch first / third person', 'Same: look from the cab', 'Same: look along the gun', '—'],
       ['D-pad', 'Tap ping · hold command wheel', 'Same', 'Same', 'Same'],
+      [pad('map'), 'Tap map: closer look, whole leg, close', 'Same', 'Same', 'Same'],
       [pair('L3', 'R3'), 'Sprint / reset cam', 'Camera distance / look back', 'Zoom', 'Snap grid'],
       [`Start / ${pad('sheet')}`, 'Pause · hold convoy sheet', 'Same', 'Same', 'Same'],
     ];
     const kbLine = (set: 0 | 1) => {
       const m: KeyMap = b.kb[set];
       const k = (id: keyof KeyMap) => keyLabel(m[id]);
-      return `${set === 0 ? 'P1' : 'P2'}: ${k('moveUp')} ${k('moveLeft')} ${k('moveDown')} ${k('moveRight')} move, ${k('turnLeft')} / ${k('turnRight')} aim, ${k('fire')} fire, ${k('interact')} interact, ${k('vehicle')} vehicle, ${k('view')} first / third person, ${k('crouch')} crouch / lights, ${k('sprint')} sprint / handbrake, ${k('wheel')} wheel, ${k('swap')} swap tool, ${k('prevBuild')} ${k('nextBuild')} cycle build, hold ${k('sheet')} for the convoy sheet`;
+      return `${set === 0 ? 'P1' : 'P2'}: ${k('moveUp')} ${k('moveLeft')} ${k('moveDown')} ${k('moveRight')} move, ${k('turnLeft')} / ${k('turnRight')} aim, ${k('fire')} fire, ${k('interact')} interact, ${k('vehicle')} vehicle, ${k('view')} first / third person, ${k('crouch')} crouch / lights, ${k('sprint')} sprint / handbrake, ${k('wheel')} wheel, ${k('map')} map, ${k('swap')} swap tool, ${k('prevBuild')} ${k('nextBuild')} cycle build, hold ${k('sheet')} for the convoy sheet`;
     };
     const mouse = `fire ${mouseWord(b.mouse.fire)}, aim ${mouseWord(b.mouse.aim)}, view ${mouseWord(b.mouse.view)}`;
     host.innerHTML = `<div class="menu" style="min-width:900px"><h2>Controls</h2>

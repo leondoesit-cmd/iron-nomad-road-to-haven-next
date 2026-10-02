@@ -24,6 +24,7 @@ import type { Vehicle } from './vehicle';
 import type { Zombie } from './zombies';
 import { escapeHtml, btnLabel } from '../ui/hud';
 import { disposeTree } from '../render/dispose';
+import { newFrame, type MapFrame } from '../ui/mapdata';
 
 const ARENA = 46;
 const SPAWN_R = 98;
@@ -1086,6 +1087,25 @@ export class CampScene extends Scene {
   protected updateMusicState() {
     if (this.phase === 'night' && this.waveActive) this.audio.setMusic('raid');
     else if (this.phase === 'build' || this.phase === 'ledger' || this.phase === 'dawn') this.audio.setMusic('camp');
+  }
+
+  /** Camp has no ground map: a radar of the ring around the fire, the watch posts and what is coming. */
+  mapModes = 2;
+  private frame: MapFrame | null = null;
+
+  mapFrame(pins: CompassPin[]): MapFrame | null {
+    let f = this.frame;
+    if (!f) {
+      f = this.frame = newFrame('camp');
+      f.title = this.siteName;
+      f.bounds = { x0: -70, x1: 70, z0: -70, z1: 70 };
+      f.radiusMin = 62;
+      f.radiusMax = 62;
+    }
+    this.fillMapActors(f, false);
+    f.pins.length = 0;
+    for (const p of pins) f.pins.push({ x: p.x, z: p.z, kind: p.kind, label: p.label });
+    return f;
   }
 
   compassPins(): CompassPin[] {
