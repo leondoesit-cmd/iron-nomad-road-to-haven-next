@@ -2,6 +2,7 @@ import { clamp } from '../core/math';
 
 export type SoundId =
   | 'pistol'
+  | 'shotgun'
   | 'mg'
   | 'sniper'
   | 'boom'
@@ -230,6 +231,10 @@ export class AudioEngine {
       case 'pistol':
         this.burst(out, t0, 'bandpass', 1900, 0.9, 0.9, 0.002, 0.11);
         this.tone(out, t0, 'triangle', 190, 55, 0.7, 0.002, 0.09);
+        break;
+      case 'shotgun':
+        this.burst(out, t0, 'lowpass', 2600, 0.6, 1.0, 0.002, 0.22);
+        this.tone(out, t0, 'sawtooth', 140, 45, 0.8, 0.002, 0.16);
         break;
       case 'mg':
         this.burst(out, t0, 'bandpass', 1500, 0.8, 0.55, 0.002, 0.07);

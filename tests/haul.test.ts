@@ -246,7 +246,7 @@ describe('carrying parts, fuel and oil by hand', () => {
     const { h, sc } = leg();
     ownCar(sc);
     const p = sc.players[0];
-    p.equip = 'pistol';
+    p.equip = 'gun';
     p.carry = { kind: 'oil', amount: OIL_CAN };
     const mag = p.mag;
     h.intents[0].rt = 1;

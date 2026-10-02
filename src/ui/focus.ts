@@ -18,6 +18,8 @@ export class FocusUI {
   active = false;
   /** Cursors shown: 1 when playing solo, so no second ring sits on a button nobody controls. */
   seats: 1 | 2 = 2;
+  /** When set, only this player has a cursor: a menu that belongs to one person (an inventory) ignores the other pad. */
+  owner: number | null = null;
   onCancel: (player: number) => void = () => {};
   /** Extra per-tick hook so panels can read other buttons (e.g. LB/RB tab switching). */
   onTick: ((input: InputManager) => void) | null = null;
@@ -58,7 +60,7 @@ export class FocusUI {
   paint() {
     for (const it of this.items) it.el.classList.remove('f0', 'f1');
     for (let p = 0; p < this.seats; p++) {
-      if (!this.active) continue;
+      if (!this.active || (this.owner !== null && p !== this.owner)) continue;
       const cur = this.items[this.cursor[p]];
       cur?.el.classList.add(`f${p}`);
     }
@@ -113,6 +115,7 @@ export class FocusUI {
   update(input: InputManager) {
     if (!this.active) return;
     for (let p = 0; p < 2; p++) {
+      if (this.owner !== null && p !== this.owner) continue;
       const it = input.intents[p];
       if (it.device === 'none') continue;
       for (const d of [NAV.up, NAV.down, NAV.left, NAV.right]) {

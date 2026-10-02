@@ -659,7 +659,7 @@ export class CampScene extends Scene {
     for (const g of this.ghost) g.visible = false;
     for (const p of this.players) {
       p.buildMode = false;
-      p.equip = 'pistol';
+      p.equipGun();
     }
     this.clock.frozen = false;
     this.clock.elapsed = 0.9 * this.clock.dayLength;

@@ -80,6 +80,8 @@ export interface Ctx {
   loose?: LooseWorld;
   /** Open the field workbench for a vehicle (set by the game when a UI is available). */
   openWorkbench?: (p: Player, v: Vehicle) => void;
+  /** Open a player's inventory: what they wear, hold and carry (set by the game when a UI is available). */
+  openInventory?: (p: Player) => void;
   /** Remove a barricade (rammed, breached or smashed). */
   breakBarricade(a: Aabb, how: 'ram' | 'charge' | 'smash'): void;
   groundAt(x: number, z: number): number;
@@ -91,6 +93,10 @@ export interface Ctx {
   tip(id: string): void;
   /** Loot gained by the convoy. Crew cuts are withheld automatically. */
   addLoot(gross: Partial<Stocks>, label?: string): void;
+  /** A piece of gear found by one person: their bag, else their partner's, else Scrap. */
+  addGear(by: Player, item: import('../sim/gear').GearItem): void;
+  /** How far the convoy has come, 0 to 1. */
+  readonly gearProgress: number;
   onVehicleDestroyed(v: Vehicle): void;
   /** Is a world point inside any player's view frustum (with margin)? Used so spawns never pop in view. */
   visibleToAnyView(x: number, y: number, z: number, margin?: number): boolean;

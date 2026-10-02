@@ -17,6 +17,7 @@ import { applyEncounterEffects } from './encounterFx';
 import { saveCampaign, loadCampaign } from '../save/save';
 import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { Workbench } from '../ui/garage';
+import { InventoryScreen } from '../ui/inventory';
 import type { Player } from './player';
 import type { Vehicle } from './vehicle';
 
@@ -75,7 +76,7 @@ export class Game {
     this.hud = new Hud(halves);
     this.hud.setLayout(this.R.layout);
     this.overlays = new Overlays(this);
-    this.input.onEscape = () => this.togglePause(-1);
+    this.input.onEscape = () => (this.inventory ? this.inventory.close() : this.togglePause(-1));
     // Mouse aim: click the canvas to capture the pointer. Esc (or alt-tab) releases it, which pauses.
     this.input.attachMouse(canvas);
     this.input.onChange = () => this.saveSettings();
@@ -232,6 +233,7 @@ export class Game {
     const sc = new LegScene(this.services(), leg);
     sc.onResult = (r) => this.onSceneResult(r);
     sc.openWorkbench = (p, v) => this.openWorkbench(p, v);
+    sc.openInventory = (p) => this.openInventory(p);
     this.scene = sc;
     this.phase = 'leg';
     this.paused = false;
@@ -252,6 +254,7 @@ export class Game {
     const sc = new DelveScene(this.services(), parent.leg, site, parent.delveRecord(site.id), carry);
     sc.parentTick = (dt) => parent.advanceOffscreen(dt);
     sc.onResult = (r) => this.onSceneResult(r);
+    sc.openInventory = (p) => this.openInventory(p);
     this.scene = sc;
     this.paused = false;
     this.startLock = 0.5;
@@ -309,6 +312,7 @@ export class Game {
     const camp = new CampScene(this.services(), leg, siteId, hot);
     camp.onResult = (r) => this.onSceneResult(r);
     camp.openWorkbench = (p, v) => this.openWorkbench(p, v);
+    camp.openInventory = (p) => this.openInventory(p);
     this.scene = camp;
     this.phase = 'camp';
     this.paused = false;
@@ -317,6 +321,26 @@ export class Game {
   }
 
   private workbench: Workbench | null = null;
+  private inventory: InventoryScreen | null = null;
+  /** Seconds the scene stays frozen after a menu closes, so the press that closed it is not also played. */
+  private resumeLock = 0;
+
+  /** Open one person's inventory. The game stands still while it is open. */
+  openInventory(p: Player) {
+    const sc = this.scene;
+    if (!sc || this.inventory || this.workbench || (this.phase !== 'leg' && this.phase !== 'camp')) return;
+    const back = this.phase;
+    sc.paused = true;
+    this.phase = 'vote';
+    this.inventory = new InventoryScreen(this, this.overlays.root, () => {
+      this.inventory = null;
+      sc.paused = false;
+      this.phase = back;
+      this.startLock = 0.4;
+      this.resumeLock = 0.2;
+    });
+    this.inventory.open(p);
+  }
 
   /** Open the field workbench for one of the convoy's vehicles. The game stands still while it is open. */
   openWorkbench(p: Player, v: Vehicle) {
@@ -488,7 +512,8 @@ export class Game {
       // Pause with Start from either pad.
       this.startLock = Math.max(0, this.startLock - step);
       if (this.startLock <= 0) for (let p = 0; p < 2; p++) if (wasPressed(this.input.intents[p], Btn.Start)) this.togglePause(p);
-      if (!sc.paused) {
+      if (this.resumeLock > 0) this.resumeLock -= step;
+      else if (!sc.paused) {
         this.handleCommandWheel(sc);
         sc.tick(step);
       }
