@@ -18,9 +18,11 @@ export const Btn = {
   Right: 15,
   /** Not a physical button: the first / third person switch, driven by whatever the player binds to it. */
   View: 16,
+  /** Not a physical button: jump, driven by whatever the player binds to it (A on a pad, shared with interact). */
+  Jump: 17,
 } as const;
-/** Logical buttons, including View. */
-export const BTN_COUNT = 17;
+/** Logical buttons, including View and Jump. */
+export const BTN_COUNT = 18;
 export type BtnName = keyof typeof Btn;
 
 export type DeviceKind = 'pad' | 'keyboard';
