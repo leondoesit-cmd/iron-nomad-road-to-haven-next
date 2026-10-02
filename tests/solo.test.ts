@@ -73,7 +73,7 @@ describe('solo input seats', () => {
     down('ShiftRight');
     im.pollJoin();
     expect(im.slots).toEqual([{ kind: 'kb', set: 2 }, null]);
-    down('KeyF');
+    down('KeyT');
     im.pollJoin();
     expect(im.slots).toEqual([{ kind: 'kb', set: 2 }, null]);
     expect(im.joined).toBe(1);

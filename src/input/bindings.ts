@@ -22,6 +22,7 @@ export type ActionId =
   | 'horn'
   | 'swap'
   | 'interact'
+  | 'jump'
   | 'vehicle'
   | 'crouch'
   | 'sprint'
@@ -66,6 +67,7 @@ export const ACTIONS: ActionDef[] = [
   { id: 'horn', label: 'Horn', hint: 'Tap horn, hold siren (same button as reload on a pad)', group: 'vehicle', btn: [Btn.X], devices: ['kb'], optional: true },
   { id: 'swap', label: 'Swap tool', hint: 'Gun, wrench, crowbar, jerrycan · Camp: previous element', group: 'combat', pad: Btn.LB, btn: [Btn.LB], devices: ALL },
   { id: 'interact', label: 'Interact', hint: 'Hold to loot, repair, strip, siphon, refuel, revive · Driving: handbrake on a pad', group: 'team', pad: Btn.A, btn: [Btn.A], devices: ALL },
+  { id: 'jump', label: 'Jump', hint: 'On foot: jump · On a pad this shares the interact button and jumps only when nothing is in reach', group: 'move', pad: Btn.Jump, btn: [Btn.Jump], devices: ALL, optional: true },
   { id: 'vehicle', label: 'Enter · exit vehicle', hint: 'Hold to bail out at speed · Shares the view button on a pad: tap view, hold this', group: 'vehicle', pad: Btn.Y, btn: [Btn.Y], devices: ALL },
   { id: 'view', label: 'First / third person', hint: 'Switch the camera on foot, driving and manning the gun', group: 'camera', pad: Btn.View, btn: [Btn.View], devices: ALL, optional: true },
   { id: 'camera', label: 'Reset camera · look back', hint: 'On foot: recentre · Driving: hold to look behind', group: 'camera', pad: Btn.R3, btn: [Btn.R3], devices: ALL, optional: true },
@@ -78,6 +80,12 @@ export const ACTIONS: ActionDef[] = [
 export const ACTION_BY_ID = Object.fromEntries(ACTIONS.map((a) => [a.id, a])) as Record<ActionId, ActionDef>;
 
 export const actionsFor = (d: Device) => ACTIONS.filter((a) => a.devices.includes(d));
+
+/**
+ * Actions that may sit on one pad button on purpose. Jump rides on interact: the player only jumps when the press
+ * has nothing to interact with, so the two never fight.
+ */
+const coexists = (a: ActionId, b: ActionId) => (a === 'jump' && b === 'interact') || (a === 'interact' && b === 'jump');
 
 /** Marks a pad `view` binding that rides on the vehicle button: tap switches view, hold enters or exits. */
 export const SHARED = -2;
@@ -101,6 +109,7 @@ const PAD_DEFAULT: PadMap = {
   reload: Btn.X,
   swap: Btn.LB,
   interact: Btn.A,
+  jump: Btn.A,
   vehicle: Btn.Y,
   view: SHARED,
   camera: Btn.R3,
@@ -111,13 +120,13 @@ const PAD_DEFAULT: PadMap = {
 const KB_DEFAULT: [KeyMap, KeyMap] = [
   {
     moveUp: 'KeyW', moveDown: 'KeyS', moveLeft: 'KeyA', moveRight: 'KeyD',
-    turnLeft: 'KeyQ', turnRight: 'KeyE', fire: 'KeyF', interact: 'KeyG', vehicle: 'KeyR', crouch: 'KeyC',
-    sprint: 'ShiftLeft', wheel: 'Tab', reload: 'KeyT', horn: 'KeyH', swap: 'KeyV', prevBuild: 'KeyZ', nextBuild: 'KeyX',
-    view: 'KeyB', camera: 'KeyY', sheet: 'Space',
+    turnLeft: 'KeyZ', turnRight: 'KeyX', fire: 'KeyT', interact: 'KeyE', jump: 'Space', vehicle: 'KeyF', crouch: 'KeyC',
+    sprint: 'ShiftLeft', wheel: 'KeyG', reload: 'KeyR', horn: 'KeyH', swap: 'KeyQ', prevBuild: 'Digit1', nextBuild: 'Digit2',
+    view: 'KeyB', camera: 'KeyY', sheet: 'Tab',
   },
   {
     moveUp: 'ArrowUp', moveDown: 'ArrowDown', moveLeft: 'ArrowLeft', moveRight: 'ArrowRight',
-    turnLeft: 'BracketLeft', turnRight: 'BracketRight', fire: 'ShiftRight', interact: 'Slash', vehicle: 'Enter', crouch: 'Period',
+    turnLeft: 'BracketLeft', turnRight: 'BracketRight', fire: 'ShiftRight', interact: 'Slash', jump: 'KeyO', vehicle: 'Enter', crouch: 'Period',
     sprint: 'ControlRight', wheel: 'Backspace', reload: 'Comma', horn: 'KeyM', swap: 'KeyN', prevBuild: 'Semicolon', nextBuild: 'Quote',
     view: 'KeyP', camera: 'KeyL', sheet: 'Backslash',
   },
@@ -180,7 +189,7 @@ export function assignBinding<V extends number | string>(device: Device, map: An
     }
     // A shared view follows the vehicle button, so it is never the one that clashes.
     const viewOwns = pad.view !== undefined && pad.view !== SHARED && pad.view === next;
-    const clash = pool.find((a) => a !== id && a !== 'view' && pad[a] === next) ?? (viewOwns && id !== 'view' ? 'view' : undefined);
+    const clash = pool.find((a) => a !== id && a !== 'view' && pad[a] === next && !coexists(a, id)) ?? (viewOwns && id !== 'view' ? 'view' : undefined);
     const prev = pad[id];
     pad[id] = next;
     if (clash) {
@@ -189,6 +198,11 @@ export function assignBinding<V extends number | string>(device: Device, map: An
       const home = prev === SHARED ? PAD_BUTTONS.find((b) => !Object.values(pad).includes(b)) : prev;
       if (home === undefined) delete pad[clash];
       else pad[clash] = home;
+      // Jump rides with interact, so it follows it off the button.
+      if (clash === 'interact' && id !== 'jump' && pad.jump === next) {
+        if (home === undefined) delete pad.jump;
+        else pad.jump = home;
+      }
     }
     return clash ?? null;
   }
@@ -337,7 +351,7 @@ export function importBindings(raw: unknown): Bindings {
       const v = next[a.id];
       if (v === undefined || v === SHARED) continue;
       const other = seen.get(v);
-      if (other) next[a.id] = into[a.id];
+      if (other && !coexists(other, a.id)) next[a.id] = into[a.id];
       else seen.set(v, a.id);
     }
     for (const k of Object.keys(into) as ActionId[]) delete into[k];
