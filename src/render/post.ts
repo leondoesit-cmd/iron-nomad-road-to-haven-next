@@ -162,8 +162,8 @@ export class PostFX {
   height = 0;
   params: PostParams = {
     exposure: 1,
-    bloom: 0.06,
-    bloomThreshold: 1.1,
+    bloom: 0.03,
+    bloomThreshold: 1.6,
     bloomScatter: 0.7,
     vignette: 0.32,
     grain: 0.025,

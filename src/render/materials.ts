@@ -174,7 +174,7 @@ export function pbr(color: number, rough = 0.8, metal = 0, extra: THREE.MeshStan
 }
 
 /** Emissive lens for lamps: dark glass when off, glowing when on. HDR emissive so bloom picks it up. */
-export function lampMaterials(color = 0xfff1c8, on = 6) {
+export function lampMaterials(color = 0xfff1c8, on = 3) {
   return {
     on: shared(new THREE.MeshStandardMaterial({ color: 0x222222, emissive: color, emissiveIntensity: on, roughness: 0.2, metalness: 0 })),
     off: shared(new THREE.MeshStandardMaterial({ color: 0x8c8a80, roughness: 0.15, metalness: 0.1 })),
