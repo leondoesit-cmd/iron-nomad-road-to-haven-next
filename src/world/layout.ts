@@ -6,6 +6,8 @@ import { makeTerrainDef, roadX, heightAt, roadSlope, keepOutZ, waterAt, type Sit
 import { buildRoadside, buildSite, type RuralBuilding, type SiteContent } from './settlements';
 import { isLakeSite, lakeAt } from './lakes';
 import { delveName, delveSiteKind, type DelveSite } from './delveSites';
+import { planById } from './plans';
+import type { BuildingRole, CityPlan, Facing, LandmarkKind, PlannedPlace, PlannedStreet } from './cityPlan';
 
 export type AabbKind = 'building' | 'wall' | 'car' | 'rock' | 'barricade' | 'crate' | 'pillar' | 'tower' | 'partition' | 'furniture' | 'stair' | 'floor' | 'dock';
 
@@ -73,7 +75,13 @@ export type PropKind =
   | 'caveMouth'
   | 'mineAdit'
   | 'bunkerHatch'
-  | 'metroEntrance';
+  | 'metroEntrance'
+  | 'fountain'
+  | 'plaque'
+  | 'bench'
+  | 'parkBays'
+  | 'cafeTable'
+  | 'cafeChair';
 
 export interface PropSpawn {
   kind: PropKind;
@@ -188,6 +196,15 @@ export interface Lot {
   strip: number;
   slot: number;
   kind: 'building' | 'open' | 'zone';
+  /** Planned legs: floors, facade style and tint, when the plan fixes them. */
+  floors?: number;
+  style?: number;
+  tint?: number;
+  /** Planned legs: a landmark lot. Set pieces and the metro headhouse leave it alone. */
+  landmark?: LandmarkKind;
+  /** Planned legs: a shopfront with its own drawn sign. */
+  shop?: string;
+  fixed?: boolean;
 }
 
 export interface Passage {
@@ -196,12 +213,27 @@ export interface Passage {
   x1: number;
   width: number;
   side: -1 | 1;
+  /** Planned legs: the street this is, if it has a name. */
+  street?: string;
 }
 
 export interface Slot {
   z0: number;
   z1: number;
   cross: number; // cross-street width after this block
+  /** Planned legs: the cross street after this block, if it has a name. */
+  street?: string;
+}
+
+/** A landmark building that is smaller than its lot (the rest of the lot is a forecourt or car park). */
+export interface LandmarkBuilding {
+  aabb: Aabb;
+  role: BuildingRole;
+  floors: number;
+  style: number;
+  tint?: number;
+  /** The way the main facade faces. */
+  front: Facing;
 }
 
 export interface LegLayout {
@@ -212,6 +244,11 @@ export interface LegLayout {
   strips: { x0: number; x1: number; side: -1 | 1 }[];
   passages: Passage[];
   lots: Lot[];
+  /** Planned city legs: the authored plan, paved streets and plazas, announced places and landmark buildings. */
+  plan: CityPlan | null;
+  streets: PlannedStreet[];
+  places: PlannedPlace[];
+  landmarks: LandmarkBuilding[];
   zones: ScavZone[];
   ambushes: AmbushSpec[];
   encounters: EncounterSpot[];
@@ -265,6 +302,10 @@ export class LegLayoutImpl implements LegLayout {
   strips: { x0: number; x1: number; side: -1 | 1 }[] = [];
   passages: Passage[] = [];
   lots: Lot[] = [];
+  plan: CityPlan | null = null;
+  streets: PlannedStreet[] = [];
+  places: PlannedPlace[] = [];
+  landmarks: LandmarkBuilding[] = [];
   zones: ScavZone[] = [];
   ambushes: AmbushSpec[] = [];
   encounters: EncounterSpot[] = [];
@@ -289,7 +330,10 @@ export class LegLayoutImpl implements LegLayout {
     this.leg = leg;
     this.terrain = makeTerrainDef(leg);
     this.rng = new Rng(leg.seed * 7919 + 13);
-    if (leg.biome === 'city') this.buildCityGrid();
+    if (leg.biome === 'city') {
+      if (leg.plan) this.buildPlannedGrid(planById(leg.plan));
+      else this.buildCityGrid();
+    }
     for (const s of leg.sets) this.place(s);
     this.end = { x: roadX(this.terrain, leg.length), z: leg.length, radius: 45 };
     this.start = { x: roadX(this.terrain, 12), z: 12, yaw: Math.atan2(roadSlope(this.terrain, 12), 1) };
@@ -397,6 +441,228 @@ export class LegLayoutImpl implements LegLayout {
     }
   }
 
+  // ---------------------------------------------------------------- planned city
+
+  /**
+   * The same skeleton as `buildCityGrid` (blocks, strips, passages, lots) read off an authored plan instead of dice,
+   * then the paved streets and the landmarks that make the plan a particular place.
+   */
+  private buildPlannedGrid(plan: CityPlan) {
+    this.plan = plan;
+    let z = plan.startZ;
+    for (const b of plan.blocks) {
+      this.slots.push({ z0: z, z1: z + b.len, cross: b.cross, street: b.street });
+      z += b.len + b.cross;
+    }
+    for (const side of [-1, 1] as const) {
+      let x = BOULEVARD_HALF + SIDEWALK;
+      for (const st of plan.sides[String(side) as '-1' | '1']) {
+        const x1 = x + st.w;
+        this.strips.push({ x0: side === 1 ? x : -x1, x1: side === 1 ? x1 : -x, side });
+        x = x1;
+        if (st.gap > 0) {
+          this.passages.push({ x0: side === 1 ? x : -(x + st.gap), x1: side === 1 ? x + st.gap : -x, width: st.gap, side, street: st.street });
+          x += st.gap;
+        }
+      }
+    }
+    let si = 0;
+    for (const strip of this.strips) {
+      si++;
+      const stripIndex = this.strips.filter((q) => q.side === strip.side).indexOf(strip);
+      this.slots.forEach((slot, k) => {
+        const o = plan.lots.find((l) => l.side === strip.side && l.strip === stripIndex && l.block === k);
+        const roll = hash2(k, si * 13 + stripIndex, this.leg.seed);
+        const lot: Lot = {
+          x0: strip.x0,
+          x1: strip.x1,
+          z0: slot.z0,
+          z1: slot.z1,
+          side: strip.side,
+          strip: stripIndex,
+          slot: k,
+          kind: o?.kind ?? (roll < plan.buildingShare ? 'building' : 'open'),
+        };
+        if (lot.kind === 'building') {
+          const [lo, hi] = stripIndex === 0 ? plan.floors.near : plan.floors.far;
+          lot.floors = lo + Math.floor(hash2(k * 3 + 1, si * 7 + stripIndex, this.leg.seed + 5) * (hi - lo + 1));
+        }
+        if (o) {
+          if (o.floors !== undefined) lot.floors = o.floors;
+          lot.style = o.style;
+          lot.tint = o.tint;
+          lot.landmark = o.landmark;
+          lot.shop = o.shop;
+          lot.fixed = !!(o.landmark || o.shop);
+        }
+        this.lots.push(lot);
+        this.indexLot(lot);
+      });
+    }
+    this.layOutStreets(plan);
+    this.dressLandmarks(plan);
+    this.terrain.streets = this.streets.filter((q) => (q.kind === 'asphalt' || q.kind === 'tarmac') && !q.silent).map(({ x0, x1, z0, z1 }) => ({ x0, x1, z0, z1 }));
+  }
+
+  /** Paved cross streets and side streets, plus the named places the HUD announces. */
+  private layOutStreets(plan: CityPlan) {
+    const add = (kind: PlannedStreet['kind'], x0: number, x1: number, z0: number, z1: number, street?: string, silent?: boolean) =>
+      this.streets.push({ id: `${plan.id}:st${this.streets.length}`, kind, x0, x1, z0, z1, street, silent });
+    const outW = Math.max(...this.strips.filter((q) => q.side === -1).map((q) => -q.x0));
+    const outE = Math.max(...this.strips.filter((q) => q.side === 1).map((q) => q.x1));
+    const zFirst = this.slots[0].z0;
+    const zLast = this.slots[this.slots.length - 1].z1;
+    // The spine is drawn by the road mesh; it is only here so that driving up it names the street.
+    add('asphalt', -BOULEVARD_HALF, BOULEVARD_HALF, zFirst, zLast, plan.spine, true);
+    for (const slot of this.slots) {
+      if (slot.cross < 5) continue;
+      const zA = slot.z1;
+      const zB = slot.z1 + slot.cross;
+      add('asphalt', -outW, -BOULEVARD_HALF, zA, zB, slot.street);
+      add('asphalt', BOULEVARD_HALF, outE, zA, zB, slot.street);
+      add('asphalt', -BOULEVARD_HALF, BOULEVARD_HALF, zA, zB, slot.street, true);
+    }
+    for (const p of this.passages) {
+      if (p.width < 5) continue;
+      for (const slot of this.slots) add('asphalt', p.x0, p.x1, slot.z0, slot.z1, p.street);
+    }
+    for (const pl of plan.places) {
+      const lot = this.lots.find((l) => l.side === pl.side && l.strip === pl.strip && l.slot === pl.block);
+      if (!lot) continue;
+      this.places.push({ id: pl.id, name: pl.name, sub: pl.sub, x: (lot.x0 + lot.x1) / 2, z: (lot.z0 + lot.z1) / 2, r: pl.r });
+    }
+  }
+
+  private pave(kind: 'paving' | 'lawn' | 'tarmac', x0: number, x1: number, z0: number, z1: number) {
+    this.streets.push({ id: `${this.plan?.id ?? 'plan'}:pv${this.streets.length}`, kind, x0: Math.min(x0, x1), x1: Math.max(x0, x1), z0, z1 });
+  }
+
+  private plainProp(kind: PropKind, x: number, z: number, yaw: number, scale = 1, seed = 1, tag?: number) {
+    this.props.push({ kind, x, y: 0, z, yaw, scale, seed, tag });
+  }
+
+  /** Landmark footprints, forecourts, and everything standing in them. */
+  private dressLandmarks(plan: CityPlan) {
+    const rng = new Rng(this.leg.seed ^ 0x7e11);
+    const faceYaw = (dx: number, dz: number) => Math.atan2(dx, dz);
+    const ground = (id: string, kind: PickupKind, amount: number, x: number, z: number) => this.pickups.push({ id: this.id(id), kind, amount, x, z, y: 0 });
+    const lamp = (x: number, z: number, towardX: number) => this.plainProp('streetlight', x, z, x < towardX ? 0 : Math.PI, 1, 1 + this.props.length);
+    let cluster = 6100;
+
+    for (const lot of this.lots) {
+      if (!lot.landmark) continue;
+      const o = plan.lots.find((l) => l.side === lot.side && l.strip === lot.strip && l.block === lot.slot);
+      const out = lot.side;
+      const spineEdge = out === 1 ? lot.x0 : lot.x1;
+      const cx = (lot.x0 + lot.x1) / 2;
+      const cz = (lot.z0 + lot.z1) / 2;
+      const depth = lot.x1 - lot.x0;
+      /** x at distance d from the spine edge of the lot, going away from the spine. */
+      const xAt = (d: number) => spineEdge + out * d;
+
+      // The buildings, when the landmark does not fill its lot.
+      for (const bd of o?.buildings ?? []) {
+        this.landmarks.push({
+          aabb: { id: newAabbId(), minX: lot.x0 + bd.rect[0], maxX: lot.x0 + bd.rect[1], minZ: lot.z0 + bd.rect[2], maxZ: lot.z0 + bd.rect[3], y0: 0, y1: bd.floors * 3.3, kind: 'building', hp: 99999, tint: 0 },
+          role: bd.role,
+          floors: bd.floors,
+          style: bd.style,
+          tint: bd.tint,
+          front: bd.front,
+        });
+      }
+
+      switch (lot.landmark) {
+        case 'foundersSquare': {
+          // Two levels, as the real square has: the paved street level beside Haim Ozer and a raised lawn behind it,
+          // with the fountain where the first well was dug and five plaques for the founders.
+          this.pave('paving', lot.x0, lot.x1, lot.z0, lot.z1);
+          const fx = xAt(9);
+          this.pave('lawn', xAt(18), xAt(depth - 3), lot.z0 + 6, lot.z1 - 6);
+          this.plainProp('fountain', fx, cz, 0, 1, 1);
+          // An invisible solid: the fountain prop draws the basin.
+          const r = 3.4;
+          this.aabbs.push({ id: newAabbId(), minX: fx - r, maxX: fx + r, minZ: cz - r, maxZ: cz + r, y0: 0, y1: 0.95, kind: 'pillar', hp: 9999 });
+          for (let i = 0; i < 5; i++) this.plainProp('plaque', xAt(16.6), cz + (i - 2) * 8.2, faceYaw(-out, 0), 1, i + 1);
+          for (let k = 0; k < 4; k++) {
+            const a = Math.PI / 4 + (k * Math.PI) / 2;
+            const bx = fx + Math.cos(a) * 6;
+            const bz = cz + Math.sin(a) * 6;
+            this.plainProp('bench', bx, bz, faceYaw(fx - bx, cz - bz), 1, k + 1);
+          }
+          const trees: [number, number][] = [[22, -21], [28, -12], [34, -5], [25, 9], [31, 15], [36, 22]];
+          trees.forEach(([d, dz], i) => this.plainProp('deadTree', xAt(Math.min(d, depth - 3)), cz + dz, rng.range(0, 6), rng.range(0.8, 1.2), i + 3));
+          const half = (lot.z1 - lot.z0) / 2 - 3;
+          for (const dz of [-half, half]) {
+            lamp(xAt(1.4), cz + dz, cx);
+            lamp(xAt(depth - 1.4), cz + dz, cx);
+          }
+          for (let i = 0; i < 3; i++) this.plainProp('rubble', xAt(rng.range(4, depth - 4)), cz + rng.range(-24, 24), rng.range(0, 6), 1, rng.int(0, 99));
+          ground('sq', 'scrap', 12, fx + 4.2, cz - 2.5);
+          ground('sq', 'scrap', 9, fx - 4.5, cz + 3.5);
+          ground('sq', 'rations', 1, xAt(20), cz + 6);
+          ground('sq', 'medicine', 1, xAt(24), cz - 7);
+          ground('sq', 'fuel', 5, xAt(depth - 4), lot.z0 + 5);
+          // The square is where everyone went, and some of them are still there.
+          pushZombies(this, rng, fx, cz, 9, ['walker', 'walker', 'walker', 'runner'], 11, true, cluster++);
+          pushZombies(this, rng, xAt(26), cz, 1, ['brute'], 2, true, cluster++);
+          pushZombies(this, rng, xAt(22), cz - 14, 1, ['screamer'], 2, true, cluster++);
+          break;
+        }
+        case 'greatSynagogue': {
+          // The forecourt between Hovevei Zion Street and the front steps.
+          this.pave('paving', lot.x0, lot.x1, lot.z0, lot.z1);
+          for (const dz of [-1, 1]) {
+            lamp(xAt(1.5), cz + dz * 26, cx);
+            this.plainProp('deadTree', xAt(3.2), cz + dz * 13, rng.range(0, 6), 1, 2 + dz);
+          }
+          this.plainProp('bench', xAt(2.6), cz + 6, faceYaw(out, 0), 1, 1);
+          this.plainProp('bench', xAt(2.6), cz - 6, faceYaw(out, 0), 1, 2);
+          ground('sy', 'oil', OIL_CAN, xAt(4), lot.z0 + 3);
+          break;
+        }
+        case 'cityHall': {
+          // The car park the three buildings enclose, open to the street: tarmac, two back-to-back rows of painted bays,
+          // and the cars nobody came back for. The wing and the tower sit against the far edge of the lot.
+          const lx = lot.x0 + 11;
+          this.pave('tarmac', lx, lot.x1, lot.z0 + 11, lot.z1);
+          const zBay = lot.z0 + 14;
+          for (const [row, x0] of [[0, lx + 0.5], [1, lx + 5.5]] as const) {
+            for (let k = 0; k < 3; k++) this.plainProp('parkBays', x0, zBay + 6.5 + k * 13, Math.PI / 2, 1, 1);
+            for (let i = 0; i < 15; i++) {
+              if (!rng.chance(0.4)) continue;
+              const carSeed = rng.int(0, 9999);
+              const jitter = rng.range(-0.25, 0.25);
+              this.addCar(x0 + 2.5 + rng.range(-0.3, 0.3), zBay + 1.3 + i * 2.6, (row === 0 ? -Math.PI / 2 : Math.PI / 2) + jitter * 0.1, carSeed, carSeed % 3 === 0 ? { status: 'hulk' } : {});
+            }
+          }
+          lamp(lot.x1 - 1.4, lot.z0 + 14, lx);
+          lamp(lot.x1 - 1.4, lot.z1 - 3, lx);
+          ground('ch', 'tech', 2, lx + 2, lot.z0 + 40);
+          ground('ch', 'scrap', 14, lx + 3, lot.z0 + 22);
+          ground('ch', 'medicine', 1, lx + 1.5, lot.z0 + 30);
+          // The staff who never went home.
+          pushZombies(this, rng, lx + 6, lot.z0 + 38, 6, ['walker', 'walker', 'runner'], 8, true, cluster++);
+          pushZombies(this, rng, lx + 3, lot.z0 + 50, 1, ['screamer'], 2, true, cluster++);
+          break;
+        }
+      }
+    }
+    // Shopfronts with a drawn sign: tables and chairs out on the sidewalk, and something to eat inside.
+    for (const lot of this.lots) {
+      if (!lot.shop) continue;
+      const out = lot.side;
+      const cz = (lot.z0 + lot.z1) / 2;
+      for (const dz of [-5, 0.5, 6]) {
+        this.plainProp('cafeTable', out * 8.75, cz + dz, 0, 1, 1);
+        this.plainProp('cafeChair', out * 7.85, cz + dz + 0.1, Math.PI / 2, 1, 1 + Math.round(dz));
+        this.plainProp('cafeChair', out * 9.65, cz + dz - 0.1, -Math.PI / 2, 1, 2 + Math.round(dz));
+      }
+      ground('sh', 'rations', 2, out * 9.1, cz - 2.5);
+      ground('sh', 'rations', 1, out * 9.1, cz + 3);
+    }
+  }
+
   private indexLot(lot: Lot) {
     for (let gz = Math.floor(lot.z0 / 16); gz <= Math.floor(lot.z1 / 16); gz++) {
       const key = gz;
@@ -416,6 +682,10 @@ export class LegLayoutImpl implements LegLayout {
           if (x > l.x0 - r && x < l.x1 + r && z > l.z0 - r && z < l.z1 + r) return true;
         }
       }
+    }
+    for (const lm of this.landmarks) {
+      const a = lm.aabb;
+      if (x > a.minX - r && x < a.maxX + r && z > a.minZ - r && z < a.maxZ + r) return true;
     }
     for (const a of this.aabbs) {
       if (x > a.minX - r && x < a.maxX + r && z > a.minZ - r && z < a.maxZ + r) return true;
@@ -567,7 +837,7 @@ export class LegLayoutImpl implements LegLayout {
         break;
       }
       case 'encounter': {
-        const side = rng.sign();
+        const side = (s.side as number | undefined) ?? rng.sign();
         const x = rxAt(s.at) + side * (city ? 9.5 : 7.5);
         const y = heightAt(T, x, s.at);
         this.encounters.push({ id: this.id('e'), encounter: String(s.id), x, z: s.at });
@@ -642,7 +912,7 @@ export class LegLayoutImpl implements LegLayout {
     const slot = this.slotNear(s.at);
     // Use the boulevard-facing strip lot in this slot as the zone footprint.
     const lot = this.lots.find((l) => l.slot === this.slots.indexOf(slot) && l.side === side && l.strip === 0);
-    if (!lot) return;
+    if (!lot || lot.fixed) return;
     lot.kind = 'zone';
     const w = lot.x1 - lot.x0;
     const d = lot.z1 - lot.z0;
@@ -818,6 +1088,7 @@ export class LegLayoutImpl implements LegLayout {
     const target = leg.length * rng.range(0.42, 0.55);
     const fits = (l: Lot) =>
       l.strip === 0 &&
+      !l.fixed &&
       l.kind !== 'zone' &&
       l.z1 - l.z0 >= 28 &&
       l.z0 > 240 &&

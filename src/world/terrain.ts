@@ -98,6 +98,8 @@ export interface TerrainDef {
   /** Ways underground in the open country and on lake islands. */
   delves: DelveSite[];
   theme: 'dust' | 'salt' | 'cinder';
+  /** Planned city legs: the paved side and cross streets (rectangles) beyond the boulevard. */
+  streets?: { x0: number; x1: number; z0: number; z1: number }[];
 }
 
 export function makeTerrainDef(leg: LegDef): TerrainDef {
@@ -376,7 +378,14 @@ export function baseHeight(def: TerrainDef, x: number, z: number): number {
 export function surfaceAt(def: TerrainDef, x: number, z: number): Surface {
   const rx = roadX(def, z);
   const d = Math.abs(x - rx);
-  if (def.biome === 'city') return d < def.roadHalf ? 'asphalt' : Math.abs(Math.floor(z / 7)) % 9 === 0 ? 'asphalt' : 'hardpan';
+  if (def.biome === 'city') {
+    if (d < def.roadHalf) return 'asphalt';
+    if (def.streets) {
+      for (const s of def.streets) if (x >= s.x0 && x <= s.x1 && z >= s.z0 && z <= s.z1) return 'asphalt';
+      return 'hardpan';
+    }
+    return Math.abs(Math.floor(z / 7)) % 9 === 0 ? 'asphalt' : 'hardpan';
+  }
   if (d < def.roadHalf) return 'asphalt';
   if (d < def.roadHalf + 3) return 'hardpan';
   if (def.lakes.length && lakeWater(def.lakes, x, z)) return 'mud';

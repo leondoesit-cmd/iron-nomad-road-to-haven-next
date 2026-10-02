@@ -117,6 +117,13 @@ export class Game {
     this.overlays.showTitle();
     this.layout();
     this.startAttract();
+    // Shortcut for checking a map without playing up to it: ?leg=L3P starts a fresh run on that leg.
+    const jump = new URLSearchParams(location.search).get('leg');
+    if (jump && LEGS.legs.some((l) => l.id === jump)) {
+      this.input.autoJoinKeyboard();
+      this.newCampaign();
+      this.beginLeg(jump);
+    }
     this.last = performance.now();
     requestAnimationFrame((n) => this.frame(n));
   }

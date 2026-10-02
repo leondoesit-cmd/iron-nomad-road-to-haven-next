@@ -11,6 +11,7 @@ import {
   type ScavZone,
   type ZombieSpawn,
 } from './layout';
+import type { BuildingRole, Facing, PlannedStreet } from './cityPlan';
 import { CHUNK, chunkHeights } from './terrain';
 import { hash2 } from '../core/rng';
 
@@ -19,6 +20,14 @@ export interface BuildingSpec {
   /** Floors drive window rows; 'stepped' adds a smaller upper block. */
   floors: number;
   stepped: boolean;
+  /** Planned legs: a fixed facade style (0 panel, 1 brick, 2 stucco, 3 curtain wall) and base colour. */
+  style?: number;
+  tint?: number;
+  /** A landmark building: drawn with its own roof, portico or canopy. `front` is the way its main facade faces. */
+  role?: BuildingRole;
+  front?: Facing;
+  /** A shopfront with its own drawn sign on the boulevard-facing wall. */
+  shop?: string;
 }
 
 export interface ChunkData {
@@ -35,6 +44,8 @@ export interface ChunkData {
   zones: ScavZone[];
   /** City blocks (z ranges between cross streets) overlapping this chunk: where sidewalks run. */
   blocks: { z0: number; z1: number }[];
+  /** Planned legs: paved streets, plazas and lawns overlapping this chunk. */
+  patches: PlannedStreet[];
 }
 
 const inChunk = (cx: number, cz: number, x: number, z: number) => Math.floor(x / CHUNK) === cx && Math.floor(z / CHUNK) === cz;
@@ -55,7 +66,7 @@ export class ChunkSource {
     for (const lot of L.lots) {
       if (lot.kind !== 'building') continue;
       const roll = hash2(lot.slot * 17 + lot.strip, lot.side + 5, L.leg.seed + 99);
-      const floors = lot.strip === 0 ? 2 + Math.floor(roll * 5) : 3 + Math.floor(roll * 11);
+      const floors = lot.floors ?? (lot.strip === 0 ? 2 + Math.floor(roll * 5) : 3 + Math.floor(roll * 11));
       const h = floors * 3.3;
       const aabb: Aabb = {
         id: newAabbId(),
@@ -69,7 +80,11 @@ export class ChunkSource {
         hp: 99999,
         tint: Math.floor(hash2(lot.slot, lot.strip * 3 + lot.side, 17) * 4),
       };
-      this.buildingAabbs.push({ aabb, floors, stepped: roll > 0.72 });
+      this.buildingAabbs.push({ aabb, floors, stepped: roll > 0.72 && !lot.fixed, style: lot.style, tint: lot.tint, shop: lot.shop });
+    }
+    // Landmarks smaller than their lot are not lots at all: they are buildings with a forecourt.
+    for (const lm of L.landmarks) {
+      this.buildingAabbs.push({ aabb: lm.aabb, floors: lm.floors, stepped: false, style: lm.style, tint: lm.tint, role: lm.role, front: lm.front });
     }
   }
 
@@ -93,6 +108,7 @@ export class ChunkSource {
       mines: L.mines.filter((p) => inChunk(cx, cz, p.x, p.z)),
       zones: L.zones.filter((p) => inChunk(cx, cz, p.x, p.z)),
       blocks: L.slots.filter((s) => s.z1 > cz * CHUNK && s.z0 < (cz + 1) * CHUNK).map((s) => ({ z0: s.z0, z1: s.z1 })),
+      patches: L.streets.filter((s) => !s.silent && s.x1 > cx * CHUNK && s.x0 < (cx + 1) * CHUNK && s.z1 > cz * CHUNK && s.z0 < (cz + 1) * CHUNK),
     };
     this.cache.set(key, c);
     return c;

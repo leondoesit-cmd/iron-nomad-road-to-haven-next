@@ -578,6 +578,95 @@ function fenceProto(seed: number): MeshBuilder {
   return b;
 }
 
+
+// ------------------------------------------------------------------------------------------ civic
+
+/** A round stone fountain basin with a pedestal, standing in stagnant water. About 3.4 m radius. */
+function fountainProto(seed: number): MeshBuilder {
+  const b = new MeshBuilder();
+  b.seed(seed);
+  const stone = S.concrete(0xc6c1b3, 0.18);
+  const dark = S.concrete(0x9a968b, 0.3);
+  b.lathe('fountainBasin', [[3.4, 0], [3.4, 0.78], [3.28, 0.95], [3.05, 0.95], [2.95, 0.8], [2.95, 0.5], [0, 0.5]], 0, 0, 0, stone, 0, 0, 0, 28);
+  b.cyl(0, 0.78, 0, 5.9, 0.02, 5.9, S.glass(0x2f4a3e), 0, 0, 0, 20);
+  // Pedestal, two bowls and a spout; the top bowl has cracked.
+  b.frustum(0, 1.2, 0, 0.5, 0.8, 1.4, stone, 0, 0, 0, 14);
+  b.lathe('fountainBowl', [[1.3, 0], [1.3, 0.12], [0.2, 0.3], [0.2, 0.55], [0, 0.55]], 0, 1.75, 0, stone, 0, 0, 0, 20);
+  b.rod(0, 2.1, 0, 0, 2.9, 0, 0.09, S.metal(0x6a6e70, 0.7), 6);
+  b.lathe('fountainBowlTop', [[0.7, 0], [0.7, 0.08], [0.15, 0.2], [0, 0.2]], 0, 2.8, 0, dark, 0, 0, 0, 14);
+  // A green tide mark and the odd fallen chunk.
+  b.lathe('fountainMoss', [[3.0, 0.5], [3.0, 0.62], [2.96, 0.62], [2.96, 0.5]], 0, 0.02, 0, S.concrete(0x4e6a34, 0.4), 0, 0, 0, 28);
+  const r = rng(seed + 31);
+  for (let i = 0; i < 4; i++) {
+    const a = r() * 6.28;
+    b.rbox(Math.cos(a) * 3.7, 0.1, Math.sin(a) * 3.7, 0.5, 0.2, 0.4, 0.04, dark, 0, r() * 3, 0);
+  }
+  b.groundShade(0, 0.4, 0.25);
+  return b;
+}
+
+/** A marble stele with worn lines of lettering: one of the founders' plaques. Front faces +Z. */
+function plaqueProto(seed: number): MeshBuilder {
+  const b = new MeshBuilder();
+  const r = rng(seed + 5);
+  b.rbox(0, 0.12, 0, 1.3, 0.24, 0.5, 0.03, S.concrete(0x8f8b80, 0.7));
+  b.rbox(0, 1.19, 0, 1.0, 1.9, 0.16, 0.03, S.concrete(0xd9d5c9, 0.4), 0, 0, (r() - 0.5) * 0.03);
+  for (let i = 0; i < 7; i++) b.box(0, 1.95 - i * 0.2, 0.085, 0.3 + r() * 0.4, 0.03, 0.01, S.paint(0x4a4740, 0.9));
+  b.box(0, 0.5, 0.09, 0.9, 0.04, 0.01, S.paint(0x6a5a38, 0.6));
+  return b;
+}
+
+/** A park bench: slatted seat and back on cast ends. Faces +Z. */
+function benchProto(seed: number): MeshBuilder {
+  const b = new MeshBuilder();
+  const wood = S.wood(seed % 2 ? 0x6a5038 : 0x7a6044, 0.8);
+  const iron = S.steel(0x2e3032, 0.6);
+  for (const x of [-0.8, 0.8]) {
+    b.box(x, 0.22, 0, 0.06, 0.44, 0.5, iron);
+    b.box(x, 0.7, -0.24, 0.06, 0.55, 0.05, iron, 0.18, 0, 0);
+  }
+  for (let i = 0; i < 3; i++) b.box(0, 0.46, -0.16 + i * 0.16, 1.8, 0.04, 0.12, wood);
+  for (let i = 0; i < 2; i++) b.box(0, 0.62 + i * 0.2, -0.27 - i * 0.04, 1.8, 0.1, 0.03, wood, 0.18, 0, 0);
+  return b;
+}
+
+
+/** A row of five painted parking bays (2.6 m wide, 5 m deep), centred on x with the bays running out along +Z. */
+function parkBaysProto(seed: number): MeshBuilder {
+  const b = new MeshBuilder();
+  const r = rng(seed + 3);
+  const paint = S.paint(0xd6d4c8, 0.95);
+  for (let i = 0; i <= 5; i++) b.box((i - 2.5) * 2.6, 0.052, 2.5, 0.1, 0.02, 4.7 - r() * 0.3, paint);
+  b.box(0, 0.052, 4.95, 13.1, 0.02, 0.1, paint);
+  return b;
+}
+
+/** A small square café table in black with steel legs. */
+function cafeTableProto(seed: number): MeshBuilder {
+  const b = new MeshBuilder();
+  const top = S.paint(0x232527, 0.5);
+  const leg = S.steel(0x8d9195, 0.4);
+  b.rbox(0, 0.74, 0, 0.8, 0.035, 0.8, 0.01, top);
+  b.box(0, 0.7, 0, 0.7, 0.03, 0.7, S.steel(0x5c6063, 0.5));
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) b.rod(sx * 0.34, 0, sz * 0.34, sx * 0.34, 0.72, sz * 0.34, 0.017, leg, 6);
+  if (seed % 2) b.cyl(0.22, 0.79, -0.18, 0.05, 0.08, 0.05, S.glass(0x20262a), 0, 0, 0, 8);
+  return b;
+}
+
+/** A moulded black plastic café chair. Faces +Z, the backrest behind it. */
+function cafeChairProto(seed: number): MeshBuilder {
+  const b = new MeshBuilder();
+  const plastic = S.plastic(0x16171a, 0.45);
+  b.rbox(0, 0.45, 0, 0.44, 0.045, 0.44, 0.02, plastic);
+  b.rbox(0, 0.72, -0.2, 0.42, 0.5, 0.04, 0.02, plastic, -0.12 + (seed % 3) * 0.02, 0, 0);
+  for (const sx of [-1, 1]) {
+    b.rod(sx * 0.19, 0, 0.18, sx * 0.19, 0.45, 0.18, 0.018, plastic, 6);
+    b.rod(sx * 0.19, 0, -0.2, sx * 0.19, 0.5, -0.2, 0.018, plastic, 6);
+    b.rod(sx * 0.19, 0.45, 0.18, sx * 0.19, 0.5, -0.2, 0.014, plastic, 5);
+  }
+  return b;
+}
+
 // ------------------------------------------------------------------------------------------ registry
 
 function build(kind: PropKind, seed: number, tag: number): MeshBuilder {
@@ -626,6 +715,18 @@ function build(kind: PropKind, seed: number, tag: number): MeshBuilder {
       return containerProto(seed, tag);
     case 'fence':
       return fenceProto(seed);
+    case 'fountain':
+      return fountainProto(seed);
+    case 'plaque':
+      return plaqueProto(seed);
+    case 'bench':
+      return benchProto(seed);
+    case 'parkBays':
+      return parkBaysProto(seed);
+    case 'cafeTable':
+      return cafeTableProto(seed);
+    case 'cafeChair':
+      return cafeChairProto(seed);
     default:
       return new MeshBuilder();
   }
