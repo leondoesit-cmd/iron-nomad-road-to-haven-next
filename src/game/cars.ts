@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { modelKey } from '../render/workFx';
 import { sitePos } from './hauling';
-import { partName, type PartItem } from '../sim/parts';
+import { newPart, partName, type PartItem } from '../sim/parts';
+import { colorName } from '../sim/paint';
 import { rollCar, type CarStatus } from '../sim/cars';
 import { SALVAGE_STAGES, lootText, salvageLoot, type SalvageCtx, type SalvageKind } from '../sim/salvage';
 import { newAabbId, type Aabb, type CarSpawn } from '../world/layout';
@@ -230,6 +231,11 @@ export class CarField {
     if (scrapped) text += `${text === 'Nothing worth taking' ? '' : ', '}${scrapped} Scrap (no room for the rest)`;
     p.note(text, kept.length || scrapped ? 'good' : 'info');
     if (loot.gear) ctx.addGear(p, loot.gear);
+    if (loot.paint) {
+      // A spray can rolls out of the glovebox and lands at the searcher's feet.
+      ctx.loose?.drop(p.pos.x + Math.sin(p.yaw) * 1.3, p.pos.z + Math.cos(p.yaw) * 1.3, { kind: 'paint', color: loot.paint.color, charges: loot.paint.charges });
+      p.note(`A spray can (${colorName(loot.paint.color)}): pick it up and paint a panel`, 'good');
+    }
     {
       const site = sitePos(v, (['wheel', 'hood', 'flank', 'rear'] as const)[Math.min(3, stage)]);
       const hand = new THREE.Vector3(p.pos.x, p.pos.y + 1, p.pos.z);
@@ -243,11 +249,15 @@ export class CarField {
         delete b.fit.wheels;
         v.health.comp.tires = v.health.comp.tires.map(() => 0);
       } else if (stage === 1) {
-        delete b.fit.engine;
+        // The engine is out: the bay is empty, not back to a factory motor that was never there.
+        b.fit.engine = newPart('eng_none', 1);
         v.health.comp.engine = 0;
         v.engineOn = false;
       } else if (stage === 2) {
         for (const s of ['armor', 'weapon', 'utility', 'front', 'roof', 'rear', 'side'] as const) delete b.fit[s];
+        // And the radiator behind the grille comes out with the front end.
+        b.fit.cooling = newPart('rad_none', 1);
+        v.health.comp.radiator = 0;
         v.health.hp = Math.min(v.health.hp, v.health.maxHp * 0.12);
         v.health.comp.plates = 0.1;
       }

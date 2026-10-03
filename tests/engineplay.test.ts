@@ -340,3 +340,81 @@ describe('fuel cans in the world', () => {
     expect(c.stocks.fuel).toBe(f0);
   });
 });
+
+describe('spray paint in the field', () => {
+  it('a can in your hands paints the panel you face, one charge a panel, and the model changes', () => {
+    const { h, sc } = leg();
+    const v = ownCar(sc, 'sedan');
+    const p = sc.players[0];
+    // Beside the left door, facing it.
+    const [dx, , dz] = v.body.toWorld(v.def.width / 2 + 1.1, 0, -0.1);
+    p.placeAt(dx, dz, -Math.PI / 2);
+    p.aimYaw = -Math.PI / 2;
+    p.carry = { kind: 'paint', color: 0xe0be1a, charges: 2 };
+    run(sc, 0.2);
+    expect(p.prompt?.text).toMatch(/Spray the left door Hazard Yellow \(2 left\)/);
+    expect(sc.work.ghostState(`g${p.index}`)).toBe('aimed');
+    const shell0 = v.visual.body.geometry;
+    hold(h, sc, 0, Btn.A, 2.6);
+    expect(v.build!.panels).toEqual({ doorL: 0xe0be1a });
+    expect(p.carry).toMatchObject({ kind: 'paint', charges: 1 });
+    // The vehicle was rebuilt with the new colour.
+    expect(v.visual.body.geometry).not.toBe(shell0);
+    // Already that colour: nothing to do.
+    run(sc, 0.2);
+    expect(p.prompt?.text).toMatch(/already Hazard Yellow/);
+  });
+
+  it('the last charge empties the can; a can cannot be stowed, and X sets it down', () => {
+    const { h, sc, c } = leg();
+    const v = ownCar(sc, 'hatch');
+    const p = sc.players[0];
+    const [dx, , dz] = v.body.toWorld(0, 0, -v.def.length / 2 - 1.2);
+    p.placeAt(dx, dz, 0);
+    p.aimYaw = 0;
+    p.carry = { kind: 'paint', color: 0x2a2a2a, charges: 1 };
+    hold(h, sc, 0, Btn.A, 2.6);
+    expect(v.build!.panels?.rear).toBe(0x2a2a2a);
+    expect(p.carry).toBeNull();
+    // A fresh can: X does not put it in the trunk, it sets it on the road.
+    p.carry = { kind: 'paint', color: 0x2a2a2a, charges: 3 };
+    const inv = c.inventory.length;
+    h.intents[0].device = 'keyboard';
+    h.intents[0].held |= 1 << Btn.X;
+    h.intents[0].pressed = 1 << Btn.X;
+    sc.tick(DT);
+    h.intents[0].held = 0;
+    h.intents[0].pressed = 0;
+    sc.tick(DT);
+    expect(p.carry).toBeNull();
+    expect(c.inventory.length).toBe(inv);
+    const near = sc.loose!.nearest(p.pos.x, p.pos.z, 3);
+    expect(near?.carried).toMatchObject({ kind: 'paint', color: 0x2a2a2a, charges: 3 });
+  });
+
+  it('a vehicle driving over a spray can leaves it where it lies', () => {
+    const { sc } = leg();
+    const v = ownCar(sc, 'sedan');
+    sc.loose!.drop(v.position.x, v.position.z, { kind: 'paint', color: 0x336699, charges: 4 });
+    expect(sc.players[0].tryEnter()).toBe(true);
+    run(sc, 2.5);
+    expect(sc.players[0].vehicle).toBe(v);
+    expect(sc.loose!.nearest(v.position.x, v.position.z, 6)?.carried.kind).toBe('paint');
+  });
+});
+
+describe('stripping a car', () => {
+  it('pulling the engine leaves an empty bay, not a ghost of the factory motor', () => {
+    const { h, sc } = leg();
+    const v = ownCar(sc, 'sedan');
+    v.faction = 'neutral';
+    const p = sc.players[0];
+    p.equip = 'crowbar';
+    hold(h, sc, 0, Btn.A, 3.5);
+    expect(v.salvaged).toBe(1);
+    hold(h, sc, 0, Btn.A, 6);
+    expect(v.salvaged).toBeGreaterThanOrEqual(2);
+    expect(v.build!.fit.engine?.id).toBe('eng_none');
+    expect(v.stats.noEngine).toBe(true);
+  });
+});

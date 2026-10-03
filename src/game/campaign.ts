@@ -8,6 +8,7 @@ import { addToBag, allItems, sanitizeLoadout, scrapOf, starterLoadout, type Gear
 import { DrugState, type DrugId, type DrugSave } from '../sim/drugs';
 import { fuelOf } from '../sim/engines';
 import { addReserve } from '../sim/fuel';
+import { cleanPanels } from '../sim/paint';
 
 export interface PlayerSave {
   name: string;
@@ -381,5 +382,5 @@ function sanitizeBuild(b: VehicleBuild): VehicleBuild {
   if (!Array.isArray(comp.tires) || comp.tires.length !== def.physics.wheelCount) comp.tires = fresh.tires;
   // Saves from before engines had a fuel: the tank holds whatever the engine in the bay burns.
   const tank: FuelType = FUEL_TYPES.includes(b.tank) ? b.tank : fuelOf(def, fit);
-  return { ...b, fit, comp, tank, stripe: b.stripe ?? 0, stripeColor: b.stripeColor ?? 0xe9dfc7, fuel: b.fuel ?? 1, hp: Math.max(0.01, b.hp ?? 1) };
+  return { ...b, fit, comp, tank, panels: cleanPanels(b.panels), stripe: b.stripe ?? 0, stripeColor: b.stripeColor ?? 0xe9dfc7, fuel: b.fuel ?? 1, hp: Math.max(0.01, b.hp ?? 1) };
 }

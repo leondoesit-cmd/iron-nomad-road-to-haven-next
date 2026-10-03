@@ -187,7 +187,9 @@ describe('abandoned cars in a live leg', () => {
     hold(h, sc, 0, Btn.A, 6);
     expect(v.salvaged).toBe(2);
     expect(v.health.comp.engine).toBe(0);
-    expect(v.build!.fit.engine).toBeUndefined();
+    // The bay is empty now, not back to a factory motor that was never there.
+    expect(v.build!.fit.engine?.id).toBe('eng_none');
+    expect(v.stats.noEngine).toBe(true);
     // The engine it was running on came back out of the trunk of inventory.
     expect(c.inventory.some((it) => it.id === 'eng_v6')).toBe(true);
     hold(h, sc, 0, Btn.A, 5);

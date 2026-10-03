@@ -6,6 +6,8 @@ import { acquireShell, releaseShell, type Shell } from './shellCache';
 import { heavyGun } from './parts';
 import { partDef, type VehicleDef } from '../data';
 import type { VehicleLook } from './vehicleModels';
+import { paintPanels } from './paintJob';
+import { panelSignature } from '../sim/paint';
 
 /**
  * Drivable versions of the cars standing along the road: hatchback, sedan, pickup and van.
@@ -394,6 +396,7 @@ function makeShell(def: VehicleDef, look: VehicleLook): Shell {
   const fixedGun = !!wpnPart && def.weaponMount === 'front';
   const kitLook = look;
   addKit(b, rig, fixedGun ? m : { ...m, gun: undefined }, kitLook, { nativeGun });
+  paintPanels(b, look.paint, look.panels, m);
   b.groundShade(0.0, 0.5, 0.35);
   const geo = b.build();
   geo.translate(0, -g0, 0);
@@ -403,7 +406,7 @@ function makeShell(def: VehicleDef, look: VehicleLook): Shell {
 }
 
 function shellKey(def: VehicleDef, look: VehicleLook): string {
-  return `${def.id}|${look.paint}|${look.stripe}|${look.stripeColor}|${look.seed}|${Math.round(look.wear * 10)}|${fitSignature(look.fit)}`;
+  return `${def.id}|${look.paint}|${look.stripe}|${look.stripeColor}|${look.seed}|${Math.round(look.wear * 10)}|${fitSignature(look.fit)}|${panelSignature(look.panels)}`;
 }
 
 export function buildCar(def: VehicleDef, wheelLocal: [number, number, number][], steered: boolean[], look: VehicleLook): VehicleVisual {

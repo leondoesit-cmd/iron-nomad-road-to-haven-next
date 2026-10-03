@@ -42,6 +42,30 @@ export interface Rig {
   muzzle(x: number, y: number, z: number): void;
 }
 
+/** What the engine in the bay looks like from outside. Derived from the build, so cached shells key off the fitted part ids. */
+export interface EngineLook {
+  /** Aftermarket quality 1..3, or 0 for a factory engine (even one carried over from another car). */
+  mk: number;
+  /** Not the engine this chassis was built with. */
+  swapped: boolean;
+  blown: boolean;
+  diesel: boolean;
+  /** Engine size class minus bay size class: how far it overshoots. */
+  oversize: number;
+  /** Size class of the engine itself. */
+  size: number;
+  /** The bay has been stripped. */
+  empty: boolean;
+}
+
+export interface CoolingLook {
+  /** Aftermarket quality 1..3, or 0 for the factory core. */
+  mk: number;
+  /** Rating in kW, to tell a big core from a small one. */
+  kw: number;
+  empty: boolean;
+}
+
 export interface KitLook {
   paint: number;
   stripe: number;
@@ -49,6 +73,8 @@ export interface KitLook {
   seed: number;
   fit: Fit;
   wear: number;
+  engine?: EngineLook;
+  cooling?: CoolingLook;
 }
 
 const steel = (w = 0.7) => S.steel(0x565a5d, w);
@@ -100,22 +126,40 @@ function armorKit(b: MeshBuilder, m: Mounts, mk: number, look: KitLook) {
   }
 }
 
-/** Engine visible from outside: an air-filter pod, a bonnet scoop, a supercharger and headers. */
-function engineKit(b: MeshBuilder, m: Mounts, mk: number) {
+/**
+ * Engine visible from outside. A tuned engine shows an air-filter pod, a scoop or a supercharger. An engine too big for
+ * its bay pushes up through the bonnet (more of it the more it overshoots), a swapped diesel gets an exhaust stack, and
+ * on a bike or quad the motor simply hangs out where everyone can see it.
+ */
+function engineKit(b: MeshBuilder, m: Mounts, e: EngineLook, look: KitLook) {
+  const mk = e.mk;
   if (!m.hood) {
     // Bikes and quads: a bigger expansion chamber along the flank.
     const x = m.hw * 0.9;
-    b.pipe(
-      [
-        [x, m.sill + 0.02, m.front.z * 0.2],
-        [x + 0.04, m.sill, m.rear.z * 0.3],
-        [x + 0.05, m.sill + 0.04, m.rear.z * 0.8],
-      ],
-      0.028 + mk * 0.006,
-      chromeMat(),
-      8,
-    );
-    b.limb(x + 0.04, m.sill, m.rear.z * 0.3, x + 0.05, m.sill + 0.04, m.rear.z * 0.85, 0.06 + mk * 0.01, 0.045, chromeMat(), 12);
+    if (mk > 0) {
+      b.pipe(
+        [
+          [x, m.sill + 0.02, m.front.z * 0.2],
+          [x + 0.04, m.sill, m.rear.z * 0.3],
+          [x + 0.05, m.sill + 0.04, m.rear.z * 0.8],
+        ],
+        0.028 + mk * 0.006,
+        chromeMat(),
+        8,
+      );
+      b.limb(x + 0.04, m.sill, m.rear.z * 0.3, x + 0.05, m.sill + 0.04, m.rear.z * 0.85, 0.06 + mk * 0.01, 0.045, chromeMat(), 12);
+    }
+    if (e.swapped && e.size >= 2) {
+      // A car engine bolted in where a bike motor used to be: block, heads, headers and a blower, all hanging out.
+      const s = 0.1 + 0.04 * e.size;
+      const y = m.sill + s * 0.9;
+      const z = (m.side.z0 + m.side.z1) / 2 - 0.1;
+      b.rbox(0, y, z, s * 1.6, s * 1.2, s * 2.1, 0.03, S.metal(0x55595d, 0.6));
+      b.rbox(0, y + s * 0.75, z, s * 1.45, s * 0.35, s * 1.95, 0.02, S.metal(0x8a8e92, 0.5));
+      for (let i = 0; i < Math.min(8, e.size * 2); i++) b.cyl(-s * 0.5 + (i % 2) * s, y + s * 0.95, z - s * 0.8 + Math.floor(i / 2) * s * 0.5, 0.045, 0.09, 0.045, chromeMat(), 0, 0, 0, 8);
+      for (const sx of [1, -1]) b.pipe([[sx * s * 0.8, y, z + s * 0.9], [sx * (s * 0.8 + 0.08), y - s * 0.4, z], [sx * (s * 0.8 + 0.1), y - s * 0.5, z - s * 1.4]], 0.03, S.metal(0x8a5a3a, 0.7), 8);
+      if (e.blown) b.cyl(0, y + s * 1.15, z, s * 0.9, s * 0.45, s * 0.9, S.steel(0x2a2c2f), 0, 0, 0, 14);
+    }
     return;
   }
   const h = m.hood;
@@ -126,7 +170,7 @@ function engineKit(b: MeshBuilder, m: Mounts, mk: number) {
   } else if (mk === 2) {
     b.rbox(0, h.y + 0.07, zc, h.hw * 0.7, 0.12, (h.z1 - h.z0) * 0.42, 0.04, S.steel(0x3c4044, 0.6), -0.08, 0, 0);
     b.box(0, h.y + 0.06, zc + (h.z1 - h.z0) * 0.21, h.hw * 0.62, 0.07, 0.02, S.plastic(0x0c0c0c));
-  } else {
+  } else if (mk >= 3) {
     // Blower poking through the bonnet, with eight chrome stacks and fat headers out of the wings.
     b.rbox(0, h.y + 0.13, zc, h.hw * 0.62, 0.22, (h.z1 - h.z0) * 0.4, 0.05, S.metal(0x6a6e72, 0.4));
     b.cyl(0, h.y + 0.27, zc, 0.22, 0.12, 0.34, S.steel(0x25272a), 0, 0, 0, 14);
@@ -142,6 +186,53 @@ function engineKit(b: MeshBuilder, m: Mounts, mk: number) {
         S.metal(0x8a5a3a, 0.7),
         8,
       );
+    }
+  }
+  // An engine bigger than the bay: the bonnet is cut and the block shows through.
+  if (e.swapped && e.oversize >= 2) {
+    const up = 0.05 + 0.045 * e.oversize;
+    const body = S.paint(look.paint, Math.min(1, look.wear + 0.2));
+    b.rbox(0, h.y + up * 0.5, zc, h.hw * (1.05 + 0.05 * e.oversize), up + 0.06, (h.z1 - h.z0) * 0.62, 0.05, body);
+    b.rbox(0, h.y + up * 0.95, zc, h.hw * 0.9, 0.04, (h.z1 - h.z0) * 0.5, 0.02, S.steel(0x1c1e20, 0.6));
+    if (e.oversize >= 3) {
+      for (let i = 0; i < 6; i++) b.cyl(-h.hw * 0.36 + (i % 3) * h.hw * 0.36, h.y + up + 0.1, zc - 0.12 + Math.floor(i / 3) * 0.26, 0.07, 0.2, 0.07, chromeMat(), 0, 0, 0, 8);
+      if (e.blown) b.cyl(0, h.y + up + 0.13, zc, 0.3, 0.2, 0.4, S.steel(0x25272a), 0, 0, 0, 14);
+    }
+  }
+  // A diesel in a car that left the factory on petrol: an upright exhaust stack behind the cab.
+  if (e.diesel && e.swapped) {
+    const z = m.roof ? m.roof.z0 - 0.02 : m.rear.z + 0.5;
+    const top = (m.roof?.y ?? m.side.y1) + 0.12;
+    const x = -(m.hw + 0.05);
+    b.pipe([[x, m.sill + 0.05, z - 0.25], [x, m.sill + 0.12, z], [x, top, z]], 0.045, chromeMat(), 8);
+    b.cyl(x, top + 0.04, z, 0.12, 0.05, 0.12, S.steel(0x2a2c2f), 0, 0, 0, 10);
+  }
+}
+
+/** A radiator that is not the factory one shows through the grille: a finned core, coloured tanks, fans on the big ones. */
+function coolingKit(b: MeshBuilder, m: Mounts, c: CoolingLook) {
+  if (c.mk <= 0 || c.empty) return;
+  const F = m.front.z;
+  const y = m.front.y + (m.narrow ? 0.06 : 0.16);
+  const w = Math.max(0.14, m.front.hw * (m.narrow ? 1.5 : 1.3));
+  const hgt = (m.narrow ? 0.14 : 0.2) + c.mk * 0.04;
+  const alu = c.mk >= 3 ? S.metal(0xc4c8cc, 0.4) : c.mk === 2 ? S.metal(0xa8acb0, 0.5) : S.steel(0x3a3d40, 0.7);
+  b.rbox(0, y, F - 0.025, w * 2, hgt, 0.07, 0.015, alu);
+  const n = Math.max(4, Math.round(w * 11));
+  for (let i = 0; i < n; i++) b.box(-w + (i + 0.5) * ((w * 2) / n), y, F + 0.012, 0.008, hgt * 0.8, 0.01, dark());
+  if (c.mk >= 2) {
+    // Coloured end tanks and a hose up to the engine.
+    for (const sx of [1, -1]) {
+      b.rbox(sx * (w + 0.015), y, F - 0.025, 0.05, hgt + 0.03, 0.08, 0.015, S.paint(c.mk >= 3 ? 0xe07a1a : 0xc23a1a, 0.4));
+      b.pipe([[sx * (w + 0.03), y + hgt * 0.4, F - 0.03], [sx * (w + 0.06), y + hgt * 0.9, F - 0.2]], 0.014, S.rubber(0x1c1c1e), 6);
+    }
+  }
+  if (c.mk >= 3 || c.kw >= 400) {
+    // A second core behind the first, and twin fans showing at the sides.
+    b.rbox(0, y - hgt * 0.35, F - 0.1, w * 1.9, hgt * 0.6, 0.06, 0.012, S.metal(0x6a6e72, 0.5));
+    for (const sx of [1, -1]) {
+      b.cyl(sx * w * 0.5, y, F - 0.07, hgt * 0.85, 0.03, hgt * 0.85, S.plastic(0x141414), Math.PI / 2, 0, 0, 14);
+      b.cyl(sx * w * 0.5, y, F - 0.05, hgt * 0.2, 0.04, hgt * 0.2, S.steel(0x5a5d60), Math.PI / 2, 0, 0, 8);
     }
   }
 }
@@ -377,8 +468,8 @@ export function addKit(b: MeshBuilder, rig: Rig, m: Mounts, look: KitLook, o: { 
   paintDetails(b, m, look);
   const arm = mkOf(fit, 'armor');
   if (arm) armorKit(b, m, arm, look);
-  const eng = mkOf(fit, 'engine');
-  if (eng) engineKit(b, m, eng);
+  if (look.engine && !look.engine.empty) engineKit(b, m, look.engine, look);
+  if (look.cooling) coolingKit(b, m, look.cooling);
   const wpn = mkOf(fit, 'weapon');
   if (wpn || o.nativeGun) weaponKit(b, rig, m, wpn, o.nativeGun);
   const utl = mkOf(fit, 'utility');

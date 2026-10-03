@@ -784,6 +784,18 @@ function pickupGeometry(kind: string): THREE.BufferGeometry {
   const b = new MeshBuilder();
   b.jitter = 0.03;
   const steel = S.steel(0x6a6e72, 0.6);
+  if (kind.startsWith('paint:')) {
+    // A spray can standing on the ground: black body, a cap in the paint's colour, a nozzle and a label band.
+    const col = parseInt(kind.slice(6), 16) || 0xffffff;
+    b.cyl(0, 0.17, 0, 0.11, 0.34, 0.11, S.metal(0x2a2c2f, 0.5), 0, 0, 0, 14);
+    b.cyl(0, 0.17, 0, 0.115, 0.14, 0.115, S.paint(col, 0.3), 0, 0, 0, 14);
+    b.cyl(0, 0.36, 0, 0.08, 0.06, 0.08, S.paint(col, 0.3), 0, 0, 0, 12);
+    b.cyl(0, 0.4, 0, 0.035, 0.04, 0.035, S.plastic(0xe6e0d0), 0, 0, 0, 8);
+    b.box(0, 0.25, 0.058, 0.05, 0.1, 0.004, S.glow(0xe8c020, 0.8));
+    g = shared(b.build());
+    pickupGeo.set(kind, g);
+    return g;
+  }
   switch (kind) {
     case 'fuel':
       jerryCan(b, 0, 0, 0, C.fuel, 0.3);
@@ -832,6 +844,56 @@ function pickupGeometry(kind: string): THREE.BufferGeometry {
       b.box(0, 0.27, 0, 0.3, 0.03, 0.06, S.metal(0x2a2a2a));
       b.box(0.1, 0.14, 0.101, 0.14, 0.05, 0.005, S.paint(0xd8c050, 0.5));
       break;
+    case 'engine1':
+    case 'engine2':
+    case 'engine3': {
+      // An engine block on a shipping stand: heads, intake, pulley and exhaust manifold. Better engines show brass and chrome.
+      const mk = Number(kind.slice(6));
+      b.rbox(0, 0.05, 0, 0.7, 0.07, 0.44, 0.015, S.steel(0x2e3134, 0.7));
+      for (const sx of [1, -1]) b.box(sx * 0.3, 0.14, 0, 0.05, 0.14, 0.4, S.steel(0x3a3d40, 0.7));
+      b.rbox(0, 0.28, 0, 0.52, 0.28, 0.34, 0.03, S.metal(0x5a5e62, 0.6));
+      b.rbox(0, 0.46, 0, 0.5, 0.1, 0.32, 0.02, S.metal(mk >= 3 ? 0xb89a52 : 0x8a8e92, 0.5));
+      for (let i = 0; i < 4; i++) b.cyl(-0.18 + i * 0.12, 0.55, 0, 0.065, 0.1, 0.065, mk >= 2 ? S.chrome() : S.steel(0x5a5d60), 0, 0, 0, 8);
+      b.cyl(0.3, 0.28, 0, 0.2, 0.06, 0.2, S.steel(0x2a2c2e), 0, 0, Math.PI / 2, 14);
+      b.cyl(0.33, 0.28, 0, 0.1, 0.04, 0.1, S.chrome(), 0, 0, Math.PI / 2, 10);
+      b.rod(-0.22, 0.22, 0.18, 0.22, 0.22, 0.18, 0.028, S.metal(0x7a4a2a, 0.7), 8);
+      b.rbox(-0.1, 0.17, -0.19, 0.3, 0.1, 0.05, 0.01, S.steel(0x2e3134, 0.6));
+      if (mk >= 3) b.cyl(0, 0.62, 0, 0.26, 0.12, 0.3, S.steel(0x25272a), 0, 0, 0, 14);
+      if (mk >= 2) b.box(-0.06, 0.5, -0.17, 0.2, 0.02, 0.04, S.glow(mk >= 3 ? 0xffb454 : 0x7ddc7a, 2));
+      break;
+    }
+    case 'radiator1':
+    case 'radiator2':
+    case 'radiator3': {
+      // A finned core between two end tanks, hoses sticking out; the big ones carry a fan shroud.
+      const mk = Number(kind.slice(8));
+      const alu = mk >= 3 ? S.metal(0xc4c8cc, 0.4) : mk === 2 ? S.metal(0xa8acb0, 0.5) : S.steel(0x3a3d40, 0.7);
+      b.rbox(0, 0.3, 0, 0.62, 0.42, 0.07, 0.012, alu);
+      for (let i = 0; i < 15; i++) b.box(-0.29 + i * 0.0415, 0.3, 0.04, 0.011, 0.38, 0.01, S.steel(0x1c1d1f, 0.6));
+      for (const y of [0.54, 0.06]) b.rbox(0, y, 0, 0.66, 0.08, 0.1, 0.015, mk >= 2 ? S.paint(mk >= 3 ? 0xe07a1a : 0xc23a1a, 0.4) : S.steel(0x4a4d50, 0.7));
+      b.cyl(-0.26, 0.6, 0, 0.07, 0.1, 0.07, S.metal(0xb8b0a0, 0.4), 0, 0, 0, 10);
+      b.cyl(0.33, 0.52, 0, 0.06, 0.14, 0.06, S.rubber(0x1c1c1e), 0, 0, Math.PI / 2, 8);
+      if (mk >= 2) b.cyl(0, 0.3, -0.06, 0.44, 0.04, 0.44, S.plastic(0x141414), Math.PI / 2, 0, 0, 16);
+      break;
+    }
+    case 'tyre1':
+    case 'tyre2':
+    case 'tyre3': {
+      // A tyre on its rim, standing on its tread. Rougher quality tyres have blocks; the best have beadlock bolts.
+      const mk = Number(kind.slice(4));
+      b.torus(0, 0.3, 0, 0.23, 0.095, S.rubber(0x161618), 0, 0, 0, 10, 28);
+      b.cyl(0, 0.3, 0, 0.3, 0.13, 0.3, mk >= 3 ? S.metal(0x3a3c40, 0.5) : S.metal(0x8a8e92, 0.5), Math.PI / 2, 0, 0, 16);
+      b.cyl(0, 0.3, 0.02, 0.1, 0.16, 0.1, S.steel(0x5a5d60), Math.PI / 2, 0, 0, 8);
+      if (mk >= 2) for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        b.box(Math.cos(a) * 0.3, 0.3 + Math.sin(a) * 0.3, 0, 0.06, 0.06, 0.16, S.rubber(0x1c1c1e), 0, 0, a);
+      }
+      if (mk >= 3) for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        b.cyl(Math.cos(a) * 0.19, 0.3 + Math.sin(a) * 0.19, 0.075, 0.025, 0.02, 0.025, S.chrome(), Math.PI / 2, 0, 0, 6);
+      }
+      break;
+    }
     case 'part1':
     case 'part2':
     case 'part3': {
@@ -875,7 +937,7 @@ export function makeCarryModel(kind: string): THREE.Group {
   const g = new THREE.Group();
   const m = new THREE.Mesh(pickupGeometry(kind), pickupMat);
   m.castShadow = true;
-  m.scale.setScalar(kind.startsWith('part') ? 0.9 : 1.1);
+  m.scale.setScalar(/^(part|engine|radiator|tyre)\d$/.test(kind) ? 0.9 : 1.1);
   g.add(m);
   return g;
 }
@@ -896,6 +958,15 @@ const GLOW: Record<string, number> = {
   part1: 0xe6dcc0,
   part2: 0x7ddc7a,
   part3: 0xffb454,
+  engine1: 0xe6dcc0,
+  engine2: 0x7ddc7a,
+  engine3: 0xffb454,
+  radiator1: 0xe6dcc0,
+  radiator2: 0x7ddc7a,
+  radiator3: 0xffb454,
+  tyre1: 0xe6dcc0,
+  tyre2: 0x7ddc7a,
+  tyre3: 0xffb454,
 };
 
 export function makePickup(kind: string): PickupModel {

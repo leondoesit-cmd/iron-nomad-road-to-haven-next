@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { partDef, type PartSlot } from '../data';
 import { MK_CSS, SLOT_SITE, modelKey, type GhostAnchor, type Site } from '../render/workFx';
-import { socketDistance, socketFor, type Anchor, type Socket } from '../render/sockets';
+import { panelAnchor, socketDistance, socketFor, type Anchor, type Socket } from '../render/sockets';
+import { PANEL_NAME, colorName, panelColor, paintPanel, panelsOf, type PanelId } from '../sim/paint';
 import { OIL_RESERVE_MAX } from './campaign';
 import { carriedName, carryModelKey, inspectLines, liftSecs, partInspect, planFit, planStow, pourFuel, type Carried } from '../sim/carry';
 import { currentCond, idInSlot, installPart } from '../sim/garage';
@@ -126,6 +127,97 @@ function aimedSocket(p: Player, v: Vehicle, within: number): SocketHit | null {
   return best;
 }
 
+export interface PanelHit {
+  panel: PanelId;
+  anchor: Anchor;
+  dist: number;
+}
+
+/** Of one vehicle's panels, the one the player is standing nearest and facing. */
+function aimedPanel(p: Player, v: Vehicle, within = 3.4): PanelHit | null {
+  const [lx, ly, lz] = toLocal(v, p.pos.x, p.pos.y + 1.0, p.pos.z);
+  const fx = Math.sin(p.aimYaw);
+  const fz = Math.cos(p.aimYaw);
+  let best: PanelHit | null = null;
+  let bs = Infinity;
+  for (const panel of panelsOf(v.def)) {
+    const a = panelAnchor(v.def, panel);
+    if (!a) continue;
+    const dist = Math.hypot(a.x - lx, (a.y - ly) * 0.5, a.z - lz);
+    if (dist > within) continue;
+    const w = anchorWorld(v, a);
+    const dx = w.x - p.pos.x;
+    const dz = w.z - p.pos.z;
+    const l = Math.hypot(dx, dz) || 1;
+    const score = dist - 1.4 * Math.max(0, (dx * fx + dz * fz) / l);
+    if (score < bs) {
+      bs = score;
+      best = { panel, anchor: a, dist };
+    }
+  }
+  return best;
+}
+
+function panelGhost(v: Vehicle, a: Anchor): GhostAnchor[] {
+  const r = v.body.body.rotation();
+  return [{ pos: anchorWorld(v, a), quat: new THREE.Quaternion(r.x, r.y, r.z, r.w), size: [a.sx + 0.05, a.sy + 0.05, a.sz + 0.05] }];
+}
+
+type Can = Extract<Carried, { kind: 'paint' }>;
+
+/** Hold A with a spray can: paint the panel you are facing. */
+function sprayCandidate(p: Player, c: Can): Cand | null {
+  const ctx = p.ctx;
+  const v = ownRideNear(p);
+  if (!v?.build) return null;
+  const hit = aimedPanel(p, v);
+  if (!hit) {
+    return { kind: 'spray', prompt: 'Step up to a panel to spray it', dur: 1, target: v, ok: false, label: 'spray', run: () => {} };
+  }
+  const b = v.build;
+  const name = PANEL_NAME[hit.panel].toLowerCase();
+  const already = panelColor(b.paint, b.panels, hit.panel) === c.color;
+  const moving = Math.abs(v.speed) > 2;
+  const rgb: [number, number, number] = [((c.color >> 16) & 255) / 255, ((c.color >> 8) & 255) / 255, (c.color & 255) / 255];
+  return {
+    kind: 'spray',
+    prompt: moving ? `${v.def.name} is moving` : already ? `The ${name} is already ${colorName(c.color)}` : `Spray the ${name} ${colorName(c.color)} (${c.charges} left)`,
+    dur: 2,
+    target: `${v.id}:${hit.panel}`,
+    ok: !already && !moving,
+    label: 'spray',
+    noise: 14,
+    run: () => {
+      if (p.carry !== c) return;
+      v.commit();
+      paintPanel(b, hit.panel, c.color);
+      v.syncFromBuild();
+      c.charges--;
+      if (c.charges <= 0) {
+        p.carry = null;
+        p.note('The can is empty', 'info');
+      }
+      const at = anchorWorld(v, hit.anchor);
+      ctx.audio.play('pickup', v.position.x, v.position.z, 0.6);
+      ctx.work.label(`${PANEL_NAME[hit.panel]}  ${colorName(c.color)}`, `#${c.color.toString(16).padStart(6, '0')}`, at.clone().add(new THREE.Vector3(0, 0.9, 0)));
+      ctx.work.burst(at, 1, 0.5);
+      p.note(`${PANEL_NAME[hit.panel]} sprayed ${colorName(c.color)}${p.carry ? `: ${c.charges} left in the can` : ''}`, 'good');
+    },
+    tick: () => {
+      const from = handPos(p);
+      const to = anchorWorld(v, hit.anchor);
+      // A spray of paint from the nozzle to the panel, thickening as the hold fills.
+      const k = p.action ? p.action.t / p.action.dur : 0;
+      for (let i = 0; i < 2; i++) {
+        const t = Math.random();
+        ctx.fx.puff(from.x + (to.x - from.x) * t + (Math.random() - 0.5) * 0.15, from.y + (to.y - from.y) * t + (Math.random() - 0.5) * 0.15, from.z + (to.z - from.z) * t + (Math.random() - 0.5) * 0.15, rgb[0], rgb[1], rgb[2], 0.12 + 0.25 * k, 0.5);
+      }
+      ctx.work.ghost(`g${p.index}`, panelGhost(v, hit.anchor), 'aimed');
+      return true;
+    },
+  };
+}
+
 /**
  * Every tick: outlines where a carried part goes (white from afar, green and filled when you are in reach, red when
  * the place is right but the job is not), a tag on the spot, and tags over loose parts and fitted ones you inspect.
@@ -147,6 +239,12 @@ export function guide(p: Player) {
       const lines = [{ text: sock.label, css: '#cfc8b4' }, { text: cur ? `Now: ${partDef(cur).name}${v.build && cur ? ` ${Math.round(currentCond(v.build, slot) * 100)}%` : ''}` : 'Empty mount', css: '#e6dcc0' }, { text: moving ? 'Wait for it to stop' : `Attach ${partDef(item.id).name}`, css: moving ? '#ff8a6a' : '#8cf08c' }];
       ctx.work.tag(`t${p.index}`, lines, anchorWorld(v, anchor).add(new THREE.Vector3(0, 0.9, 0)));
     }
+    return;
+  }
+  if (p.carry?.kind === 'paint') {
+    const v = ownRideNear(p);
+    const hit = v ? aimedPanel(p, v) : null;
+    if (v && hit && !p.action) ctx.work.ghost(`g${p.index}`, panelGhost(v, hit.anchor), 'aimed');
     return;
   }
   if (p.carry) return;
@@ -196,6 +294,7 @@ export function haulCandidate(p: Player): Cand | null {
     };
   }
   const c = p.carry;
+  if (c.kind === 'paint') return sprayCandidate(p, c);
   let v = ownRideNear(p);
   let hit: SocketHit | null = null;
   if (c.kind === 'part') {
@@ -374,7 +473,10 @@ export function returnCarry(p: Player) {
   p.carry = null;
   if (c.kind === 'part') camp.addPart(c.item);
   else if (c.kind === 'fuel') camp.stowFuel(c.amount, c.fuel ?? 'petrol');
-  else if (camp.stowOil(c.amount) < c.amount - 0.02) camp.stocks.scrap += 1;
+  else if (c.kind === 'oil') {
+    if (camp.stowOil(c.amount) < c.amount - 0.02) camp.stocks.scrap += 1;
+  }
+  // A spray can has no place in the trucks: it is simply left behind.
 }
 
 /** Climbing in with full hands: it goes in the trunk if it fits, otherwise it is set down beside the car. */
@@ -387,7 +489,7 @@ export function stashBeforeEntering(p: Player) {
 /** X while carrying: stow it at your car, or set it down anywhere else. */
 export function haulKey(p: Player) {
   if (!p.carry) return;
-  if (ownRideNear(p)) stowCarry(p);
+  if (p.carry.kind !== 'paint' && ownRideNear(p)) stowCarry(p);
   else dropCarry(p);
 }
 

@@ -7,7 +7,11 @@ import type { VehicleBuild } from '../sim/garage';
 import type { Fit } from '../sim/parts';
 import { partDef } from '../data';
 import { bedroll, crate, exhaust, heavyGun, jerryCan, plate, rivets, shock, signPlate, spareTyre, strap } from './parts';
-import { addKit, type KitLook, type Mounts } from './attachments';
+import { addKit, type CoolingLook, type EngineLook, type KitLook, type Mounts } from './attachments';
+import { bayFit, engineDef, radiatorDef } from '../sim/engines';
+import { defOf } from '../sim/garage';
+import { paintPanels } from './paintJob';
+import type { PanelPaint } from '../sim/paint';
 import { addWheels, blank, bodyMat, finish, headlamp, liveRig, rider, taillight, wheelSpec, type VehicleVisual } from './vehicleKit';
 import { buildCar, carMounts } from './carModels';
 
@@ -22,10 +26,27 @@ export interface VehicleLook {
   fit: Fit;
   /** 0..1: grime and rust. */
   wear: number;
+  engine?: EngineLook;
+  cooling?: CoolingLook;
+  /** Panels sprayed another colour. */
+  panels?: PanelPaint;
+}
+
+/** What the engine and radiator look like from outside, for a build. */
+function powertrainLook(b: VehicleBuild): { engine?: EngineLook; cooling?: CoolingLook } {
+  const def = defOf(b);
+  const e = engineDef(def, b.fit);
+  const r = radiatorDef(def, b.fit);
+  if (!e?.engine) return {};
+  const bay = bayFit(def, e.engine);
+  return {
+    engine: { mk: e.stock ? 0 : e.mk, swapped: e.id !== def.stockEngine, blown: !!e.engine.blown, diesel: e.engine.fuel === 'diesel', oversize: bay.oversize, size: e.engine.size, empty: !!e.empty },
+    cooling: r ? { mk: r.stock ? 0 : r.mk, kw: r.cooling ?? 0, empty: !!r.empty } : undefined,
+  };
 }
 
 export function lookOf(b: VehicleBuild): VehicleLook {
-  return { paint: b.paint, stripe: b.stripe, stripeColor: b.stripeColor, seed: b.seed, fit: b.fit, wear: Math.min(0.95, 0.4 + (1 - b.hp) * 0.5) };
+  return { paint: b.paint, stripe: b.stripe, stripeColor: b.stripeColor, seed: b.seed, fit: b.fit, wear: Math.min(0.95, 0.4 + (1 - b.hp) * 0.5), panels: b.panels, ...powertrainLook(b) };
 }
 export function defaultLook(color: number): VehicleLook {
   return { paint: color, stripe: 0, stripeColor: 0xe9dfc7, seed: 1, fit: {}, wear: 0.55 };
@@ -144,6 +165,7 @@ export function buildMoped(def: VehicleDef, wheelLocal: [number, number, number]
   taillight(v, 0.1, 0.02, -1.0, 0.04, 0.03, true);
   taillight(v, -0.1, 0.02, -1.0, 0.04, 0.03, true);
   addKit(b, liveRig(v, b), MOPED_MOUNTS, kitLook(look), { nativeGun: false });
+  paintPanels(b, look.paint, look.panels, MOPED_MOUNTS);
   const bodyGeo = b.build();
   const ws = wheelSpec(def, mkOf(look.fit, 'wheels'));
   addWheels(v, def, wheelLocal, steered, ws.width, ws.style);
@@ -243,6 +265,7 @@ export function buildQuad(def: VehicleDef, wheelLocal: [number, number, number][
   taillight(v, 0.2, 0.18, -1.1);
   taillight(v, -0.2, 0.18, -1.1);
   addKit(b, liveRig(v, b), QUAD_MOUNTS, kitLook(look), { nativeGun: true });
+  paintPanels(b, look.paint, look.panels, QUAD_MOUNTS);
   const bodyGeo = b.build();
   const ws = wheelSpec(def, mkOf(look.fit, 'wheels'));
   addWheels(v, def, wheelLocal, steered, ws.width, ws.style);
@@ -374,6 +397,7 @@ export function buildBuggy(def: VehicleDef, wheelLocal: [number, number, number]
   taillight(v, 0.55, 0.08, -2.08, 0.14, 0.08);
   taillight(v, -0.55, 0.08, -2.08, 0.14, 0.08);
   addKit(b, liveRig(v, b), BUGGY_MOUNTS, kitLook(look), { nativeGun: false });
+  paintPanels(b, look.paint, look.panels, BUGGY_MOUNTS);
   const bodyGeo = b.build();
   const ws = wheelSpec(def, mkOf(look.fit, 'wheels'));
   addWheels(v, def, wheelLocal, steered, ws.width, ws.style);

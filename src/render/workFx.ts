@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { partDef } from '../data';
 import type { PartItem } from '../sim/parts';
+import { partModelKey } from '../sim/carry';
 import { shared } from './dispose';
 import type { Particles } from './particles';
 import { glowTexture, makeCarryModel } from './props';
@@ -37,7 +38,7 @@ const MK_RGB: [number, number, number][] = [
 ];
 export const MK_CSS = ['#ffd27a', '#e6dcc0', '#7ddc7a', '#ffb454'];
 
-export const modelKey = (it: PartItem) => `part${partDef(it.id).mk}`;
+export const modelKey = (it: PartItem) => partModelKey(it.id);
 const mkOf = (it: PartItem) => Math.min(3, Math.max(1, partDef(it.id).mk));
 
 interface Tween {

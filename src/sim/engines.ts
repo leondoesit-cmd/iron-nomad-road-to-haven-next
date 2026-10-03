@@ -78,6 +78,9 @@ export const BAY_TEXT: Record<BayLabel, string> = {
   cut: 'Forced in: the bonnet is cut to fit',
 };
 
+/** The same in a few words, for crowded cards. */
+export const BAY_SHORT: Record<BayLabel, string> = { loose: 'loose fit', fits: 'fits', snug: 'snug fit', tight: 'tight fit', cut: 'bonnet cut' };
+
 export function bayFit(def: VehicleDef, spec: EngineSpec): BayFit {
   const bay = def.bay ?? spec.size;
   const oversize = spec.size - bay;

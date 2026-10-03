@@ -1,6 +1,7 @@
 import { PARTS, type PartSlot, type VehicleDef } from '../data';
 import { slotsOf } from '../sim/parts';
 import { mountsOfChassis } from './vehicleModels';
+import type { PanelId } from '../sim/paint';
 
 /**
  * Attach points. Every part slot is a physical place on a vehicle: the engine goes under the bonnet, the radiator
@@ -144,4 +145,28 @@ export function socketDistance(sock: Socket, x: number, y: number, z: number): {
     }
   }
   return { dist: bd, anchor: best };
+}
+
+/** Where a paintable panel is on the vehicle, as a box in the chassis frame: for aiming a spray can. */
+export function panelAnchor(def: VehicleDef, panel: PanelId): Anchor | undefined {
+  const mt = mountsOfChassis(def);
+  if (!mt) return undefined;
+  const { m, g0 } = mt;
+  const low = (y: number) => y - g0;
+  switch (panel) {
+    case 'hood':
+      return m.hood ? box(0, low(m.hood.y), (m.hood.z0 + m.hood.z1) / 2, m.hood.hw * 1.8, 0.1, Math.max(0.4, m.hood.z1 - m.hood.z0)) : undefined;
+    case 'roof':
+      return m.roof ? box(0, low(m.roof.y), (m.roof.z0 + m.roof.z1) / 2, m.roof.hw * 1.8, 0.1, Math.max(0.5, m.roof.z1 - m.roof.z0)) : undefined;
+    case 'doorL':
+    case 'doorR': {
+      if (m.narrow) return undefined;
+      const sx = panel === 'doorL' ? 1 : -1;
+      return box(sx * (m.hw + 0.02), low((m.side.y0 + m.side.y1) / 2), (m.side.z0 + m.side.z1) / 2, 0.08, Math.max(0.3, m.side.y1 - m.side.y0 + 0.2), m.side.z1 - m.side.z0);
+    }
+    case 'front':
+      return box(0, low(m.front.y) + (m.narrow ? 0.1 : 0.15), m.front.z - 0.15, Math.max(0.3, m.front.hw * 2), 0.5, 0.3);
+    case 'rear':
+      return box(0, low(m.rear.y) + (m.narrow ? 0.1 : 0.15), m.rear.z + 0.15, Math.max(0.3, m.rear.hw * 2), 0.5, 0.3);
+  }
 }

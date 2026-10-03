@@ -1,8 +1,9 @@
 import { PARTS, PART_SLOTS, partDef, type Cost, type PartSlot } from '../data';
-import { BAY_TEXT, engineLine, engineSpec } from '../sim/engines';
+import { BAY_SHORT, BAY_TEXT, engineLine, engineSpec } from '../sim/engines';
 import { TANK_DREGS, addReserve, planDrain, reserveOf } from '../sim/fuel';
 import { forecastSwap, forecastWorthy, currentFigures, type Forecast } from '../sim/forecast';
 import { VERDICT_TEXT } from '../sim/thermal';
+import { PANEL_NAME, SPRAY_CHARGES, colorName, panelColor, paintPanel, panelsOf, washPanels, type PanelId } from '../sim/paint';
 import type { Campaign } from '../game/campaign';
 import { PLAYER_CSS } from '../render/palette';
 import { canAfford, costText, spend } from '../sim/resources';
@@ -32,6 +33,8 @@ export interface GarageHost {
   players: number[];
   /** The live vehicle behind a column, when the garage is open mid-leg: its tank is what gets drained. */
   vehicle?(i: number): Vehicle | null;
+  /** Put a full spray can in the hands of whoever opened the bench, and let them out to use it. */
+  takeCan?(i: number, color: number): void;
 }
 
 /**
@@ -41,6 +44,10 @@ export class GarageView {
   sel: { i: number; slot: PartSlot } | null = null;
   /** A vehicle uid waiting for a second press to confirm breaking it down. */
   private armed: string | null = null;
+  /** What the swatches paint, per column: the whole vehicle or one panel. */
+  private target: Record<number, PanelId | 'all'> = {};
+  /** The last colour picked, per column: what a spray can is filled with. */
+  private lastColor: Record<number, number> = {};
 
   constructor(private h: GarageHost) {}
 
@@ -99,13 +106,27 @@ export class GarageView {
       ).replace('<button', `<button class="slotbtn${sel ? ' sel' : ''}${it && !factory && !empty ? ' fitted' : ''}${empty ? ' emptymount' : ''}"`);
     });
     lines.push(`<div class="slotgrid">${slotBtns.join('')}</div>`);
-    // Paint and stripes.
+    // Paint: the whole vehicle or one panel, then a swatch.
+    const panels = panelsOf(def);
+    const tgt = this.targetOf(i, panels);
+    if (panels.length) {
+      const chips = (['all', ...panels] as (PanelId | 'all')[]).map((pid) =>
+        this.h.btn(`ptgt${i}-${pid}`, pid === 'all' ? 'Whole vehicle' : PANEL_NAME[pid], () => this.setTarget(i, pid), true).replace('<button', `<button class="chipbtn${tgt === pid ? ' on' : ''}"`),
+      );
+      lines.push(`<div class="stripes">${chips.join('')}</div>`);
+    }
+    const current = tgt === 'all' ? b.paint : panelColor(b.paint, b.panels, tgt);
     const sw = PARTS.paints.map((pn) =>
       this.h
-        .btn(`paint${i}-${pn.id}`, `<span class="sw${b.paint === pn.c ? ' on' : ''}" style="background:#${pn.c.toString(16).padStart(6, '0')}"></span>`, () => this.paint(i, pn.c), true, pn.name)
+        .btn(`paint${i}-${pn.id}`, `<span class="sw${current === pn.c ? ' on' : ''}" style="background:#${pn.c.toString(16).padStart(6, '0')}"></span>`, () => this.paint(i, pn.c), true, pn.name)
         .replace('<button', '<button class="swbtn"'),
     );
     lines.push(`<div class="swatches">${sw.join('')}</div>`);
+    if (b.panels) lines.push(`<div class="btns">${this.h.btn(`wash${i}`, 'Wash the panels back to one colour', () => this.wash(i), true)}</div>`);
+    if (this.field && this.h.takeCan) {
+      const col = this.lastColor[i] ?? b.paint;
+      lines.push(`<div class="btns">${this.h.btn(`can${i}`, `Take a spray can <span class="cost">${escapeHtml(colorName(col))} · ${SPRAY_CHARGES} panels</span>`, () => this.h.takeCan!(i, col), true, 'Leaves the bench with a can in your hands: walk up to a panel and hold the button')}</div>`);
+    }
     const stripes = PARTS.stripes.map((s, idx) => this.h.btn(`stripe${i}-${idx}`, s.name, () => this.stripe(i, idx), true).replace('<button', `<button class="chipbtn${b.stripe === idx ? ' on' : ''}"`));
     lines.push(`<div class="stripes">${stripes.join('')}</div>`);
     if (b.stripe > 0) {
@@ -142,11 +163,11 @@ export class GarageView {
     const wrong = !st.noEngine && b.tank !== st.fuel && tankFU >= TANK_DREGS;
     const hot = fig.heat.verdict === 'overheats' ? 'bad' : fig.heat.verdict === 'hot' ? 'mid' : '';
     const out: string[] = [
-      `<div class="sub2">ENGINE ${escapeHtml(engineLine(spec).toUpperCase())} · ${st.noEngine ? '<span class="bad">NO ENGINE</span>' : escapeHtml(BAY_TEXT[st.bayLabel].toUpperCase())}</div>`,
+      `<div class="sub2">ENGINE ${escapeHtml(engineLine(spec).toUpperCase())} · ${st.noEngine ? '<span class="bad">NO ENGINE</span>' : `<span class="${st.bayLabel === 'cut' || st.bayLabel === 'tight' ? 'mid' : ''}" title="${escapeHtml(BAY_TEXT[st.bayLabel])}">${escapeHtml(BAY_SHORT[st.bayLabel].toUpperCase())}</span>`}</div>`,
       `<div class="sub2">COOLING ${Math.round(st.coolKw)} kW · <span class="${hot}">${escapeHtml(VERDICT_TEXT[fig.heat.verdict].toUpperCase())}</span> · RANGE ${fig.rangeKm.toFixed(0)} km</div>`,
       `<div class="sub2">TANK ${tankFU.toFixed(1)}/${st.tank.toFixed(0)} FU ${b.tank.toUpperCase()}${wrong ? ` · <span class="bad">ENGINE BURNS ${st.fuel.toUpperCase()}</span>` : ''}</div>`,
     ];
-    if (wrong || tankFU >= TANK_DREGS) {
+    if (wrong) {
       const plan = planDrain(b.tank, tankFU, st.fuel);
       out.push(`<div class="btns">${this.h.btn(`drain${i}`, `Drain tank <span class="cost">${tankFU.toFixed(1)} FU → ${b.tank} reserve</span>`, () => this.drain(i), plan.ok, plan.ok ? 'Empty the tank into the convoy reserve' : plan.label)}</div>`);
     }
@@ -351,8 +372,27 @@ export class GarageView {
     this.h.say(`Oil topped up to ${Math.round(r.oil * 100)}%.`, true);
   }
 
+  private targetOf(i: number, panels: PanelId[]): PanelId | 'all' {
+    const t = this.target[i] ?? 'all';
+    return t === 'all' || panels.includes(t) ? t : 'all';
+  }
+  private setTarget(i: number, t: PanelId | 'all') {
+    this.target[i] = t;
+    this.h.rerender();
+  }
   private paint(i: number, col: number) {
-    this.h.build(i).paint = col;
+    const b = this.h.build(i);
+    const t = this.targetOf(i, panelsOf(defOf(b)));
+    this.lastColor[i] = col;
+    if (t === 'all') {
+      // Painting the whole vehicle starts it again from one colour.
+      b.paint = col;
+      washPanels(b);
+    } else paintPanel(b, t, col);
+    this.h.refresh();
+  }
+  private wash(i: number) {
+    washPanels(this.h.build(i));
     this.h.refresh();
   }
   private stripe(i: number, idx: number) {
@@ -423,6 +463,18 @@ export class Workbench {
       },
       build: () => self.v!.build!,
       vehicle: () => self.v,
+      takeCan: (_i, color) => {
+        const pl = self.game.scene?.players[self.owner];
+        if (!pl) return;
+        if (pl.carry) {
+          self.msg = 'Your hands are full: put it down first';
+          self.game.audio.play('deny');
+          return self.render();
+        }
+        pl.carry = { kind: 'paint', color, charges: SPRAY_CHARGES };
+        pl.note(`Spray can (${colorName(color)}): walk up to a panel and hold the button`, 'good');
+        self.close();
+      },
       btn: (id, label, act, enabled = true, title = '') => {
         this.acts.set(id, act);
         return `<button data-fid="${id}" ${enabled ? '' : 'disabled'} title="${escapeHtml(title)}">${label}</button>`;

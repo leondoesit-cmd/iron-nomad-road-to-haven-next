@@ -5,6 +5,7 @@ import { OIL_CRITICAL, OIL_LOW } from './oil';
 import { effectiveStats, isWorn, mkOf, newPart, newUid, slotsOf, type Fit, type PartItem, type Stats } from './parts';
 import { fuelOf, stockEngineSpec } from './engines';
 import { fuelMismatch } from './fuel';
+import type { PanelPaint } from './paint';
 
 /** The two player colours, repeated here so the sim stays free of render imports. */
 export const PLAYER_PAINT = [0xff8a1f, 0x2f9bff] as const;
@@ -34,6 +35,8 @@ export interface VehicleBuild {
   /** Index into PARTS.stripes. */
   stripe: number;
   stripeColor: number;
+  /** Panels sprayed a different colour from `paint`. */
+  panels?: PanelPaint;
   /** Picks the body variant and the small details (dents, missing trim) so no two found cars look alike. */
   seed: number;
   fit: Fit;

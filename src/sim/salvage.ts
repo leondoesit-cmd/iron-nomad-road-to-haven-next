@@ -3,6 +3,7 @@ import { Rng } from '../core/rng';
 import type { BuildComp } from './garage';
 import { newPart, rollPart, type Fit, type PartItem } from './parts';
 import { gearDrop, type GearItem } from './gear';
+import { foundCan } from './paint';
 
 /** What is being stripped. Raiders carry better kit than a family car. */
 export type SalvageKind = 'car' | 'raider' | 'wagon' | 'convoy';
@@ -45,6 +46,8 @@ export interface SalvageLoot {
   oil: number;
   /** A piece of personal gear in the cabin or trunk, now and then. */
   gear?: GearItem;
+  /** A spray can in the glovebox, now and then. */
+  paint?: { color: number; charges: number };
 }
 
 const CAR_MK = [0.72, 0.24, 0.04];
@@ -136,6 +139,8 @@ export function salvageLoot(stage: number, c: SalvageCtx): SalvageLoot {
       if (c.kind !== 'convoy') {
         const g = gearDrop(rng, c.kind === 'wagon' ? 'wreck' : c.kind === 'raider' ? 'raider' : 'trunk', { progress: c.progress });
         if (g && !(c.burnt && rng.chance(0.55))) out.gear = g;
+        // Drawn after the gear, so every earlier find is what it always was.
+        if (!c.burnt && rng.chance(0.12)) out.paint = foundCan(() => rng.next());
       }
     }
   }
@@ -149,5 +154,6 @@ export function lootText(l: SalvageLoot, name: (it: PartItem) => string): string
   for (const k of Object.keys(l.stocks)) if (l.stocks[k as keyof Stocks]) bits.push(`${Math.round(l.stocks[k as keyof Stocks] as number)} ${labels[k] ?? k}`);
   if (l.ammo) bits.push(`${l.ammo} rounds`);
   if (l.oil > 0.01) bits.push(`${Math.round(l.oil * 200)}% of an oil can`);
+  if (l.paint) bits.push('a spray can');
   return bits.length ? bits.join(', ') : 'Nothing worth taking';
 }

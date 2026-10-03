@@ -98,7 +98,7 @@ export interface PropSpawn {
   dy?: number;
 }
 
-export type PickupKind = 'fuel' | 'oil' | 'scrap' | 'parts' | 'tech' | 'rations' | 'medicine' | 'ammo' | 'fragment' | 'chassis' | 'part';
+export type PickupKind = 'fuel' | 'oil' | 'scrap' | 'parts' | 'tech' | 'rations' | 'medicine' | 'ammo' | 'fragment' | 'chassis' | 'part' | 'paint';
 export interface PickupSpawn {
   id: string;
   kind: PickupKind;
@@ -107,6 +107,8 @@ export interface PickupSpawn {
   part?: { id: string; cond: number };
   /** For kind 'fuel': set when a can is put down; world cans get theirs from their id (see sim/fuel `pickupFuel`). */
   fuel?: 'petrol' | 'diesel';
+  /** For kind 'paint': the colour in the can (`amount` holds the sprays left). Only ever put down by a player or found in a trunk. */
+  color?: number;
   x: number;
   y: number;
   z: number;

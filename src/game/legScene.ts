@@ -18,7 +18,7 @@ import { gearDrop } from '../sim/gear';
 import { disposeTree } from '../render/dispose';
 import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { RARITY_NAMES, newPart, partName } from '../sim/parts';
-import { carriedName, planStow, type Carried, type Loose } from '../sim/carry';
+import { carriedName, partModelKey, planStow, type Carried, type Loose } from '../sim/carry';
 import { pickupFuel } from '../sim/fuel';
 import { lakeCurrent } from '../world/lakes';
 import { DRUGS, DRUG_IDS } from '../sim/drugs';
@@ -664,7 +664,7 @@ export class LegScene extends Scene {
   /** Build the floating model for a pickup and register it. Parts, fuel and oil are carried by hand. */
   private spawnPickup(p: PickupSpawn) {
     const fuelKind = p.kind === 'fuel' ? (p.fuel ?? pickupFuel(p.id)) : undefined;
-    const m = makePickup(p.kind === 'part' ? `part${p.amount}` : fuelKind === 'diesel' ? 'diesel' : p.kind);
+    const m = makePickup(p.kind === 'part' ? (p.part ? partModelKey(p.part.id) : `part${p.amount}`) : p.kind === 'paint' ? `paint:${(p.color ?? 0xffffff).toString(16)}` : fuelKind === 'diesel' ? 'diesel' : p.kind);
     m.group.position.set(p.x, p.y, p.z);
     if (p.kind === 'part') {
       // Good parts show from a distance, in their rarity colour.
@@ -681,6 +681,7 @@ export class LegScene extends Scene {
     if (p.kind === 'part' && p.part) loose = { kind: 'part', item: newPart(p.part.id, p.part.cond) };
     else if (p.kind === 'fuel') loose = { kind: 'fuel', amount: p.amount, fuel: fuelKind };
     else if (p.kind === 'oil') loose = { kind: 'oil', amount: p.amount };
+    else if (p.kind === 'paint') loose = { kind: 'paint', color: p.color ?? 0xffffff, charges: p.amount };
     this.pickups.set(p.id, { spawn: p, group: m.group, baseY: p.y, phase: Math.random() * 6.28, loose });
   }
 
@@ -723,8 +724,8 @@ export class LegScene extends Scene {
     const id = `drop${this.dropSeq++}`;
     const y = this.groundAt(x, z);
     const kind = c.kind === 'part' ? 'part' : c.kind;
-    const amount = c.kind === 'part' ? (c.item.id ? partMk(c.item.id) : 1) : c.amount;
-    const spawn: PickupSpawn = { id, kind, amount, x, y, z, part: c.kind === 'part' ? { id: c.item.id, cond: c.item.cond } : undefined, fuel: c.kind === 'fuel' ? (c.fuel ?? 'petrol') : undefined };
+    const amount = c.kind === 'part' ? (c.item.id ? partMk(c.item.id) : 1) : c.kind === 'paint' ? c.charges : c.amount;
+    const spawn: PickupSpawn = { id, kind, amount, x, y, z, part: c.kind === 'part' ? { id: c.item.id, cond: c.item.cond } : undefined, fuel: c.kind === 'fuel' ? (c.fuel ?? 'petrol') : undefined, color: c.kind === 'paint' ? c.color : undefined };
     this.spawnPickup(spawn);
     // Keep the very item that was dropped, so its wear survives being put down.
     const e = this.pickups.get(id);
@@ -748,6 +749,8 @@ export class LegScene extends Scene {
         const v = p.vehicle;
         // Parts, fuel and oil are lifted by hand on foot; only a vehicle sweeps them up as it passes.
         if (e.loose && !v) continue;
+        // A vehicle never sweeps up a spray can: it stays where it was put.
+        if (e.loose?.kind === 'paint') continue;
         const px = v ? v.position.x : p.pos.x;
         const pz = v ? v.position.z : p.pos.z;
         const r = v ? v.def.width / 2 + 2.1 : 1.9;
