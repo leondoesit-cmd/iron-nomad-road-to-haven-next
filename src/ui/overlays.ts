@@ -188,6 +188,7 @@ export class Overlays {
         ${solo ? '' : row('lay', 'Split screen', g.R.layout === 'horizontal' ? 'TOP / BOTTOM' : 'LEFT / RIGHT')}
         ${row('vol', 'Master volume', `${Math.round(g.audio.volume * 100)}%`)}
         ${row('mus', 'Music volume', `${Math.round(g.audio.musicVolume * 100)}%`)}
+        ${row('tts', 'Radio TTS voice', g.audio.ttsEnabled ? 'ON' : 'OFF')}
         ${row('rm1', solo ? 'Rumble' : 'P1 rumble', s.rumble[0] ? 'ON' : 'OFF')}
         ${solo ? '' : row('rm2', 'P2 rumble', s.rumble[1] ? 'ON' : 'OFF')}
         ${row('aa1', solo ? 'Aim assist' : 'P1 aim assist', `${Math.round(s.aimAssist[0] * 100)}%`)}
@@ -221,6 +222,10 @@ export class Overlays {
             break;
           case 'mus':
             g.audio.setMusicVolume(clamp(g.audio.musicVolume + dir * 0.1, 0, 1));
+            break;
+          case 'tts':
+            g.audio.setTtsEnabled(!g.audio.ttsEnabled);
+            g.saveSettings();
             break;
           case 'rm1':
             st.rumble[0] = !st.rumble[0];

@@ -1,27 +1,74 @@
 import { clamp } from '../core/math';
 import type { SampleLibrary } from './samples';
+import { TTSEngine } from './tts';
 
 /**
- * Procedural Voice Barks & Walkie-Talkie Radio Chatter Engine.
+ * Contextual Voice Barks & Walkie-Talkie Radio Chatter Engine.
  * Features:
  * - Authentic walkie-talkie bandpass filtering (420Hz HP - 2900Hz LP, 1.8kHz presence peak)
  * - Analog transistor diode saturation (WaveShaper)
  * - Heavy RF dynamics compression (12:1, fast attack)
  * - Tactical PTT mic clicks, CTCSS chirps, Roger beeps, and squelch tail static bursts
- * - Procedural formant-synthesized voice chatter syllables matching text cadence
+ * - In-browser SpeechSynthesis TTS with speaker variation and radio carrier immersion
+ * - Procedural formant-synthesized voice chatter syllables fallback when TTS is unsupported
  */
 export class RadioAudioEngine {
   ctx: AudioContext;
   samples: SampleLibrary;
+  tts: TTSEngine;
   private noiseBuf: AudioBuffer;
+  private masterVolume = 0.7;
+  private muted = false;
+  ttsEnabled = true;
+  voiceMode: 'tts' | 'synth' | 'off' = 'tts';
 
-  constructor(ctx: AudioContext, samples: SampleLibrary) {
+  private activeTransmission: {
+    finish: () => void;
+    timeoutId?: ReturnType<typeof setTimeout> | undefined;
+    chain: { input: GainNode; output: GainNode; carrierStatic: AudioBufferSourceNode };
+  } | null = null;
+
+  constructor(ctx: AudioContext, samples: SampleLibrary, tts?: TTSEngine) {
     this.ctx = ctx;
     this.samples = samples;
+    this.tts = tts || new TTSEngine();
     const len = ctx.sampleRate * 2;
     this.noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
     const d = this.noiseBuf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  }
+
+  setVolume(v: number) {
+    this.masterVolume = v;
+  }
+
+  setMuted(m: boolean) {
+    this.muted = m;
+    if (m) {
+      this.cancelActiveTransmission();
+    }
+  }
+
+  setTtsEnabled(enabled: boolean) {
+    this.ttsEnabled = enabled;
+    this.tts.enabled = enabled;
+    if (!enabled) {
+      this.cancelActiveTransmission();
+    }
+  }
+
+  cancelActiveTransmission() {
+    if (this.activeTransmission) {
+      this.activeTransmission.finish();
+      this.activeTransmission = null;
+    }
+    this.tts.cancel();
+  }
+
+  estimateDuration(text: string): number {
+    const words = text.split(/\s+/).filter((w) => w.length > 0);
+    // Average speech rate with radio PTT switch overhead
+    return Math.max(0.8, words.length * 0.35 + 0.5);
   }
 
   /** Builds the authentic walkie-talkie / CB radio DSP filter chain. */
@@ -98,12 +145,16 @@ export class RadioAudioEngine {
   }
 
   /**
-   * Plays a procedural contextual radio bark with authentic PTT key-in,
-   * procedural speech cadence formant synthesis, compression, and squelch tail.
+   * Plays a contextual radio bark with authentic PTT key-in,
+   * in-browser speech synthesis (or procedural fallback), compression, and squelch tail.
    */
   playRadioChatter(text: string, dest: AudioNode, vol = 1): number {
     const ctx = this.ctx;
     const t0 = ctx.currentTime;
+
+    // Cancel active transmission to avoid overlapping comms
+    this.cancelActiveTransmission();
+
     const chain = this.createRadioChain(dest);
     chain.output.gain.setValueAtTime(vol * 0.9, t0);
 
@@ -120,16 +171,104 @@ export class RadioAudioEngine {
       pttIn.start(t0);
     }
 
-    // 2. Procedural Formant Voice Chatter Syllables
+    const estDuration = this.estimateDuration(text);
+    const useTTS = this.voiceMode === 'tts' && this.tts.hasSupport && this.ttsEnabled && !this.muted;
+
+    if (useTTS) {
+      let finished = false;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+      const finishTransmission = () => {
+        if (finished) return;
+        finished = true;
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = undefined;
+        }
+
+        const tTail = ctx.currentTime;
+        // PTT Mic Click-Out & Squelch Tail (Roger Beep + Static Tail)
+        if (this.samples.micClickOut) {
+          const pttOut = ctx.createBufferSource();
+          pttOut.buffer = this.samples.micClickOut;
+          const g = ctx.createGain();
+          g.gain.value = 0.9;
+          pttOut.connect(g).connect(chain.input);
+          pttOut.start(tTail);
+        }
+
+        const stopTime = tTail + 0.12;
+        try {
+          chain.carrierStatic.stop(stopTime);
+        } catch {}
+
+        chain.output.gain.setValueAtTime(vol * 0.9, stopTime - 0.02);
+        chain.output.gain.linearRampToValueAtTime(0.0001, stopTime);
+
+        if (this.activeTransmission === current) {
+          this.activeTransmission = null;
+        }
+      };
+
+      timeoutId = setTimeout(finishTransmission, Math.max(1200, (estDuration + 2.5) * 1000));
+      const current = { finish: finishTransmission, timeoutId, chain };
+      this.activeTransmission = current;
+
+      const effectiveVol = clamp(vol * (this.muted ? 0 : this.masterVolume), 0, 1);
+      this.tts.speak(text, {
+        volume: effectiveVol,
+        onEnd: () => finishTransmission(),
+        onError: () => finishTransmission(),
+      });
+
+      return estDuration;
+    }
+
+    // Fallback when TTS is unsupported (e.g. Node/Vitest test environment) or 'synth' mode
+    if (this.voiceMode === 'synth' || !this.tts.hasSupport) {
+      return this.playSynthSyllables(text, chain, t0, vol);
+    }
+
+    // Voice mode 'off': silent radio carrier & mic clicks only
+    const tailStart = t0 + estDuration - 0.08;
+    if (this.samples.micClickOut) {
+      const pttOut = ctx.createBufferSource();
+      pttOut.buffer = this.samples.micClickOut;
+      const g = ctx.createGain();
+      g.gain.value = 0.9;
+      pttOut.connect(g).connect(chain.input);
+      pttOut.start(tailStart);
+    }
+
+    const totalDur = tailStart - t0 + 0.12;
+    try {
+      chain.carrierStatic.stop(t0 + totalDur);
+    } catch {}
+
+    chain.output.gain.setValueAtTime(vol * 0.9, t0 + totalDur - 0.02);
+    chain.output.gain.linearRampToValueAtTime(0.0001, t0 + totalDur);
+
+    return totalDur;
+  }
+
+  /**
+   * Procedural formant voice chatter syllables fallback (used when TTS is unsupported
+   * such as headless test suites, or explicitly configured).
+   */
+  playSynthSyllables(
+    text: string,
+    chain: { input: GainNode; output: GainNode; carrierStatic: AudioBufferSourceNode },
+    t0: number,
+    vol = 1,
+  ): number {
+    const ctx = this.ctx;
     const speechStart = t0 + 0.06;
     const words = text.split(/\s+/).filter((w) => w.length > 0);
     let curTime = speechStart;
 
-    // Determine voice pitch based on text mood (urgent, warning, or calm)
     const isUrgent = text.includes('!') || /horde|seiz|run|wall|strike|ambush/i.test(text);
     const baseF0 = isUrgent ? 135 : 110;
 
-    // Syllable formant map (F1, F2, F3 frequencies)
     const formants: Record<string, [number, number, number]> = {
       a: [730, 1250, 2450],
       e: [530, 1840, 2550],
@@ -142,26 +281,22 @@ export class RadioAudioEngine {
       const word = words[wIdx].toLowerCase().replace(/[^a-z]/g, '');
       if (!word) continue;
 
-      // Break into rough syllables by vowel clusters
       const syllables = word.match(/[^aeiouy]*[aeiouy]+(?:[^aeiouy]*$|[^aeiouy](?=[^aeiouy]))?/gi) || [word];
 
       for (let sIdx = 0; sIdx < syllables.length; sIdx++) {
         const syl = syllables[sIdx];
         const sylDur = clamp(0.09 + syl.length * 0.025, 0.08, 0.2);
 
-        // Pick dominant vowel for formant resonances
         const vowelMatch = syl.match(/[aeiou]/);
         const vKey = vowelMatch ? vowelMatch[0] : 'a';
         const [f1, f2, f3] = formants[vKey] || formants.a;
 
-        // Glottal excitation pulse (buzz with pitch modulation)
         const osc = ctx.createOscillator();
         osc.type = 'sawtooth';
         const inflection = isUrgent ? Math.sin((sIdx / Math.max(1, syllables.length)) * Math.PI) * 20 : 0;
         osc.frequency.setValueAtTime(baseF0 + inflection, curTime);
         osc.frequency.linearRampToValueAtTime(baseF0 * 0.9 + inflection, curTime + sylDur);
 
-        // Formant filters in parallel
         const gSyl = ctx.createGain();
         gSyl.gain.setValueAtTime(0.0001, curTime);
         gSyl.gain.linearRampToValueAtTime(0.35, curTime + 0.012);
@@ -175,7 +310,6 @@ export class RadioAudioEngine {
           osc.connect(filt).connect(gSyl);
         }
 
-        // Fricative consonant noise (for 's', 't', 'k', 'sh')
         if (/[stkpfch]/i.test(syl)) {
           const noiseSrc = ctx.createBufferSource();
           noiseSrc.buffer = this.noiseBuf;
@@ -197,10 +331,9 @@ export class RadioAudioEngine {
 
         curTime += sylDur + 0.015;
       }
-      curTime += 0.04; // Micro-pause between words
+      curTime += 0.04;
     }
 
-    // 3. PTT Mic Click-Out & Squelch Tail (Roger Beep + Static Tail)
     const tailStart = curTime + 0.05;
     if (this.samples.micClickOut) {
       const pttOut = ctx.createBufferSource();
@@ -212,9 +345,10 @@ export class RadioAudioEngine {
     }
 
     const totalDur = tailStart - t0 + 0.12;
-    chain.carrierStatic.stop(t0 + totalDur);
+    try {
+      chain.carrierStatic.stop(t0 + totalDur);
+    } catch {}
 
-    // Fade out and cleanup
     chain.output.gain.setValueAtTime(vol * 0.9, t0 + totalDur - 0.02);
     chain.output.gain.linearRampToValueAtTime(0.0001, t0 + totalDur);
 

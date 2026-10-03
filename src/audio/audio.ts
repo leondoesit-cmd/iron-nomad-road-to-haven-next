@@ -193,6 +193,8 @@ export class AudioEngine {
     this.spatial.setSolo(this.solo);
 
     this.radio = new RadioAudioEngine(ctx, this.samples);
+    this.radio.setVolume(this.volume);
+    this.radio.setMuted(this.muted);
     this.vehicleAudio = new VehicleAudioEngine(ctx, this.samples, this.spatial);
     this.foley = new FoleyEngine(ctx, this.samples);
 
@@ -203,6 +205,7 @@ export class AudioEngine {
   setVolume(v: number) {
     this.volume = v;
     if (this.master) this.master.gain.value = this.muted ? 0 : v;
+    this.radio?.setVolume(v);
   }
 
   setMusicVolume(v: number) {
@@ -213,6 +216,19 @@ export class AudioEngine {
   setMuted(m: boolean) {
     this.muted = m;
     if (this.master) this.master.gain.value = m ? 0 : this.volume;
+    this.radio?.setMuted(m);
+  }
+
+  get ttsEnabled(): boolean {
+    return this.radio?.ttsEnabled ?? true;
+  }
+
+  setTtsEnabled(enabled: boolean) {
+    this.radio?.setTtsEnabled(enabled);
+  }
+
+  silenceRadio() {
+    this.radio?.cancelActiveTransmission();
   }
 
   setSolo(s: boolean) {
@@ -280,18 +296,18 @@ export class AudioEngine {
   }
 
   /**
-   * Plays a procedural contextual radio bark with authentic PTT key-in,
-   * procedural speech cadence formant synthesis, compression, and squelch tail.
+   * Plays a contextual radio bark with authentic PTT key-in,
+   * in-browser speech synthesis, RF carrier hiss, and squelch tail.
    */
   playRadioChatter(text: string, vol = 1) {
     if (!this.ctx || this.muted || !this.radio) return;
-    this.duck(1.5, 0.5);
     // Route radio chatter through both player buses
     const out = this.ctx.createGain();
     out.gain.value = 1.0;
     out.connect(this.buses[0] || this.sfx);
     if (!this.solo && this.buses[1]) out.connect(this.buses[1]);
-    this.radio.playRadioChatter(text, out, vol);
+    const duration = this.radio.playRadioChatter(text, out, vol);
+    this.duck(Math.max(1.5, duration + 0.2), 0.45);
   }
 
   /**
