@@ -104,3 +104,67 @@ describe('stability assist', () => {
     expect(maxYawRate).toBeLessThan(1.6);
   });
 });
+
+describe.each([1, 2, 3])('tier %i handbrake turn', (tier) => {
+  /** Cruise, then pull the handbrake with the wheel over, and watch the slide. */
+  function turn(handbrake: boolean) {
+    const P = makeWorld();
+    const def = vehicleDef(tier);
+    const g = def.physics.suspension.rest + def.physics.wheelRadius - def.physics.hardY;
+    const v = new VehicleBody(P, def, 0, g + 0.05, 0, 0);
+    const env = defaultEnv();
+    let maxYaw = 0;
+    let maxLat = 0;
+    let minUp = 1;
+    let yaw0 = 0;
+    let speed0 = 0;
+    let headingChange = 0;
+    let speed1 = 0;
+    for (let i = 0; i < 12 * 60; i++) {
+      const t = i / 60;
+      const hb = handbrake && t > 6 && t < 7.5;
+      v.update({ steer: t > 6 && t < 9 ? 0.8 : 0, throttle: t < 6 ? 0.8 : 0.3, brake: 0, handbrake: hb }, env, 1 / 60);
+      P.step();
+      if (i === 6 * 60) {
+        yaw0 = v.yaw;
+        speed0 = v.speed;
+      }
+      if (t > 6) {
+        const w = v.body.angvel();
+        const up = v.up();
+        maxYaw = Math.max(maxYaw, Math.abs(w.x * up[0] + w.y * up[1] + w.z * up[2]));
+        const lv = v.body.linvel();
+        const f = v.forward();
+        maxLat = Math.max(maxLat, Math.abs(lv.x * f[2] - lv.z * f[0]));
+        minUp = Math.min(minUp, up[1]);
+      }
+      if (i === 9 * 60) {
+        let d = v.yaw - yaw0;
+        while (d > Math.PI) d -= 2 * Math.PI;
+        while (d < -Math.PI) d += 2 * Math.PI;
+        headingChange = Math.abs(d);
+        speed1 = v.speed;
+      }
+    }
+    return { maxYaw, maxLat, minUp, headingChange, speed0, speed1 };
+  }
+
+  it('turns the car round faster than the wheel alone, and stays a slide the driver can hold', () => {
+    const with_ = turn(true);
+    const without = turn(false);
+    // eslint-disable-next-line no-console
+    console.log(`T${tier} handbrake`, JSON.stringify(with_), 'wheel only', JSON.stringify(without));
+    expect(with_.headingChange).toBeGreaterThan(without.headingChange * 1.2);
+    // No spin-out: the yaw rate stays within a few rad/s, the car stays on its wheels and is not skating sideways.
+    expect(with_.maxYaw).toBeLessThan(2.6);
+    expect(with_.maxLat).toBeLessThan(4);
+    expect(with_.minUp).toBeGreaterThan(0.9);
+    // And it does not stop the car dead.
+    expect(with_.speed1).toBeGreaterThan(with_.speed0 * 0.45);
+  });
+
+  it('comes out of the slide pointing where it is going', () => {
+    const r = turn(true);
+    expect(r.maxLat).toBeLessThan(4);
+  });
+});

@@ -60,6 +60,11 @@ export function fakeServices(opts: { onRadio?: (t: string) => void; solo?: boole
     updateMusic: () => {},
     setListeners: () => {},
     setTrip: () => {},
+    setWind: () => {},
+    setOcclusionTester: () => {},
+    playRadioChatter: (text: string) => void sounds.push(`radio:${text}`),
+    setIndoor: () => {},
+    setSolo: () => {},
   };
   const input = {
     intents,

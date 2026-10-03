@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { modelKey } from '../render/workFx';
+import { prepareVehicleVisual } from '../render/vehicleModels';
+import { chassisDef } from '../data';
 import { sitePos } from './hauling';
 import { partName, type PartItem } from '../sim/parts';
 import { rollCar, type CarStatus } from '../sim/cars';
@@ -22,6 +24,8 @@ interface CarState {
   z: number;
   yaw: number;
   live: Vehicle | null;
+  /** The model being built a slice at a time before this car spawns. */
+  prep?: Generator<void> | null;
 }
 
 /** Cars appear as the convoy approaches and are put away again, with their state, once it has moved on. */
@@ -64,8 +68,9 @@ export class CarField {
     this.t -= dt;
     this.obsT -= dt;
     if (this.t <= 0) {
-      this.t = 0.4;
-      this.stream();
+      // Put one car in or away per pass, soonest again while there is more to do: building a vehicle is a few
+      // milliseconds, and a street full of them in one tick is a dropped frame.
+      this.t = this.stream() ? 0.1 : 0.4;
     }
     if (this.obsT <= 0) {
       this.obsT = 0.25;
@@ -73,16 +78,46 @@ export class CarField {
     }
   }
 
-  private stream() {
+  /** Returns whether there is still work waiting. */
+  private stream(): boolean {
     const ctx = this.ctx;
     const pts = ctx.players.map((p) => (p.vehicle ? p.vehicle.position : p.pos));
+    let next: CarState | null = null;
+    let nextD = Infinity;
+    let away: CarState | null = null;
+    let queued = 0;
     for (const st of this.states.values()) {
       let d = Infinity;
       for (const p of pts) d = Math.min(d, Math.hypot(p.x - st.x, p.z - st.z));
       if (!st.live) {
-        if ((this.everything || d < SPAWN_R) && (ctx.colliderReady?.(st.x, st.z) ?? true)) this.spawn(st);
-      } else if (!this.everything && d > DESPAWN_R && !st.live.driver && !st.live.passenger) this.despawn(st);
+        if (!((this.everything || d < SPAWN_R) && (ctx.colliderReady?.(st.x, st.z) ?? true))) continue;
+        // The small camp arena has a handful of cars and wants them all now.
+        if (this.everything) {
+          this.spawn(st);
+          continue;
+        }
+        queued++;
+        if (d < nextD) {
+          nextD = d;
+          next = st;
+        }
+      } else if (!this.everything && d > DESPAWN_R && !st.live.driver && !st.live.passenger) {
+        queued++;
+        away ??= st;
+      }
     }
+    if (next) {
+      // Build the model a slice a tick, and put the car in once it is ready.
+      next.prep ??= prepareVehicleVisual(chassisDef(next.build.chassis), next.build);
+      if (next.prep.next().done) {
+        next.prep = null;
+        this.spawn(next);
+        return queued > 1;
+      }
+      return true;
+    }
+    if (away) this.despawn(away);
+    return queued > 1;
   }
 
   private spawn(st: CarState) {
@@ -139,6 +174,8 @@ export class CarField {
       live.add(v);
       const p = v.position;
       const yaw = v.yaw;
+      // Boxes sit at absolute heights, so a car parked on a hill needs one up there.
+      const gy = ctx.groundAt(p.x, p.z);
       const e = this.obstacles.get(v);
       if (e && Math.hypot(e.x - p.x, e.z - p.z) < 0.35 && Math.abs(e.yaw - yaw) < 0.12) continue;
       if (e) ctx.obs.remove(e.a);
@@ -148,7 +185,7 @@ export class CarField {
       const hw = v.def.width / 2 - 0.05;
       const hx = s * hl + c * hw;
       const hz = c * hl + s * hw;
-      const a: Aabb = { id: newAabbId(), minX: p.x - hx, maxX: p.x + hx, minZ: p.z - hz, maxZ: p.z + hz, y0: 0, y1: Math.min(2.2, v.def.physics.halfExtents[1] * 2 + 0.9), kind: 'car', hp: 9999 };
+      const a: Aabb = { id: newAabbId(), minX: p.x - hx, maxX: p.x + hx, minZ: p.z - hz, maxZ: p.z + hz, y0: gy - 0.5, y1: gy + Math.min(2.2, v.def.physics.halfExtents[1] * 2 + 0.9), kind: 'car', hp: 9999 };
       ctx.obs.add(a);
       this.obstacles.set(v, { a, x: p.x, z: p.z, yaw });
     }
@@ -229,9 +266,9 @@ export class CarField {
     let text = lootText({ ...loot, items: kept, oil }, partName);
     if (scrapped) text += `${text === 'Nothing worth taking' ? '' : ', '}${scrapped} Scrap (no room for the rest)`;
     p.note(text, kept.length || scrapped ? 'good' : 'info');
-    if (loot.gear) ctx.addGear(p, loot.gear);
     {
       const site = sitePos(v, (['wheel', 'hood', 'flank', 'rear'] as const)[Math.min(3, stage)]);
+      if (loot.gear) ctx.dropGear(loot.gear, site.x, site.z);
       const hand = new THREE.Vector3(p.pos.x, p.pos.y + 1, p.pos.z);
       ctx.work.burst(site, 1, 0.9);
       if (kept.length) ctx.work.spill(kept.map(modelKey), site, hand);

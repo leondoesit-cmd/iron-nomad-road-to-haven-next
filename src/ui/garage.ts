@@ -1,7 +1,7 @@
 import { PARTS, PART_SLOTS, partDef, type Cost, type PartSlot } from '../data';
 import type { Campaign } from '../game/campaign';
 import { PLAYER_CSS } from '../render/palette';
-import { canAfford, costText, spend } from '../sim/resources';
+import { canAfford, costText, refund, spend } from '../sim/resources';
 import { OIL_CAN, OIL_LOW, pourOil } from '../sim/oil';
 import { type VehicleBuild, buildName, currentCond, defOf, installPart, maxHpOf, needsService, removePart, serviceBuild, serviceCost, statsOf, conditionSummary, dismantleYield, GARAGE_MAX } from '../sim/garage';
 import { RARITY_CSS, RARITY_NAMES, conditionLabel, describeStats, newPart, partName, scrapValue, slotsOf, type PartItem } from '../sim/parts';
@@ -240,6 +240,8 @@ export class GarageView {
     if (!spend(c.stocks, cost)) return this.h.say('Not enough stock', false);
     const res = installPart(b, newPart(id, 1));
     if (!res.ok) {
+      // Nothing was built: give back what the bench took.
+      refund(c.stocks, cost);
       this.h.say(res.reason ?? 'It does not fit', false);
       return;
     }
@@ -359,6 +361,7 @@ export class Workbench {
     this.view.sel = null;
     this.msg = '';
     this.game.focus.active = true;
+    this.game.focus.owner = owner;
     this.game.focus.onCancel = () => this.close();
     this.render();
   }
@@ -371,6 +374,7 @@ export class Workbench {
   close() {
     this.game.focus.clear();
     this.game.focus.active = false;
+    this.game.focus.owner = null;
     this.game.focus.onCancel = () => {};
     this.root.innerHTML = '';
     this.root.classList.remove('on');

@@ -6,12 +6,16 @@ import { C } from './palette';
 import { makePavingMaterial, makeRoadMaterial, makeTerrainMaterial, ROAD_REPEAT, type GroundTheme } from './terrainMaterial';
 import { FacadeBuilder, facadeMaterial } from './facade';
 import { crate, plate, spareTyre } from './parts';
-import { buildScatter } from './scatter';
+import { buildScatterSteps, type ScatterSet } from './scatter';
 import { kitMaterial } from './materials';
 import { SHOP_H, SHOP_W, shopFrontMaterial, type ShopId } from './shopFront';
+import { buildSignGeometries } from './signs';
 import { CELL, CELLS, CHUNK, corridorHalf, heightAt, normalAt, roadX, surfaceAt, waterAt, type TerrainDef } from '../world/terrain';
+import { nearestRoad, type RoadPath } from '../world/openWorld';
 import type { BuildingSpec, ChunkData } from '../world/chunkgen';
 import type { Aabb } from '../world/layout';
+import { facadeStyleOf } from '../world/shopGlass';
+import { PaneSet } from './glass';
 import { BOULEVARD_HALF, SIDEWALK } from '../world/layout';
 import { GROUPS, type Collider, type PhysicsWorld } from '../physics/physics';
 import { hash2, noise2 } from '../core/rng';
@@ -58,6 +62,13 @@ const pavingMaterial = () => {
 export interface ChunkOpts {
   /** Ground cover density, 0..1 (quality setting). */
   scatter: number;
+  /**
+   * Build only the ground, roads and colliders at once and leave buildings, props and ground cover to `buildNext`, one
+   * stage per call. A whole chunk costs 10 ms or so; spread over a few ticks it never costs a frame.
+   */
+  staged?: boolean;
+  /** Called when the ground mesh is in, so the far landscape can step aside only once there is something to step aside for. */
+  onGround?: () => void;
 }
 
 /** Visual-only crags on cliff faces nobody can reach, so the walls read as broken rock instead of a smooth ramp. */
@@ -66,7 +77,7 @@ export function cliffDetail(def: TerrainDef, x: number, z: number): number {
   const d = Math.abs(x - roadX(def, z));
   const ch = corridorHalf(def, z);
   let m = smoothstep(ch + 1.5, ch + 7, d);
-  m = Math.max(m, Math.min(1, smoothstep(def.length + 152, def.length + 168, z) + (1 - smoothstep(-68, -52, z))));
+  m = Math.max(m, Math.min(1, smoothstep(def.zMax - 8, def.zMax + 8, z) + (1 - smoothstep(def.zMin - 8, def.zMin + 8, z))));
   if (m <= 0) return 0;
   const ridge = 1 - Math.abs(noise2(x / 9, z / 9, def.seed + 61) * 2 - 1);
   const ridge2 = 1 - Math.abs(noise2(x / 23 + 4, z / 23, def.seed + 64) * 2 - 1);
@@ -76,6 +87,24 @@ export function cliffDetail(def: TerrainDef, x: number, z: number): number {
 }
 
 /** Big ridges and peaks on the slopes beyond the canyon rim: the far scenery, never reachable. */
+/**
+ * How far the drawn road sits above the ground under it (the collider's surface) at a point, 0 off the road. The road is a
+ * crowned strip laid a few centimetres up, so anything meant to lie on the road (blood, brass, a thrown limb) rests on this.
+ */
+export function roadLift(def: TerrainDef, x: number, z: number): number {
+  const city = def.biome === 'city';
+  const crown = city ? 0.07 : 0.05;
+  if (def.open) {
+    const h = nearestRoad(def.open, x, z);
+    if (!h.road || h.road.kind === 'track' || h.edge > 0) return 0;
+    const t = h.d / h.road.half;
+    return 0.035 + crown * (1 - t * t);
+  }
+  const half = city ? BOULEVARD_HALF : def.roadHalf;
+  const t = Math.abs(x - roadX(def, z)) / half;
+  return t > 1 ? 0 : 0.035 + crown * (1 - t * t);
+}
+
 export function mountainRelief(def: TerrainDef, x: number, z: number, d = Math.abs(x - roadX(def, z)), ch = corridorHalf(def, z)): number {
   const m = smoothstep(ch + 70, ch + 300, d);
   if (m <= 0) return 0;
@@ -103,11 +132,19 @@ function cliffPush(def: TerrainDef, x: number, z: number, h: number): [number, n
 /** Meshes plus colliders for one 128 m chunk. Created and disposed by the streaming system. */
 export class ChunkView {
   group = new THREE.Group();
+  /** Glass over the shopfronts of this chunk, one pane to each of the glass boxes in its data. */
+  panes = new PaneSet();
   colliders: Collider[] = [];
   aabbColliders = new Map<number, Collider>();
   barricadeMeshes = new Map<number, THREE.Mesh>();
   private geos: THREE.BufferGeometry[] = [];
   private instanced: THREE.InstancedMesh[] = [];
+  /** This chunk is city: city ground, boulevard, facades. In a city leg that is every chunk; in the open world, the district's. */
+  private city = false;
+  /** Visual work still to do on a staged chunk. */
+  private stages: (() => boolean | void)[] = [];
+  /** Barricades that were blown apart before their mesh was built. */
+  private removed = new Set<number>();
 
   constructor(
     public data: ChunkData,
@@ -118,12 +155,38 @@ export class ChunkView {
   ) {
     const x0 = data.cx * CHUNK;
     const z0 = data.cz * CHUNK;
-    this.buildTerrain(def, mats, x0, z0);
-    this.buildRoad(def, mats, z0);
-    this.buildBuildings(data, mats);
-    this.buildProps(data, mats, def.biome === 'city');
-    this.buildScatter(def, opts.scatter);
+    this.city = data.city;
     this.buildColliders(def, x0, z0);
+    const ground = this.buildTerrain(def, mats, x0, z0);
+    this.stages.push(
+      () => {
+        if (!ground.next().done) return true;
+        opts.onGround?.();
+      },
+      () => (def.open ? this.buildOpenRoads(def, mats, x0, z0) : this.buildRoad(def, mats, z0)),
+      this.sliced(() => this.buildBuildings(data, mats)),
+      () => this.buildProps(data, mats, def.biome === 'city'),
+      this.sliced(() => this.buildScatter(def, opts.scatter)),
+    );
+    if (!opts.staged) while (this.buildNext());
+  }
+
+  /** A stage made of slices: the generator is started when the stage first runs and the stage repeats until it is done. */
+  private sliced(make: () => Generator<void>): () => boolean {
+    let g: Generator<void> | null = null;
+    return () => !(g ??= make()).next().done;
+  }
+
+  /** Visual stages left on a staged chunk. */
+  get pending(): number {
+    return this.stages.length;
+  }
+
+  /** Run the next stage of a staged chunk. Returns whether there is more to do. */
+  buildNext(): boolean {
+    const stage = this.stages[0];
+    if (stage && !stage()) this.stages.shift();
+    return this.stages.length > 0;
   }
 
   private addMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cast: boolean, receive: boolean) {
@@ -135,11 +198,12 @@ export class ChunkView {
     return m;
   }
 
-  private buildTerrain(def: TerrainDef, mats: ChunkMaterials, x0: number, z0: number) {
+  /** The ground mesh, built as a generator that yields every few rows so a staged chunk can spread it over several ticks. */
+  private *buildTerrain(def: TerrainDef, mats: ChunkMaterials, x0: number, z0: number): Generator<void> {
     const n = CELLS;
     const N1 = n + 1;
     const W = n + 3;
-    const city = def.biome === 'city';
+    const city = this.city;
     const seed = def.seed;
     // Positions with a one-cell border so normals match across chunk seams. Cliff faces nobody can reach get
     // crags (vertical noise) and bulges (horizontal push toward the corridor), so they read as broken rock.
@@ -147,6 +211,7 @@ export class ChunkView {
     const px = new Float32Array(W * W);
     const pz = new Float32Array(W * W);
     for (let r = -1; r <= n + 1; r++) {
+      if (r > 0 && r % 16 === 0) yield;
       for (let c = -1; c <= n + 1; c++) {
         const x = x0 + c * CELL;
         const z = z0 + r * CELL;
@@ -199,7 +264,9 @@ export class ChunkView {
       if (hx > 30 || hz > 30 || a.kind === 'partition' || a.kind === 'furniture' || a.kind === 'stair' || a.kind === 'floor') continue;
       shade((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2, Math.max(hx, hz) + 2.4, a.kind === 'building' ? 0.4 : 0.5);
     }
+    yield;
     for (let r = 0; r <= n; r++) {
+      if (r > 0 && r % 16 === 0) yield;
       for (let c = 0; c <= n; c++) {
         const i = r * N1 + c;
         const x = x0 + c * CELL;
@@ -234,6 +301,7 @@ export class ChunkView {
         let earth = 0;
         let gravel = 0;
         let wet = 0;
+        let track = false;
         if (city) {
           earth = 0.7 + noise2(x / 21, z / 21, seed + 73) * 0.5;
           gravel = smoothstep(0.62, 0.8, noise2(x / 15, z / 15, seed + 71)) * 0.9;
@@ -241,10 +309,16 @@ export class ChunkView {
         } else {
           const cliff = smoothstep(corridorHalf(def, z) + 2, corridorHalf(def, z) + 9, d);
           rock = Math.max(rock, cliff * 0.9);
-          gravel = 1 - smoothstep(def.roadHalf + 1.2, def.roadHalf + 4.2, d);
+          if (def.open) {
+            // Worn ground beside every road, and a darker beaten strip down a track.
+            const hit = nearestRoad(def.open, x, z);
+            gravel = hit.road ? 1 - smoothstep(0.2, 3.2, hit.edge) : 0;
+            track = hit.road?.kind === 'track';
+            if (track) gravel = Math.max(gravel, 1 - smoothstep(-0.5, 1.6, hit.edge) * 0.9);
+          } else gravel = 1 - smoothstep(def.roadHalf + 1.2, def.roadHalf + 4.2, d);
           gravel = Math.max(gravel, smoothstep(0.68, 0.84, noise2(x / 17, z / 17, seed + 71)) * 0.75);
           sand = surf === 'sand' ? 1 : smoothstep(0.5, 0.78, noise2(x / 36 + 3, z / 36, seed + 72)) * 0.85;
-          earth = 0.55 + noise2(x / 23, z / 23, seed + 73) * 0.6;
+          earth = track ? 0.1 : 0.55 + noise2(x / 23, z / 23, seed + 73) * 0.6;
           if (surf === 'mud') {
             wet = 0.75;
             sand *= 0.2;
@@ -289,6 +363,7 @@ export class ChunkView {
         col[i * 3 + 2] = kk * tb;
       }
     }
+    yield;
     // Skirts hang below each edge so the seams to neighbouring chunks (and the far landscape) never crack.
     const edges: number[][] = [[], [], [], []];
     for (let k = 0; k <= n; k++) {
@@ -329,6 +404,7 @@ export class ChunkView {
         idx.push(a, d, e, a, e, b);
       }
     }
+    yield;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
@@ -400,11 +476,103 @@ export class ChunkView {
     m.position.set(x0, 0, z0);
   }
 
-  private buildScatter(def: TerrainDef, density: number) {
+  /**
+   * The open world's roads: a ribbon along every highway and road that passes through this chunk. A track gets no mesh;
+   * the ground shader paints it. Where two roads cross, the later one sits a centimetre higher so they do not fight.
+   */
+  private buildOpenRoads(def: TerrainDef, mats: ChunkMaterials, x0: number, z0: number) {
+    const o = def.open!;
+    const city = this.city;
+    const x1 = x0 + CHUNK;
+    const z1 = z0 + CHUNK;
+    const tmp: [number, number, number] = [0, 1, 0];
+    o.roads.forEach((road, ri) => {
+      if (road.kind === 'track') return;
+      const half = road.half;
+      const ext = city ? 0.04 : 0.7;
+      const crown = city ? 0.07 : 0.05;
+      const us = [-ext / (2 * half), 0, 0.18, 0.5, 0.82, 1, 1 + ext / (2 * half)];
+      const cols = us.length;
+      const p = road.pts;
+      const n = p.length / 2;
+      const pad = half + 2;
+      // Which points belong to this chunk: any whose segment to a neighbour touches the chunk's rectangle.
+      const hits = (i: number) => {
+        const ax = p[i * 2];
+        const az = p[i * 2 + 1];
+        return ax > x0 - pad && ax < x1 + pad && az > z0 - pad && az < z1 + pad;
+      };
+      let run: number[] = [];
+      const flush = () => {
+        if (run.length >= 2) this.roadRibbon(def, mats, road, ri, run, x0, z0, us, cols, half, crown, tmp);
+        run = [];
+      };
+      for (let i = 0; i < n; i++) {
+        if (hits(i) || (i > 0 && hits(i - 1)) || (i + 1 < n && hits(i + 1))) run.push(i);
+        else flush();
+      }
+      flush();
+    });
+  }
+
+  private roadRibbon(def: TerrainDef, mats: ChunkMaterials, road: RoadPath, ri: number, run: number[], x0: number, z0: number, us: number[], cols: number, half: number, crown: number, tmp: [number, number, number]) {
+    const p = road.pts;
+    const n = p.length / 2;
+    const verts: number[] = [];
+    const nors: number[] = [];
+    const uvs: number[] = [];
+    const tans: number[] = [];
+    const idx: number[] = [];
+    let arc = 0;
+    let rows = 0;
+    // Arc length from the road's start, so the lane texture lines up across chunks.
+    for (let i = 1; i <= run[0]; i++) arc += Math.hypot(p[i * 2] - p[i * 2 - 2], p[i * 2 + 1] - p[i * 2 - 1]);
+    for (let k = 0; k < run.length; k++) {
+      const i = run[k];
+      if (k > 0) arc += Math.hypot(p[i * 2] - p[i * 2 - 2], p[i * 2 + 1] - p[i * 2 - 1]);
+      const a = Math.max(0, i - 1);
+      const b = Math.min(n - 1, i + 1);
+      let tx = p[b * 2] - p[a * 2];
+      let tz = p[b * 2 + 1] - p[a * 2 + 1];
+      const tl = Math.hypot(tx, tz) || 1;
+      tx /= tl;
+      tz /= tl;
+      // Sideways is the tangent turned a quarter turn; the lane texture wants it as `rtan` too.
+      const px = tz;
+      const pz = -tx;
+      for (const u of us) {
+        const off = (u - 0.5) * 2 * half;
+        const x = p[i * 2] + off * px;
+        const z = p[i * 2 + 1] + off * pz;
+        const uc = Math.min(1, Math.max(0, u));
+        verts.push(x - x0, heightAt(def, x, z) + 0.035 + ri * 0.012 + crown * (1 - (uc * 2 - 1) ** 2), z - z0);
+        normalAt(def, x, z, tmp);
+        nors.push(tmp[0], tmp[1], tmp[2]);
+        uvs.push(u, arc / ROAD_REPEAT);
+        tans.push(px, 0, pz);
+      }
+      if (k < run.length - 1) {
+        const r0 = rows * cols;
+        for (let c = 0; c < cols - 1; c++) idx.push(r0 + c, r0 + cols + c, r0 + c + 1, r0 + c + 1, r0 + cols + c, r0 + cols + c + 1);
+      }
+      rows++;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nors, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    g.setAttribute('rtan', new THREE.Float32BufferAttribute(tans, 3));
+    g.setIndex(idx);
+    g.computeBoundingSphere();
+    const m = this.addMesh(g, mats.road, false, true);
+    m.position.set(x0, 0, z0);
+  }
+
+  private *buildScatter(def: TerrainDef, density: number): Generator<void> {
     if (density <= 0) return;
     // Nothing grows on the lake bed.
     const submerged = def.lakes.length ? (x: number, z: number) => waterAt(def, x, z) !== null : undefined;
-    const set = buildScatter(def, this.data.cx, this.data.cz, this.data.aabbs, this.data.props, density, submerged);
+    const set = yield* buildScatterSteps(def, this.data.cx, this.data.cz, this.data.aabbs, this.data.props, density, submerged);
     for (const im of [set.grass, set.shrubs, ...set.pebbles, ...set.boulders]) {
       if (!im) continue;
       this.group.add(im);
@@ -413,7 +581,7 @@ export class ChunkView {
     this.scatterSet = set;
   }
 
-  private scatterSet: ReturnType<typeof buildScatter> | null = null;
+  private scatterSet: ScatterSet | null = null;
 
   /** Distance from the nearest player to this chunk's edge: small ground cover switches off beyond its fade range. */
   setDetailDistance(d: number) {
@@ -424,20 +592,31 @@ export class ChunkView {
     if (s.shrubs) s.shrubs.visible = d < 190;
   }
 
-  private buildBuildings(data: ChunkData, mats: ChunkMaterials) {
+  private *buildBuildings(data: ChunkData, mats: ChunkMaterials): Generator<void> {
     if (data.blocks.length && (data.cx === 0 || data.cx === -1)) this.buildSidewalks(data);
     if (data.patches.length) this.buildPatches(data, mats);
+    if (data.signs.length) {
+      for (const { material, geometry } of buildSignGeometries(data.signs)) this.addMesh(geometry, material, false, false);
+    }
     if (!data.buildings.length) return;
     const fb = new FacadeBuilder();
     const det = new MeshBuilder();
     det.jitter = 0.05;
+    let built = 0;
     for (const bs of data.buildings) {
+      if (built++ % 3 === 2) yield;
       const a = bs.aabb;
       const seed = hash2(Math.round(a.minX * 2), Math.round(a.minZ * 2), 77);
       const tall = bs.floors >= 9;
       const k = hash2(Math.round(a.minX), Math.round(a.maxZ), 78);
-      const style = bs.style ?? (tall ? (k < 0.35 ? 3 : k < 0.75 ? 0 : 2) : k < 0.45 ? 1 : k < 0.75 ? 2 : 0);
-      const tint = new THREE.Color(bs.tint ?? FACADE_TINT[style][Math.floor(seed * FACADE_TINT[style].length) % FACADE_TINT[style].length]);
+      // An Israeli apartment block is rendered, almost always stucco, in cream, sand and warm white; towers are panel.
+      const il = !!bs.israeli && !bs.role;
+      const style = facadeStyleOf(bs);
+      const tint = new THREE.Color(bs.tint ?? (il && style !== 3 ? ISRAELI_TINT[Math.floor(seed * 977) % ISRAELI_TINT.length] : FACADE_TINT[style][Math.floor(seed * FACADE_TINT[style].length) % FACADE_TINT[style].length]));
+      if (bs.role === 'standSide' || bs.role === 'standEnd') {
+        this.grandstand(fb, det, bs, tint);
+        continue;
+      }
       // A shopfront with its own sign takes the place of the awnings.
       const face = !bs.shop && BOULEVARD_HALF + 4 > Math.min(Math.abs(a.minX), Math.abs(a.maxX)) ? (a.minX > 0 ? 'w' : 'e') : null;
       // A pitched roof replaces the flat slab and parapet; a landmark has no shopfront band.
@@ -450,8 +629,12 @@ export class ChunkView {
           this.buildingShell(fb, det, a.minX + inset, a.maxX - inset, a.minZ + inset, a.maxZ - inset, a.y1, a.y1 + 6.6, tint, style, seed + 0.31, false, null);
         }
       }
-      if (!bs.role) this.rooftop(det, a.minX, a.maxX, a.minZ, a.maxZ, a.y1 + (bs.stepped ? 6.6 : 0), seed, bs.stepped ? 3 : 0);
-      if (style === 1 && seed > 0.4 && a.y1 > 9 && !bs.role) this.fireEscape(det, a, seed);
+      if (!bs.role) this.rooftop(det, a.minX, a.maxX, a.minZ, a.maxZ, a.y1 + (bs.stepped ? 6.6 : 0), seed, bs.stepped ? 3 : 0, il);
+      if (il && style !== 3) {
+        this.balconies(det, a, tint, seed, style);
+        this.solarHeaters(det, a.minX, a.maxX, a.minZ, a.maxZ, a.y1 + (bs.stepped ? 6.6 : 0), seed, bs.stepped ? 3 : 0);
+      }
+      if (style === 1 && seed > 0.4 && a.y1 > 9 && !bs.role && !il) this.fireEscape(det, a, seed);
     }
     if (!fb.empty) this.addMesh(fb.build(), facadeMaterial(), true, true);
     if (!det.empty) this.addMesh(det.build(), mats.roofs, true, true);
@@ -542,7 +725,7 @@ export class ChunkView {
   }
 
   /** Rooftop clutter: AC units, vents, a stair hut, sometimes a water tower or antenna mast. */
-  private rooftop(det: MeshBuilder, x0: number, x1: number, z0: number, z1: number, y: number, seed: number, inset: number) {
+  private rooftop(det: MeshBuilder, x0: number, x1: number, z0: number, z1: number, y: number, seed: number, inset: number, israeli = false) {
     const r = (k: number) => hash2(Math.round(seed * 1000) + k * 13, k, 91);
     const w = x1 - x0 - inset * 2;
     const d = z1 - z0 - inset * 2;
@@ -568,7 +751,7 @@ export class ChunkView {
       det.box(hx, y + 2.68, hz, 2.9, 0.12, 2.5, S.concrete(C.concreteDark, 0.7));
       det.box(hx + 1.31, y + 1.0, hz, 0.03, 2.0, 0.9, S.paint(0x4a3a2e, 0.8));
     }
-    if (r(2) > 0.62) {
+    if (r(2) > 0.62 && !israeli) {
       // Water tower on legs, timber tank with steel hoops.
       const [tx, tz] = at(60);
       for (const [lx, lz] of [[1, 1], [-1, 1], [-1, -1], [1, -1]]) det.rod(tx + lx * 1.0, y, tz + lz * 1.0, tx + lx * 0.85, y + 3.2, tz + lz * 0.85, 0.06, S.steel(0x3a3c3e), 6);
@@ -745,6 +928,313 @@ export class ChunkView {
       }
     }
     if (!tar.empty) this.addMesh(tar.build(), kitMaterial(), false, true);
+    this.railway(data, mats);
+    this.pitch(data, mats);
+  }
+
+
+  // ---------------------------------------------------------------- Israeli apartment blocks
+
+  /**
+   * A balcony under many of the windows on the two long walls, in stacks, as on the real blocks: a slab, a solid parapet with
+   * a dark rail on top, now and then an air-conditioning condenser; and on the bays with no balcony, the odd condenser on
+   * its bracket or a roller shutter half down over the window. The bays are the facade shader's own cells, so each balcony
+   * sits in front of a window.
+   */
+  private balconies(det: MeshBuilder, a: Aabb, tint: THREE.Color, seed: number, style: number) {
+    void style;
+    const floorH = 3.3;
+    const gh = floorH * 1.3;
+    const upper = Math.floor((a.y1 - gh) / floorH);
+    if (upper < 1) return;
+    const slab = S.concrete(tint.clone().multiplyScalar(1.04).getHex(), 0.6);
+    const parapet = S.concrete(tint.clone().multiplyScalar(0.9).getHex(), 0.7);
+    const rail = S.paint(0x3b3d40, 0.7);
+    const ac = S.paint(0xe4e4de, 0.6);
+    const shutter = S.paint(0xb5ad98, 0.8);
+    const target = 2.6 + seed * 0.7;
+    const d = a.maxZ - a.minZ;
+    const n = Math.max(1, Math.round(d / target));
+    const cell = d / n;
+    const sd = Math.round(seed * 1000);
+    for (const out of [-1, 1] as const) {
+      const wallX = out === 1 ? a.maxX : a.minX;
+      for (let c = 0; c < n; c++) {
+        const zc = a.minZ + (c + 0.5) * cell;
+        const balcony = hash2(sd + c * 7, out + 3, 51) < 0.38;
+        const bw = cell * 0.74;
+        for (let f = 0; f < upper; f++) {
+          const y = gh + f * floorH;
+          const roll = hash2(c * 31 + f, sd + out, 52);
+          if (balcony && roll > 0.12) {
+            det.box(wallX + out * 0.72, y + 0.07, zc, 1.44, 0.14, bw, slab);
+            det.box(wallX + out * 1.4, y + 0.62, zc, 0.08, 0.96, bw, parapet);
+            det.box(wallX + out * 1.4, y + 1.13, zc, 0.12, 0.05, bw + 0.04, rail);
+            if (roll > 0.74) det.box(wallX + out * 0.45, y + 0.4, zc + bw * 0.28, 0.5, 0.52, 0.72, ac);
+          } else if (!balcony) {
+            if (roll < 0.09) det.box(wallX + out * 0.2, y + 0.62, zc + cell * 0.3, 0.4, 0.55, 0.78, ac);
+            else if (roll < 0.2) {
+              // A roller shutter, lowered part way: housing over the window and the slats below it.
+              det.box(wallX + out * 0.08, y + 2.6, zc, 0.16, 0.22, cell * 0.5, shutter);
+              det.box(wallX + out * 0.05, y + 2.0, zc, 0.05, 1.1, cell * 0.46, shutter);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /** Solar water heaters on the roof: a tilted collector panel with a white tank lying across the top, in a loose grid. */
+  private solarHeaters(det: MeshBuilder, x0: number, x1: number, z0: number, z1: number, y: number, seed: number, inset: number) {
+    const w = x1 - x0 - inset * 2 - 3;
+    const d = z1 - z0 - inset * 2 - 3;
+    if (w < 3 || d < 3) return;
+    const cx = (x0 + x1) / 2;
+    const cz = (z0 + z1) / 2;
+    const cols = Math.max(1, Math.min(5, Math.floor(w / 3)));
+    const rows = Math.max(1, Math.min(4, Math.floor(d / 6)));
+    const sd = Math.round(seed * 1000);
+    const tankC = S.paint(0xefefe8, 0.5);
+    const panelC = S.paint(0x1c2a44, 0.4);
+    const frame = S.steel(0x8a8e90, 0.6);
+    for (let i = 0; i < cols; i++) {
+      for (let j = 0; j < rows; j++) {
+        if (hash2(sd + i * 11, j * 5 + 3, 61) > 0.5) continue;
+        const px = cx + ((i + 0.5) / cols - 0.5) * w;
+        const pz = cz + ((j + 0.5) / rows - 0.5) * d;
+        det.box(px, y + 0.55, pz + 0.1, 1.5, 0.06, 1.05, panelC, 0.62, 0, 0);
+        det.cyl(px, y + 1.05, pz - 0.28, 0.5, 1.4, 0.5, tankC, 0, 0, Math.PI / 2, 10);
+        det.rod(px - 0.6, y, pz - 0.4, px - 0.6, y + 0.8, pz - 0.28, 0.025, frame, 5);
+        det.rod(px + 0.6, y, pz - 0.4, px + 0.6, y + 0.8, pz - 0.28, 0.025, frame, 5);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- stadium, light rail
+
+  /**
+   * One stand of HaMoshava Stadium. A solid back wall of concrete panels, the seating rake as full-height steps (so the
+   * stand's flanks are stepped too), seats in alternating sectors of blue and white, a rail along the front, and on the
+   * tall stands a roof that reaches out over the seats.
+   */
+  private grandstand(fb: FacadeBuilder, det: MeshBuilder, bs: BuildingSpec, tint: THREE.Color) {
+    const a = bs.aabb;
+    const front = bs.front ?? 'e';
+    const ew = front === 'e' || front === 'w';
+    const D = ew ? a.maxX - a.minX : a.maxZ - a.minZ;
+    const L = ew ? a.maxZ - a.minZ : a.maxX - a.minX;
+    const H = a.y1;
+    const cx = (a.minX + a.maxX) / 2;
+    const cz = (a.minZ + a.maxZ) / 2;
+    // sgn: which way "towards the pitch" runs along the depth axis.
+    const sgn = front === 'e' || front === 'n' ? 1 : -1;
+    const frontEdge = ew ? (sgn > 0 ? a.maxX : a.minX) : sgn > 0 ? a.maxZ : a.minZ;
+    const backEdge = ew ? (sgn > 0 ? a.minX : a.maxX) : sgn > 0 ? a.minZ : a.maxZ;
+    const rowD = 0.95;
+    const rows = Math.max(3, Math.floor(D / rowD));
+    const y0 = H > 9 ? 1.0 : 0.7;
+    const y1 = H - (H > 9 ? 1.4 : 1.2);
+    const concrete = S.concrete(tint.clone().multiplyScalar(0.96).getHex(), 0.7);
+    const dark = S.concrete(tint.clone().multiplyScalar(0.72).getHex(), 0.75);
+    const blue = S.plastic(0x1f48a0, 0.6);
+    const white = S.plastic(0xe6e6df, 0.6);
+    const red = S.plastic(0xb3202a, 0.6);
+    const sectors = Math.max(2, Math.round(L / 9));
+    const secLen = L / sectors;
+    // Put a box in stand coordinates: `t` is the distance back from the front edge, `lat` the position along the stand.
+    const at = (t: number, lat: number, y: number, dt: number, h: number, dl: number, color: Parameters<MeshBuilder['box']>[6]) => {
+      const pd = frontEdge - sgn * t;
+      const pl = (ew ? a.minZ : a.minX) + lat;
+      if (ew) det.box(pd, y, pl, dt, h, dl, color);
+      else det.box(pl, y, pd, dl, h, dt, color);
+    };
+    for (let k = 0; k < rows; k++) {
+      const top = y0 + ((y1 - y0) * k) / Math.max(1, rows - 1);
+      const t = (k + 0.5) * (D / rows);
+      // The step itself, from the ground up so the flanks are solid.
+      at(t, L / 2, top / 2, D / rows + 0.02, top, L, concrete);
+      for (let s = 0; s < sectors; s++) {
+        const col = (s + Math.floor(k / 6)) % 4 === 3 ? red : s % 2 ? white : blue;
+        at(t - 0.12, (s + 0.5) * secLen, top + 0.1, 0.5, 0.2, secLen - 0.9, col);
+      }
+    }
+    // Aisles: a dark strip up the rake between every pair of sectors.
+    for (let s = 1; s < sectors; s++) {
+      for (let k = 0; k < rows; k += 2) {
+        const top = y0 + ((y1 - y0) * k) / Math.max(1, rows - 1);
+        at((k + 0.5) * (D / rows), s * secLen, top + 0.03, D / rows * 2, 0.06, 0.8, dark);
+      }
+    }
+    // The back wall, in concrete panels, a little proud of the last step; the end faces are the steps.
+    const wallX0 = ew ? backEdge - (sgn > 0 ? 0.02 : -0.02) : a.minX;
+    const wallX1 = ew ? wallX0 : a.maxX;
+    const wallZ0 = ew ? a.minZ : backEdge - (sgn > 0 ? 0.02 : -0.02);
+    const wallZ1 = ew ? a.maxZ : wallZ0;
+    // `wall` walks from its first to its second point with the face to the left of travel (towards (-dz, dx)).
+    if (ew) {
+      if (sgn > 0) fb.wall(wallX0, a.minZ, wallX1, a.maxZ, 0, H, 0, tint, 10, 0.5, 3.3, 3.2);
+      else fb.wall(wallX0, a.maxZ, wallX1, a.minZ, 0, H, 0, tint, 10, 0.5, 3.3, 3.2);
+    } else if (sgn > 0) fb.wall(a.maxX, wallZ0, a.minX, wallZ1, 0, H, 0, tint, 10, 0.5, 3.3, 3.2);
+    else fb.wall(a.minX, wallZ0, a.maxX, wallZ1, 0, H, 0, tint, 10, 0.5, 3.3, 3.2);
+    // A rail along the front row, and a drop of dark stripe where the pitch wall would be.
+    at(0.15, L / 2, 0.55, 0.08, 1.1, L, S.steel(0x5c6266, 0.6));
+    // The roof over the tall stands: a level slab reaching 3 m past the front, a red fascia, and slim columns at the back.
+    if (H > 9) {
+      const reach = D + 3.4;
+      const tt = reach / 2 - 3.4;
+      at(tt, L / 2, H + 0.3, reach, 0.35, L + 1.2, S.paint(0xcfd3d4, 0.6));
+      at(-3.1, L / 2, H + 0.3, 0.3, 0.7, L + 1.3, S.paint(0xb3202a, 0.6));
+      const cols = Math.max(2, Math.round(L / 10));
+      for (let i = 0; i <= cols; i++) at(D - 0.4, (i / cols) * L, H / 2 + 0.3, 0.5, H, 0.5, S.steel(0x6a6e70, 0.5));
+    } else {
+      at(D / 2, L / 2, H + 0.12, D + 0.3, 0.24, L + 0.3, concrete);
+    }
+    // Tall stands are where the sign goes; nothing more to add for the low ones.
+    void cx;
+    void cz;
+  }
+
+  /** The light-rail line: a concrete slab with two tracks, island platforms with canopies, and overhead wire on masts. */
+  private railway(data: ChunkData, mats: ChunkMaterials) {
+    const bx0 = data.cx * CHUNK;
+    const bz0 = data.cz * CHUNK;
+    const bx1 = bx0 + CHUNK;
+    const bz1 = bz0 + CHUNK;
+    const det = new MeshBuilder();
+    const slabC = S.concrete(0x8f8d86, 0.7);
+    const bedC = S.concrete(0x5a5853, 0.8);
+    const steel = S.steel(0x75797c, 0.5);
+    const mastC = S.steel(0x7d8184, 0.55);
+    const wire = S.steel(0x2a2c2e, 0.5);
+    for (const p of data.patches) {
+      if (p.kind === 'rail') {
+        const x0 = Math.max(p.x0, bx0);
+        const x1 = Math.min(p.x1, bx1);
+        const zc = (p.z0 + p.z1) / 2;
+        const wd = p.z1 - p.z0;
+        if (x1 - x0 < 0.05 || zc + wd / 2 < bz0 || zc - wd / 2 > bz1) continue;
+        const len = x1 - x0;
+        const mx = (x0 + x1) / 2;
+        det.box(mx, 0.045, zc, len, 0.09, wd, slabC);
+        for (const tz of [-3.9, 3.9]) {
+          det.box(mx, 0.093, zc + tz, len, 0.012, 2.3, bedC);
+          for (const r of [-0.7175, 0.7175]) det.box(mx, 0.17, zc + tz + r, len, 0.14, 0.07, steel);
+        }
+        // Joints across the slab every six metres, on a lattice that does not care where the chunk starts.
+        for (let x = Math.ceil((x0 - p.x0) / 6) * 6 + p.x0; x < x1; x += 6) det.box(x, 0.092, zc, 0.05, 0.006, wd, bedC);
+        // Masts every 26 m on both sides; each reaches an arm over its own track. Contact wire and a messenger wire above it.
+        for (let x = p.x0 + 8; x < p.x1 - 4; x += 26) {
+          if (x >= x0 && x < x1) {
+            for (const side of [-1, 1]) {
+              const pz = zc + side * (wd / 2 + 0.9);
+              if (pz < bz0 || pz >= bz1) continue;
+              det.cyl(x, 3.5, pz, 0.28, 7.0, 0.28, mastC, 0, 0, 0, 8);
+              det.rod(x, 6.4, pz, x, 6.25, zc + side * 3.9, 0.05, mastC, 5);
+              det.rod(x, 6.25, zc + side * 3.9, x, 5.35, zc + side * 3.9, 0.012, wire, 4);
+            }
+          }
+          for (const side of [-1, 1]) {
+            if (zc + side * 3.9 >= bz0 && zc + side * 3.9 < bz1 && x + 13 >= x0 && x + 13 < x1) det.rod(x + 13, 6.25, zc + side * 3.9, x + 13, 5.35, zc + side * 3.9, 0.01, wire, 4);
+          }
+        }
+        for (const side of [-1, 1]) {
+          const wz = zc + side * 3.9;
+          if (wz < bz0 || wz >= bz1) continue;
+          det.box(mx, 5.35, wz, len, 0.03, 0.03, wire);
+          det.box(mx, 6.25, wz, len, 0.025, 0.025, wire);
+        }
+      } else if (p.kind === 'platform') {
+        const x0 = Math.max(p.x0, bx0);
+        const x1 = Math.min(p.x1, bx1);
+        const zc = (p.z0 + p.z1) / 2;
+        if (x1 - x0 < 0.05 || zc < bz0 || zc >= bz1) continue;
+        const len = x1 - x0;
+        const mx = (x0 + x1) / 2;
+        det.box(mx, 0.1, zc, len, 0.12, p.z1 - p.z0, S.concrete(0xa9a79e, 0.7));
+        for (const e of [-1, 1]) det.box(mx, 0.165, zc + e * 1.4, len, 0.01, 0.4, S.paint(0xd8b02a, 0.7));
+        // Canopy: a long slab on posts, with a red fascia along both edges.
+        const cl = Math.max(0, len - (x0 > p.x0 ? 0 : 4) - (x1 < p.x1 ? 0 : 4));
+        const cxm = (x0 + x1) / 2 + ((x0 > p.x0 ? 0 : 2) - (x1 < p.x1 ? 0 : 2)) / 2;
+        if (cl > 1) {
+          det.box(cxm, 4.0, zc, cl, 0.18, 4.4, S.paint(0xd7dadb, 0.55));
+          for (const e of [-1, 1]) det.box(cxm, 3.92, zc + e * 2.2, cl, 0.36, 0.1, S.paint(0xc8161d, 0.5));
+        }
+        for (let x = Math.ceil((x0 - p.x0) / 8) * 8 + p.x0 + 4; x < x1 - 2; x += 8) {
+          if (x < p.x0 + 3 || x > p.x1 - 3) continue;
+          for (const e of [-1, 1]) det.cyl(x, 2.0, zc + e * 1.2, 0.16, 4.0, 0.16, S.steel(0x6a6e70, 0.55), 0, 0, 0, 8);
+        }
+      }
+    }
+    if (!det.empty) this.addMesh(det.build(), mats.roofs, true, true);
+  }
+
+  /** HaMoshava's pitch: dead grass in mowing stripes, white lines, a centre circle and a goal at each end. */
+  private pitch(data: ChunkData, mats: ChunkMaterials) {
+    const bx0 = data.cx * CHUNK;
+    const bz0 = data.cz * CHUNK;
+    const bx1 = bx0 + CHUNK;
+    const bz1 = bz0 + CHUNK;
+    const det = new MeshBuilder();
+    det.jitter = 0.02;
+    const line = S.paint(0xe8e6dc, 0.7);
+    const flat = (x0: number, x1: number, z0: number, z1: number, y: number, h: number, color: Parameters<MeshBuilder['box']>[6]) => {
+      const ax = Math.max(x0, bx0);
+      const bx = Math.min(x1, bx1);
+      const az = Math.max(z0, bz0);
+      const bz = Math.min(z1, bz1);
+      if (bx - ax < 0.01 || bz - az < 0.01) return;
+      det.box((ax + bx) / 2, y, (az + bz) / 2, bx - ax, h, bz - az, color);
+    };
+    for (const p of data.patches) {
+      if (p.kind !== 'pitch') continue;
+      const w = p.x1 - p.x0;
+      const l = p.z1 - p.z0;
+      const mx = (p.x0 + p.x1) / 2;
+      const mz = (p.z0 + p.z1) / 2;
+      const stripes = Math.round(l / 7);
+      for (let i = 0; i < stripes; i++) {
+        flat(p.x0, p.x1, p.z0 + (i * l) / stripes, p.z0 + ((i + 1) * l) / stripes, 0.04, 0.08, S.cloth(i % 2 ? 0x76843a : 0x6a7a34, 0.9));
+      }
+      const t = 0.14;
+      const m = 1.2;
+      // Touchlines, goal lines, halfway line.
+      flat(p.x0 + m, p.x0 + m + t, p.z0 + m, p.z1 - m, 0.085, 0.01, line);
+      flat(p.x1 - m - t, p.x1 - m, p.z0 + m, p.z1 - m, 0.085, 0.01, line);
+      flat(p.x0 + m, p.x1 - m, p.z0 + m, p.z0 + m + t, 0.085, 0.01, line);
+      flat(p.x0 + m, p.x1 - m, p.z1 - m - t, p.z1 - m, 0.085, 0.01, line);
+      flat(p.x0 + m, p.x1 - m, mz - t / 2, mz + t / 2, 0.085, 0.01, line);
+      // Penalty areas and six-yard boxes.
+      for (const end of [-1, 1]) {
+        const zEdge = end < 0 ? p.z0 + m : p.z1 - m;
+        const sign = end < 0 ? 1 : -1;
+        for (const [hw, dp] of [[9.2, 14], [4.4, 4.6]]) {
+          flat(mx - hw, mx - hw + t, Math.min(zEdge, zEdge + sign * dp), Math.max(zEdge, zEdge + sign * dp), 0.085, 0.01, line);
+          flat(mx + hw - t, mx + hw, Math.min(zEdge, zEdge + sign * dp), Math.max(zEdge, zEdge + sign * dp), 0.085, 0.01, line);
+          const zl = zEdge + sign * dp;
+          flat(mx - hw, mx + hw, zl - t / 2, zl + t / 2, 0.085, 0.01, line);
+        }
+        // The goal: two posts, a crossbar, and net bars going back.
+        const gz = zEdge - sign * -0.0;
+        const back = -sign * 2.0;
+        const inChunk = mx >= bx0 && mx < bx1 && gz >= bz0 && gz < bz1;
+        if (inChunk) {
+          const gp = S.paint(0xf0f0ea, 0.5);
+          for (const px of [-3.66, 3.66]) {
+            det.rod(mx + px, 0, gz, mx + px, 2.44, gz, 0.06, gp, 6);
+            det.rod(mx + px, 2.44, gz, mx + px, 2.1, gz + back, 0.03, gp, 5);
+            det.rod(mx + px, 0, gz + back, mx + px, 2.1, gz + back, 0.025, gp, 5);
+          }
+          det.rod(mx - 3.66, 2.44, gz, mx + 3.66, 2.44, gz, 0.06, gp, 6);
+          det.rod(mx - 3.66, 2.1, gz + back, mx + 3.66, 2.1, gz + back, 0.03, gp, 5);
+        }
+      }
+      if (mx >= bx0 && mx < bx1 && mz >= bz0 && mz < bz1) {
+        det.torus(mx, 0.09, mz, 7.0, 0.07, line, Math.PI / 2, 0, 0, 4, 40);
+        det.cyl(mx, 0.09, mz, 0.4, 0.02, 0.4, line, 0, 0, 0, 10);
+      }
+      void w;
+    }
+    if (!det.empty) this.addMesh(det.build(), mats.roofs, false, true);
   }
 
   /** A shopfront's drawn sign: one flat panel standing just off the wall that faces the boulevard. */
@@ -858,6 +1348,16 @@ export class ChunkView {
       for (let i = 0; i < 3; i++) box(6.5 + i * 0.6, 0.09 * (3 - i), 0, 0.6, 0.18 * (3 - i), 14 - i * 0.5, stoneDark);
       box(0.06, 2.1, 0, 0.14, 4.2, 6.5, S.glass(0x10181e));
       for (const [ex, ez, ew2, ed] of [[cx, a.minZ + 0.1, w, 0.2], [cx, a.maxZ - 0.1, w, 0.2]]) det.box(ex, y1 + 0.5, ez, ew2, 1.0, ed, stoneDark);
+    } else if (bs.role === 'busTerminal') {
+      // The Central Bus Station's hall: a long concession canopy on pilotis along the front where the buses draw up, a band of
+      // dark glass behind it, ribs on the upper floors, a plant room on the roof, and the rail along its edge.
+      box(2.6, 4.3, 0, 5.2, 0.3, latLen - 2, stone);
+      for (let lat = -latLen / 2 + 3; lat < latLen / 2 - 1; lat += 6) box(5.0, 2.15, lat, 0.45, 4.3, 0.45, stone);
+      box(0.06, 2.1, 0, 0.14, 4.0, latLen - 5, S.glass(0x10181e));
+      box(5.15, 4.62, 0, 0.1, 0.5, latLen - 2, S.paint(0x0d5c3a, 0.5));
+      for (let k = 1; k < bs.floors; k++) box(0.25, k * 3.3 + 1.0, 0, 0.5, 0.18, latLen, stoneDark);
+      det.box(cx, y1 + 1.4, cz, w * 0.5, 2.8, d * 0.2, stoneDark);
+      for (const [ex, ez, ew2, ed] of [[cx, a.minZ + 0.1, w, 0.2], [cx, a.maxZ - 0.1, w, 0.2]]) det.box(ex, y1 + 0.5, ez, ew2, 1.0, ed, stoneDark);
     } else if (bs.role === 'hallSide') {
       // Long facade towards the car park: colonnade under a shade slab, sun-shade ledges above every window row,
       // and air-conditioning units here and there; a railing round the roof.
@@ -890,7 +1390,7 @@ export class ChunkView {
     if (lm && !lm.empty) this.addMesh(lm.build(), kitMaterial(), true, true);
     for (const a of data.aabbs) {
       if (a.kind === 'wall') this.wallProp(b, a);
-      else if (a.kind === 'barricade') {
+      else if (a.kind === 'barricade' && !this.removed.has(a.id)) {
         // Barricades are separate meshes so they can be rammed or blown apart.
         const bb = new MeshBuilder();
         this.barricadeProp(bb, a);
@@ -997,32 +1497,44 @@ export class ChunkView {
   private buildColliders(def: TerrainDef, x0: number, z0: number) {
     // Heightfield for the ground.
     this.colliders.push(this.phys.addHeightfield(x0, z0, CHUNK, CELLS, this.data.heights));
+    for (const a of this.data.aabbs) this.addAabb(a);
     for (const a of this.data.aabbs) {
-      if (a.ramp) {
-        const r = a.ramp;
-        const rc = this.phys.addStaticTilted(r.x, r.y, r.z, r.hx, r.hy, r.hz, r.q, GROUPS.furn);
-        this.colliders.push(rc);
-        this.aabbColliders.set(a.id, rc);
-        continue;
-      }
-      const hy = (a.y1 - a.y0) / 2;
-      const c = this.phys.addStaticBox(
-        (a.minX + a.maxX) / 2,
-        (a.y1 + a.y0) / 2 + (a.kind === 'rock' ? 0 : 0),
-        (a.minZ + a.maxZ) / 2,
-        (a.maxX - a.minX) / 2,
-        hy,
-        (a.maxZ - a.minZ) / 2,
-        0,
-        a.kind === 'furniture' || a.kind === 'floor' ? GROUPS.furn : GROUPS.static,
-      );
-      this.colliders.push(c);
-      this.aabbColliders.set(a.id, c);
+      if (!a.pane || !a.paneN) continue;
+      const [nx, nz] = a.paneN;
+      this.panes.add({ key: String(a.id), kind: a.pane, c: [(a.minX + a.maxX) / 2, (a.y0 + a.y1) / 2, (a.minZ + a.maxZ) / 2], n: [nx, 0, nz], hw: Math.max(a.maxX - a.minX, a.maxZ - a.minZ) / 2, hh: (a.y1 - a.y0) / 2 });
     }
+    if (this.panes.size) this.group.add(this.panes.group);
     void def;
   }
 
+  /** Give a box a collider (a wall piece added when a wall is breached, or one of the chunk's own on load). */
+  addAabb(a: Aabb) {
+    if (this.aabbColliders.has(a.id)) return;
+    if (a.ramp) {
+      const r = a.ramp;
+      const rc = this.phys.addStaticTilted(r.x, r.y, r.z, r.hx, r.hy, r.hz, r.q, GROUPS.furn);
+      this.colliders.push(rc);
+      this.aabbColliders.set(a.id, rc);
+      return;
+    }
+    const hy = (a.y1 - a.y0) / 2;
+    const c = this.phys.addStaticBox(
+      (a.minX + a.maxX) / 2,
+      (a.y1 + a.y0) / 2,
+      (a.minZ + a.maxZ) / 2,
+      (a.maxX - a.minX) / 2,
+      hy,
+      (a.maxZ - a.minZ) / 2,
+      0,
+      // Glass stops people and cars and takes a round, but the camera sees through it.
+      a.kind === 'furniture' || a.kind === 'floor' || a.mat === 'glass' ? GROUPS.furn : GROUPS.static,
+    );
+    this.colliders.push(c);
+    this.aabbColliders.set(a.id, c);
+  }
+
   removeAabb(id: number) {
+    this.removed.add(id);
     const bm = this.barricadeMeshes.get(id);
     if (bm) {
       bm.visible = false;
@@ -1039,6 +1551,7 @@ export class ChunkView {
   dispose() {
     for (const c of this.colliders) this.phys.removeCollider(c);
     this.colliders = [];
+    this.panes.dispose();
     for (const g of this.geos) g.dispose();
     for (const im of this.instanced) im.dispose();
     this.group.removeFromParent();
@@ -1046,11 +1559,13 @@ export class ChunkView {
 }
 
 /** Base wall colours per facade style: panel concrete, brick, stucco, curtain wall. */
-const FACADE_TINT: number[][] = [
+export const FACADE_TINT: number[][] = [
   [0xb8b6ae, 0xa8a8a2, 0xc2bcb0, 0x9ea4a6],
   [0x9a5a44, 0x8a4c3a, 0xa86a50, 0x7e5244],
   [0xd2c6a8, 0xc8b8a0, 0xb8b0a0, 0xd8cbb8],
   [0x5a6670, 0x4e5a62, 0x66707a, 0x56626a],
 ];
 const AWNING = [0x8a2a24, 0x2a5a3a, 0x2a4a6a, 0xa87a2a, 0x5a3a5a];
+/** Rendered walls of an Israeli apartment block: warm white, cream, Jerusalem-stone sand, a little pink. */
+const ISRAELI_TINT = [0xe6dcc6, 0xdccfb2, 0xe9e2d0, 0xd6c6a2, 0xcdbf9f, 0xe2d2b8, 0xefe8da, 0xd9c8b4, 0xcfc4b0, 0xe0cfc0];
 const CAR_DOOR = [0x8a4b2d, 0x5d7a8a, 0xc8c3b6, 0x6b6e5a];

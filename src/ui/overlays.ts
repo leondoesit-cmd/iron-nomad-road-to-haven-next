@@ -1,4 +1,4 @@
-import { ENCOUNTERS, LEGS, STRUCTURES, encounterById, t, type LegDef } from '../data';
+import { ENCOUNTERS, LEGS, STRUCTURES, encounterById, legById, t, type LegDef } from '../data';
 import { FocusUI, type FocusItem } from './focus';
 import { LedgerPanel } from './ledger';
 import { ControlsMenu } from './controls';
@@ -496,11 +496,13 @@ export class Overlays {
     void ENCOUNTERS;
   }
 
-  showCampDecision(leg: LegDef, done: (siteId: string, hot: boolean) => void) {
+  /** `siteIds` and `hubId` are given in the open world, where the choices depend on where the convoy stopped. */
+  showCampDecision(leg: LegDef, done: (siteId: string, hot: boolean) => void, siteIds?: string[], hubId?: string | null) {
     const g = this.game;
     const bars = (v: number) => '▮'.repeat(Math.round(v * 5)) + '▯'.repeat(5 - Math.round(v * 5));
-    const sites = leg.campSites.map((s) => ({ id: s, ...STRUCTURES.sites[s] }));
-    const hub = leg.endHub ? LEGS.hubs[leg.endHub] : null;
+    const sites = (siteIds ?? leg.campSites).map((s) => ({ id: s, ...STRUCTURES.sites[s] }));
+    const hubKey = siteIds ? hubId : leg.endHub;
+    const hub = hubKey ? LEGS.hubs[hubKey] : null;
     this.vote({
       kind: 'site',
       title: 'The Dusk Bell',
@@ -643,8 +645,8 @@ export class Overlays {
     const ending: EndingId = selectEnding({ axes: c.axes, loyalCrewAlive: loyalCrew, crewAlive: c.crewLive.length, fragments: c.fragments.size });
     const leanText = t(`lean.${lean === 'neutral' ? 'neutral' : lean}`);
     const s = c.stats;
-    this.root.innerHTML = `<div class="report panel paper" style="width:min(820px,94%)"><h2>Rustgate: end of the vertical slice</h2>
-      <p style="text-transform:none;letter-spacing:.01em">You made it to the first real settlement. The broadcast crackles again, and somewhere to the north a gate waits to find out what kind of convoy you turned out to be.</p>
+    this.root.innerHTML = `<div class="report panel paper" style="width:min(820px,94%)"><h2>${legById(c.legId).open ? 'Haven' : 'Rustgate'}: end of the vertical slice</h2>
+      <p style="text-transform:none;letter-spacing:.01em">${legById(c.legId).open ? 'The gate stood open. Whatever the broadcast was, it was true enough to get you here. The road ends at Haven; the country around it does not, and the broadcast has started again, from further away.' : 'You made it to the first real settlement. The broadcast crackles again, and somewhere to the north a gate waits to find out what kind of convoy you turned out to be.'}</p>
       <div class="grid2"><div>Distance driven <b>${(s.distance / 1000).toFixed(1)} km</b></div><div>Nights survived <b>${s.nights}</b></div>
       <div>Infected put down <b>${s.zombiesKilled}</b></div><div>Raiders put down <b>${s.raidersKilled}</b></div>
       <div>Vehicles lost <b>${s.vehiclesLost}</b></div><div>Radio fragments <b>${c.fragments.size}/4</b></div>
@@ -655,7 +657,7 @@ export class Overlays {
     this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));
     const q = (k: string) => this.root.querySelector<HTMLElement>(`[data-fid="${k}"]`)!;
     g.focus.setItems([
-      { el: q('led'), press: () => camp && this.showLedger(camp, () => {}) },
+      { el: q('led'), press: () => camp && this.showLedger(camp, (next) => (legById(c.legId).open ? this.game.rollOut(next) : undefined)) },
       { el: q('new'), press: () => g.startNewGame() },
       { el: q('quit'), press: () => g.toTitle() },
     ]);

@@ -1345,22 +1345,50 @@ export function levelBase(plan: BuildingPlan, level: number) {
   return plan.floorY + level * plan.levelH;
 }
 
+/** What a building's walls are made of decides what a bullet can punch through: siding and planks, plaster, corrugated tin. */
+export function wallMaterial(look: BuildingPlan['look']): NonNullable<Aabb['mat']> {
+  return look === 'warehouse' || look === 'shack' ? 'sheet' : look === 'barn' || look === 'house' ? 'wood' : 'plaster';
+}
+
+/** What a window of a building is glazed with: a shop's wide front takes more than a house's sash. */
+export function paneKind(look: BuildingPlan['look'], op: Opening): import('../sim/glass').GlassKind {
+  return look === 'store' && op.b - op.a >= 1.8 ? 'shop' : 'window';
+}
+
+/** The key a window's pane goes by, for the building's glass and the collider that stands in for it. */
+export const paneKey = (wall: number, op: Opening) => `${wall}:${op.a.toFixed(2)}`;
+
+/** The colliders of one wall: a box for each solid piece between its openings. `wi` is the wall's index in the plan. */
+export function wallAabbs(plan: BuildingPlan, w: Wall, wi: number, newId: () => number): Aabb[] {
+  const out: Aabb[] = [];
+  const mat = wallMaterial(plan.look);
+  const base = levelBase(plan, w.level);
+  for (const p of wallPieces(w)) {
+    if (!p.solid) continue;
+    const y0 = w.level === 0 && p.v0 === 0 ? plan.floorY - 1.2 : base + p.v0;
+    const y1 = base + p.v1;
+    const extra = { mat, wall: wi };
+    if (w.axis === 'x') out.push({ id: newId(), minX: p.u0, maxX: p.u1, minZ: w.c - w.t / 2, maxZ: w.c + w.t / 2, y0, y1, kind: 'partition', hp: 99999, ...extra });
+    else out.push({ id: newId(), minX: w.c - w.t / 2, maxX: w.c + w.t / 2, minZ: p.u0, maxZ: p.u1, y0, y1, kind: 'partition', hp: 99999, ...extra });
+  }
+  // Whole panes of glass stop a person as much as a wall does, and any bullet breaks them.
+  for (const op of w.ops) {
+    if (op.kind !== 'window' || op.glass !== 'intact') continue;
+    const py0 = base + op.sill;
+    const py1 = base + op.head;
+    if (w.axis === 'x') out.push({ id: newId(), minX: op.a, maxX: op.b, minZ: w.c - 0.025, maxZ: w.c + 0.025, y0: py0, y1: py1, kind: 'partition', hp: 99999, mat: 'glass', wall: wi, pane: paneKind(plan.look, op) });
+    else out.push({ id: newId(), minX: w.c - 0.025, maxX: w.c + 0.025, minZ: op.a, maxZ: op.b, y0: py0, y1: py1, kind: 'partition', hp: 99999, mat: 'glass', wall: wi, pane: paneKind(plan.look, op) });
+  }
+  return out;
+}
+
 /** Colliders for walls, furniture, stairs and upper floors. Ground floors are the terrain itself. */
 export function planAabbs(plan: BuildingPlan, newId: () => number): Aabb[] {
   const out: Aabb[] = [];
   const box = (minX: number, maxX: number, minZ: number, maxZ: number, y0: number, y1: number, kind: Aabb['kind'], extra: Partial<Aabb> = {}) => {
     out.push({ id: newId(), minX, maxX, minZ, maxZ, y0, y1, kind, hp: 99999, ...extra });
   };
-  for (const w of plan.walls) {
-    const base = levelBase(plan, w.level);
-    for (const p of wallPieces(w)) {
-      if (!p.solid) continue;
-      const y0 = (w.level === 0 && p.v0 === 0 ? plan.floorY - 1.2 : base + p.v0);
-      const y1 = base + p.v1;
-      if (w.axis === 'x') box(p.u0, p.u1, w.c - w.t / 2, w.c + w.t / 2, y0, y1, 'partition');
-      else box(w.c - w.t / 2, w.c + w.t / 2, p.u0, p.u1, y0, y1, 'partition');
-    }
-  }
+  plan.walls.forEach((w, wi) => out.push(...wallAabbs(plan, w, wi, newId)));
   for (const f of plan.furn) {
     if (!f.solid || f.h < 0.3) continue;
     const r = furnRect(f);

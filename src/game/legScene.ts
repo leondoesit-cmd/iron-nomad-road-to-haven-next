@@ -1,3 +1,4 @@
+import { bind } from '../sim/vitals';
 import * as THREE from 'three';
 import { ENEMIES, VEHICLES, boatDef, partDef, t, type LegDef } from '../data';
 import { ChunkSource, type ChunkData } from '../world/chunkgen';
@@ -5,8 +6,9 @@ import { CHUNK, groundHeight, heightAt, roadX, surfaceAt, waterAt as terrainWate
 import type { Aabb, PickupSpawn, ScavContainer, ScavZone } from '../world/layout';
 import { chunkKey } from '../world/layout';
 import { ChunkView, disposeChunkMaterials, makeChunkMaterials, type ChunkMaterials } from '../render/chunkview';
-import { makeBeam, makePickup } from '../render/props';
+import { makePickup } from '../render/props';
 import { Landscape } from '../render/landscape';
+import { Destruction } from './destruction';
 import { clamp, smoothstep } from '../core/math';
 import { Scene, type CompassPin, type SceneServices } from './scene';
 import { QUALITY } from '../render/renderer';
@@ -18,23 +20,35 @@ import { gearDrop } from '../sim/gear';
 import { disposeTree } from '../render/dispose';
 import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { RARITY_NAMES, newPart, partName } from '../sim/parts';
-import { carriedName, planStow, type Carried, type Loose } from '../sim/carry';
+import { carriedName, type Carried, type Goods, type Loose } from '../sim/carry';
 import { lakeCurrent } from '../world/lakes';
 import { DRUGS, DRUG_IDS } from '../sim/drugs';
 import type { DelveSite } from '../world/delveSites';
 import { newDelveRecord, type DelveRecord, type PlayerCarry } from './delveScene';
-import { LegMapBaker, SITE_LABEL, minefieldOutline, newFrame, roadLine, type MapFrame } from '../ui/mapdata';
+import { districtMask } from '../world/openWorld';
+import type { WorldMemory, WorldPose } from './worldMemory';
+import { LegMapBaker, SITE_LABEL, minefieldOutline, newFrame, openRoadLines, roadLine, type MapFrame } from '../ui/mapdata';
 
 interface PickupEntity {
   spawn: PickupSpawn;
   group: THREE.Group;
   baseY: number;
   phase: number;
-  /** Set for parts, fuel cans and oil cans: things carried by hand rather than banked on touch. */
+  /** Set for parts, fuel cans and oil cans: things carried by hand. Everything else is banked on pickup. */
   loose?: Carried;
-  /** Seconds before the full-trunk note may show again. */
-  noteT?: number;
 }
+
+const GOODS_NAME: Record<string, string> = {
+  scrap: 'Scrap',
+  parts: 'Spare parts',
+  tech: 'Tech',
+  rations: 'Rations',
+  medicine: 'Medicine',
+  ammo: 'Ammo',
+  chassis: 'Salvaged chassis',
+  fragment: 'Radio fragment',
+};
+const goodsLabel = (p: PickupSpawn) => (p.kind === 'ammo' || p.amount <= 1 ? GOODS_NAME[p.kind] : `${GOODS_NAME[p.kind]} (${p.amount})`);
 
 const partMk = (id: string) => partDef(id).mk;
 
@@ -64,6 +78,9 @@ interface ZoneState {
 }
 
 const STREAM_R = 2;
+/** Milliseconds of chunk work a tick may start: for the look-ahead, and for a chunk next to a player. */
+const STREAM_CALM_MS = 4;
+const STREAM_URGENT_MS = 10;
 const MINE_COLOR = new THREE.Color(0x1d1b19);
 
 export class LegScene extends Scene {
@@ -71,6 +88,8 @@ export class LegScene extends Scene {
   mode = 'leg' as const;
   src: ChunkSource;
   mats: ChunkMaterials;
+  /** City ground and roads for a district chunk of the open world (made on first use). */
+  private cityMats: ChunkMaterials | null = null;
   chunks = new Map<number, ChunkView>();
   landscape: Landscape;
   pickups = new Map<string, PickupEntity>();
@@ -100,27 +119,35 @@ export class LegScene extends Scene {
   private mineT = 0;
   private fuelTip = false;
   private repairTip = false;
-  private loadQueueT = 0;
   /** When the last car or parts tip was shown, so they never talk over each other. */
   private carTipAt = -99;
   private legRng: Rng;
   distanceTravelled = 0;
   private lastLead = 0;
+  private lastX = 0;
   /** Per-leg loot snapshot for the dawn report. */
   startStocks = { ...this.campaign.stocks };
+
+  /** The world's memory, when this leg is the open world: adopted at start, filled in by `capture` at dusk. */
+  memory: WorldMemory | null = null;
+  /** Where the convoy decided to camp (the Dusk Bell's answer), once it has. */
+  campPose: WorldPose | null = null;
 
   constructor(
     svc: SceneServices,
     public leg: LegDef,
+    opts: { memory?: WorldMemory; start?: WorldPose } = {},
   ) {
     super(svc);
     this.biome = leg.biome;
+    if (leg.open) this.cityMix = 0;
     this.clock = new DayClock(leg.dayLength, 0.1);
-    this.src = new ChunkSource(leg);
+    this.src = opts.memory?.src ?? new ChunkSource(leg);
+    if (opts.memory) this.adoptMemory(opts.memory);
     this.terrain = this.src.layout.terrain;
     this.legRng = new Rng(leg.seed + this.campaign.day * 17);
     this.mats = makeChunkMaterials(leg.biome, leg.theme);
-    this.landscape = new Landscape(this.terrain, this.src.layout);
+    this.landscape = new Landscape(this.terrain, this.src.layout, leg.open ? this.src.cityBuildings() : undefined);
     this.obs.ground = (x, z) => heightAt(this.terrain!, x, z);
     // Doorways of every building, so the dead can find their way in and out.
     this.zombies.buildings = this.src.layout.rural.map((b) => {
@@ -134,6 +161,18 @@ export class LegScene extends Scene {
         }
       }
       return { x0: b.plan.x0 - 1, x1: b.plan.x1 + 1, z0: b.plan.z0 - 1, z1: b.plan.z1 + 1, doors };
+    });
+    this.world = new Destruction(this, {
+      buildings: () => this.landscape.buildings,
+      chunk: (cx, cz) => {
+        const view = this.chunks.get(chunkKey(cx, cz));
+        return { data: this.src.get(cx, cz), view };
+      },
+      doorway: (bv, axis, c, mid) => {
+        const i = this.src.layout.rural.indexOf(bv.rb);
+        const b = this.zombies.buildings[i];
+        if (b) b.doors.push(axis === 'z' ? { x: c, z: mid, nx: 1, nz: 0 } : { x: mid, z: c, nx: 0, nz: 1 });
+      },
     });
     this.root.add(this.landscape.group);
     // Cut a building away for each viewer standing inside it (roof and upper floors), per view.
@@ -152,25 +191,155 @@ export class LegScene extends Scene {
     this.loose = {
       nearest: (x, z, r, prefer) => this.looseNearest(x, z, r, prefer),
       take: (id) => this.looseTake(id),
+      nearestGoods: (x, z, r, prefer) => this.goodsNearest(x, z, r, prefer),
+      takeGoods: (id, by) => this.goodsTake(id, by),
       drop: (x, z, c) => this.looseDrop(x, z, c),
     };
-    this.src.layout.ambushes.forEach((spec) => this.ambushes.push({ spec, state: 'idle', tries: 0, waiting: [], t: 0 }));
-    this.src.layout.zones.forEach((zone) => this.zones.push({ zone, noise: 0, horde: 0, fired: false }));
+    this.src.layout.ambushes.forEach((spec) => this.ambushes.push({ spec, state: this.memory?.ambushDone.has(spec.id) ? 'done' : 'idle', tries: 0, waiting: [], t: 0 }));
+    this.src.layout.zones.forEach((zone) => this.zones.push({ zone, noise: 0, horde: 0, fired: !!this.memory?.zoneFired.has(zone.id) }));
     this.buildMines();
     this.registerDelves();
     this.spawnBoats();
     for (const car of this.src.layout.cars) this.cars.add(car);
     // Preload the start so the world exists before anyone drives.
-    const st = this.src.layout.start;
+    const st = opts.start ? this.freeSpot(opts.start) : this.src.layout.start;
     this.loadAround([{ x: st.x, z: st.z }], 1, 99);
     this.P.step();
     this.spawnConvoy(st.x, st.z, st.yaw, 3.6, true);
     for (const m of this.campaign.crewLive) this.crew.spawn(m, st.x, st.z - 9, st.yaw);
     this.crew.mode = 'follow';
     this.lastLead = st.z;
+    this.lastX = st.x;
     this.R.setLight(this.clockLight(), this.biome);
+    if (leg.open) {
+      this.updateBiome(0, true);
+      this.R.setLight(this.clockLight(), this.biome, this.lightCity);
+      this.startCampPrompt();
+      for (const q of this.memory?.zombies ?? []) this.zombies.spawn(q.kind, q.x, q.z, q.dormant, q.cluster);
+      // What the last day left on the road: tyre marks, and parts that were torn off and not picked up.
+      if (this.memory?.tracks) this.marks.restore(this.memory.tracks);
+      for (const d of this.memory?.drops ?? []) this.looseDrop(d.x, d.z, d.carried);
+      this.radio(opts.start ? t('radio.open.again', { day: this.campaign.day }) : t('radio.open.start'));
+      return;
+    }
     this.radio(leg.index === 1 ? t('radio.intro1') : leg.index === 2 ? t('radio.l2.start') : t('radio.l3.start'));
     if (leg.index === 2) this.services.onRadio(t('radio.l2.voice2'));
+  }
+
+  /** The nearest clear dry ground to a pose: a camp may have been made at the foot of a wall, and the morning's vehicles need room. */
+  private freeSpot(p: WorldPose): WorldPose {
+    const L = this.src.layout;
+    const T = this.terrain!;
+    for (let r = 0; r <= 90; r += 6) {
+      for (let k = 0; k < (r === 0 ? 1 : 12); k++) {
+        const a = (k / 12) * Math.PI * 2;
+        const x = p.x + Math.cos(a) * r;
+        const z = p.z + Math.sin(a) * r;
+        if (!L.blockedAt(x, z, 7) && !terrainWater(T, x, z)) return { x, z, yaw: p.yaw };
+      }
+    }
+    return p;
+  }
+
+  private adoptMemory(m: WorldMemory) {
+    this.memory = m;
+    m.src = this.src;
+    this.takenPickups = m.takenPickups;
+    this.doneEncounters = m.doneEncounters;
+    this.shownTips = m.shownTips;
+    this.placesShown = m.placesShown;
+    this.brokenAabbs = m.brokenAabbs;
+    this.spawnedChunks = m.spawnedChunks;
+    this.mapSeen = m.mapSeen;
+    this.delveRecords = m.delveRecords;
+    if (m.cars) this.cars.states = m.cars;
+    // After a reload the layout is new: containers that were searched are marked on it again.
+    if (m.searched.size) for (const z of this.src.layout.zones) for (const c of z.containers) if (m.searched.has(c.id)) c.taken = true;
+  }
+
+  /** Writes what the world should remember into its memory, just before this scene is torn down for the night. */
+  capture(m: WorldMemory) {
+    this.cars.clear();
+    m.cars = this.cars.states;
+    m.zombies = this.zombies.list.filter((z) => !z.dead && !z.raid).slice(0, 700).map((z) => ({ kind: z.kind, x: z.x, z: z.z, dormant: z.state === 'dormant', cluster: z.cluster }));
+    m.ambushDone = new Set(this.ambushes.filter((a) => a.state === 'done').map((a) => a.spec.id));
+    m.zoneFired = new Set(this.zones.filter((z) => z.fired).map((z) => z.zone.id));
+    m.camp = this.campPose;
+    for (const z of this.zones) for (const c of z.zone.containers) if (c.taken) m.searched.add(c.id);
+    m.tracks = this.marks.snapshot();
+    // Pieces still lying in the road with a part in them are kept as pickups; so is anything set down on the ground.
+    const drops: WorldMemory['drops'] = [];
+    for (const p of this.debris.pieces) {
+      if (!p.item) continue;
+      const t = p.body.translation();
+      drops.push({ x: t.x, z: t.z, carried: { kind: 'part', item: p.item } });
+    }
+    for (const [id, e] of this.pickups) if (id.startsWith('drop') && e.loose) drops.push({ x: e.spawn.x, z: e.spawn.z, carried: e.loose });
+    m.drops = drops;
+  }
+
+  // ------------------------------------------------------------------ making camp (open world)
+
+  /** After the Dusk Bell, anyone on foot can hold to call the camp wherever they are. */
+  private startCampPrompt() {
+    for (const p of this.players) {
+      this.interact.add({
+        id: `camp:${p.index}`,
+        x: p.pos.x,
+        z: p.pos.z,
+        r: 1.6,
+        prompt: 'Hold to make camp here',
+        dur: 2.2,
+        priority: -4,
+        enabled: (q) => q === p && this.clock.bellRung && q.state === 'foot' && !this.pendingResult,
+        run: () => this.callCamp(),
+      });
+    }
+  }
+
+  /** Keeps each camp prompt under its player's feet. */
+  private moveCampPrompts() {
+    for (const i of this.interact.list) {
+      if (!i.id.startsWith('camp:')) continue;
+      const p = this.players[Number(i.id.slice(5))];
+      if (!p) continue;
+      i.x = p.pos.x;
+      i.z = p.pos.z;
+    }
+  }
+
+  /** The convoy stops here for the night: remember where, and ask which kind of camp. */
+  private callCamp() {
+    if (this.pendingResult) return;
+    const lead = this.players.find((q) => q.alive) ?? this.players[0];
+    const v = lead.vehicle ?? lead.ownVehicle;
+    const x = v ? v.position.x : lead.pos.x;
+    const z = v ? v.position.z : lead.pos.z;
+    this.campPose = { x, z, yaw: v ? v.yaw : lead.yaw };
+    this.pendingResult = true;
+    this.endReached = true;
+    this.onResult({ type: 'dusk' });
+  }
+
+  /** Where the camp is, for the place-name on the Ledger and for the camp's own rules: a hub if one is close. */
+  hubNearby(): string | null {
+    const o = this.terrain?.open;
+    const p = this.campPose;
+    if (!o || !p) return null;
+    for (const h of o.hubs) if (Math.hypot(h.x - p.x, h.z - p.z) < 170) return h.id;
+    if (Math.hypot(o.haven.x - p.x, o.haven.z - p.z) < 170) return 'haven';
+    return null;
+  }
+
+  /** The camps this ground offers: the city's own in a district, a gas stop's if one is close, otherwise open flats and rock. */
+  campOptions(): string[] {
+    const o = this.terrain?.open;
+    const p = this.campPose;
+    if (!o || !p) return this.leg.campSites;
+    if (districtMask(o, p.x, p.z) > 0.5) return ['carPark', 'plaza'];
+    const out = ['flats', 'canyonMouth'];
+    if (this.terrain!.sites.some((s) => (s.kind === 'gasStop' || s.kind === 'depot' || s.kind.startsWith('hub')) && Math.hypot(s.x - p.x, s.z - p.z) < 240)) out.unshift('gasStation');
+    return out;
   }
 
   private clockLight() {
@@ -276,6 +445,7 @@ export class LegScene extends Scene {
         p.syncEquip();
         if (c.equip === 'gun') p.equipGun();
       }
+      if (reason === 'rescue') bind(p.bleed);
       p.invuln = 1.5;
     });
     if (reason === 'rescue') {
@@ -328,16 +498,16 @@ export class LegScene extends Scene {
     }
   }
 
-  private loadChunk(cx: number, cz: number) {
+  private loadChunk(cx: number, cz: number, staged = false) {
     const key = chunkKey(cx, cz);
     const data0 = this.src.get(cx, cz);
     // Barricades already broken stay broken.
     const data: ChunkData = this.brokenAabbs.size ? { ...data0, aabbs: data0.aabbs.filter((a) => !this.brokenAabbs.has(a.id)) } : data0;
-    const view = new ChunkView(data, this.terrain!, this.mats, this.P, { scatter: QUALITY[this.R.quality].scatter });
+    const mats = data.city && this.leg.biome !== 'city' ? (this.cityMats ??= makeChunkMaterials('city', this.leg.theme)) : this.mats;
+    const view = new ChunkView(data, this.terrain!, mats, this.P, { scatter: QUALITY[this.R.quality].scatter, staged, onGround: () => this.landscape.setLoaded(cx, cz, true) });
     this.root.add(view.group);
     view.group.updateMatrixWorld(true);
     this.chunks.set(key, view);
-    this.landscape.setLoaded(cx, cz, true);
     for (const a of data.aabbs) if (!a.physOnly) this.obs.add(a);
     // Pickups
     for (const p of data.pickups) {
@@ -380,8 +550,74 @@ export class LegScene extends Scene {
     this.landscape.setLoaded(view.data.cx, view.data.cz, false);
   }
 
+  /**
+   * Streaming is paced, not bursty. A chunk is made in small steps (its data, then its ground and colliders, then its
+   * buildings, props and ground cover), and a tick does steps only while it is inside a small time budget: a few
+   * milliseconds when the work is the look-ahead, which has all the time in the world, and a few more when a chunk next
+   * to someone is missing. A slow machine does fewer steps a tick, never a whole chunk at once.
+   */
+  private streamWork(points: { x: number; z: number }[], here: { x: number; z: number }[]) {
+    const dist = (list: { x: number; z: number }[], cx: number, cz: number) => {
+      let best = Infinity;
+      for (const p of list) {
+        const dx = cx - Math.floor(p.x / CHUNK);
+        const dz = cz - Math.floor(p.z / CHUNK);
+        best = Math.min(best, dx * dx + dz * dz);
+      }
+      return best;
+    };
+    const t0 = performance.now();
+    for (let unit = 0; unit < 6; unit++) {
+      // Finish the nearest staged chunk, if there is one.
+      let pendView: ChunkView | null = null;
+      let pendD = Infinity;
+      for (const v of this.chunks.values()) {
+        if (!v.pending) continue;
+        const d = dist(points, v.data.cx, v.data.cz);
+        if (d < pendD) {
+          pendD = d;
+          pendView = v;
+        }
+      }
+      // The nearest chunk that is wanted and not in.
+      let wantD = Infinity;
+      let wx = 0;
+      let wz = 0;
+      for (const p of points) {
+        const pcx = Math.floor(p.x / CHUNK);
+        const pcz = Math.floor(p.z / CHUNK);
+        for (let dx = -STREAM_R; dx <= STREAM_R; dx++) {
+          for (let dz = -STREAM_R; dz <= STREAM_R; dz++) {
+            if (this.chunks.has(chunkKey(pcx + dx, pcz + dz))) continue;
+            const d = dx * dx + dz * dz;
+            if (d < wantD) {
+              wantD = d;
+              wx = pcx + dx;
+              wz = pcz + dz;
+            }
+          }
+        }
+      }
+      if (!pendView && wantD === Infinity) return;
+      // A staged chunk is finished before the next one is started, unless the next one is much closer.
+      let cx: number;
+      let cz: number;
+      if (pendView && pendD <= wantD + 2) {
+        pendView.buildNext();
+        cx = pendView.data.cx;
+        cz = pendView.data.cz;
+      } else {
+        cx = wx;
+        cz = wz;
+        if (this.src.step(wx, wz)) this.loadChunk(wx, wz, true);
+      }
+      // Only a chunk next to someone is worth hurrying; the look-ahead has all the time it needs.
+      if (performance.now() - t0 >= (dist(here, cx, cz) > 2 ? STREAM_CALM_MS : STREAM_URGENT_MS)) return;
+    }
+  }
+
   private stream(dt: number) {
-    this.loadQueueT -= dt;
+    void dt;
     const pts: { x: number; z: number }[] = [];
     for (const p of this.players) {
       const v = p.vehicle;
@@ -394,10 +630,7 @@ export class LegScene extends Scene {
         pts.push({ x: p.vehicle.position.x + fx * 120, z: p.vehicle.position.z + fz * 120 });
       }
     }
-    if (this.loadQueueT <= 0) {
-      this.loadQueueT = 0.02;
-      this.loadAround(pts, STREAM_R, 1);
-    }
+    this.streamWork(pts, pts.slice(0, this.players.length));
     // Unload far chunks (hysteresis of one chunk).
     for (const [key, view] of this.chunks) {
       let near = false;
@@ -457,7 +690,7 @@ export class LegScene extends Scene {
         this.addLoot(c.loot, 'search');
         // Seeded by the container, so reloading a chunk never rerolls a find.
         const find = gearDrop(new Rng(hashString(c.id) ^ Math.imul(this.campaign.seed, 2654435761)), 'search', { depth: c.depth, progress: this.gearProgress, biome: this.biome === 'city' ? 'city' : 'waste' });
-        if (find) this.addGear(p, find);
+        if (find) this.dropGear(find, c.x, c.z);
         this.giveDrugs(c.drugs, p);
         this.audio.play('loot', c.x, c.z, 0.8);
         this.removeContainerView(c.id);
@@ -633,13 +866,61 @@ export class LegScene extends Scene {
     if (how === 'charge') this.radio('Barricade down. That was loud.');
   }
 
+  /** A moving vehicle through a pane of glass: a shopfront or a window gives to a car at a walking-pace-and-more. */
+  private ramGlass() {
+    for (const v of this.vehicles) {
+      if (v.wreck || v.mass < 300 || v.speed < 3.5) continue;
+      const [fx, , fz] = v.body.forward();
+      const reach = v.def.length / 2 + 0.8;
+      const px = v.position.x + fx * reach;
+      const pz = v.position.z + fz * reach;
+      const panes: Aabb[] = [];
+      this.obs.near(px, pz, v.def.width / 2 + 1.4, (a) => {
+        if (a.mat !== 'glass' || a.kind !== 'partition') return;
+        const cx = Math.max(a.minX, Math.min(px, a.maxX));
+        const cz = Math.max(a.minZ, Math.min(pz, a.maxZ));
+        // In the way of the nose, and low enough for the car to reach it.
+        if (Math.hypot(cx - px, cz - pz) < v.def.width / 2 + 0.4 && a.y0 < v.position.y + 1.6 && a.y1 > v.position.y - 0.3) panes.push(a);
+      });
+      for (const a of panes) {
+        if (!this.obs.byId(a.id)) continue;
+        // Enough to take a pane out at a crawl, and a good many at speed.
+        if (this.world!.hit(a, 14 + v.speed * 6, 'ram', { x: Math.max(a.minX, Math.min(px, a.maxX)), y: Math.min(a.y1 - 0.2, Math.max(a.y0 + 0.2, v.position.y + 0.6)), z: Math.max(a.minZ, Math.min(pz, a.maxZ)) })) {
+          v.glass.hitNear(px, v.position.y + 0.5, pz, 6 + v.speed, 'ram', 2.2);
+          if (v.driver?.isPlayer) this.players[v.driver.index].cam.addShake(0.25);
+        }
+      }
+    }
+  }
+
   private updateRamming() {
+    this.ramGlass();
     for (const v of this.vehicles) {
       if (v.wreck || v.mass < 800 || v.speed < 6.5) continue;
       const [fx, , fz] = v.body.forward();
       const reach = v.def.length / 2 + 1.4 + v.speed * 0.05;
       const px = v.position.x + fx * reach;
       const pz = v.position.z + fz * reach;
+      // A heavy vehicle at speed goes through a thin wall: the blow is its kinetic energy, spent on the wall.
+      if (v.speed >= 7.5) {
+        const walls: Aabb[] = [];
+        this.obs.near(px, pz, v.def.width / 2 + 1.2, (a) => {
+          if (a.kind !== 'partition' || a.wall === undefined) return;
+          const cx = Math.max(a.minX, Math.min(px, a.maxX));
+          const cz = Math.max(a.minZ, Math.min(pz, a.maxZ));
+          if (Math.hypot(cx - px, cz - pz) < 1.1) walls.push(a);
+        });
+        for (const a of walls) {
+          if (!this.obs.byId(a.id)) continue;
+          const broke = this.world!.hit(a, (0.5 * v.mass * v.speed * v.speed) / 150, 'ram', { x: px, y: v.position.y + 0.8, z: pz });
+          if (broke) {
+            v.takeHit(8 + v.speed, px, pz, { ram: true, silent: true });
+            const lv = v.body.body.linvel();
+            v.body.body.setLinvel({ x: lv.x * 0.6, y: lv.y, z: lv.z * 0.6 }, true);
+            if (v.driver?.isPlayer) this.players[v.driver.index].cam.addShake(0.5);
+          }
+        }
+      }
       this.obs.near(px, pz, v.def.width / 2 + 1.5, (a) => {
         if (a.kind !== 'barricade' || a.breakable !== 'flimsy') return;
         const cx = Math.max(a.minX - 0.5, Math.min(px, a.maxX + 0.5));
@@ -660,20 +941,10 @@ export class LegScene extends Scene {
 
   // ------------------------------------------------------------------ pickups
 
-  /** Build the floating model for a pickup and register it. Parts, fuel and oil are carried by hand. */
+  /** Build the floating model for a pickup and register it. Nothing is picked up on touch: every item is taken by hand. */
   private spawnPickup(p: PickupSpawn) {
-    const m = makePickup(p.kind === 'part' ? `part${p.amount}` : p.kind);
+    const m = makePickup(p.kind === 'part' ? (p.part ? `part:${p.part.id}` : `part${p.amount}`) : p.kind);
     m.group.position.set(p.x, p.y, p.z);
-    if (p.kind === 'part') {
-      // Good parts show from a distance, in their rarity colour.
-      if (p.amount >= 2) m.group.add(makeBeam(p.amount >= 3 ? 0xffb454 : 0x7ddc7a, p.amount >= 3 ? 14 : 8));
-    } else if (p.kind === 'fragment' || p.kind === 'chassis') {
-      const col = p.kind === 'fragment' ? 0x3ad0ff : 0x3aa0ff;
-      m.group.add(makeBeam(col, 22));
-    } else if (p.amount >= 14 && p.kind !== 'fuel' && p.kind !== 'oil') {
-      m.group.add(makeBeam(0xffe9a0, 9));
-    } else if (p.kind === 'fuel') m.group.add(makeBeam(0xff6a3a, 7));
-    else if (p.kind === 'oil') m.group.add(makeBeam(0xe0b030, 6));
     this.root.add(m.group);
     let loose: Carried | undefined;
     if (p.kind === 'part' && p.part) loose = { kind: 'part', item: newPart(p.part.id, p.part.cond) };
@@ -705,16 +976,42 @@ export class LegScene extends Scene {
         best = { id, carried: e.loose, x: e.spawn.x, y: e.spawn.y, z: e.spawn.z };
       }
     }
-    return best;
+    // A part that tore off a vehicle and has settled in the road can be lifted like any other.
+    return this.debris.nearestLoose(x, z, bd, prefer) ?? best;
   }
 
   private looseTake(id: string): Carried | null {
+    if (id.startsWith('debris:')) return this.debris.take(id);
     const e = this.pickups.get(id);
     if (!e?.loose) return null;
     const c = e.loose;
     this.takenPickups.add(id);
     this.removePickup(id);
     return c;
+  }
+
+  /** The nearest banked-on-pickup item (scrap, rations, ammo and the like) within `r`. */
+  private goodsNearest(x: number, z: number, r: number, prefer?: string): Goods | null {
+    let best: Goods | null = null;
+    let bd = r;
+    for (const [id, e] of this.pickups) {
+      if (e.loose || !GOODS_NAME[e.spawn.kind]) continue;
+      const d = Math.hypot(e.spawn.x - x, e.spawn.z - z) - (id === prefer ? 0.3 : 0);
+      if (d < bd) {
+        bd = d;
+        best = { id, label: goodsLabel(e.spawn), x: e.spawn.x, y: e.spawn.y, z: e.spawn.z };
+      }
+    }
+    return best;
+  }
+
+  private goodsTake(id: string, by: Player): boolean {
+    const e = this.pickups.get(id);
+    if (!e || e.loose) return false;
+    this.collect(e.spawn, by);
+    this.takenPickups.add(id);
+    this.removePickup(id);
+    return true;
   }
 
   private looseDrop(x: number, z: number, c: Carried) {
@@ -737,55 +1034,7 @@ export class LegScene extends Scene {
     for (const e of this.pickups.values()) {
       e.group.position.y = e.baseY + 0.2 + Math.sin(time * 2 + e.phase) * 0.08;
       e.group.rotation.y += dt * 1.4;
-      if (e.noteT) e.noteT = Math.max(0, e.noteT - dt);
     }
-    for (const [id, e] of this.pickups) {
-      let taker: Player | null = null;
-      for (const p of this.players) {
-        if (!p.alive) continue;
-        const v = p.vehicle;
-        // Parts, fuel and oil are lifted by hand on foot; only a vehicle sweeps them up as it passes.
-        if (e.loose && !v) continue;
-        const px = v ? v.position.x : p.pos.x;
-        const pz = v ? v.position.z : p.pos.z;
-        const r = v ? v.def.width / 2 + 2.1 : 1.9;
-        if (Math.abs(px - e.spawn.x) > r || Math.abs(pz - e.spawn.z) > r) continue;
-        if (Math.hypot(px - e.spawn.x, pz - e.spawn.z) < r) {
-          taker = p;
-          break;
-        }
-      }
-      if (!taker) continue;
-      if (e.loose && e.spawn.kind !== 'fuel') {
-        if (!this.stowSwept(e, taker)) continue;
-      } else this.collect(e.spawn, taker);
-      this.takenPickups.add(id);
-      this.removePickup(id);
-    }
-  }
-
-  /** A vehicle drives over a part or oil can: it goes in the trunk if there is room, else stays where it lies. */
-  private stowSwept(e: PickupEntity, by: Player): boolean {
-    const c = e.loose!;
-    const camp = this.campaign;
-    const plan = planStow(c, { parts: camp.inventoryRoom, oil: 4 - camp.items.oil });
-    if (!plan.ok) {
-      if (!e.noteT) {
-        by.note(`${plan.label}: ${carriedName(c)} left behind`, 'warn');
-        e.noteT = 6;
-      }
-      return false;
-    }
-    this.audio.play('pickup', e.spawn.x, e.spawn.z, 0.8);
-    this.fx.spark(e.spawn.x, e.spawn.y + 0.6, e.spawn.z, 4, 3);
-    if (c.kind === 'part') {
-      camp.stowPart(c.item);
-      by.note(`+ ${partName(c.item)} (${RARITY_NAMES[partMk(c.item.id)]})`, 'good');
-    } else if (c.kind === 'oil') {
-      const took = camp.stowOil(c.amount);
-      by.note(`+ oil (${Math.round(took * 200)}% of a can)`, 'good');
-    }
-    return true;
   }
 
   private collect(p: PickupSpawn, by: Player) {
@@ -842,7 +1091,8 @@ export class LegScene extends Scene {
           const dz = a.spec.z - p.pos.z;
           const dx = a.spec.x - p.pos.x;
           // Raiders read Dust: they notice a convoy approaching from the south.
-          if (dz > -40 && Math.hypot(dx, dz) < a.spec.triggerRadius) trig = true;
+          // On a corridor leg that means from the south; in the open world raiders see you from any side.
+          if ((this.terrain!.open || dz > -40) && Math.hypot(dx, dz) < a.spec.triggerRadius) trig = true;
         }
         if (!trig) continue;
         a.state = 'pending';
@@ -876,7 +1126,36 @@ export class LegScene extends Scene {
     const lead = this.leadPlayerPos();
     const diff = this.campaign.difficulty.aggro;
     const nB = Math.max(1, Math.round(a.spec.buggies * (0.8 + 0.2 * diff)));
+    const open = !!T.open;
+    // The way the convoy is heading, so raiders come out ahead of it wherever it is going.
+    const lp = this.players.find((q) => q.alive) ?? this.players[0];
+    const lv = lp.vehicle;
+    let hx = 0;
+    let hz = 1;
+    if (open) {
+      if (lv && Math.abs(lv.speed) > 2) {
+        const [fx, , fz] = lv.body.forward();
+        const s = lv.speed >= 0 ? 1 : -1;
+        hx = fx * s;
+        hz = fz * s;
+      } else {
+        hx = a.spec.x - lead.x;
+        hz = a.spec.z - lead.z;
+      }
+      const hl = Math.hypot(hx, hz) || 1;
+      hx /= hl;
+      hz /= hl;
+    }
     const spawn = (kind: 'buggy' | 'wagon', i: number) => {
+      if (open) {
+        const ahead = this.legRng.range(110, 170) + (a.spec.canyon ? 30 : 0);
+        const side = i % 2 === 0 ? 1 : -1;
+        const off = this.legRng.range(28, 62) * side;
+        const x = lead.x + hx * ahead - hz * off;
+        const zz = lead.z + hz * ahead + hx * off;
+        a.waiting.push({ kind, x, z: zz, yaw: Math.atan2(lead.x - x, lead.z - zz) });
+        return;
+      }
       // Ahead of the convoy, off the road, facing it.
       const zz = lead.z + this.legRng.range(110, 170) + (a.spec.canyon ? 30 : 0);
       const rx = roadX(T, zz);
@@ -892,7 +1171,8 @@ export class LegScene extends Scene {
 
   private leadPlayerPos() {
     let best = this.players[0];
-    for (const p of this.players) if (p.pos.z > best.pos.z) best = p;
+    if (this.terrain?.open) best = this.players.find((q) => q.alive) ?? best;
+    else for (const p of this.players) if (p.pos.z > best.pos.z) best = p;
     const v = best.vehicle;
     return { x: v ? v.position.x : best.pos.x, z: v ? v.position.z : best.pos.z };
   }
@@ -1010,7 +1290,7 @@ export class LegScene extends Scene {
         if (!this.shownTips.has('tip-car') && near((v) => v.faction === 'neutral' && !v.wreck)) id = 'car';
         else if (this.shownTips.has('tip-car') && !this.shownTips.has('tip-salvage') && near((v) => this.cars.canSalvage(v))) id = 'salvage';
         else if (this.campaign.inventory.length && !this.shownTips.has('tip-parts') && this.shownTips.has('tip-car')) id = 'parts';
-        else if (!this.shownTips.has('tip-haul') && p.state === 'foot' && this.looseNearest(p.pos.x, p.pos.z, 5)) id = 'haul';
+        else if (!this.shownTips.has('tip-haul') && p.state === 'foot' && (this.looseNearest(p.pos.x, p.pos.z, 5) || this.goodsNearest(p.pos.x, p.pos.z, 5))) id = 'haul';
         if (id) {
           this.shownTips.add(`tip-${id}`);
           this.carTipAt = this.time;
@@ -1102,6 +1382,7 @@ export class LegScene extends Scene {
   // ------------------------------------------------------------------ end of leg, failure
 
   private updateEnd(dt: number) {
+    if (this.terrain?.open) return this.updateOpenEnd(dt);
     const end = this.src.layout.end;
     // Dusk Bell
     if (this.bellBanner > 0) this.bellBanner -= dt;
@@ -1124,6 +1405,35 @@ export class LegScene extends Scene {
       this.onResult({ type: 'dusk' });
     }
     void dt;
+  }
+
+  /** The open world has no end of the road for the day: night, or Haven, ends it. */
+  private updateOpenEnd(dt: number) {
+    if (this.bellBanner > 0) this.bellBanner -= dt;
+    if (this.pendingResult) return;
+    const live = this.players.filter((p) => p.alive && p.state !== 'downed');
+    if (!live.length) return;
+    const end = this.src.layout.end;
+    let all = true;
+    for (const p of live) {
+      const v = p.vehicle;
+      if (Math.hypot((v ? v.position.x : p.pos.x) - end.x, (v ? v.position.z : p.pos.z) - end.z) > end.radius) all = false;
+    }
+    if (all) {
+      this.campPose = { x: end.x, z: end.z, yaw: 0 };
+      this.pendingResult = true;
+      this.endReached = true;
+      this.campaign.flags.haven = true;
+      if (this.clock.t < DUSK_BELL_AT) this.clock.skipToDusk();
+      this.radio(t('radio.haven'));
+      this.onResult({ type: 'haven' });
+      return;
+    }
+    // Past dark with nobody having called it, the convoy stops where it is.
+    if (this.clock.t > 1.06) {
+      this.radio(t('radio.forcedCamp'));
+      this.callCamp();
+    }
   }
 
   private updateFail(dt: number) {
@@ -1171,11 +1481,13 @@ export class LegScene extends Scene {
   protected modeTick(dt: number) {
     if (this.paused) return;
     this.stream(dt);
+    this.updateBiome(dt);
+    this.moveCampPrompts();
     this.updatePickups(dt);
     this.updateMines(dt);
     this.updateRamming();
     this.updateZones(dt);
-    this.wildlife.ambient(dt, this.leg.biome, this.leg.theme ?? 'dust', this.leg.index);
+    this.wildlife.ambient(dt, this.biome, this.leg.theme ?? 'dust', this.leg.index);
     this.updateAmbushes(dt);
     this.updateEncounters();
     this.updateTips();
@@ -1191,7 +1503,7 @@ export class LegScene extends Scene {
       this.bellDone = true;
       this.bellBanner = 7;
       this.audio.play('bell');
-      this.radio(t('radio.dusk'));
+      this.radio(t(this.leg.open ? 'radio.dusk.open' : 'radio.dusk'));
     }
     if (this.clock.night && !this.nightTold) {
       this.nightTold = true;
@@ -1208,6 +1520,18 @@ export class LegScene extends Scene {
       }
     });
     // Distance stat.
+    if (this.terrain?.open) {
+      // No "up the road" in the open world: distance is however far the lead player has actually gone.
+      const at = this.leadPlayerPos();
+      const step = Math.hypot(at.x - this.lastX, at.z - this.lastLead);
+      if (step < 40) {
+        this.campaign.stats.distance += step;
+        this.distanceTravelled += step;
+      }
+      this.lastX = at.x;
+      this.lastLead = at.z;
+      return;
+    }
     const lead = this.leadPlayerPos().z;
     if (lead > this.lastLead) {
       this.campaign.stats.distance += lead - this.lastLead;
@@ -1218,6 +1542,18 @@ export class LegScene extends Scene {
 
   private bellDone = false;
   private nightTold = false;
+
+  /** Open world: crossing into a city district eases the light, and swaps the rules (noise, wildlife, cars) once well inside. */
+  private updateBiome(dt: number, snap = false) {
+    const o = this.terrain?.open;
+    if (!o || !o.districts.length) return;
+    let m = 0;
+    for (const p of this.players) m += districtMask(o, p.vehicle ? p.vehicle.position.x : p.pos.x, p.vehicle ? p.vehicle.position.z : p.pos.z);
+    m /= Math.max(1, this.players.length);
+    this.cityMix = snap ? m : this.cityMix + (m - this.cityMix) * Math.min(1, dt * 1.5);
+    if (this.cityMix > 0.6) this.biome = 'city';
+    else if (this.cityMix < 0.4) this.biome = 'wasteland';
+  }
 
   protected syncExtra(alpha: number, dt: number) {
     for (const e of this.activeContainers.values()) {
@@ -1296,7 +1632,7 @@ export class LegScene extends Scene {
   compassPins(): CompassPin[] {
     const pins: CompassPin[] = [];
     const L = this.src.layout;
-    pins.push({ x: L.end.x, z: L.end.z, kind: 'end', label: 'CAMP' });
+    pins.push({ x: L.end.x, z: L.end.z, kind: 'end', label: this.terrain?.open ? 'HAVEN' : 'CAMP' });
     for (const e of L.encounters) if (!this.doneEncounters.has(e.id)) pins.push({ x: e.x, z: e.z, kind: 'encounter', label: '!' });
     for (const zs of this.zones) {
       if (zs.zone.pin !== false && zs.zone.containers.some((c) => !c.taken)) pins.push({ x: zs.zone.x, z: zs.zone.z, kind: 'zone', label: zs.zone.kind.slice(0, 1).toUpperCase() });
@@ -1304,7 +1640,6 @@ export class LegScene extends Scene {
     for (const [, e] of this.pickups) {
       if (e.spawn.kind === 'fragment') pins.push({ x: e.spawn.x, z: e.spawn.z, kind: 'fragment', label: 'R' });
       if (e.spawn.kind === 'chassis') pins.push({ x: e.spawn.x, z: e.spawn.z, kind: 'chassis', label: 'C' });
-      if (e.spawn.kind === 'part' && e.spawn.amount >= 2) pins.push({ x: e.spawn.x, z: e.spawn.z, kind: 'part', label: 'PART' });
     }
     // Your own vehicles left standing, so an old ride is easy to find again.
     for (const v of this.vehicles) {
@@ -1341,13 +1676,15 @@ export class LegScene extends Scene {
       f.title = this.leg.name;
       f.base = baker.base;
       f.bounds = baker.bounds;
-      f.road = roadLine(T);
+      if (T.open) f.roads = openRoadLines(T);
+      else f.road = roadLine(T);
       f.roadHalf = T.roadHalf;
       f.hazards = T.minefields.map((m) => minefieldOutline(T, m.z0, m.z1, m.halfWidth));
-      f.radiusMin = this.biome === 'city' ? 80 : 150;
-      f.radiusMax = this.biome === 'city' ? 170 : 320;
       f.overview = true;
     }
+    // In the open world the same map is a city one block over and a desert one block back.
+    f.radiusMin = this.biome === 'city' ? 80 : 150;
+    f.radiusMax = this.biome === 'city' ? 170 : 320;
     // A few milliseconds a frame until the ground is baked.
     if (this.mapBaker && !this.mapBaker.base.done) this.mapBaker.step(3);
     this.fillMapActors(f, true, f.radiusMax);
@@ -1389,6 +1726,7 @@ export class LegScene extends Scene {
     }
     // Materials and textures are made per leg.
     disposeChunkMaterials(this.mats);
+    if (this.cityMats) disposeChunkMaterials(this.cityMats);
     this.R.onBeforeView[1] = () => {};
     this.landscape.dispose();
     super.dispose();

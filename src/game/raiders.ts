@@ -6,6 +6,7 @@ import { C } from '../render/palette';
 import { angleDiff, clamp, damp, dampAngle, wrapAngle } from '../core/math';
 import type { DriveInput } from '../physics/vehicle';
 import { gearDrop } from '../sim/gear';
+import { stormSight } from '../sim/weather';
 import type { Ctx } from './ctx';
 import type { Player } from './player';
 import { Vehicle, type Pilot } from './vehicle';
@@ -23,8 +24,10 @@ interface Target {
 }
 
 /** Closest thing worth attacking: a convoy vehicle or a player on foot. */
-function acquire(ctx: Ctx, x: number, z: number, maxD: number): Target | null {
+export function acquire(ctx: Ctx, x: number, z: number, maxD: number): Target | null {
   let best: Target | null = null;
+  // Dust in the air shortens what a raider can pick out.
+  maxD *= stormSight(ctx.storm);
   for (const v of ctx.vehicles) {
     if (v.faction !== 'convoy' || v.wreck) continue;
     const d = Math.hypot(v.position.x - x, v.position.z - z);
@@ -429,22 +432,11 @@ export class RaiderSystem {
     return best;
   }
 
-  /** A raider's kit can survive them: it goes to whoever is closest, if anyone is near enough to pick it up. */
+  /** A raider's kit can survive them: it lies where they fell, for anyone to take. */
   private dropGear(x: number, z: number, src: 'raider' | 'wreck') {
     const ctx = this.ctx;
     const find = gearDrop(ctx.rng, src, { progress: ctx.gearProgress });
-    if (!find) return;
-    let best: Player | null = null;
-    let bd = 45;
-    for (const p of ctx.players) {
-      if (p.state === 'dead') continue;
-      const d = Math.hypot(p.pos.x - x, p.pos.z - z);
-      if (d < bd) {
-        bd = d;
-        best = p;
-      }
-    }
-    if (best) ctx.addGear(best, find);
+    if (find) ctx.dropGear(find, x, z);
   }
 
   damageInfantry(u: Infantry, amount: number, killer: number): boolean {
@@ -700,7 +692,8 @@ export class RaiderSystem {
     dz /= l;
     ctx.combat.shoot(ox, oy, oz, dx, dy, dz, {
       side: 'raider',
-      damage: dmg * ctx.campaign.difficulty.damage,
+      ammo: u.kind === 'sniper' ? 'sniper' : 'raider',
+      damage: dmg,
       spread: u.kind === 'sniper' ? 0.006 : 0.025 + d * 0.0009,
       range: u.def.range + 10,
       tracer: true,

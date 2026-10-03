@@ -214,6 +214,35 @@ export class Particles {
     }
   }
 
+  /**
+   * A directional burst of blood: thrown along (dx, dy, dz), widening as it goes. An exit wound sprays forward with
+   * speed; the entry side gets a short fine mist back toward the shooter.
+   */
+  bloodSpray(x: number, y: number, z: number, dx: number, dy: number, dz: number, n = 6, speed = 6, spread = 0.45, color: [number, number, number] = [0.55, 0.05, 0.05]) {
+    for (let i = 0; i < n; i++) {
+      const k = speed * (0.35 + Math.random() * 0.95);
+      this.smoke.emit(
+        x,
+        y,
+        z,
+        dx * k + (Math.random() - 0.5) * spread * speed,
+        dy * k + (Math.random() - 0.3) * spread * speed,
+        dz * k + (Math.random() - 0.5) * spread * speed,
+        0.4 + Math.random() * 0.45,
+        0.2 + Math.random() * 0.1,
+        0.07,
+        color[0],
+        color[1],
+        color[2],
+        0.9,
+        15,
+        0.5,
+      );
+    }
+    // A fine pink mist hangs for a moment where the round went in.
+    this.smoke.emit(x, y, z, dx * 0.6, 0.3, dz * 0.6, 0.35, 0.3, 0.9, 0.62, 0.12, 0.1, 0.35, 0, 2);
+  }
+
   flash(x: number, y: number, z: number, size = 1.6) {
     this.glow.emit(x, y, z, 0, 0, 0, 0.07, size, size * 0.4, 1, 0.85, 0.4, 1, 0, 0);
   }
@@ -243,7 +272,7 @@ export class Tracers {
   private next = 0;
   private geo: THREE.BufferGeometry;
 
-  constructor(n = 160) {
+  constructor(n = 420) {
     this.n = n;
     this.pos = new Float32Array(n * 6);
     this.col = new Float32Array(n * 6);

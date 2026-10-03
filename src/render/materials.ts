@@ -7,7 +7,31 @@ export const GLOBALS = {
   uTime: { value: 0 },
   /** Approximate scene light for unlit-shaded effects (smoke and dust particles). */
   uLight: { value: new THREE.Color(1, 1, 1) },
+  /** How wet the ground is, 0 bone dry to 1 soaked: darkens it, takes the roughness off and fills puddles. */
+  uWet: { value: 0 },
 };
+
+/** Shared by the ground shaders: puddles that fill the low spots as the ground gets wetter. Needs `uWet` and a fragment `common` include. */
+export const WET_PARS = /* glsl */ `
+uniform float uWet;
+float wpHash( vec2 p ) {
+  vec3 p3 = fract( vec3( p.xyx ) * 0.1031 );
+  p3 += dot( p3, p3.yzx + 33.33 );
+  return fract( ( p3.x + p3.y ) * p3.z );
+}
+float wpNoise( vec2 p ) {
+  vec2 i = floor( p );
+  vec2 f = fract( p );
+  f = f * f * ( 3.0 - 2.0 * f );
+  return mix( mix( wpHash( i ), wpHash( i + vec2( 1.0, 0.0 ) ), f.x ), mix( wpHash( i + vec2( 0.0, 1.0 ) ), wpHash( i + vec2( 1.0, 1.0 ) ), f.x ), f.y );
+}
+// 1 inside a puddle. The basins are fixed in the world, so a puddle fills from its deepest point outward as uWet rises.
+float puddleMask( vec2 xz, float level ) {
+  float n = wpNoise( xz * 0.16 ) * 0.55 + wpNoise( xz * 0.43 + 7.3 ) * 0.3 + wpNoise( xz * 1.3 ) * 0.15;
+  float thr = uWet * 0.6;
+  return ( 1.0 - smoothstep( thr - 0.06, thr, n ) ) * level;
+}
+`;
 
 /**
  * The "kit" material: one physically based material for every model the MeshBuilder makes.

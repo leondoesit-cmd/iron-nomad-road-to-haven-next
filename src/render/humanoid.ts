@@ -419,6 +419,10 @@ export class Humanoid {
    * Pose the rig. `speed` is horizontal speed in m/s for walk cycles; `aim` raises the weapon arm;
    * `crouch` 0..1 lowers the stance, `air` 0..1 tucks the legs for a jump or a fall.
    */
+  /** Barrel wander (yaw, pitch, radians) and how hard the last shot is still kicking, set by the owner each frame. */
+  gunSway: [number, number] = [0, 0];
+  gunKick = 0;
+
   update(dt: number, pose: PoseKind, speed: number, aim: number, crouch: number, lookPitch = 0, air = 0) {
     this.walkT += dt * (1.5 + speed * 1.1);
     const run = Math.min(1, speed / 3.5) * (1 - air);
@@ -458,6 +462,15 @@ export class Humanoid {
         this.armL.rotation.x = -1.2 * aim + lookPitch * 0.45;
         this.armL.rotation.z = -0.45 * aim;
         this.elbowL.rotation.x = -0.55 * aim;
+      }
+      if (aim > 0.1 && !this.carried) {
+        // The gun wanders in the hands and bucks back with each shot: arms rock up, elbows give, the shoulders take it.
+        this.armR.rotation.x += this.gunSway[1] * 2.2 * aim - this.gunKick * 0.28;
+        this.armR.rotation.y += this.gunSway[0] * 2.2 * aim;
+        this.armL.rotation.x += this.gunSway[1] * 2.2 * aim - this.gunKick * 0.26;
+        this.armL.rotation.y += this.gunSway[0] * 2.2 * aim;
+        this.elbowR.rotation.x -= this.gunKick * 0.2;
+        this.torso.rotation.x -= this.gunKick * 0.07;
       }
       this.head.rotation.x = lookPitch * 0.4 - this.torso.rotation.x * 0.6;
       if (this.swing > 0 && !this.carried) {

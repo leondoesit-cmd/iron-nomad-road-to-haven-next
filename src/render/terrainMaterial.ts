@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GLOBALS, WET_PARS } from './materials';
 import { macroTexture, roadTextures, terrainTextures } from './proctex';
 
 /**
@@ -64,6 +65,7 @@ uniform vec3 cRockA;
 uniform vec3 cRockB;
 uniform vec3 cGravel;
 uniform vec4 uTScale;
+${WET_PARS}
 #ifdef TERRAIN_LOD
 uniform sampler2D tLoaded;
 uniform vec4 uLoadedRect;
@@ -124,12 +126,17 @@ vec3 tCol = cSand * ( tSA.r * 1.12 ) * tB.x
 tCol *= 0.8 + tMac.r * 0.4;
 tCol *= mix( vec3( 1.0 ), vec3( 1.07, 0.99, 0.9 ), tMac2.g );
 tCol *= mix( 1.0, 0.5, vTData.y );
+// Rain: the whole ground darkens, and the low spots fill with puddles. The shore stays glassy whatever the weather.
+float tFlat = smoothstep( 0.88, 0.97, tWn.y ) * ( 1.0 - tB.z );
+float tPud = max( puddleMask( tXZ, tFlat ), smoothstep( 0.45, 0.8, vTData.y ) * tFlat * 0.85 );
+tCol *= mix( 1.0, 0.62, uWet * 0.55 );
+tCol *= mix( 1.0, 0.5, tPud );
 diffuseColor.rgb = tCol * vColor.rgb;
 float tCavity = mix( 1.0, 0.65 + 0.35 * dot( tH, tB ), 0.8 );
 `;
 
 const FRAG_ROUGH = /* glsl */ `
-float roughnessFactor = clamp( dot( tB, vec4( 0.96, 0.9, 0.82, 0.88 ) ) - vTData.y * 0.45, 0.2, 1.0 );
+float roughnessFactor = mix( clamp( dot( tB, vec4( 0.96, 0.9, 0.82, 0.88 ) ) - vTData.y * 0.45 - uWet * 0.25, 0.2, 1.0 ), 0.04, tPud );
 `;
 
 const FRAG_METAL = /* glsl */ `
@@ -148,6 +155,8 @@ const FRAG_NORMAL = /* glsl */ `
     wn += rpert * tB.z * 1.2;
   }
   normal = normalize( ( viewMatrix * vec4( normalize( wn ), 0.0 ) ).xyz );
+  // Standing water is flat.
+  normal = normalize( mix( normal, nonPerturbedNormal, tPud ) );
 }
 `;
 
@@ -185,6 +194,7 @@ export function makeTerrainMaterial(biome: 'wasteland' | 'city', lod?: TerrainUn
     cRockB: col(look.rockB),
     cGravel: col(look.gravel),
     uTScale: { value: new THREE.Vector4(1 / look.scale[0], 1 / look.scale[1], 1 / look.scale[2], 1 / look.scale[3]) },
+    uWet: GLOBALS.uWet,
   };
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
@@ -229,6 +239,7 @@ uniform sampler2D tRoadS;
 uniform sampler2D tMacroR;
 uniform vec3 cDust;
 uniform float uDust;
+${WET_PARS}
 `;
 
 const ROAD_COLOR = /* glsl */ `
@@ -245,10 +256,12 @@ float rDust = smoothstep( 0.1, 0.0, rEdge ) * 0.9 + smoothstep( 0.62, 0.86, rMac
 rDust = clamp( rDust * uDust * ( 0.55 + rFine.g * 0.6 ), 0.0, 1.0 );
 diffuseColor.rgb = mix( rAlb.rgb * ( 0.92 + rMac.r * 0.16 ), cDust * ( 0.8 + rFine.b * 0.35 ), rDust );
 float rCav = rSrf.a;
+float rPud = puddleMask( vRWPos.xz, 1.0 - rDust * 0.6 );
+diffuseColor.rgb *= mix( 1.0, 0.62, uWet * 0.55 ) * mix( 1.0, 0.5, rPud );
 `;
 
 const ROAD_ROUGH = /* glsl */ `
-float roughnessFactor = clamp( mix( rSrf.b, 0.97, rDust ), 0.25, 1.0 );
+float roughnessFactor = mix( clamp( mix( rSrf.b, 0.97, rDust ) - uWet * 0.3, 0.25, 1.0 ), 0.04, rPud );
 `;
 
 const ROAD_NORMAL = /* glsl */ `
@@ -257,7 +270,7 @@ const ROAD_NORMAL = /* glsl */ `
   vec3 rT = normalize( ( viewMatrix * vec4( vRTan, 0.0 ) ).xyz );
   vec3 rB = normalize( cross( rN, rT ) );
   vec2 rn = ( rSrf.rg * 2.0 - 1.0 ) * ( 1.0 - rDust * 0.7 );
-  normal = normalize( rN + rT * rn.x * 1.1 - rB * rn.y * 1.1 );
+  normal = normalize( mix( rN + rT * rn.x * 1.1 - rB * rn.y * 1.1, nonPerturbedNormal, rPud ) );
 }
 `;
 
@@ -277,6 +290,7 @@ export function makeRoadMaterial(biome: 'wasteland' | 'city'): THREE.MeshStandar
     tMacroR: { value: macroTexture() },
     cDust: { value: new THREE.Color(biome === 'city' ? 0x6f6a62 : 0xc4a57c) },
     uDust: { value: biome === 'city' ? 0.45 : 1 },
+    uWet: GLOBALS.uWet,
   };
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
@@ -316,6 +330,8 @@ pCol = mix( pCol, pCol * 0.55, smoothstep( 0.62, 0.8, pMac.b ) * 0.6 );
 diffuseColor.rgb = pCol;
 float rCav = 1.0 - pJ;
 float rDust = 0.0;
+float rPud = puddleMask( vRWPos.xz, 1.0 );
+diffuseColor.rgb *= mix( 1.0, 0.62, uWet * 0.55 ) * mix( 1.0, 0.5, rPud );
 vec4 rSrf = vec4( 0.5, 0.5, 0.88 - pJ * 0.1 - smoothstep( 0.7, 0.85, pMac.b ) * 0.4, 1.0 );
 `;
 
@@ -329,6 +345,7 @@ export function makePavingMaterial(): THREE.MeshStandardMaterial {
     tMacroR: { value: macroTexture() },
     cDust: { value: new THREE.Color(0x6f6a62) },
     uDust: { value: 0 },
+    uWet: GLOBALS.uWet,
   };
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);

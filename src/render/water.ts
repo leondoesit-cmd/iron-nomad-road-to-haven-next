@@ -151,7 +151,22 @@ export function buildLakeWater(l: Lake): LakeWater {
   geo.rotateX(-Math.PI / 2);
   const depth = depthTexture(l, half);
   const col = lakeColors(l.style);
-  const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.05, metalness: 0, transparent: true, depthWrite: false });
+  // Normal alpha blending for the colour, but alpha itself is written as 0, the "mirror" code the screen-space reflections read
+  // (see gloss.ts). The sheet also writes depth, so the reflection pass finds the surface and not the lake bed below it.
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.05,
+    metalness: 0,
+    transparent: true,
+    depthWrite: true,
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.AddEquation,
+    blendSrc: THREE.SrcAlphaFactor,
+    blendDst: THREE.OneMinusSrcAlphaFactor,
+    blendEquationAlpha: THREE.AddEquation,
+    blendSrcAlpha: THREE.ZeroFactor,
+    blendDstAlpha: THREE.ZeroFactor,
+  });
   const uniforms = {
     tWDepth: { value: depth },
     tWNorm: { value: waterNormalTexture() },

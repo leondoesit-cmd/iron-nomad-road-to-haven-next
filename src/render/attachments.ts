@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { crate, jerryCan, plate, rivets, spareTyre, strap, heavyGun } from './parts';
 import { partDef } from '../data';
+import { partMeta, partTag } from './bodyParts';
 import type { Fit } from '../sim/parts';
 
 /**
@@ -75,8 +76,10 @@ function armorKit(b: MeshBuilder, m: Mounts, mk: number, look: KitLook) {
   const col = mk >= 3 ? S.paint(0xaeb2ae, 0.45) : mk === 2 ? S.steel(0x4d5154, 0.75) : S.steel(0x6e7276, 0.8);
   const rust = S.rust(0x6a3a22);
   const thick = 0.02 + mk * 0.008;
+  const armorId = look.fit.armor?.id;
   for (const sx of [1, -1]) {
     const x = sx * (m.hw + thick / 2 + 0.005);
+    b.mark(partTag('slot', `armor:${sx}`), partMeta({ kind: 'slot', id: armorId, slot: 'armor', mk, side: sx as 1 | -1, pivot: [x, (m.side.y0 + m.side.y1) / 2, zc] }));
     // Door plates, split in two so they read as separate sheets.
     plate(b, x, (m.side.y0 + m.side.y1) / 2, zc + len * 0.24, len * 0.46, sideH, thick, col, 0, sx * Math.PI / 2, 0);
     plate(b, x, (m.side.y0 + m.side.y1) / 2, zc - len * 0.25, len * 0.44, sideH * 0.94, thick, mk === 1 ? rust : col, 0, sx * Math.PI / 2, 0);
@@ -84,12 +87,16 @@ function armorKit(b: MeshBuilder, m: Mounts, mk: number, look: KitLook) {
       // A second ceramic course along the sill.
       plate(b, x + sx * 0.012, m.side.y0 - 0.05, zc, len * 0.9, 0.16, thick, S.paint(0x9a9e9a, 0.5), 0, sx * Math.PI / 2, 0);
     }
+    b.end();
   }
   if (m.narrow) return;
   if (mk >= 2 && m.hood) {
+    b.mark(partTag('slot', 'armor:hood'), partMeta({ kind: 'slot', id: armorId, slot: 'armor', mk, pivot: [0, m.hood.y, m.hood.z0] }));
     plate(b, 0, m.hood.y + 0.018, (m.hood.z0 + m.hood.z1) / 2, m.hood.hw * 1.55, m.hood.z1 - m.hood.z0 - 0.1, thick, col, -Math.PI / 2, 0, 0);
+    b.end();
   }
   if (mk >= 3 && m.roof) {
+    b.mark(partTag('slot', 'armor:roof'), partMeta({ kind: 'slot', id: armorId, slot: 'armor', mk, pivot: [0, m.roof.y, (m.roof.z0 + m.roof.z1) / 2] }));
     plate(b, 0, m.roof.y + 0.02, (m.roof.z0 + m.roof.z1) / 2, m.roof.hw * 1.5, m.roof.z1 - m.roof.z0 - 0.08, thick, col, -Math.PI / 2, 0, 0);
     // Slatted window armour: bars across the glass line.
     const r = rnd(look.seed + 3);
@@ -97,6 +104,7 @@ function armorKit(b: MeshBuilder, m: Mounts, mk: number, look: KitLook) {
       const z = m.roof.z1 - 0.1 - i * ((m.roof.z1 - m.roof.z0 - 0.2) / 5);
       for (const sx of [1, -1]) b.box(sx * (m.hw - 0.01), m.side.y1 + 0.18 + r() * 0.02, z, 0.025, 0.05, 0.22, dark());
     }
+    b.end();
   }
 }
 
@@ -187,27 +195,35 @@ function weaponKit(b: MeshBuilder, rig: Rig, m: Mounts, mk: number, native: bool
 function utilityKit(b: MeshBuilder, m: Mounts, mk: number, look: KitLook) {
   const r = rnd(look.seed + 9);
   const cols = [0x55603e, look.paint, 0xb0301e, 0xc89a2a];
+  const utlId = look.fit.utility?.id;
+  const tag = (sx: number, pivot: [number, number, number]) => b.mark(partTag('slot', `utility:${sx}`), partMeta({ kind: 'slot', id: utlId, slot: 'utility', mk, side: sx as -1 | 0 | 1, pivot }));
   if (m.narrow) {
     for (const sx of [1, -1]) {
+      tag(sx, [sx * m.rear.hw, m.rear.y, m.rear.z + 0.55]);
       b.rbox(sx * (m.rear.hw + 0.12 + mk * 0.02), m.rear.y - 0.02, m.rear.z + 0.55, 0.18 + mk * 0.03, 0.26, 0.4, 0.04, S.leather(0x3a3228, 0.7));
       b.box(sx * (m.rear.hw + 0.12 + mk * 0.02), m.rear.y + 0.12, m.rear.z + 0.55, 0.19 + mk * 0.03, 0.02, 0.2, S.steel(0x6a6c6e));
+      b.end();
     }
     return;
   }
   const z = m.rear.z + 0.42;
   for (const sx of [1, -1]) {
     const x = sx * (m.hw + 0.13);
+    tag(sx, [sx * m.hw, m.sill + 0.12, z]);
     b.box(x - sx * 0.07, m.sill + 0.12, z, 0.14, 0.03, 0.34, dark());
     jerryCan(b, x, m.sill + 0.135, z, cols[Math.floor(r() * cols.length)], sx > 0 ? Math.PI / 2 : -Math.PI / 2);
     if (mk >= 3) jerryCan(b, x, m.sill + 0.135, z + 0.34, cols[Math.floor(r() * cols.length)], sx > 0 ? Math.PI / 2 : -Math.PI / 2);
     strap(b, [[x - sx * 0.1, m.sill + 0.12, z - 0.14], [x - sx * 0.1, m.sill + 0.5, z - 0.14], [x + sx * 0.1, m.sill + 0.5, z - 0.14]]);
+    b.end();
   }
   if (mk >= 2) {
     // A cylindrical tank slung under the tail, with a hose up to the filler.
     const d = 0.26 + (mk - 2) * 0.08;
+    tag(0, [0, m.sill, m.rear.z + 0.62]);
     b.cyl(0, m.sill - 0.02, m.rear.z + 0.62, d, m.hw * 1.5, d, S.steel(0x6a6e72, 0.55), 0, 0, Math.PI / 2, 18);
     for (const sx of [1, -1]) b.box(sx * m.hw * 0.62, m.sill + 0.08, m.rear.z + 0.62, 0.04, 0.3, 0.06, dark());
     b.pipe([[m.hw * 0.72, m.sill, m.rear.z + 0.62], [m.hw * 0.86, m.sill + 0.3, m.rear.z + 0.5], [m.hw + 0.02, m.sill + 0.5, m.rear.z + 0.42]], 0.015, S.rubber(0x1c1c1e), 6);
+    b.end();
   }
 }
 
@@ -326,6 +342,7 @@ function sideKit(b: MeshBuilder, m: Mounts, id: string) {
   const len = m.side.z1 - m.side.z0;
   for (const sx of [1, -1]) {
     const x = sx * (m.hw + 0.07);
+    b.mark(partTag('slot', `side:${sx}`), partMeta({ kind: 'slot', id, slot: 'side', mk: partDef(id).mk, side: sx as 1 | -1, pivot: [sx * m.hw, m.sill + 0.05, zc] }));
     if (id === 'sd_skirt') {
       const t = S.steel(0x34373a, 0.7);
       b.pipe([[x, m.sill - 0.03, m.side.z0 - 0.1], [x, m.sill - 0.03, m.side.z1 + 0.1]], 0.036, t, 8);
@@ -344,6 +361,7 @@ function sideKit(b: MeshBuilder, m: Mounts, id: string) {
       b.box(x + sx * 0.02, m.sill + 0.08, zc, 0.03, 0.08, len * 0.7, S.steel(0x2a2c2e, 0.5));
       b.cyl(x, m.sill + 0.02, m.side.z0 - 0.07, 0.06, 0.03, 0.06, S.metal(0x1a1612, 0.9), Math.PI / 2, 0, 0, 10);
     }
+    b.end();
   }
 }
 
@@ -383,9 +401,17 @@ export function addKit(b: MeshBuilder, rig: Rig, m: Mounts, look: KitLook, o: { 
   if (wpn || o.nativeGun) weaponKit(b, rig, m, wpn, o.nativeGun);
   const utl = mkOf(fit, 'utility');
   if (utl) utilityKit(b, m, utl, look);
-  if (fit.front) frontKit(b, m, fit.front.id);
-  if (fit.roof) roofKit(b, rig, m, fit.roof.id, look);
-  if (fit.rear) rearKit(b, m, fit.rear.id, look);
+  // Bolt-on modules are marked, so a hard enough knock can tear them off the merged body.
+  const one = (slot: 'front' | 'roof' | 'rear', pivot: [number, number, number], draw: (id: string) => void) => {
+    const it = fit[slot];
+    if (!it) return;
+    b.mark(partTag('slot', slot), partMeta({ kind: 'slot', id: it.id, slot, mk: partDef(it.id).mk, pivot }));
+    draw(it.id);
+    b.end();
+  };
+  one('front', [0, m.front.y, m.front.z - 0.05], (id) => frontKit(b, m, id));
+  one('roof', [0, m.roof?.y ?? 1, m.roof ? (m.roof.z0 + m.roof.z1) / 2 : 0], (id) => roofKit(b, rig, m, id, look));
+  one('rear', [0, m.rear.y + 0.25, m.rear.z], (id) => rearKit(b, m, id, look));
   if (fit.side) sideKit(b, m, fit.side.id);
 }
 

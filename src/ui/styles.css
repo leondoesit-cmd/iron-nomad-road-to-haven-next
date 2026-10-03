@@ -267,6 +267,33 @@ canvas.minimap {
 .bar.crit .fill {
   background: var(--red);
 }
+.bar.bleed .fill {
+  background: var(--red);
+  animation: bleedpulse 0.9s ease-in-out infinite alternate;
+}
+@keyframes bleedpulse {
+  to {
+    opacity: 0.55;
+  }
+}
+.bar.stam {
+  height: 6px;
+  margin-top: 3px;
+  display: none;
+}
+.bar.stam .fill {
+  background: #9fd0e8;
+  transition: none;
+}
+.bar.stam.winded .fill {
+  background: var(--amber);
+}
+.ammo small.warn {
+  color: var(--amber);
+}
+.ammo small.bad {
+  color: var(--red);
+}
 .bar.fuel .fill {
   background: #ffcf6a;
 }
@@ -523,6 +550,8 @@ canvas.minimap {
 .half.v-left .msgs,
 .half.v-right .msgs {
   width: min(90%, 520px);
+  /* The narrow halves stack compass, clock and minimap down the right edge; start the radio lines below that stack. */
+  top: calc(212px * var(--u));
 }
 .sub {
   max-width: 100%;
@@ -548,6 +577,10 @@ canvas.minimap {
   color: var(--amber);
   display: none;
   text-align: center;
+}
+.half.v-left .banner,
+.half.v-right .banner {
+  top: 42%;
 }
 .banner small {
   display: block;
@@ -1160,11 +1193,13 @@ button:disabled {
 #aimhint {
   position: absolute;
   left: 50%;
-  top: 12px;
+  bottom: 118px;
   transform: translateX(-50%);
   display: none;
   pointer-events: none;
   font-size: 0.8em;
+  max-width: 340px;
+  text-align: center;
   background: var(--panel);
   border: 1px solid var(--panel-line);
   padding: 4px 14px;
@@ -1514,12 +1549,12 @@ button:disabled {
 }
 .invbody {
   display: grid;
-  grid-template-columns: 1fr 1.25fr 1fr;
+  grid-template-columns: 1.45fr 1.2fr 0.95fr;
   gap: 10px;
   min-height: 0;
 }
 .ledger.inv.center .invbody {
-  grid-template-columns: 1fr 1.4fr 1fr;
+  grid-template-columns: 1.3fr 1.3fr 1fr;
 }
 .invcol {
   display: flex;
@@ -1547,48 +1582,183 @@ button:disabled {
   color: #b3281c;
   font-weight: 700;
 }
-.invlist,
-.invbelt {
+.gi {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.gi * {
+  vector-effect: non-scaling-stroke;
+}
+.gi.ghost {
+  opacity: 0.16;
+  filter: grayscale(1);
+}
+.doll {
+  display: grid;
+  grid-template-columns: 3.7em minmax(0, 1fr) 3.7em;
+  gap: 6px;
+  align-items: stretch;
+  flex: 1;
+  min-height: 19em;
+  padding: 6px 4px;
+  background:
+    radial-gradient(ellipse at 50% 55%, rgba(255, 244, 214, 0.55), rgba(38, 28, 16, 0.08) 70%),
+    repeating-linear-gradient(0deg, rgba(38, 28, 16, 0.05) 0 1px, transparent 1px 14px);
+  border: 1px solid rgba(38, 28, 16, 0.35);
+}
+.dollcol {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  justify-content: space-around;
+  gap: 6px;
+}
+.dollfig {
+  position: relative;
+  min-width: 0;
+}
+.doll-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 2px 3px rgba(38, 28, 16, 0.35));
+}
+.invbelt {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.invutil {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
 }
 .invbag {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(auto-fill, minmax(3.6em, 1fr));
+  gap: 6px;
 }
-.invcol .slotbtn {
-  min-height: 2.5em;
-  border-left: 4px solid rgba(38, 28, 16, 0.25) !important;
+.tile {
+  position: relative;
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 1px;
+  padding: 3px 2px 2px !important;
+  min-width: 0;
+  aspect-ratio: 1 / 1.08;
+  text-transform: none;
+  letter-spacing: 0;
+  background: linear-gradient(180deg, rgba(255, 244, 214, 0.55), rgba(200, 180, 140, 0.4)) !important;
+  border: 2px solid rgba(38, 28, 16, 0.4) !important;
+  overflow: hidden;
 }
-.invcol .slotbtn.r1 {
-  border-left-color: #8c8466 !important;
+.tile .ic {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: block;
 }
-.invcol .slotbtn.r2 {
-  border-left-color: #3f9e3c !important;
-}
-.invcol .slotbtn.r3 {
-  border-left-color: #d98a1f !important;
-}
-.invcol .slotbtn.held {
-  background: rgba(255, 200, 100, 0.55);
-}
-.invcol .slotbtn.empty {
-  opacity: 0.45;
-  border-style: dashed;
-}
-.invcol .slotbtn i {
-  font-style: normal;
-  font-size: 0.8em;
+.tile small {
+  font-size: 0.62em;
+  line-height: 1.1;
   letter-spacing: 0.04em;
+  color: #4a3a28;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.invcol .slotbtn em {
-  color: #5a4630;
+.tile .cnt {
+  position: absolute;
+  right: 3px;
+  top: 2px;
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 0.68em;
+  line-height: 1;
+  padding: 1px 3px;
+  background: rgba(38, 28, 16, 0.82);
+  color: #f3e6c8;
+  border-radius: 3px;
 }
-.invcol .slotbtn b em {
-  font-weight: 400;
-  margin-left: 4px;
+.tile .pip {
+  position: absolute;
+  left: 3px;
+  top: 1px;
+  font-size: 0.52em;
+  letter-spacing: -0.1em;
+  font-style: normal;
+}
+.tile[data-n]::before {
+  content: attr(data-n);
+  position: absolute;
+  left: 3px;
+  bottom: 14px;
+  font-family: var(--mono);
+  font-size: 0.7em;
+  color: #261c10;
+  background: rgba(255, 200, 100, 0.85);
+  border-radius: 3px;
+  padding: 0 3px;
+  z-index: 1;
+}
+.tile.r1 {
+  border-color: #8c8466 !important;
+}
+.tile.r2 {
+  border-color: #3f9e3c !important;
+  box-shadow: inset 0 0 8px rgba(63, 158, 60, 0.28);
+}
+.tile.r3 {
+  border-color: #d98a1f !important;
+  box-shadow: inset 0 0 10px rgba(217, 138, 31, 0.4);
+}
+.tile.held {
+  background: linear-gradient(180deg, rgba(255, 214, 120, 0.85), rgba(255, 190, 90, 0.6)) !important;
+}
+.tile.sel {
+  outline: 3px solid #261c10;
+  outline-offset: 1px;
+}
+.tile.empty {
+  opacity: 0.55;
+  border-style: dashed !important;
+  background: rgba(38, 28, 16, 0.05) !important;
+}
+.tile.empty.bag {
+  aspect-ratio: 1 / 1.08;
+}
+.mini {
+  display: inline-block;
+  width: 1.4em;
+  height: 1.4em;
+  vertical-align: -0.35em;
+  margin-right: 5px;
+}
+.bigcard {
+  display: grid;
+  grid-template-columns: 5.4em 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 6px;
+  border: 2px solid rgba(38, 28, 16, 0.4);
+  background: linear-gradient(180deg, rgba(255, 244, 214, 0.6), rgba(200, 180, 140, 0.4));
+}
+.bigcard.r2 {
+  border-color: #3f9e3c;
+}
+.bigcard.r3 {
+  border-color: #d98a1f;
+}
+.bigic {
+  width: 5.4em;
+  height: 5.4em;
+}
+.bigcard h3 {
+  margin: 0 0 2px;
 }
 .invcol .chips {
   display: flex;
@@ -1609,12 +1779,21 @@ button:disabled {
   margin-left: 3px;
 }
 .effects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
   font-family: var(--mono);
-  font-size: 0.86em;
+  font-size: 0.82em;
   line-height: 1.5;
   border-top: 1px dotted rgba(38, 28, 16, 0.35);
   padding-top: 4px;
   text-transform: none;
+}
+.effects .pill {
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 9px;
+  background: rgba(255, 244, 214, 0.5);
 }
 .invcol .good,
 .effects .good {
@@ -1792,4 +1971,52 @@ button:disabled {
   0%, 100% { transform: translate(0, 0) rotate(0deg); }
   25% { transform: translate(calc(var(--trip, 0) * 3px), calc(var(--trip, 0) * -2px)) rotate(calc(var(--trip, 0) * 0.5deg)); }
   75% { transform: translate(calc(var(--trip, 0) * -3px), calc(var(--trip, 0) * 2px)) rotate(calc(var(--trip, 0) * -0.5deg)); }
+}
+
+/* Weapon condition on an inventory tile, and the supplies strip under the bag. */
+.tile .wear {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 1px;
+  height: 3px;
+  background: rgba(38, 28, 16, 0.3);
+  text-decoration: none;
+}
+.tile .wear::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--w);
+  background: #3e8f35;
+}
+.tile .wear.mid::after {
+  background: #c98a1b;
+}
+.tile .wear.bad::after {
+  background: #b8372a;
+}
+.invsupply {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 0.82em;
+}
+.invsupply .pill {
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 9px;
+  background: rgba(255, 244, 214, 0.5);
+}
+.invsupply .good {
+  color: #2d7a2a;
+}
+.invsupply .badc {
+  color: #a8301f;
+}
+.sortbtn {
+  float: right;
+  font-size: 0.7em;
+  padding: 0 8px;
 }

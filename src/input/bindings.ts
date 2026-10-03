@@ -68,7 +68,7 @@ export const ACTIONS: ActionDef[] = [
   { id: 'melee', label: 'Melee · takedown', hint: 'Tap melee, hold takedown · Driving: front gun · Camp: next element', group: 'combat', pad: Btn.RB, btn: [Btn.RB], devices: ALL, optional: true },
   { id: 'reload', label: 'Reload', hint: 'Reload · hold swap utility · Driving: horn · Camp: watch post', group: 'combat', pad: Btn.X, btn: [Btn.X], devices: ALL },
   { id: 'horn', label: 'Horn', hint: 'Tap horn, hold siren (same button as reload on a pad)', group: 'vehicle', btn: [Btn.X], devices: ['kb'], optional: true },
-  { id: 'swap', label: 'Swap tool', hint: 'Gun, wrench, crowbar, jerrycan · Camp: previous element', group: 'combat', pad: Btn.LB, btn: [Btn.LB], devices: ALL },
+  { id: 'swap', label: 'Swap tool', hint: 'Gun, wrench, crowbar, jerrycan · Mouse wheel also cycles · Camp: previous element', group: 'combat', pad: Btn.LB, btn: [Btn.LB], devices: ALL },
   { id: 'interact', label: 'Interact', hint: 'Hold to loot, repair, strip, siphon, refuel, revive · Driving: handbrake on a pad', group: 'team', pad: Btn.A, btn: [Btn.A], devices: ALL },
   { id: 'jump', label: 'Jump', hint: 'On foot: jump · On a pad this shares the interact button and jumps only when nothing is in reach', group: 'move', pad: Btn.Jump, btn: [Btn.Jump], devices: ALL, optional: true },
   { id: 'vehicle', label: 'Enter · exit vehicle', hint: 'Hold to bail out at speed · Shares the view button on a pad: tap view, hold this', group: 'vehicle', pad: Btn.Y, btn: [Btn.Y], devices: ALL },
@@ -131,7 +131,7 @@ const KB_DEFAULT: [KeyMap, KeyMap] = [
     moveUp: 'KeyW', moveDown: 'KeyS', moveLeft: 'KeyA', moveRight: 'KeyD',
     turnLeft: 'KeyZ', turnRight: 'KeyX', fire: 'KeyT', interact: 'KeyE', jump: 'Space', vehicle: 'KeyF', crouch: 'KeyC',
     sprint: 'ShiftLeft', wheel: 'KeyG', reload: 'KeyR', horn: 'KeyH', swap: 'KeyQ', prevBuild: 'Digit1', nextBuild: 'Digit2',
-    view: 'KeyB', camera: 'KeyY', sheet: 'Tab', map: 'KeyV', inventory: 'Digit3', use: 'Digit4',
+    view: 'KeyB', camera: 'KeyY', sheet: 'Digit3', map: 'KeyV', inventory: 'Tab', use: 'Digit4',
   },
   {
     moveUp: 'ArrowUp', moveDown: 'ArrowDown', moveLeft: 'ArrowLeft', moveRight: 'ArrowRight',

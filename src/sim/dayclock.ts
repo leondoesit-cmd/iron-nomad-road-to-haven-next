@@ -111,3 +111,25 @@ export function lightAt(t: number, biome: 'wasteland' | 'city'): LightState {
     night,
   };
 }
+
+/** Lighting while crossing from the wasteland into a city (mix 0 to 1), so the sky does not jump at the district's edge. */
+export function lightMix(t: number, mix: number): LightState {
+  if (mix <= 0) return lightAt(t, 'wasteland');
+  if (mix >= 1) return lightAt(t, 'city');
+  const a = lightAt(t, 'wasteland');
+  const b = lightAt(t, 'city');
+  const m3 = (x: RGB, y: RGB): RGB => mix3(x, y, mix);
+  return {
+    elevation: lerp(a.elevation, b.elevation, mix),
+    azimuth: lerp(a.azimuth, b.azimuth, mix),
+    sunColor: m3(a.sunColor, b.sunColor),
+    sunIntensity: lerp(a.sunIntensity, b.sunIntensity, mix),
+    hemiSky: m3(a.hemiSky, b.hemiSky),
+    hemiGround: m3(a.hemiGround, b.hemiGround),
+    hemiIntensity: lerp(a.hemiIntensity, b.hemiIntensity, mix),
+    fog: m3(a.fog, b.fog),
+    sky: m3(a.sky, b.sky),
+    night: lerp(a.night, b.night, mix),
+  };
+}
+const mix3 = mix;

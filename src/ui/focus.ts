@@ -114,7 +114,7 @@ export class FocusUI {
   /** Call every fixed tick while the menu is open. */
   update(input: InputManager) {
     if (!this.active) return;
-    for (let p = 0; p < 2; p++) {
+    for (let p = 0; p < this.seats; p++) {
       if (this.owner !== null && p !== this.owner) continue;
       const it = input.intents[p];
       if (it.device === 'none') continue;

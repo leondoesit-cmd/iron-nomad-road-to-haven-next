@@ -1,7 +1,26 @@
 import { G, groups } from '../physics/physics';
+import {
+  AMMO,
+  SURFACES,
+  damageFraction,
+  stepBullet,
+  surfaceOfBox,
+  throughFlesh,
+  throughSlab,
+  zeroPitch,
+  type AmmoKind,
+  type AmmoSpec,
+  type Surface,
+} from '../sim/ballistics';
+import { structuralMul } from '../sim/breach';
+import { windAt } from '../sim/weather';
 import type { Ctx } from './ctx';
 import type { Vehicle } from './vehicle';
 import type { Player } from './player';
+import type { Aabb } from '../world/layout';
+import type { Zombie } from './zombies';
+import type { Animal } from './wildlife';
+import type { Infantry } from './raiders';
 
 export interface ShotOpts {
   side: 'convoy' | 'raider';
@@ -21,41 +40,77 @@ export interface ShotOpts {
   /** Loudness added to the Signature grid at the shooter. */
   noise?: number;
   headshots?: boolean;
+  /** The round it fires. Default: a raider's for raiders, a mounted gun's from a vehicle, else a pistol's. */
+  ammo?: AmmoKind;
 }
 
-export interface ShotResult {
-  kind: 'none' | 'static' | 'zombie' | 'vehicle' | 'infantry' | 'player' | 'animal';
+/** A round in the air. */
+interface Bullet {
   x: number;
   y: number;
   z: number;
-  dist: number;
-  killed: boolean;
+  vx: number;
+  vy: number;
+  vz: number;
+  spec: AmmoSpec;
+  kind: AmmoKind;
+  o: ShotOpts;
+  /** Where it left the gun, for who a hit zombie turns toward. */
+  ox: number;
+  oz: number;
+  range: number;
+  travelled: number;
+  dead: boolean;
 }
 
+type Hit =
+  | { t: 'static'; dist: number; x: number; y: number; z: number; nx: number; ny: number; nz: number; handle: number; vehicle: Vehicle | null }
+  | { t: 'zombie'; dist: number; zombie: Zombie; head: boolean }
+  | { t: 'infantry'; dist: number; unit: Infantry; head: boolean }
+  | { t: 'animal'; dist: number; animal: Animal }
+  | { t: 'player'; dist: number; player: Player };
+
 const RAY_FILTER = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
+/** The thickest slab a round is measured through. Anything more is a wall to the other side of the world. */
+const MAX_SLAB = 2.5;
+/** How far through a hollow box (a shipping container) a round is followed to find its far skin. */
+const HOLLOW_SLAB = 7;
+/** Boxes that stand in for something round: good for stopping a bullet, wrong for pinning a mark to. */
+const ROUGH_KINDS = new Set(['rock', 'tower', 'pillar']);
 
 export class Combat {
+  /** Rounds in the air. */
+  bullets: Bullet[] = [];
+  /** Wind this tick, m/s (x, z). */
+  wind: [number, number] = [0, 0];
+  /** Called when a round lands on something, for tests and the audio. */
+  onImpact: ((e: { surface: Surface | 'flesh'; x: number; y: number; z: number; speed: number; penetrated: boolean }) => void) | null = null;
+
   constructor(private ctx: Ctx) {}
 
-  /** Nudge a shot direction toward the nearest enemy in a narrow cone. Stronger assist on keyboard. */
-  assist(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, strength: number): [number, number, number] {
+  /** Nudge a shot direction toward the nearest enemy in a narrow cone, leading a target that is moving. Stronger assist on keyboard. */
+  assist(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, strength: number, speed = 300): [number, number, number] {
     if (strength <= 0) return [dx, dy, dz];
     const cone = Math.cos((5.5 * strength * Math.PI) / 180);
     let best: { x: number; y: number; z: number; score: number } | null = null;
-    const consider = (x: number, y: number, z: number) => {
-      const vx = x - ox;
-      const vy = y - oy;
-      const vz = z - oz;
-      const len = Math.hypot(vx, vy, vz);
+    const consider = (x: number, y: number, z: number, vx = 0, vz = 0) => {
+      const vx0 = x - ox;
+      const vy0 = y - oy;
+      const vz0 = z - oz;
+      const len = Math.hypot(vx0, vy0, vz0);
       if (len < 2 || len > 70) return;
-      const c = (vx * dx + vy * dy + vz * dz) / len;
+      // The round takes time to get there: aim where a moving body will be, not where it is.
+      const lead = (len / speed) * Math.min(1, strength) * 0.85;
+      const lx = vx0 + vx * lead;
+      const lz = vz0 + vz * lead;
+      const c = (vx0 * dx + vy0 * dy + vz0 * dz) / len;
       if (c < cone) return;
       const score = c * 100 - len * 0.1;
-      if (!best || score > best.score) best = { x, y, z, score };
+      if (!best || score > best.score) best = { x: ox + lx, y, z: oz + lz, score };
     };
     this.ctx.zombies.forEachNear(ox, oz, 70, (zb) => {
       if (zb.dead) return;
-      consider(zb.x, zb.y + 1.2 * zb.def.scale, zb.z);
+      consider(zb.x, zb.y + 1.2 * zb.def.scale, zb.z, zb.vx, zb.vz);
     });
     // Hunters that have turned on someone are worth aiming at; grazing deer are not.
     this.ctx.wildlife.forEachNear(ox, oz, 70, (a) => {
@@ -82,10 +137,16 @@ export class Combat {
     return [nx, ny, nz];
   }
 
-  shoot(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, o: ShotOpts): ShotResult {
+  /**
+   * Fire a round. It leaves the muzzle at its own speed and is flown a tick at a time by `update`: gravity pulls it down,
+   * the air (and a storm's wind) pushes it, and it can punch through thin cover on the way to whatever it finally hits.
+   */
+  shoot(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, o: ShotOpts): void {
     const ctx = this.ctx;
     const range = o.range ?? 90;
-    if (o.assist) [dx, dy, dz] = this.assist(ox, oy, oz, dx, dy, dz, o.assist);
+    const kind: AmmoKind = o.ammo ?? (o.side === 'raider' ? 'raider' : o.ownVehicle ? 'turret' : 'pistol');
+    const spec = AMMO[kind];
+    if (o.assist) [dx, dy, dz] = this.assist(ox, oy, oz, dx, dy, dz, o.assist, spec.speed);
     if (o.spread) {
       const s = o.spread;
       const rx = (ctx.rng.next() - 0.5) * 2 * s;
@@ -99,109 +160,304 @@ export class Combat {
       dy /= l;
       dz /= l;
     }
-    const res: ShotResult = { kind: 'none', x: ox + dx * range, y: oy + dy * range, z: oz + dz * range, dist: range, killed: false };
-
-    // Static geometry and vehicles through Rapier.
-    let vehHit: Vehicle | null = null;
-    const own = o.ownVehicle?.body.body;
-    const rh = ctx.P.raycast(ox, oy, oz, dx, dy, dz, range, RAY_FILTER, own);
-    if (rh) {
-      res.dist = rh.toi;
-      res.kind = 'static';
-      res.x = ox + dx * rh.toi;
-      res.y = oy + dy * rh.toi;
-      res.z = oz + dz * rh.toi;
-      const v = ctx.vehicleByCollider.get(rh.collider.handle);
-      if (v && !v.wreck) {
-        // Friendly vehicles never stop friendly bullets.
-        if (!(o.side === 'convoy' && v.faction === 'convoy') && !(o.side === 'raider' && v.faction === 'raider')) {
-          res.kind = 'vehicle';
-          vehHit = v;
-        } else {
-          // pass through friendlies: re-cast beyond them
-          res.kind = 'none';
-          res.dist = range;
-          res.x = ox + dx * range;
-          res.y = oy + dy * range;
-          res.z = oz + dz * range;
-        }
-      }
-    }
-
-    // Logical targets in front of the static hit.
-    const maxD = res.dist;
-    if (o.side === 'convoy') {
-      const z = ctx.zombies.rayTest(ox, oy, oz, dx, dy, dz, maxD);
-      let zd = Infinity;
-      if (z) zd = z.dist;
-      const inf = ctx.raiders.infantryRayTest(ox, oy, oz, dx, dy, dz, maxD);
-      let id = Infinity;
-      if (inf) id = inf.dist;
-      const an = ctx.wildlife.rayTest(ox, oy, oz, dx, dy, dz, maxD);
-      const ad = an ? an.dist : Infinity;
-      if (an && ad < zd && ad <= id && ad < res.dist) {
-        res.kind = 'animal';
-        res.dist = ad;
-        res.x = ox + dx * ad;
-        res.y = oy + dy * ad;
-        res.z = oz + dz * ad;
-        res.killed = ctx.wildlife.damage(an.animal, o.damage * (1 - an.animal.def.armor * (1 - (o.pierce ?? 0))), { fromX: ox, fromZ: oz, killer: o.owner?.index ?? -1 });
-        ctx.fx.blood(res.x, res.y, res.z, 3);
-      } else if (z && zd <= id && zd < res.dist) {
-        res.kind = 'zombie';
-        res.dist = zd;
-        res.x = ox + dx * zd;
-        res.y = oy + dy * zd;
-        res.z = oz + dz * zd;
-        const head = !!o.headshots && z.head;
-        const dmg = o.damage * (head ? 2 : 1) * (1 - z.zombie.def.armor * (1 - (o.pierce ?? 0)));
-        res.killed = ctx.zombies.damage(z.zombie, dmg, { fromX: ox, fromZ: oz, head, killer: o.owner?.index ?? -1 });
-        ctx.fx.blood(res.x, res.y, res.z, head ? 5 : 3);
-      } else if (inf && id < res.dist) {
-        res.kind = 'infantry';
-        res.dist = id;
-        res.x = ox + dx * id;
-        res.y = oy + dy * id;
-        res.z = oz + dz * id;
-        res.killed = ctx.raiders.damageInfantry(inf.unit, o.damage * (inf.head && o.headshots ? 2 : 1), o.owner?.index ?? -1);
-        ctx.fx.blood(res.x, res.y, res.z, 3);
-      } else if (vehHit) {
-        res.killed = this.applyVehicleHit(vehHit, ox, oz, o);
-      } else if (res.kind === 'static') {
-        ctx.fx.spark(res.x, res.y, res.z, 3, 4);
-        ctx.fx.puff(res.x, res.y, res.z, 0.55, 0.5, 0.45, 0.7, 0.4);
-      }
-    } else {
-      // Raiders shoot players and convoy vehicles.
-      const pl = this.playerRay(ox, oy, oz, dx, dy, dz, maxD);
-      if (pl && pl.dist < res.dist) {
-        res.kind = 'player';
-        res.dist = pl.dist;
-        res.x = ox + dx * pl.dist;
-        res.y = oy + dy * pl.dist;
-        res.z = oz + dz * pl.dist;
-        // Raider rounds are tuned to chew vehicles; people on foot take a reduced share.
-        pl.player.hurt(o.damage * 0.55, ox, oz, 'bullet');
-        ctx.fx.blood(res.x, res.y, res.z, 3);
-      } else if (vehHit) {
-        res.killed = this.applyVehicleHit(vehHit, ox, oz, o);
-      } else if (res.kind === 'static') {
-        ctx.fx.spark(res.x, res.y, res.z, 2, 3);
-        ctx.fx.puff(res.x, res.y, res.z, 0.6, 0.5, 0.4, 0.9, 0.5);
-        if (rh) ctx.structureHit?.(rh.collider.handle, o.damage);
-      }
-    }
-
-    if (o.tracer !== false) ctx.tracers.add(ox, oy, oz, res.x, res.y, res.z, o.side === 'raider' ? 1 : 1, o.side === 'raider' ? 0.5 : 0.85, o.side === 'raider' ? 0.3 : 0.45);
+    // Sights are set for a range: tip the barrel up a hair so the round crosses the line of sight there.
+    dy += zeroPitch(spec, range);
+    const l = Math.hypot(dx, dy, dz);
+    dx /= l;
+    dy /= l;
+    dz /= l;
+    this.bullets.push({ x: ox, y: oy, z: oz, vx: dx * spec.speed, vy: dy * spec.speed, vz: dz * spec.speed, spec, kind, o, ox, oz, range, travelled: 0, dead: false });
     if (o.noise) ctx.sig.emit(ox, oz, o.noise * ctx.signatureMult, 'noise');
-    return res;
   }
 
-  private applyVehicleHit(v: Vehicle, ox: number, oz: number, o: ShotOpts): boolean {
+  /** Fly every round in the air one tick. */
+  update(dt: number) {
+    if (!this.bullets.length) return;
     const ctx = this.ctx;
-    const r = v.takeHit(o.damage * (o.side === 'raider' ? ctx.campaign.difficulty.damage : 1), ox, oz, { incendiary: o.incendiary, pierce: o.pierce });
-    ctx.fx.spark(v.position.x, v.position.y + 0.8, v.position.z, 2, 3);
-    return r;
+    this.wind = windAt(ctx.storm, ctx.time);
+    for (let i = this.bullets.length - 1; i >= 0; i--) {
+      const b = this.bullets[i];
+      this.advance(b, dt);
+      if (b.dead) {
+        this.bullets[i] = this.bullets[this.bullets.length - 1];
+        this.bullets.pop();
+      }
+    }
+  }
+
+  clear() {
+    this.bullets.length = 0;
+  }
+
+  private advance(b: Bullet, dt: number) {
+    const ctx = this.ctx;
+    const x0 = b.x;
+    const y0 = b.y;
+    const z0 = b.z;
+    const [wx, wz] = this.wind;
+    stepBullet(b, dt / 2, b.spec.drag, wx, wz);
+    stepBullet(b, dt / 2, b.spec.drag, wx, wz);
+    let dx = b.x - x0;
+    let dy = b.y - y0;
+    let dz = b.z - z0;
+    let len = Math.hypot(dx, dy, dz);
+    if (len < 1e-6) {
+      b.dead = true;
+      return;
+    }
+    dx /= len;
+    dy /= len;
+    dz /= len;
+    // The range limit ends it mid-tick if it runs out.
+    if (b.travelled + len > b.range) len = Math.max(0, b.range - b.travelled);
+    let cx = x0;
+    let cy = y0;
+    let cz = z0;
+    let left = len;
+    for (let stage = 0; stage < 6 && left > 1e-4 && !b.dead; stage++) {
+      const h = this.firstHit(b, cx, cy, cz, dx, dy, dz, left);
+      if (!h) {
+        cx += dx * left;
+        cy += dy * left;
+        cz += dz * left;
+        left = 0;
+        break;
+      }
+      const used = h.dist;
+      cx += dx * used;
+      cy += dy * used;
+      cz += dz * used;
+      left -= used;
+      const adv = this.land(b, h, cx, cy, cz, dx, dy, dz);
+      if (adv) {
+        // Through the far side: carry on from there along the new heading.
+        cx = adv.x;
+        cy = adv.y;
+        cz = adv.z;
+        left = Math.max(0, left - adv.run);
+        dx = adv.dx;
+        dy = adv.dy;
+        dz = adv.dz;
+      }
+    }
+    b.travelled += len;
+    if (b.o.tracer !== false) {
+      const raider = b.o.side === 'raider';
+      ctx.tracers.add(x0, y0, z0, cx, cy, cz, 1, raider ? 0.5 : 0.85, raider ? 0.3 : 0.45);
+    }
+    if (!b.dead) {
+      b.x = cx;
+      b.y = cy;
+      b.z = cz;
+      if (b.travelled >= b.range - 1e-3) b.dead = true;
+      else if (cy < ctx.groundAt(cx, cz) - 2) b.dead = true;
+    }
+  }
+
+  /** Nearest thing along a segment: the world, or anyone the round can hurt. */
+  private firstHit(b: Bullet, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxD: number): Hit | null {
+    const ctx = this.ctx;
+    const o = b.o;
+    let best: Hit | null = null;
+    let bestD = maxD;
+    // Static geometry and vehicles through Rapier. Friendly vehicles never stop friendly bullets.
+    const own = o.ownVehicle?.body.body;
+    const friendly = (v: Vehicle) => (o.side === 'convoy' && v.faction === 'convoy') || (o.side === 'raider' && v.faction === 'raider');
+    const rh = ctx.P.raycast(ox, oy, oz, dx, dy, dz, maxD, RAY_FILTER, own, (c) => {
+      const v = ctx.vehicleByCollider.get(c.handle);
+      return !(v && !v.wreck && friendly(v));
+    });
+    if (rh) {
+      const v = ctx.vehicleByCollider.get(rh.collider.handle) ?? null;
+      best = { t: 'static', dist: rh.toi, x: ox + dx * rh.toi, y: oy + dy * rh.toi, z: oz + dz * rh.toi, nx: rh.normal.x, ny: rh.normal.y, nz: rh.normal.z, handle: rh.collider.handle, vehicle: v && !v.wreck ? v : null };
+      bestD = rh.toi;
+    }
+    if (o.side === 'convoy') {
+      const an = ctx.wildlife.rayTest(ox, oy, oz, dx, dy, dz, bestD);
+      if (an && an.dist < bestD) {
+        best = { t: 'animal', dist: an.dist, animal: an.animal };
+        bestD = an.dist;
+      }
+      const z = ctx.zombies.rayTest(ox, oy, oz, dx, dy, dz, bestD);
+      if (z && z.dist < bestD) {
+        best = { t: 'zombie', dist: z.dist, zombie: z.zombie, head: z.head };
+        bestD = z.dist;
+      }
+      const inf = ctx.raiders.infantryRayTest(ox, oy, oz, dx, dy, dz, bestD);
+      if (inf && inf.dist < bestD) {
+        best = { t: 'infantry', dist: inf.dist, unit: inf.unit, head: inf.head };
+        bestD = inf.dist;
+      }
+    } else {
+      const pl = this.playerRay(ox, oy, oz, dx, dy, dz, bestD);
+      if (pl && pl.dist < bestD) best = { t: 'player', dist: pl.dist, player: pl.player };
+    }
+    return best;
+  }
+
+  /**
+   * A round arrived at a hit. Do what it does there. Returns where it comes out and how it is heading if it went through
+   * (flesh, a wall, a car door), or null if it stopped.
+   */
+  private land(b: Bullet, h: Hit, x: number, y: number, z: number, dx: number, dy: number, dz: number): { x: number; y: number; z: number; dx: number; dy: number; dz: number; run: number } | null {
+    const ctx = this.ctx;
+    const o = b.o;
+    const spec = b.spec;
+    const speed = Math.hypot(b.vx, b.vy, b.vz);
+    const frac = damageFraction(speed / spec.speed);
+    const owner = o.owner?.index ?? -1;
+    let after = 0;
+    let thickRun = 0;
+    switch (h.t) {
+      case 'zombie': {
+        const zb = h.zombie;
+        const head = !!o.headshots && h.head;
+        const dmg = o.damage * frac * (head ? 2 : 1) * (1 - zb.def.armor * (1 - (o.pierce ?? 0)));
+        const res = ctx.zombies.bulletHit(zb, { dmg, dx, dy, dz, x, y, z, head, spec, speed, fromX: b.ox, fromZ: b.oz, killer: owner });
+        const power = dmg / zb.def.hp;
+        ctx.gore.flesh(x, y, z, dx, dy, dz, power * (head ? 1.3 : 1));
+        for (const zone of res.off) ctx.gore.sever(zb, zone, dx, dy, dz, power * Math.max(0.5, spec.gore));
+        this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
+        after = throughFlesh(spec, speed);
+        thickRun = zb.def.radius * 1.7;
+        break;
+      }
+      case 'infantry': {
+        const dmg = o.damage * frac * (h.head && o.headshots ? 2 : 1);
+        ctx.raiders.damageInfantry(h.unit, dmg, owner);
+        ctx.gore.flesh(x, y, z, dx, dy, dz, dmg / Math.max(1, h.unit.def.hp));
+        this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
+        after = throughFlesh(spec, speed);
+        thickRun = 0.7;
+        break;
+      }
+      case 'animal': {
+        const a = h.animal;
+        const dmg = o.damage * frac * (1 - a.def.armor * (1 - (o.pierce ?? 0)));
+        ctx.wildlife.damage(a, dmg, { fromX: b.ox, fromZ: b.oz, killer: owner });
+        ctx.gore.flesh(x, y, z, dx, dy, dz, dmg / Math.max(1, a.def.hp));
+        this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
+        after = throughFlesh(spec, speed);
+        thickRun = 0.6;
+        break;
+      }
+      case 'player': {
+        // Raider rounds are tuned to chew vehicles; people on foot take a reduced share.
+        h.player.hurt(o.damage * frac * 0.55, b.ox, b.oz, 'bullet');
+        ctx.gore.flesh(x, y, z, dx, dy, dz, 0.3);
+        this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
+        after = 0;
+        break;
+      }
+      case 'static': {
+        const v = h.vehicle;
+        if (v) {
+          const dmg = o.damage * frac * (o.side === 'raider' ? ctx.campaign.difficulty.damage : 1);
+          v.takeHit(dmg, b.ox, b.oz, { incendiary: o.incendiary, pierce: o.pierce, at: [h.x, h.y, h.z] });
+          // The car is boxed roughly: follow the round on through it to see whether it crossed a window.
+          v.glass.hitRay(h.x, h.y, h.z, dx, dy, dz, o.damage * frac * structuralMul(b.kind, 'glass'));
+          ctx.fx.spark(h.x, h.y, h.z, 3, 4);
+        } else if (o.side === 'raider') {
+          ctx.structureHit?.(h.handle, o.damage * frac * ctx.campaign.difficulty.damage);
+        }
+        const box = v ? null : this.boxAt(h.x, h.y, h.z);
+        const boxThin = box ? Math.min(box.maxX - box.minX, box.maxZ - box.minZ) : 0;
+        const surface: Surface = v ? 'car' : box ? surfaceOfBox(box.kind, boxThin, box.mat) : h.ny > 0.6 ? 'dirt' : 'stone';
+        const info = SURFACES[surface];
+        // Round things (rocks, tanks, pillars) are boxed roughly, so a mark put on the box would hang in the air beside them.
+        const exact = !box || !ROUGH_KINDS.has(box.kind);
+        ctx.gore.impact(surface, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dz, (speed / spec.speed) * (o.damage / 30), { moving: !!v, size: spec.hole, heavy: spec.hole >= 0.15, mark: exact });
+        // How far through it goes is worked out before the blow is dealt: a pane that breaks or a wall that gives way is
+        // not there to be measured afterwards, and the round should carry on through it.
+        let exit = 0;
+        let geo = 0;
+        if (info.stop < 9) {
+          const thinPlate = surface === 'sheet' || surface === 'glass';
+          // A container or a tank is hollow: two skins with air between, however deep the box is.
+          const hollow = surface === 'sheet' && boxThin > 0.6;
+          const probe = hollow ? HOLLOW_SLAB : MAX_SLAB;
+          const back = ctx.P.raycast(h.x + dx * probe, h.y + dy * probe, h.z + dz * probe, -dx, -dy, -dz, probe, RAY_FILTER, undefined, (c) => c.handle === h.handle);
+          geo = back && back.toi > 1e-4 ? probe - back.toi : Infinity;
+          if (geo < probe) {
+            if (thinPlate) {
+              let sp = speed;
+              for (let k = 0; k < (hollow ? 2 : 1) && sp > 0; k++) sp = throughSlab(spec, sp, surface, info.ref);
+              exit = sp;
+            } else if (geo < MAX_SLAB) exit = throughSlab(spec, speed, surface, geo);
+          }
+        }
+        this.onImpact?.({ surface, x: h.x, y: h.y, z: h.z, speed, penetrated: exit > 0 });
+        // Whatever it hit may give way: glass breaks, a plank wall opens, a barricade splinters. A pistol cannot bring down a
+        // wall, but it shatters a pane and chews sheet metal. Done after the round's own marks are laid, so a wall that falls
+        // takes them with it.
+        const strike = () => {
+          if (!box || !ctx.world) return;
+          const mul = box.kind === 'barricade' ? 1 : structuralMul(b.kind, surface);
+          if (mul > 0) ctx.world.hit(box, o.damage * frac * mul, 'bullet', { x: h.x, y: h.y, z: h.z, nx: h.nx, ny: h.ny, nz: h.nz });
+        };
+        if (exit > 0) {
+          // Out the far side, slower and a little off true, with a puff where it leaves.
+          const loss = 1 - exit / speed;
+          const jit = 0.01 + 0.05 * loss;
+          let ndx = dx + (ctx.rng.next() - 0.5) * 2 * jit;
+          let ndy = dy + (ctx.rng.next() - 0.5) * 2 * jit;
+          let ndz = dz + (ctx.rng.next() - 0.5) * 2 * jit;
+          const nl = Math.hypot(ndx, ndy, ndz);
+          ndx /= nl;
+          ndy /= nl;
+          ndz /= nl;
+          b.vx = ndx * exit;
+          b.vy = ndy * exit;
+          b.vz = ndz * exit;
+          const run = geo + 0.04;
+          // The hole it leaves on the far face.
+          if (!v && exact) ctx.gore.exitHole(surface, h.x + dx * geo, h.y + dy * geo, h.z + dz * geo, dx, dy, dz, (exit / spec.speed) * (o.damage / 30), spec.hole);
+          const px = h.x + dx * run;
+          const py = h.y + dy * run;
+          const pz = h.z + dz * run;
+          ctx.fx.puff(px, py, pz, info.tint[0], info.tint[1], info.tint[2], 0.5, 0.4);
+          if (info.spark) ctx.fx.spark(px, py, pz, info.spark, 3);
+          strike();
+          return { x: px, y: py, z: pz, dx: ndx, dy: ndy, dz: ndz, run };
+        }
+        strike();
+        b.dead = true;
+        return null;
+      }
+    }
+    if (after > 0) {
+      // Out the other side of the body, slower, still on its way.
+      b.vx = dx * after;
+      b.vy = dy * after;
+      b.vz = dz * after;
+      return { x: x + dx * thickRun, y: y + dy * thickRun, z: z + dz * thickRun, dx, dy, dz, run: thickRun };
+    }
+    b.dead = true;
+    return null;
+  }
+
+  /**
+   * The box of the world at a point on a surface, if there is one: the one the point is nearest (inside counts as nearest),
+   * and of those the thinnest. Nearest first matters for a pane of glass standing a few centimetres off a wall: a round that
+   * has just come through the glass and struck the wall must find the wall, not the glass beside it.
+   */
+  private boxAt(x: number, y: number, z: number): Aabb | null {
+    let found: Aabb | null = null;
+    let best = Infinity;
+    let thin = Infinity;
+    this.ctx.obs.near(x, z, 0.6, (a) => {
+      if (x < a.minX - 0.25 || x > a.maxX + 0.25 || z < a.minZ - 0.25 || z > a.maxZ + 0.25) return;
+      if (y < a.y0 - 0.25 || y > a.y1 + 0.25) return;
+      const d = Math.hypot(Math.max(a.minX - x, 0, x - a.maxX), Math.max(a.minZ - z, 0, z - a.maxZ), Math.max(a.y0 - y, 0, y - a.y1));
+      const t = Math.min(a.maxX - a.minX, a.maxZ - a.minZ);
+      // Within a millimetre counts as the same distance.
+      if (d < best - 1e-3 || (d < best + 1e-3 && t < thin)) {
+        best = d;
+        thin = t;
+        found = a;
+      }
+    });
+    return found;
   }
 
   private playerRay(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxD: number): { player: Player; dist: number } | null {
@@ -222,7 +478,9 @@ export class Combat {
       if (Math.hypot(cx - px, cz - pz) > 0.45) continue;
       const ty = oy + (dy / dh) * t;
       if (ty < py - 0.1 || ty > py + 1.9) continue;
-      if (!best || t < best.dist) best = { player: p, dist: t };
+      // The ray parameter is along the unit 3D direction, like the other ray tests; `t` is only the horizontal run.
+      const tt = t / dh;
+      if (!best || tt < best.dist) best = { player: p, dist: tt };
     }
     return best;
   }
@@ -233,6 +491,9 @@ export class Combat {
     ctx.fx.explosion(x, y, z, Math.max(0.6, radius / 5));
     ctx.audio.play('boom', x, z, 1);
     ctx.sig.emit(x, z, 100, 'noise');
+    // A real blast breaks what it can and chars the ground.
+    if (radius >= 3) ctx.gore.scorch(x, z, radius * 0.6);
+    ctx.world?.blast(x, y, z, radius, damage);
     for (const p of ctx.players) p.cam.addShake(Math.max(0, 0.9 - Math.hypot(p.pos.x - x, p.pos.z - z) / (radius * 4)));
     ctx.zombies.blast(x, z, radius, damage, o.owner?.index ?? -1);
     ctx.wildlife.blast(x, z, radius, damage, o.owner?.index ?? -1);
@@ -243,7 +504,7 @@ export class Combat {
       if (d > radius + v.def.length * 0.5) continue;
       const f = 1 - Math.min(1, d / (radius + v.def.length * 0.5));
       if (o.side === 'convoy' && v.faction === 'convoy' && !o.owner) continue;
-      v.takeHit(damage * f * 0.8, x, z, { incendiary: !!o.incendiary, ram: true });
+      v.takeHit(damage * f * 0.8, x, z, { incendiary: !!o.incendiary, ram: true, blast: f });
       const k = f * v.mass * 2;
       const dx = v.position.x - x;
       const dz = v.position.z - z;

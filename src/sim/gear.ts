@@ -14,6 +14,7 @@ import {
 import { clamp } from '../core/math';
 import type { Rng } from '../core/rng';
 import { newUid } from './parts';
+import { foundCondition, repairCost, wearOf } from './vitals';
 
 /**
  * A person's kit, as pure data: what is worn, what is on the belt, and what is in the bag.
@@ -24,6 +25,8 @@ export interface GearItem {
   id: string;
   /** Rounds in the magazine, for guns. Travels with the gun when it is swapped, dropped or handed over. */
   mag?: number;
+  /** Weapon condition, 0 to 1. Missing means mint, so starter kit, old saves and armour need no value. */
+  cond?: number;
 }
 
 export interface Loadout {
@@ -301,7 +304,29 @@ export function stepSel(l: Loadout, dir: 1 | -1, utilityOk: boolean): number {
 
 /** Slots whose items can be taken off for scrap, and what that is worth. */
 export function scrapOf(it: GearItem): number {
-  return gearDef(it.id).scrap;
+  const d = gearDef(it.id);
+  return isWeapon(d) ? Math.max(1, Math.round(d.scrap * (0.4 + 0.6 * wearOf(it.cond)))) : d.scrap;
+}
+
+/** Scrap it takes to put a weapon back to mint (0 for anything that does not wear). */
+export function repairPrice(it: GearItem): number {
+  const d = gearDef(it.id);
+  return isWeapon(d) ? repairCost(it.cond, d.rarity) : 0;
+}
+
+/** Restore a weapon. The caller takes the Scrap. */
+export function repairItem(it: GearItem) {
+  delete it.cond;
+}
+
+/** Bag tidy: weapons first, then what is worn-able by slot, best (rarest) first. Stable for equal items. */
+export function sortBag(l: Loadout) {
+  const rank = (g: GearItem) => {
+    const d = gearDef(g.id);
+    const k = d.kind === 'gun' ? 0 : d.kind === 'melee' ? 1 : d.kind === 'tool' ? 2 : 3 + WEAR_SLOTS.indexOf(d.slot!);
+    return k * 10 - d.rarity;
+  };
+  l.bag = l.bag.map((g, i) => ({ g, i })).sort((a, b) => rank(a.g) - rank(b.g) || a.i - b.i).map((x) => x.g);
 }
 
 // ------------------------------------------------------------------ saving
@@ -316,6 +341,7 @@ function cleanItem(raw: unknown, seen: Set<string>): GearItem | null {
   seen.add(uid);
   const it: GearItem = { uid, id: raw.id };
   if (d.gun) it.mag = typeof raw.mag === 'number' && Number.isFinite(raw.mag) ? clamp(Math.round(raw.mag), 0, d.gun.mag) : d.gun.mag;
+  if (isWeapon(d) && typeof raw.cond === 'number' && Number.isFinite(raw.cond) && raw.cond < 1) it.cond = clamp(raw.cond, 0, 1);
   return it;
 }
 
@@ -454,7 +480,11 @@ export function rollGearId(rng: Rng, o: GearRoll = {}): string {
 }
 
 export function rollGear(rng: Rng, o: GearRoll = {}): GearItem {
-  return newGear(rollGearId(rng, o));
+  const it = newGear(rollGearId(rng, o));
+  const d = gearDef(it.id);
+  // Weapons come out of the dirt with some miles on them. Clothes do not wear, so they draw nothing.
+  if (isWeapon(d)) it.cond = foundCondition(rng.next(), d.rarity);
+  return it;
 }
 
 /** Where a find came from. Each source has its own odds. */

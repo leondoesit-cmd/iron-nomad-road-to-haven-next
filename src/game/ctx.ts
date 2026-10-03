@@ -18,14 +18,18 @@ import type { WildlifeSystem } from './wildlife';
 import type { RaiderSystem } from './raiders';
 import type { CrewSystem } from './crew';
 import type { Combat } from './combat';
+import type { Gore } from './gore';
+import type { WorldDamage } from './destruction';
 import type { AudioEngine } from '../audio/audio';
 import type { InteractRegistry } from './interact';
 import type { Projectiles } from './projectiles';
 import type { Aabb } from '../world/layout';
 import type { CarField } from './cars';
+import type { DebrisField } from './debris';
+import type { TrackMarks } from '../render/trackMarks';
 import type { Faction } from './vehicle';
 import type { VehicleBuild } from '../sim/garage';
-import type { Carried, Loose } from '../sim/carry';
+import type { Carried, Goods, Loose } from '../sim/carry';
 
 export type NoteKind = 'info' | 'good' | 'warn' | 'bad';
 
@@ -35,6 +39,10 @@ export interface LooseWorld {
   nearest(x: number, z: number, r: number, prefer?: string): Loose | null;
   /** Take it out of the world and hand it over. */
   take(id: string): Carried | null;
+  /** The nearest item that goes straight into the stockpile when picked up. */
+  nearestGoods(x: number, z: number, r: number, prefer?: string): Goods | null;
+  /** Pick it up: banks it and removes it from the world. */
+  takeGoods(id: string, by: Player): boolean;
   /** Set something down on the ground. */
   drop(x: number, z: number, c: Carried): void;
 }
@@ -60,10 +68,16 @@ export interface Ctx {
   input: InputManager;
   rng: Rng;
   combat: Combat;
+  /** Blood decals, thrown limbs, spent brass and bullet holes. */
+  gore: Gore;
+  /** Things that break when hurt (a plank wall, a barricade). Absent where nothing does. */
+  world?: WorldDamage;
   /** Simulation seconds since the scene started. */
   time: number;
   /** 0 by day, 1 deep night. */
   night: number;
+  /** Dust storm strength, 0 clear to 1 the full wall. */
+  storm: number;
   players: Player[];
   vehicles: Vehicle[];
   zombies: ZombieSystem;
@@ -78,6 +92,10 @@ export interface Ctx {
   projectiles: Projectiles;
   /** Abandoned cars and everything that can be done to them. */
   cars: CarField;
+  /** What has come off vehicles and lies in the road. */
+  debris: DebrisField;
+  /** Tyre grooves and skid marks. */
+  marks: TrackMarks;
   /** A vehicle from a build, added to the scene. */
   spawnVehicle(opts: { build: VehicleBuild; x: number; z: number; yaw: number; ownerIndex: number; faction?: Faction; y?: number; hulk?: boolean }): Vehicle;
   /** True once the physics ground under a point exists (chunks stream in), so a car can safely be dropped there. */
@@ -103,6 +121,8 @@ export interface Ctx {
   addLoot(gross: Partial<Stocks>, label?: string): void;
   /** A piece of gear found by one person: their bag, else their partner's, else Scrap. */
   addGear(by: Player, item: import('../sim/gear').GearItem): void;
+  /** A find that lands on the ground near (x, z) for someone to walk up to and take. */
+  dropGear(item: import('../sim/gear').GearItem, x: number, z: number): void;
   /** How far the convoy has come, 0 to 1. */
   readonly gearProgress: number;
   onVehicleDestroyed(v: Vehicle): void;

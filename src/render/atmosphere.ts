@@ -73,7 +73,7 @@ const FOG_PARS_FRAGMENT = /* glsl */ `
     f = max( f, 1.0 - exp( - haze ) );
     f = min( f, atmoParams.w );
     float sun = max( dot( dir, atmoSunDir ), 0.0 );
-    vec3 fc = fogColor + atmoSunCol.rgb * atmoSunCol.a * ( pow( sun, 8.0 ) * 0.7 + pow( sun, 40.0 ) * 0.6 );
+    vec3 fc = fogColor + atmoSunCol.rgb * atmoSunCol.a * ( pow( sun, 28.0 ) * 0.35 + pow( sun, 120.0 ) * 0.45 );
     return mix( col, fc, f );
   }
 #endif

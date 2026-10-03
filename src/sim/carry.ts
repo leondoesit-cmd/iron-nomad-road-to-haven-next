@@ -26,6 +26,15 @@ export interface Loose {
   z: number;
 }
 
+/** Something lying in the world that is picked up straight into the stockpile: scrap, rations, ammo and the like. */
+export interface Goods {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  z: number;
+}
+
 export function carriedName(c: Carried): string {
   switch (c.kind) {
     case 'part':

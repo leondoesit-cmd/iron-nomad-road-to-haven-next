@@ -245,7 +245,7 @@ export class WildlifeSystem {
     const uz = dz / dh;
     let best: { animal: Animal; dist: number } | null = null;
     for (const a of this.list) {
-      if (a.dead && a.deadT > 4) continue;
+      if (a.dead) continue;
       const vx = a.x - ox;
       const vz = a.z - oz;
       const t0 = vx * ux + vz * uz;
@@ -449,6 +449,7 @@ export class WildlifeSystem {
       a.vz += fz * sp * 0.7 + fx * lx * 0.3;
       a.stun = Math.max(a.stun, 0.6);
       this.ctx.fx.blood(a.x, a.y + 0.5, a.z, 3);
+      v.bodywork.splat(clamp(0.02 + a.def.hp / 2500, 0.02, 0.09));
       const hp = a.def.hp;
       const loss = clamp(0.006 + hp / 2200, 0.006, 0.16) * (1 - Math.min(0.7, pl * 0.9));
       slow *= 1 - loss;
@@ -1077,7 +1078,7 @@ export class WildlifeSystem {
         const d = Math.hypot(v.position.x - a.x, v.position.z - a.z);
         if (d > v.def.length * 0.5 + def.radius * def.size + 0.5) continue;
         a.attackCd = t === 'brute' ? 1.6 : 1.5;
-        v.takeHit(def.vehicleDamage ?? 15, a.x, a.z, { ram: true });
+        v.takeHit(def.vehicleDamage ?? 15, a.x, a.z, { ram: true, smash: true });
         const dx = v.position.x - a.x;
         const dz = v.position.z - a.z;
         const l = Math.hypot(dx, dz) || 1;

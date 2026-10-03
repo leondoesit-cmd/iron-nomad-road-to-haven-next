@@ -21,6 +21,7 @@ export interface ChestLoot extends Partial<Record<DrugId, number>> {
   stocks: Partial<Stocks>;
   ammo?: number;
   medkit?: number;
+  bandage?: number;
   charge?: number;
   molotov?: number;
   flare?: number;
@@ -663,7 +664,7 @@ class Gen {
         case 'mine':
           return { stocks: { parts: s(rng.int(6, 12)), scrap: s(rng.int(8, 16)), fuel: rng.chance(0.5) ? 5 : 0, tech: rng.chance(0.3) ? 1 : 0 }, charge: rng.chance(0.3) ? 1 : 0 };
         case 'bunker':
-          return { stocks: { tech: rng.int(1, 2) + (tier > 2 ? 1 : 0), medicine: rng.int(1, 2), rations: rng.int(1, 2) }, ammo: rng.int(12, 24) + tier * 6, medkit: rng.chance(0.35) ? 1 : 0, flare: rng.chance(0.4) ? 1 : 0 };
+          return { stocks: { tech: rng.int(1, 2) + (tier > 2 ? 1 : 0), medicine: rng.int(1, 2), rations: rng.int(1, 2) }, ammo: rng.int(12, 24) + tier * 6, medkit: rng.chance(0.35) ? 1 : 0, bandage: rng.chance(0.6) ? rng.int(1, 2) : 0, flare: rng.chance(0.4) ? 1 : 0 };
         default:
           return { stocks: { scrap: s(rng.int(10, 20)), parts: s(rng.int(5, 10)), medicine: rng.chance(0.5) ? 1 : 0, tech: rng.chance(0.35) ? 1 : 0 }, molotov: rng.chance(0.3) ? 1 : 0, ammo: rng.chance(0.4) ? 12 : 0 };
       }
@@ -683,7 +684,7 @@ class Gen {
       }
     }
     // The hoard behind the boss.
-    const hoard: ChestLoot = { stocks: { tech: 3 + tier, medicine: 2, parts: 14 + tier * 6, scrap: 30 + tier * 14, rations: 3 }, ammo: 30 + tier * 10, medkit: 1 + (tier > 1 ? 1 : 0), charge: 1, ...drugLoot(theme, drng, true) };
+    const hoard: ChestLoot = { stocks: { tech: 3 + tier, medicine: 2, parts: 14 + tier * 6, scrap: 30 + tier * 14, rations: 3 }, ammo: 30 + tier * 10, medkit: 1 + (tier > 1 ? 1 : 0), bandage: 2 + tier, charge: 1, ...drugLoot(theme, drng, true) };
     const br = m.rooms.find((r) => r.role === 'boss');
     if (br) {
       let hx = m.boss.x + (br.x1 - br.x0) * CELL * 0.28;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LEGS } from '../src/data';
+import { districtAt } from '../src/world/openWorld';
 import { ChunkSource } from '../src/world/chunkgen';
 import { CHUNK, CELLS, heightAt, roadX, makeTerrainDef, chunkHeights, surfaceAt, corridorHalf } from '../src/world/terrain';
 
@@ -37,7 +38,15 @@ describe.each(LEGS.legs.map((l) => [l.id, l] as const))('leg %s layout', (_id, l
 
   it('chunk data partitions content', () => {
     let pk = 0;
-    for (let cz = -2; cz <= Math.ceil(leg.length / CHUNK) + 2; cz++) for (let cx = -3; cx <= 3; cx++) pk += src.get(cx, cz).pickups.length;
+    // The open world is too big to walk chunk by chunk in a test: check a window of it.
+    const o = L.terrain.open;
+    const cx0 = o ? -6 : -3;
+    const cx1 = o ? 6 : 3;
+    const cz0 = o ? -2 : -2;
+    const cz1 = o ? 20 : Math.ceil(leg.length / CHUNK) + 2;
+    for (let cz = cz0; cz <= cz1; cz++) for (let cx = cx0; cx <= cx1; cx++) pk += src.get(cx, cz).pickups.length;
+    const inWindow = L.pickups.filter((p) => Math.floor(p.x / CHUNK) >= cx0 && Math.floor(p.x / CHUNK) <= cx1 && Math.floor(p.z / CHUNK) >= cz0 && Math.floor(p.z / CHUNK) <= cz1).length;
+    if (o) return expect(pk).toBe(inWindow);
     // pickups beyond |x| of 3 chunks are possible in the wasteland but rare; most must be found
     expect(pk).toBeGreaterThan(L.pickups.length * 0.9);
   });
@@ -142,6 +151,8 @@ describe('wasteland places', () => {
       const def = makeTerrainDef(leg);
       for (const s of def.sites) {
         expect(Math.abs(s.x - roadX(def, s.z))).toBeLessThan(corridorHalf(def, s.z));
+        // Set pieces are strung along the highway; a place out in the open country cannot collide with them.
+        if (def.open && Math.abs(s.x - roadX(def, s.z)) > 260) continue;
         for (const r of def.ramps) expect(s.z < r.z0 - 40 || s.z > r.z0 + 200).toBe(true);
         for (const c of def.canyons) expect(s.z < c.z0 - 40 || s.z > c.z1 + 40).toBe(true);
         for (const m of def.minefields) expect(s.z < m.z0 - 40 || s.z > m.z1 + 40).toBe(true);
@@ -208,7 +219,7 @@ describe.each(LEGS.legs.map((l) => [l.id, l] as const))('leg %s cars', (_id, leg
   it('keeps them off the ground-level roadbed in the wasteland and on the boulevard in the city', () => {
     for (const c of L.cars) {
       expect(Number.isFinite(c.y)).toBe(true);
-      if (leg.biome === 'wasteland') {
+      if (leg.biome === 'wasteland' && !districtAt(L.terrain.open, c.x, c.z)) {
         // Roadside wrecks stand beside the road, never across it.
         expect(Math.abs(c.x - roadX(L.terrain, c.z))).toBeGreaterThan(4.5);
         expect(Math.abs(c.y - heightAt(L.terrain, c.x, c.z))).toBeLessThan(0.01);

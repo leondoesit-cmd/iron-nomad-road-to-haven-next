@@ -7,6 +7,7 @@ import { installPart, newBuild } from '../src/sim/garage';
 import { newPart } from '../src/sim/parts';
 import { OIL_CAN } from '../src/sim/oil';
 import { FUEL_CAN } from '../src/sim/carry';
+import { mountsOf } from '../src/game/carwork';
 import { fakeServices } from './helpers/sim';
 import type { Vehicle } from '../src/game/vehicle';
 
@@ -136,6 +137,10 @@ describe('carrying parts, fuel and oil by hand', () => {
     const p = sc.players[0];
     p.carry = { kind: 'part', item: newPart('eng_v6', 0.9) };
     expect(c.inventory.length).toBe(0);
+    // A part goes on at its own mount: carry it round to the engine bay first.
+    v.syncVisual(1, DT);
+    const bay = mountsOf(v, p.pos).find((m) => m.slot === 'engine')!;
+    p.placeAt(bay.pos.x + Math.sin(v.yaw) * 0.7, bay.pos.z + Math.cos(v.yaw) * 0.7, v.yaw + Math.PI);
     hold(h, sc, 0, Btn.A, 5);
     expect(p.carry).toBeNull();
     expect(v.build!.fit.engine?.id).toBe('eng_v6');
@@ -302,24 +307,46 @@ describe('carrying parts, fuel and oil by hand', () => {
 });
 
 describe('driving over loose things', () => {
-  it('a car sweeping over a part or an oil can stows it, and leaves it when there is no room', () => {
+  it('a car passing over a part or an oil can leaves it where it lies', () => {
     const { sc, c } = leg();
     const p = sc.players[0];
-    const v = p.vehicle!;
+    const pos = p.vehicle!.position;
     c.items.oil = 0;
-    const pos = v.position;
     sc.loose!.drop(pos.x, pos.z, { kind: 'oil', amount: OIL_CAN });
     sc.loose!.drop(pos.x, pos.z, { kind: 'part', item: newPart('eng_v6', 0.7) });
     run(sc, 0.5);
-    expect(c.items.oil).toBeCloseTo(OIL_CAN, 5);
-    expect(c.inventory.map((it) => it.id)).toEqual(['eng_v6']);
-    // Now with a full trunk.
-    while (c.inventory.length < c.inventoryCap) c.inventory.push(newPart('arm_sheet'));
-    sc.loose!.drop(pos.x, pos.z, { kind: 'part', item: newPart('whl_bl') });
+    expect(c.items.oil).toBe(0);
+    expect(c.inventory.length).toBe(0);
+    expect(sc.loose!.nearest(pos.x, pos.z, 4)).not.toBeNull();
+  });
+});
+
+describe('goods are taken by hand', () => {
+  it('holding A on foot takes the scrap and banks it', () => {
+    const { h, sc, c } = leg();
+    const v = ownCar(sc);
+    const p = sc.players[0];
+    p.placeAt(v.position.x + 12, v.position.z, 0);
+    const before = c.stocks.scrap;
+    (sc as unknown as { spawnPickup(s: object): void }).spawnPickup({ id: 'handscrap', kind: 'scrap', amount: 9, x: p.pos.x + 0.5, z: p.pos.z, y: p.pos.y });
+    run(sc, 1);
+    expect(c.stocks.scrap).toBe(before);
+    hold(h, sc, 0, Btn.A, 1);
+    expect(c.stocks.scrap).toBe(before + 9);
+  });
+
+  it('scrap lying under the player stays put until it is taken', () => {
+    const { sc, c } = leg();
+    const p = sc.players[0];
+    const before = c.stocks.scrap;
+    const spawn = { id: 'testscrap', kind: 'scrap' as const, amount: 12, x: p.pos.x, z: p.pos.z, y: p.pos.y };
+    (sc as unknown as { spawnPickup(s: typeof spawn): void }).spawnPickup(spawn);
     run(sc, 0.5);
-    expect(c.inventory.some((it) => it.id === 'whl_bl')).toBe(false);
-    expect(sc.loose!.nearest(pos.x, pos.z, 4)?.carried.kind).toBe('part');
-    expect(p.notes.some((n) => /Trunk is full/.test(n.text))).toBe(true);
+    expect(c.stocks.scrap).toBe(before);
+    expect(sc.loose!.nearestGoods(p.pos.x, p.pos.z, 3)?.label).toMatch(/Scrap/);
+    expect(sc.loose!.takeGoods('testscrap', p)).toBe(true);
+    expect(c.stocks.scrap).toBe(before + 12);
+    expect(sc.loose!.nearestGoods(p.pos.x, p.pos.z, 3)).toBeNull();
   });
 });
 

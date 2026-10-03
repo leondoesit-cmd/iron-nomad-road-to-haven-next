@@ -4,10 +4,16 @@
     "ammo": 140
   },
   "route": {
-    "start": "L1",
-    "next": { "L1": ["L2W", "L2C"], "L2W": ["L3W", "L3C", "L3P"], "L2C": ["L3W", "L3C", "L3P"], "L3W": [], "L3C": [], "L3P": [] }
+    "start": "W",
+    "next": { "W": [], "L1": ["L2W", "L2C"], "L2W": ["L3W", "L3C", "L3P"], "L2C": ["L3W", "L3C", "L3P"], "L3W": [], "L3C": [], "L3P": [] }
   },
   "hubs": {
+    "haven": {
+      "name": "Haven",
+      "features": ["hire", "trade", "garage"],
+      "safeNight": true,
+      "blurb": "Clean water, walls, a gate that opens. The broadcast was true."
+    },
     "dustwell": {
       "name": "Dustwell Outpost",
       "features": ["hire"],
@@ -22,6 +28,46 @@
     }
   },
   "legs": [
+    {
+      "id": "W",
+      "theme": "dust",
+      "index": 2,
+      "act": 1,
+      "name": "The Open Country",
+      "subtitle": "No road is the only road",
+      "biome": "wasteland",
+      "length": 4100,
+      "seed": 7777,
+      "baseThreat": 14,
+      "dayLength": 720,
+      "tutorial": true,
+      "campSites": ["flats", "gasStation", "canyonMouth", "carPark", "plaza"],
+      "open": {
+        "halfWidth": 2300,
+        "zMin": -1400,
+        "zMax": 4300,
+        "districts": [{ "id": "petah", "legId": "L3P", "at": 640 }],
+        "hubs": [{ "id": "dustwell", "x": 95, "z": 100 }, { "id": "rustgate", "x": -105, "z": 2750 }],
+        "haven": { "x": 120, "z": 4100, "radius": 50 }
+      },
+      "sets": [
+        { "at": 40, "type": "tip", "id": "open" },
+        { "at": 130, "type": "fuelCache", "count": 2 },
+        { "at": 185, "type": "scrapPile", "count": 2 },
+        { "at": 235, "type": "tip", "id": "petah" },
+        { "at": 2540, "type": "scrapPile", "count": 3 },
+        { "at": 2600, "type": "radioFragment", "n": 1 },
+        { "at": 2900, "type": "ambush", "buggies": 3, "tip": "ambush" },
+        { "at": 3000, "type": "encounter", "id": "dying_trader" },
+        { "at": 3150, "type": "partsWreck", "count": 4 },
+        { "at": 3240, "type": "radioFragment", "n": 2 },
+        { "at": 3300, "type": "minefield", "length": 180 },
+        { "at": 3560, "type": "rampCache" },
+        { "at": 3680, "type": "encounter", "id": "orphan_cart" },
+        { "at": 3790, "type": "radioFragment", "n": 3 },
+        { "at": 3880, "type": "ambush", "buggies": 3, "wagon": 1 }
+      ]
+    },
     {
       "id": "L1",
       "theme": "dust",
@@ -174,15 +220,15 @@
       "campSites": ["plaza", "carPark"],
       "sets": [
         { "at": 90, "type": "tip", "id": "petah" },
+        { "at": 150, "type": "barricade", "grade": "flimsy" },
         { "at": 196, "type": "scavengeZone", "kind": "pharmacy", "side": -1 },
-        { "at": 262, "type": "barricade", "grade": "flimsy" },
+        { "at": 283, "type": "encounter", "id": "founders_well", "side": 1 },
         { "at": 330, "type": "hordeStreet" },
-        { "at": 450, "type": "encounter", "id": "founders_well", "side": 1 },
         { "at": 520, "type": "scavengeZone", "kind": "depot", "side": 1 },
-        { "at": 640, "type": "barricade", "grade": "reinforced" },
-        { "at": 720, "type": "chassisWreck" },
-        { "at": 766, "type": "scavengeZone", "kind": "pharmacy", "side": 1 },
+        { "at": 600, "type": "barricade", "grade": "reinforced" },
+        { "at": 655, "type": "chassisWreck" },
         { "at": 880, "type": "encounter", "id": "survivors_cellar", "side": -1 },
+        { "at": 940, "type": "scavengeZone", "kind": "pharmacy", "side": 1 },
         { "at": 950, "type": "hordeStreet" },
         { "at": 1013, "type": "scavengeZone", "kind": "parking", "side": -1 },
         { "at": 1110, "type": "radioFragment", "n": 4 },

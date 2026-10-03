@@ -1,4 +1,9 @@
 import { clamp } from '../core/math';
+import { SampleLibrary } from './samples';
+import { SpatialAudioEngine, type SpatialListener, type OcclusionTester } from './spatial';
+import { RadioAudioEngine } from './radio';
+import { VehicleAudioEngine, type EngineParams } from './engineAudio';
+import { FoleyEngine } from './foley';
 
 export type SoundId =
   | 'pistol'
@@ -38,35 +43,30 @@ export type SoundId =
   | 'whisper'
   | 'gulp'
   | 'toke'
-  | 'pill';
+  | 'pill'
+  | 'shell'
+  | 'glass';
 
 export type MusicState = 'none' | 'travel' | 'stealth' | 'combat' | 'camp' | 'raid';
 
-interface EngineVoice {
-  osc1: OscillatorNode;
-  osc2: OscillatorNode;
-  noise: AudioBufferSourceNode;
-  filt: BiquadFilterNode;
-  gain: GainNode;
-  pan: StereoPannerNode;
-  lastSeen: number;
-}
+export type EngineState = EngineParams;
 
-export interface EngineState {
-  id: number;
-  x: number;
-  z: number;
-  /** 0..1 of top speed. */
-  rpm: number;
-  throttle: number;
-  tier: number;
-  /** Loudness tied to Signature: 0..100. */
-  signature: number;
+export interface PlayOptions {
+  occluded?: boolean | number;
+  indoor?: boolean;
 }
 
 /**
- * Procedural audio. Every sound is mixed relative to the nearest player and sent to that player's bus,
- * panned 0.35 left for Player 1 and 0.35 right for Player 2. High-priority cues duck the rest.
+ * AAA Hybrid Sample-Based Foley & Directional HRTF Audio Engine.
+ * Features:
+ * - Granular Multi-Layer Foley: hybrid sampled architecture for gunshots (mechanical clicks,
+ *   explosive sub-bass body, dynamic shell casing bounces, indoor/canyon tail reverberations).
+ * - Multi-Track RPM-Sampled Vehicle Audio: idle/mid/high loops, turbocharger spooling with blow-off
+ *   valve, transmission whine, exhaust backfire pops, chassis creaks under G-force.
+ * - Binaural 3D Spatial HRTF: Web Audio PannerNode with 'HRTF' panning and distance-attenuated
+ *   low-pass occlusion when sound sources (infected, raiders, gunfire) are behind concrete walls.
+ * - Contextual Voice Barks & Radio Chatter: authentic walkie-talkie bandpass, mic clicks,
+ *   compression, squelch tails, and procedural speech cadence synthesis.
  */
 export class AudioEngine {
   ctx: AudioContext | null = null;
@@ -75,22 +75,39 @@ export class AudioEngine {
   musicBus!: GainNode;
   buses: GainNode[] = [];
   private pans: StereoPannerNode[] = [];
-  /** Per player: a low-pass for the cotton-wool of being high, and a warbling echo for the rest. */
-  private trip: { filt: BiquadFilterNode; fb: GainNode; wet: GainNode; delay: DelayNode; lfo: OscillatorNode; lfoGain: GainNode }[] = [];
+
+  /** Per player: lowpass for being high, and a warbling echo. */
+  private trip: {
+    filt: BiquadFilterNode;
+    fb: GainNode;
+    wet: GainNode;
+    delay: DelayNode;
+    lfo: OscillatorNode;
+    lfoGain: GainNode;
+  }[] = [];
+
   private noiseBuf: AudioBuffer | null = null;
-  listeners: { x: number; z: number }[] = [{ x: 0, z: 0 }, { x: 0, z: 0 }];
+  listeners: SpatialListener[] = [{ x: 0, z: 0 }, { x: 0, z: 0 }];
   muted = false;
   volume = 0.7;
   musicVolume = 0.55;
-  private engines = new Map<number, EngineVoice>();
-  private now = 0;
-  private duckT = 0;
+  indoor = false;
+  solo = false;
+
+  // Subsystems
+  samples: SampleLibrary | null = null;
+  spatial: SpatialAudioEngine | null = null;
+  radio: RadioAudioEngine | null = null;
+  vehicleAudio: VehicleAudioEngine | null = null;
+  foley: FoleyEngine | null = null;
+
   private stems: Record<string, GainNode> = {};
   private musicState: MusicState = 'none';
   private musicTimer = 0;
   private beat = 0;
   private bass?: OscillatorNode;
   private radioHiss?: GainNode;
+  private wind?: { gain: GainNode; filt: BiquadFilterNode };
   private lastPlay = new Map<string, number>();
 
   /** Must be called from a user gesture. */
@@ -99,71 +116,123 @@ export class AudioEngine {
       if (this.ctx.state === 'suspended') void this.ctx.resume();
       return;
     }
-    const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const AC =
+      (typeof window !== 'undefined' &&
+        (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)) ||
+      (typeof globalThis !== 'undefined' && (globalThis as unknown as { AudioContext?: typeof AudioContext }).AudioContext) ||
+      null;
     if (!AC) return;
     const ctx = new AC();
     this.ctx = ctx;
+
+    // Master bus & master compressor
     this.master = ctx.createGain();
     this.master.gain.value = this.volume;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
     comp.ratio.value = 5;
     this.master.connect(comp).connect(ctx.destination);
+
+    // SFX bus
     this.sfx = ctx.createGain();
     this.sfx.gain.value = 1;
     this.sfx.connect(this.master);
+
+    // Music bus
     this.musicBus = ctx.createGain();
     this.musicBus.gain.value = this.musicVolume * 0.5;
     this.musicBus.connect(this.master);
+
+    // Per-player buses
     for (let i = 0; i < 2; i++) {
       const g = ctx.createGain();
       const p = ctx.createStereoPanner();
-      p.pan.value = i === 0 ? -0.35 : 0.35;
-      // bus -> low-pass -> pan, with a feedback echo hanging off the low-pass for the psychedelics.
+      p.pan.value = this.solo ? 0 : i === 0 ? -0.35 : 0.35;
+
       const filt = ctx.createBiquadFilter();
       filt.type = 'lowpass';
       filt.frequency.value = 22000;
+
       const delay = ctx.createDelay(1);
       delay.delayTime.value = 0.27;
+
       const fb = ctx.createGain();
       fb.gain.value = 0;
+
       const wet = ctx.createGain();
       wet.gain.value = 0;
+
       const lfo = ctx.createOscillator();
       lfo.frequency.value = 0.31 + i * 0.07;
       const lfoGain = ctx.createGain();
       lfoGain.gain.value = 0;
       lfo.connect(lfoGain).connect(delay.delayTime);
       lfo.start();
+
       g.connect(filt).connect(p).connect(this.sfx);
       filt.connect(delay);
       delay.connect(fb).connect(delay);
       delay.connect(wet).connect(p);
+
       this.buses.push(g);
       this.pans.push(p);
       this.trip.push({ filt, fb, wet, delay, lfo, lfoGain });
     }
+
+    // Generic noise buffer
     const len = ctx.sampleRate * 2;
     this.noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
     const d = this.noiseBuf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+
+    // Initialize AAA subsystems
+    this.samples = new SampleLibrary(ctx);
+    this.samples.init();
+
+    this.spatial = new SpatialAudioEngine(ctx);
+    this.spatial.setSolo(this.solo);
+
+    this.radio = new RadioAudioEngine(ctx, this.samples);
+    this.vehicleAudio = new VehicleAudioEngine(ctx, this.samples, this.spatial);
+    this.foley = new FoleyEngine(ctx, this.samples);
+
     this.initMusic();
+    this.initWind();
   }
 
   setVolume(v: number) {
     this.volume = v;
     if (this.master) this.master.gain.value = this.muted ? 0 : v;
   }
+
   setMusicVolume(v: number) {
     this.musicVolume = v;
     if (this.musicBus) this.musicBus.gain.value = v * 0.5;
   }
+
   setMuted(m: boolean) {
     this.muted = m;
     if (this.master) this.master.gain.value = m ? 0 : this.volume;
   }
 
-  /** How high a player is, as the ears hear it: `muffle` closes the low-pass, `echo` opens the warbling delay. Both 0..1. */
+  setSolo(s: boolean) {
+    this.solo = s;
+    if (this.spatial) this.spatial.setSolo(s);
+    if (this.pans.length > 0 && s) {
+      this.pans[0].pan.value = 0;
+    }
+  }
+
+  setIndoor(indoor: boolean) {
+    this.indoor = indoor;
+    if (this.spatial) this.spatial.setIndoor(indoor);
+  }
+
+  setOcclusionTester(fn: OcclusionTester | null) {
+    if (this.spatial) this.spatial.setOcclusionTester(fn);
+  }
+
+  /** How high a player is: muffle closes lowpass, echo opens delay. */
   setTrip(i: number, muffle: number, echo: number) {
     const ctx = this.ctx;
     const t = this.trip[i];
@@ -177,7 +246,7 @@ export class AudioEngine {
     t.lfoGain.gain.setTargetAtTime(e * 0.012, now, 0.25);
   }
 
-  setListeners(l: { x: number; z: number }[]) {
+  setListeners(l: SpatialListener[]) {
     this.listeners = l;
   }
 
@@ -210,26 +279,78 @@ export class AudioEngine {
     g.setTargetAtTime(1, this.ctx.currentTime + seconds, 0.25);
   }
 
-  /** Play a one-shot. `x`/`z` position it in the world; omit for UI sounds heard by both players. */
-  play(id: SoundId, x?: number, z?: number, vol = 1) {
+  /**
+   * Plays a procedural contextual radio bark with authentic PTT key-in,
+   * procedural speech cadence formant synthesis, compression, and squelch tail.
+   */
+  playRadioChatter(text: string, vol = 1) {
+    if (!this.ctx || this.muted || !this.radio) return;
+    this.duck(1.5, 0.5);
+    // Route radio chatter through both player buses
+    const out = this.ctx.createGain();
+    out.gain.value = 1.0;
+    out.connect(this.buses[0] || this.sfx);
+    if (!this.solo && this.buses[1]) out.connect(this.buses[1]);
+    this.radio.playRadioChatter(text, out, vol);
+  }
+
+  /**
+   * Play a sound effect. When `x` and `z` are provided, the sound is spatialized
+   * using Web Audio PannerNode with 'HRTF' panning and distance-attenuated low-pass
+   * occlusion through concrete walls.
+   */
+  play(id: SoundId, x?: number, z?: number, vol = 1, opts: PlayOptions = {}) {
     const ctx = this.ctx;
     if (!ctx || this.muted) return;
-    // Rate-limit identical sounds so machine guns don't flood the graph.
+
+    // Rate-limiting identical rapid cues
     const t0 = ctx.currentTime;
     const last = this.lastPlay.get(id) ?? 0;
-    const minGap = id === 'mg' ? 0.045 : id === 'pistol' ? 0.03 : id === 'hit' ? 0.06 : id === 'zdie' ? 0.05 : id === 'thud' ? 0.05 : id === 'yelp' || id === 'growl' || id === 'caw' ? 0.25 : 0;
+    const minGap =
+      id === 'mg'
+        ? 0.04
+        : id === 'pistol'
+        ? 0.03
+        : id === 'hit'
+        ? 0.05
+        : id === 'zdie'
+        ? 0.04
+        : id === 'thud'
+        ? 0.04
+        : id === 'shell'
+        ? 0.035
+        : id === 'yelp' || id === 'growl' || id === 'caw'
+        ? 0.2
+        : 0;
     if (t0 - last < minGap) return;
     this.lastPlay.set(id, t0);
-    let targets: { bus: number; gain: number }[];
+
+    // 1. Non-positional UI sounds
     if (x === undefined || z === undefined) {
-      targets = [{ bus: 0, gain: 1 }, { bus: 1, gain: 1 }];
+      for (const b of this.buses) this.voice(id, b, vol, opts);
+      return;
+    }
+
+    // 2. Positional 3D HRTF with concrete wall occlusion
+    if (this.spatial) {
+      // Find eligible listeners within audible perimeter
+      for (let i = 0; i < this.listeners.length; i++) {
+        if (this.solo && i > 0) break;
+        const l = this.listeners[i];
+        const destBus = this.buses[i] || this.sfx;
+        const route = this.spatial.createSpatialRoute(x, z, l, i, destBus, opts.occluded);
+        if (route) {
+          // Route voice through the occlusion filter and HRTF panner
+          this.voice(id, route.filter, vol, { ...opts, indoor: opts.indoor ?? this.indoor });
+        }
+      }
     } else {
+      // Fallback
       const n = this.nearest(x, z);
       if (n.dist > 170) return;
-      const att = 1 / (1 + (n.dist / 28) ** 2);
-      targets = [{ bus: n.bus, gain: att }];
+      const att = 1 / (1 + Math.pow(n.dist / 28, 2));
+      this.voice(id, this.buses[n.bus] || this.sfx, vol * att, opts);
     }
-    for (const tg of targets) this.voice(id, this.buses[tg.bus], vol * tg.gain);
   }
 
   private env(g: GainNode, t0: number, peak: number, attack: number, decay: number) {
@@ -238,7 +359,16 @@ export class AudioEngine {
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + attack + decay);
   }
 
-  private burst(dest: AudioNode, t0: number, type: BiquadFilterType, freq: number, q: number, peak: number, attack: number, decay: number) {
+  private burst(
+    dest: AudioNode,
+    t0: number,
+    type: BiquadFilterType,
+    freq: number,
+    q: number,
+    peak: number,
+    attack: number,
+    decay: number,
+  ) {
     const ctx = this.ctx!;
     const n = this.noise();
     const f = ctx.createBiquadFilter();
@@ -252,7 +382,16 @@ export class AudioEngine {
     n.stop(t0 + attack + decay + 0.05);
   }
 
-  private tone(dest: AudioNode, t0: number, type: OscillatorType, f0: number, f1: number, peak: number, attack: number, decay: number) {
+  private tone(
+    dest: AudioNode,
+    t0: number,
+    type: OscillatorType,
+    f0: number,
+    f1: number,
+    peak: number,
+    attack: number,
+    decay: number,
+  ) {
     const ctx = this.ctx!;
     const o = ctx.createOscillator();
     o.type = type;
@@ -265,73 +404,139 @@ export class AudioEngine {
     o.stop(t0 + attack + decay + 0.05);
   }
 
-  private voice(id: SoundId, dest: AudioNode, v: number) {
+  private voice(id: SoundId, dest: AudioNode, v: number, opts: PlayOptions = {}) {
     const ctx = this.ctx!;
     const t0 = ctx.currentTime;
     const out = ctx.createGain();
-    out.gain.value = clamp(v, 0, 1.5);
+    out.gain.value = clamp(v, 0, 1.8);
     out.connect(dest);
+
+    // Hybrid Foley Handlers
     switch (id) {
       case 'pistol':
-        this.burst(out, t0, 'bandpass', 1900, 0.9, 0.9, 0.002, 0.11);
-        this.tone(out, t0, 'triangle', 190, 55, 0.7, 0.002, 0.09);
-        break;
       case 'shotgun':
-        this.burst(out, t0, 'lowpass', 2600, 0.6, 1.0, 0.002, 0.22);
-        this.tone(out, t0, 'sawtooth', 140, 45, 0.8, 0.002, 0.16);
-        break;
       case 'mg':
-        this.burst(out, t0, 'bandpass', 1500, 0.8, 0.55, 0.002, 0.07);
-        this.tone(out, t0, 'triangle', 150, 60, 0.45, 0.002, 0.06);
-        break;
       case 'sniper':
-        this.burst(out, t0, 'lowpass', 3000, 0.6, 1.0, 0.002, 0.35);
-        this.tone(out, t0, 'sawtooth', 120, 35, 0.8, 0.002, 0.3);
+        if (this.foley) {
+          this.foley.playGunshot(id, out, t0, {
+            vol: 1,
+            indoor: opts.indoor ?? this.indoor,
+            canyon: !opts.indoor && !this.indoor,
+          });
+        } else {
+          // Procedural fallback
+          this.burst(out, t0, 'bandpass', 1900, 0.9, 0.9, 0.002, 0.11);
+          this.tone(out, t0, 'triangle', 190, 55, 0.7, 0.002, 0.09);
+        }
         break;
+
       case 'boom':
-        this.burst(out, t0, 'lowpass', 900, 0.5, 1.2, 0.004, 1.0);
-        this.tone(out, t0, 'sine', 90, 28, 1.1, 0.004, 0.9);
-        this.duck(0.6, 0.55);
+        if (this.foley) {
+          this.foley.playExplosion(out, t0, 1.2);
+        } else {
+          this.burst(out, t0, 'lowpass', 900, 0.5, 1.2, 0.004, 1.0);
+          this.tone(out, t0, 'sine', 90, 28, 1.1, 0.004, 0.9);
+        }
+        this.duck(0.7, 0.45);
         break;
+
+      case 'bell':
+        if (this.foley) {
+          this.foley.playDuskBell(out, t0, 1.0);
+        } else {
+          for (let k = 0; k < 3; k++) {
+            const s = t0 + k * 1.1;
+            this.tone(out, s, 'sine', 330, 330, 0.7, 0.004, 1.5);
+          }
+        }
+        this.duck(2.6, 0.35);
+        break;
+
+      case 'zdie':
+        if (this.foley) {
+          this.foley.playZombieDeath(out, t0, 0.85);
+        } else {
+          this.tone(out, t0, 'sawtooth', 140, 45, 0.5, 0.02, 0.45);
+        }
+        break;
+
       case 'crash':
-        this.burst(out, t0, 'lowpass', 1400, 0.7, 0.9, 0.002, 0.35);
-        this.tone(out, t0, 'square', 100, 40, 0.5, 0.002, 0.2);
+        this.burst(out, t0, 'lowpass', 1400, 0.7, 1.1, 0.002, 0.35);
+        this.tone(out, t0, 'square', 100, 40, 0.6, 0.002, 0.22);
+        if (this.samples?.subBassBody.length) {
+          const sSrc = ctx.createBufferSource();
+          sSrc.buffer = this.samples.subBassBody[1];
+          const sg = ctx.createGain();
+          sg.gain.setValueAtTime(0.8, t0);
+          sSrc.connect(sg).connect(out);
+          sSrc.start(t0);
+        }
         break;
+
       case 'hit':
         this.tone(out, t0, 'sine', 160, 60, 0.7, 0.002, 0.12);
         this.burst(out, t0, 'lowpass', 600, 0.5, 0.4, 0.002, 0.1);
         break;
+
       case 'thud':
         this.tone(out, t0, 'sine', 110, 45, 0.7, 0.003, 0.14);
         this.burst(out, t0, 'lowpass', 400, 0.5, 0.35, 0.002, 0.12);
         break;
+
       case 'swing':
         this.burst(out, t0, 'bandpass', 700, 0.7, 0.3, 0.05, 0.12);
         break;
+
       case 'splash':
         this.burst(out, t0, 'bandpass', 1500, 0.8, 0.32, 0.01, 0.4);
         this.burst(out, t0, 'lowpass', 500, 0.6, 0.3, 0.005, 0.3);
         break;
+
       case 'drip':
         this.tone(out, t0, 'sine', 1700, 650, 0.1, 0.002, 0.09);
         break;
+
       case 'reload':
-        this.tone(out, t0, 'square', 900, 700, 0.15, 0.002, 0.03);
-        this.tone(out, t0 + 0.5, 'square', 1200, 800, 0.2, 0.002, 0.04);
+        // Multi-stage mechanical reload foley
+        if (this.samples?.mechanicalClicks.length) {
+          const c1 = ctx.createBufferSource();
+          c1.buffer = this.samples.mechanicalClicks[0];
+          c1.playbackRate.value = 1.1;
+          const g1 = ctx.createGain();
+          g1.gain.value = 0.5;
+          c1.connect(g1).connect(out);
+          c1.start(t0);
+
+          const c2 = ctx.createBufferSource();
+          c2.buffer = this.samples.mechanicalClicks[1];
+          c2.playbackRate.value = 0.95;
+          const g2 = ctx.createGain();
+          g2.gain.value = 0.6;
+          c2.connect(g2).connect(out);
+          c2.start(t0 + 0.45);
+        } else {
+          this.tone(out, t0, 'square', 900, 700, 0.15, 0.002, 0.03);
+          this.tone(out, t0 + 0.5, 'square', 1200, 800, 0.2, 0.002, 0.04);
+        }
         break;
+
       case 'horn':
         for (const f of [233, 294]) this.tone(out, t0, 'square', f, f * 0.98, 0.35, 0.02, 0.55);
         break;
+
       case 'siren':
         this.tone(out, t0, 'sawtooth', 600, 900, 0.3, 0.1, 0.4);
         break;
+
       case 'wrench':
         for (let i = 0; i < 3; i++) this.tone(out, t0 + i * 0.07, 'square', 1500 - i * 200, 900, 0.1, 0.001, 0.025);
         break;
+
       case 'yelp':
         this.tone(out, t0, 'sawtooth', 900 + Math.random() * 300, 380, 0.3, 0.01, 0.16);
         this.tone(out, t0 + 0.12, 'triangle', 700, 300, 0.2, 0.01, 0.12);
         break;
+
       case 'growl': {
         const o = ctx.createOscillator();
         o.type = 'sawtooth';
@@ -354,27 +559,12 @@ export class AudioEngine {
         lfo.stop(t0 + 0.8);
         break;
       }
+
       case 'caw':
         this.tone(out, t0, 'sawtooth', 520, 340, 0.22, 0.02, 0.14);
         this.tone(out, t0 + 0.2, 'sawtooth', 480, 300, 0.2, 0.02, 0.16);
         break;
-      case 'zdie': {
-        const o = ctx.createOscillator();
-        o.type = 'sawtooth';
-        o.frequency.setValueAtTime(140 + Math.random() * 40, t0);
-        o.frequency.exponentialRampToValueAtTime(45, t0 + 0.45);
-        const f = ctx.createBiquadFilter();
-        f.type = 'bandpass';
-        f.frequency.setValueAtTime(700, t0);
-        f.frequency.exponentialRampToValueAtTime(200, t0 + 0.45);
-        f.Q.value = 3;
-        const g = ctx.createGain();
-        this.env(g, t0, 0.5, 0.02, 0.45);
-        o.connect(f).connect(g).connect(out);
-        o.start(t0);
-        o.stop(t0 + 0.55);
-        break;
-      }
+
       case 'scream': {
         const o = ctx.createOscillator();
         o.type = 'sawtooth';
@@ -400,190 +590,171 @@ export class AudioEngine {
         this.duck(0.8, 0.5);
         break;
       }
+
       case 'beep':
         this.tone(out, t0, 'sine', 1000, 1000, 0.3, 0.002, 0.07);
         break;
-      case 'bell': {
-        // FM bell struck three times: the Dusk Bell.
-        for (let k = 0; k < 3; k++) {
-          const s = t0 + k * 1.1;
-          const car = ctx.createOscillator();
-          const mod = ctx.createOscillator();
-          const mg = ctx.createGain();
-          car.frequency.value = 330;
-          mod.frequency.value = 330 * 2.76;
-          mg.gain.setValueAtTime(380, s);
-          mg.gain.exponentialRampToValueAtTime(5, s + 1.6);
-          mod.connect(mg).connect(car.frequency);
-          const g = ctx.createGain();
-          this.env(g, s, 0.7, 0.004, 1.5);
-          car.connect(g).connect(out);
-          car.start(s);
-          mod.start(s);
-          car.stop(s + 1.7);
-          mod.stop(s + 1.7);
-        }
-        this.duck(2.5, 0.35);
-        break;
-      }
+
       case 'pickup':
         this.tone(out, t0, 'triangle', 520, 780, 0.35, 0.005, 0.12);
         this.tone(out, t0 + 0.08, 'triangle', 780, 1040, 0.3, 0.005, 0.14);
         break;
+
       case 'loot':
         this.tone(out, t0, 'triangle', 400, 520, 0.3, 0.003, 0.1);
         this.burst(out, t0, 'bandpass', 2500, 1, 0.12, 0.002, 0.06);
         break;
+
       case 'click':
         this.tone(out, t0, 'square', 1200, 900, 0.12, 0.001, 0.025);
         break;
+
+      case 'glass': {
+        // A pane going: a hard crack and a spill of bright tinkles.
+        this.burst(out, t0, 'highpass', 3000, 0.8, 0.5, 0.001, 0.12);
+        for (let i = 0; i < 7; i++) {
+          const f = 2600 + Math.random() * 3200;
+          this.tone(out, t0 + 0.04 + i * 0.045 + Math.random() * 0.03, 'triangle', f, f * 0.97, 0.12, 0.001, 0.05);
+        }
+        break;
+      }
+
+      case 'shell': {
+        // Brass ringing off a hard floor: a bright ping and a smaller one on the second hop.
+        const f = 3100 + Math.random() * 1500;
+        this.tone(out, t0, 'triangle', f, f * 0.96, 0.22, 0.001, 0.05);
+        this.tone(out, t0 + 0.055, 'triangle', f * 1.08, f * 1.03, 0.11, 0.001, 0.035);
+        this.burst(out, t0, 'highpass', 5200, 1, 0.1, 0.001, 0.015);
+        break;
+      }
+
       case 'confirm':
         this.tone(out, t0, 'triangle', 600, 900, 0.25, 0.004, 0.1);
         this.tone(out, t0 + 0.07, 'triangle', 900, 1200, 0.2, 0.004, 0.12);
         break;
+
       case 'deny':
         this.tone(out, t0, 'square', 180, 120, 0.2, 0.004, 0.14);
         break;
+
       case 'build':
         this.tone(out, t0, 'square', 300, 240, 0.2, 0.002, 0.07);
         this.burst(out, t0, 'lowpass', 900, 0.6, 0.3, 0.002, 0.1);
         break;
+
       case 'alarm':
         for (let k = 0; k < 4; k++) this.tone(out, t0 + k * 0.28, 'sawtooth', 520, 520, 0.22, 0.01, 0.2);
         this.duck(1.4, 0.55);
         break;
+
       case 'retch':
-        // A heave and a splatter.
         this.tone(out, t0, 'sawtooth', 130, 70, 0.4, 0.04, 0.3);
         this.burst(out, t0 + 0.28, 'lowpass', 700, 0.7, 0.35, 0.01, 0.35);
         this.tone(out, t0 + 0.55, 'sawtooth', 110, 60, 0.3, 0.03, 0.25);
         break;
+
       case 'laugh':
-        for (let k = 0; k < 5; k++) this.tone(out, t0 + k * 0.12, 'sawtooth', 520 - k * 30 + Math.random() * 40, 380 - k * 25, 0.22, 0.01, 0.09);
+        for (let k = 0; k < 5; k++)
+          this.tone(out, t0 + k * 0.12, 'sawtooth', 520 - k * 30 + Math.random() * 40, 380 - k * 25, 0.22, 0.01, 0.09);
         break;
+
       case 'hiccup':
         this.tone(out, t0, 'triangle', 240, 520, 0.3, 0.004, 0.07);
         this.burst(out, t0, 'bandpass', 900, 1.5, 0.12, 0.002, 0.05);
         break;
+
       case 'sing':
-        for (const [k, f] of [[0, 330], [0.3, 392], [0.6, 349], [0.9, 294]] as const) this.tone(out, t0 + k, 'triangle', f * (0.96 + Math.random() * 0.08), f, 0.25, 0.04, 0.28);
+        for (const [k, f] of [[0, 330], [0.3, 392], [0.6, 349], [0.9, 294]] as const)
+          this.tone(out, t0 + k, 'triangle', f * (0.96 + Math.random() * 0.08), f, 0.25, 0.04, 0.28);
         break;
+
       case 'whisper':
         this.burst(out, t0, 'bandpass', 3200, 2.5, 0.18, 0.25, 0.7);
         this.burst(out, t0 + 0.2, 'bandpass', 2400, 3, 0.12, 0.2, 0.6);
         break;
+
       case 'gulp':
         this.tone(out, t0, 'sine', 220, 120, 0.3, 0.01, 0.09);
         this.tone(out, t0 + 0.14, 'sine', 200, 110, 0.25, 0.01, 0.09);
         this.burst(out, t0, 'lowpass', 500, 0.6, 0.12, 0.01, 0.2);
         break;
+
       case 'toke':
         this.burst(out, t0, 'bandpass', 1400, 0.8, 0.25, 0.25, 0.4);
         this.tone(out, t0 + 0.55, 'sine', 90, 70, 0.1, 0.01, 0.2);
         break;
+
       case 'pill':
         this.tone(out, t0, 'square', 1500, 1100, 0.15, 0.001, 0.03);
         this.burst(out, t0 + 0.05, 'bandpass', 2200, 1, 0.1, 0.002, 0.06);
         break;
-      case 'radio': {
-        this.burst(out, t0, 'bandpass', 2600, 1.2, 0.22, 0.01, 0.28);
-        this.tone(out, t0 + 0.05, 'square', 740, 740, 0.06, 0.004, 0.08);
-        this.tone(out, t0 + 0.2, 'square', 520, 520, 0.05, 0.004, 0.1);
-        break;
-      }
-    }
-  }
 
-  // ------------------------------------------------------------------ engines
-
-  /** Engine loops crossfade with RPM; loudness follows Signature so players learn the Noise rules by ear. */
-  updateEngines(list: EngineState[], dt: number) {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    this.now += dt;
-    const seen = new Set<number>();
-    const maxVoices = 7;
-    // Loudest/nearest first.
-    const scored = list
-      .map((e) => ({ e, n: this.nearest(e.x, e.z) }))
-      .filter((s) => s.n.dist < 130)
-      .sort((a, b) => a.n.dist - b.n.dist)
-      .slice(0, maxVoices);
-    for (const { e, n } of scored) {
-      seen.add(e.id);
-      let v = this.engines.get(e.id);
-      if (!v) {
-        v = this.makeEngine();
-        this.engines.set(e.id, v);
-      }
-      v.lastSeen = this.now;
-      const base = e.tier === 1 ? 62 : e.tier === 2 ? 48 : 34;
-      const f = base * (1 + e.rpm * 2.6 + e.throttle * 0.35);
-      const t = ctx.currentTime;
-      v.osc1.frequency.setTargetAtTime(f, t, 0.08);
-      v.osc2.frequency.setTargetAtTime(f * (e.tier === 1 ? 2.01 : 1.5), t, 0.08);
-      v.filt.frequency.setTargetAtTime(380 + e.rpm * 1400 + e.throttle * 600, t, 0.1);
-      const att = 1 / (1 + (n.dist / 22) ** 2);
-      const loud = (0.04 + (e.signature / 100) * 0.16) * att * (0.6 + e.throttle * 0.5);
-      v.gain.gain.setTargetAtTime(this.muted ? 0 : loud, t, 0.1);
-      v.pan.pan.setTargetAtTime(n.bus === 0 ? -0.35 : 0.35, t, 0.1);
-    }
-    for (const [id, v] of this.engines) {
-      if (!seen.has(id)) {
-        v.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.1);
-        if (this.now - v.lastSeen > 1.5) {
-          v.osc1.stop();
-          v.osc2.stop();
-          v.noise.stop();
-          v.gain.disconnect();
-          this.engines.delete(id);
+      case 'radio':
+        if (this.samples?.micClickIn) {
+          const ptt = ctx.createBufferSource();
+          ptt.buffer = this.samples.micClickIn;
+          const g = ctx.createGain();
+          g.gain.value = 0.8;
+          ptt.connect(g).connect(out);
+          ptt.start(t0);
+        } else {
+          this.burst(out, t0, 'bandpass', 2600, 1.2, 0.22, 0.01, 0.28);
+          this.tone(out, t0 + 0.05, 'square', 740, 740, 0.06, 0.004, 0.08);
+          this.tone(out, t0 + 0.2, 'square', 520, 520, 0.05, 0.004, 0.1);
         }
-      }
+        break;
     }
   }
 
-  private makeEngine(): EngineVoice {
-    const ctx = this.ctx!;
-    const osc1 = ctx.createOscillator();
-    osc1.type = 'sawtooth';
-    const osc2 = ctx.createOscillator();
-    osc2.type = 'square';
-    const noise = this.noise();
-    const ng = ctx.createGain();
-    ng.gain.value = 0.18;
-    const filt = ctx.createBiquadFilter();
-    filt.type = 'lowpass';
-    filt.Q.value = 2.5;
-    const gain = ctx.createGain();
-    gain.gain.value = 0;
-    const pan = ctx.createStereoPanner();
-    const mix = ctx.createGain();
-    mix.gain.value = 0.5;
-    osc1.connect(mix);
-    osc2.connect(mix);
-    noise.connect(ng).connect(mix);
-    mix.connect(filt).connect(gain).connect(pan).connect(this.sfx);
-    osc1.start();
-    osc2.start();
-    noise.start();
-    return { osc1, osc2, noise, filt, gain, pan, lastSeen: this.now };
+  // ---------------------------------------------------------------- Engines
+
+  /**
+   * Multi-track RPM-sampled vehicle engine audio loops with turbo spool,
+   * transmission whine, backfire pops, and G-force chassis creaks.
+   */
+  updateEngines(list: EngineState[], dt: number) {
+    if (!this.ctx) return;
+    if (this.vehicleAudio) {
+      this.vehicleAudio.updateEngines(list, dt, this.listeners, this.buses, this.muted);
+    }
   }
 
   silenceEngines() {
-    for (const [, v] of this.engines) {
-      try {
-        v.osc1.stop();
-        v.osc2.stop();
-        v.noise.stop();
-        v.gain.disconnect();
-      } catch {
-        /* already stopped */
-      }
+    if (this.vehicleAudio) {
+      this.vehicleAudio.silenceEngines();
     }
-    this.engines.clear();
   }
 
-  // ------------------------------------------------------------------ music
+  // ---------------------------------------------------------------- Wind
+
+  private initWind() {
+    const ctx = this.ctx!;
+    const n = this.noise();
+    const filt = ctx.createBiquadFilter();
+    filt.type = 'bandpass';
+    filt.frequency.value = 380;
+    filt.Q.value = 0.7;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.17;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 140;
+    lfo.connect(lfoGain).connect(filt.frequency);
+    n.connect(filt).connect(gain).connect(this.sfx);
+    n.start();
+    lfo.start();
+    this.wind = { gain, filt };
+  }
+
+  setWind(level: number) {
+    const w = this.wind;
+    if (!w || !this.ctx) return;
+    w.gain.gain.setTargetAtTime(this.muted ? 0 : level * 0.42, this.ctx.currentTime, 0.6);
+    w.filt.Q.setTargetAtTime(0.7 + level * 0.5, this.ctx.currentTime, 0.6);
+  }
+
+  // ---------------------------------------------------------------- Music
 
   private initMusic() {
     const ctx = this.ctx!;
@@ -593,7 +764,6 @@ export class AudioEngine {
       g.connect(this.musicBus);
       this.stems[name] = g;
     }
-    // Always-on bass drone
     const o = ctx.createOscillator();
     o.type = 'sawtooth';
     o.frequency.value = 41.2;
@@ -608,7 +778,7 @@ export class AudioEngine {
     o.start();
     o2.start();
     this.bass = o;
-    // Radio hiss for camp and calm
+
     const n = this.noise();
     const hp = ctx.createBiquadFilter();
     hp.type = 'highpass';
@@ -652,10 +822,9 @@ export class AudioEngine {
         break;
     }
     const t = this.ctx.currentTime;
-    for (const k of Object.keys(target)) this.stems[k].gain.setTargetAtTime(target[k], t, 0.8); // ~2 s crossfade
+    for (const k of Object.keys(target)) this.stems[k].gain.setTargetAtTime(target[k], t, 0.8);
   }
 
-  /** Called every frame: drives the stem sequencer. */
   updateMusic(dt: number) {
     const ctx = this.ctx;
     if (!ctx || this.musicState === 'none') return;
@@ -669,7 +838,6 @@ export class AudioEngine {
     const b = this.beat++;
     const root = [41.2, 41.2, 49, 36.7][Math.floor(b / 16) % 4];
     if (this.bass) this.bass.frequency.setTargetAtTime(root, t0, 0.3);
-    // drums
     if (state === 'travel' || state === 'combat' || state === 'raid') {
       const g = this.stems.drums;
       if (b % 4 === 0 || (state !== 'travel' && b % 8 === 6)) this.drum(g, t0, 'kick');

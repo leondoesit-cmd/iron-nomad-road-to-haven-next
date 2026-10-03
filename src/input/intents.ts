@@ -53,6 +53,8 @@ export interface PlayerIntent {
   released: number;
   /** For hold-detection: seconds each button has been held. */
   heldTime: Float32Array;
+  /** How long each button had been held when it was released; only meaningful on the frame `released` has its bit. */
+  releasedAfter: Float32Array;
   /** Full left-stick rotations completed this tick (pin break). */
   stickLoops: number;
   /** Driving: handbrake. Pad: A. Keyboard: the sprint key. */
@@ -61,6 +63,8 @@ export interface PlayerIntent {
   sprint: boolean;
   /** Menu direction edges this tick: 1 up, 2 down, 4 left, 8 right (with key repeat). */
   nav: number;
+  /** Mouse wheel notches this tick while the pointer is captured: 1 next tool, -1 previous. */
+  toolStep: number;
   /** Aim assist multiplier for this device. */
   aimAssist: number;
 }
@@ -78,10 +82,12 @@ export function newIntent(): PlayerIntent {
     pressed: 0,
     released: 0,
     heldTime: new Float32Array(BTN_COUNT),
+    releasedAfter: new Float32Array(BTN_COUNT),
     stickLoops: 0,
     handbrake: false,
     sprint: false,
     nav: 0,
+    toolStep: 0,
     aimAssist: 1,
   };
 }

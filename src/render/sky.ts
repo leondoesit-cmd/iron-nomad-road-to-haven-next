@@ -60,11 +60,11 @@ void main() {
   float mu = dot( d, uSunDir );
   float mup = max( mu, 0.0 );
   // The horizon colour is exactly what the fog shader produces at full density, so distant terrain melts into it.
-  vec3 hz = uHorizon + uSunColor * uScatter * ( pow( mup, 8.0 ) * 0.7 + pow( mup, 40.0 ) * 0.6 );
+  vec3 hz = uHorizon + uSunColor * uScatter * ( pow( mup, 28.0 ) * 0.35 + pow( mup, 120.0 ) * 0.45 );
   vec3 col = mix( hz, uZenith, pow( yc, 0.42 ) );
   // Mie scattering around the sun above the horizon line.
   float above = smoothstep( 0.0, 0.08, yc );
-  col += uSunColor * ( pow( mup, 5.0 ) * 0.22 * uScatter + pow( mup, 32.0 ) * 0.4 + pow( mup, 400.0 ) * 1.5 ) * day * mix( 1.0, 0.65, yc ) * above;
+  col += uSunColor * ( pow( mup, 18.0 ) * 0.14 * uScatter + pow( mup, 40.0 ) * 0.35 + pow( mup, 400.0 ) * 1.5 ) * day * mix( 1.0, 0.65, yc ) * above;
   // Dust band hugging the horizon.
   col = mix( col, hz, exp( - yc * 16.0 ) * 0.55 );
   // Clouds: two fbm layers projected on a dome, lit from the sun side.

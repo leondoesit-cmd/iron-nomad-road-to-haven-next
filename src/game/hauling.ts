@@ -1,11 +1,12 @@
 import * as THREE from 'three';
-import { partDef, type PartSlot } from '../data';
+import { PARTS, partDef, type PartSlot } from '../data';
 import { MK_CSS, SLOT_SITE, modelKey, type Site } from '../render/workFx';
 import { OIL_RESERVE_MAX } from './campaign';
 import { carriedName, liftSecs, planFit, planStow, pourFuel, type Carried } from '../sim/carry';
 import { installPart } from '../sim/garage';
 import { pourOil } from '../sim/oil';
 import { partName } from '../sim/parts';
+import { deckCandidate, pickMount } from './carwork';
 import type { Cand, Player } from './player';
 import type { Vehicle } from './vehicle';
 
@@ -55,7 +56,24 @@ export function haulCandidate(p: Player): Cand | null {
   if (!p.carry) {
     const lifting = p.action?.kind === 'lift' ? String(p.action.target) : undefined;
     const near = ctx.loose?.nearest(p.pos.x, p.pos.z, LIFT_REACH, lifting);
-    if (!near) return null;
+    const goods = ctx.loose?.nearestGoods(p.pos.x, p.pos.z, LIFT_REACH, lifting);
+    // Whichever lies closer; the one already being lifted keeps the hold.
+    const dist = (o: { id: string; x: number; z: number }) => Math.hypot(o.x - p.pos.x, o.z - p.pos.z) - (o.id === lifting ? 0.3 : 0);
+    if (goods && (!near || dist(goods) < dist(near))) {
+      return {
+        kind: 'lift',
+        prompt: `Pick up ${goods.label}`,
+        dur: 0.55,
+        target: goods.id,
+        ok: true,
+        label: 'lift',
+        noise: 6,
+        run: () => {
+          if (!ctx.loose?.takeGoods(goods.id, p)) p.note('Someone got there first', 'info');
+        },
+      };
+    }
+    if (!near) return deckCandidate(p);
     const label = carriedName(near.carried);
     return {
       kind: 'lift',
@@ -79,17 +97,26 @@ export function haulCandidate(p: Player): Cand | null {
   if (!v) return null;
   const plan = planFit(c, { def: v.def, fitted: (slot) => v.build?.fit[slot as PartSlot], fuel: v.fuel, tankMax: v.tankMax, oil: v.health.comp.oil });
   const moving = Math.abs(v.speed) > 2;
+  // A part goes on at its own mount: carry it there, and the mount rings. Hold it over the spot to bolt it on.
+  const slot = c.kind === 'part' ? partDef(c.item.id).slot : null;
+  const pick = slot ? pickMount(p, v, slot) : null;
+  const away = !!pick && !pick.near;
+  const where = slot ? PARTS.labels[slot].toLowerCase() : '';
+  if (pick && c.kind === 'part') {
+    const mk = Math.min(3, Math.max(1, partDef(c.item.id).mk));
+    ctx.work.focus(p.index, pick.all.map((m) => m.pos), { pos: pick.mount.pos, text: away ? `Bring ${partName(c.item)} to the ${where}` : plan.label, css: MK_CSS[mk], ok: plan.ok && !moving && !away });
+  }
   return {
     kind: 'fit',
-    prompt: moving ? `${v.def.name} is moving` : plan.label,
+    prompt: moving ? `${v.def.name} is moving` : away ? `Carry it to the ${where} (the ringed spot)` : plan.label,
     dur: plan.secs,
     target: v,
-    ok: plan.ok && !moving,
+    ok: plan.ok && !moving && !away,
     label: 'fit',
     noise: c.kind === 'part' ? 22 : 14,
     run: () => fit(p, v, c),
     tick: () => {
-      if (c.kind === 'part') ctx.work.hold(p.index, c.item, handPos(p), sitePos(v, slotSite(c.item.id)), p.action ? p.action.t / p.action.dur : 0);
+      if (c.kind === 'part') ctx.work.hold(p.index, c.item, handPos(p), pick?.mount.pos ?? sitePos(v, slotSite(c.item.id)), p.action ? p.action.t / p.action.dur : 0);
       if (c.kind === 'part' && Math.random() < 0.18) ctx.fx.spark(v.position.x + (Math.random() - 0.5), v.position.y + 0.8, v.position.z + (Math.random() - 0.5), 2, 3);
       return true;
     },
@@ -112,8 +139,11 @@ function fit(p: Player, v: Vehicle, c: Carried) {
       p.carry = null;
       ctx.audio.play('wrench', v.position.x, v.position.z, 0.8);
       const name = partName(c.item);
-      const anchor = sitePos(v, slotSite(c.item.id));
+      const pick = pickMount(p, v, partDef(c.item.id).slot);
+      const anchor = pick?.mount.pos.clone() ?? sitePos(v, slotSite(c.item.id));
       const mk = Math.min(3, Math.max(1, partDef(c.item.id).mk));
+      // A set of tyres goes on at every wheel.
+      if (pick && pick.mount.slot === 'wheels') for (const m of pick.all) if (m.slot === 'wheels' && m !== pick.mount) ctx.work.burst(m.pos, mk, 0.7);
       ctx.work.swap({
         key: p.index,
         anchor,
@@ -171,9 +201,14 @@ export function stowCarry(p: Player, quiet = false): boolean {
     return false;
   }
   const near = ownRideNear(p);
-  if (near && !quiet) p.ctx.work.stow(c.kind === 'part' ? modelKey(c.item) : c.kind, handPos(p), trunkPos(near));
+  if (near && !quiet) {
+    // It flies to the spot on the car's deck it will sit in, and appears there as it lands.
+    const spot = near.nextDeckSpot(c.kind === 'part' ? { part: { uid: c.item.uid, id: c.item.id } } : c.kind === 'fuel' ? { fuel: near.load.fuel + 1 } : { oil: near.load.oil + 1 }) ?? trunkPos(near);
+    p.ctx.work.stow(c.kind === 'part' ? modelKey(c.item) : c.kind, handPos(p), spot, () => near.refreshLoadNow());
+  }
   switch (c.kind) {
     case 'part':
+      if (near?.build) c.item.on = near.build.uid;
       camp.stowPart(c.item);
       p.carry = null;
       if (!quiet) p.note(`${partName(c.item)} stowed in the trunk`, 'good');
@@ -220,7 +255,8 @@ export function returnCarry(p: Player) {
 /** Climbing in with full hands: it goes in the trunk if it fits, otherwise it is set down beside the car. */
 export function stashBeforeEntering(p: Player) {
   if (!p.carry) return;
-  if (!stowCarry(p, true)) dropCarry(p);
+  // Only your own convoy's trunk takes it; a found car has no trunk of yours to teleport things into.
+  if (!ownRideNear(p) || !stowCarry(p, true)) dropCarry(p);
   else p.note('Stowed in the trunk', 'info');
 }
 

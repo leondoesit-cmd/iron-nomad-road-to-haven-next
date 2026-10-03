@@ -10,6 +10,8 @@ export interface PartItem {
   uid: string;
   id: string;
   cond: number;
+  /** Stowed on one particular vehicle's deck (a build uid). Unset parts ride wherever there is room. */
+  on?: string;
 }
 
 /** What is bolted onto a vehicle, by slot. */

@@ -2,6 +2,7 @@ import type { LegDef } from '../data';
 import { Rng, noise2 } from '../core/rng';
 import { lerp, smoothstep } from '../core/math';
 import { baseHeight, buttes, roadX, type Site, type TerrainDef } from './terrain';
+import { districtMask, nearestRoad } from './openWorld';
 import { delveName, snapYaw, type DelveSite } from './delveSites';
 
 /**
@@ -230,6 +231,48 @@ export function planLakes(def: TerrainDef, leg: LegDef): { lakes: Lake[]; bays: 
   return out;
 }
 
+/**
+ * Lakes of the open world, beyond the highway's own: one candidate per 760 m square of the map, kept clear of roads,
+ * roadside places, mesas, the city and each other. No bay is cut: the map has no walls to stand back.
+ */
+export function planOpenLakes(def: TerrainDef, leg: LegDef, existing: Lake[]): Lake[] {
+  const o = def.open!;
+  const rng = new Rng(leg.seed * 131 + 7);
+  const out: Lake[] = [];
+  const all = [...existing];
+  let rot = Math.floor(rng.range(0, ISLAND_ROTATION.length));
+  const nextKind = () => ISLAND_ROTATION[rot++ % ISLAND_ROTATION.length];
+  const STEP = 760;
+  for (let i = Math.floor((o.x0 + 300) / STEP); i <= Math.floor((o.x1 - 300) / STEP); i++) {
+    for (let j = Math.floor((o.z0 + 300) / STEP); j <= Math.floor((o.z1 - 500) / STEP); j++) {
+      if (rng.next() > 0.3) continue;
+      const cx = (i + rng.range(0.2, 0.8)) * STEP;
+      const cz = (j + rng.range(0.2, 0.8)) * STEP;
+      const r = rng.range(56, 96);
+      const ax = rng.range(0.85, 1.25);
+      const ext = extentOf(r, ax);
+      if (districtMask(o, cx, cz) > 0 || Math.hypot(cx, cz - 12) < 420) continue;
+      if (Math.abs(cx - roadX(def, cz)) < ext + 90) continue;
+      if (nearestRoad(o, cx, cz).d < ext + 40) continue;
+      if (o.haven.z - cz < 400 && Math.abs(cx - o.haven.x) < 500) continue;
+      if (def.sites.some((s) => Math.hypot(s.x - cx, s.z - cz) < ext + s.radius + 60)) continue;
+      if (all.some((q) => Math.hypot(q.x - cx, q.z - cz) < q.reach + ext + 80)) continue;
+      let bad = false;
+      for (let a = 0; a < 36 && !bad; a++) {
+        const rr = ext * Math.sqrt(((a % 6) + 0.5) / 6);
+        const th = (a / 36) * Math.PI * 2;
+        if (buttes(def, cx + Math.cos(th) * rr, cz + Math.sin(th) * rr) > 0.5) bad = true;
+      }
+      if (bad) continue;
+      const lake = makeLake(def, rng, cx, cz, r, ax, ext, all, nextKind);
+      lake.id = all.length;
+      out.push(lake);
+      all.push(lake);
+    }
+  }
+  return out;
+}
+
 function extentOf(r: number, ax: number) {
   return r * 1.25 * INFLUENCE * Math.max(ax, 1 / ax);
 }
@@ -252,6 +295,7 @@ function tryLake(def: TerrainDef, leg: LegDef, rng: Rng, cz: number, others: Lak
   const z0 = cz - ext - 90;
   const z1 = cz + ext + 90;
   if (z0 < 120 || z1 > leg.length - 150) return null;
+  if (def.open?.districts.some((d) => z1 > d.z0 - 120 && z0 < d.z1 + 120)) return null;
   // Canyons squeeze the corridor, so a lake cannot share their stretch of road.
   for (const c of def.canyons) if (z1 > c.z0 - 90 && z0 < c.z1 + 90) return null;
   // The bay has to reach the far bank.
@@ -272,6 +316,11 @@ function tryLake(def: TerrainDef, leg: LegDef, rng: Rng, cz: number, others: Lak
   for (const rp of def.ramps) if (Math.abs(rp.z0 - cz) < ext + 140) return null;
   for (const m of def.minefields) if (m.z1 > z0 && m.z0 < z1) return null;
 
+  return { lake: makeLake(def, rng, cx, cz, r, ax, ext, others, nextKind), bay: { z0, z1, half } };
+}
+
+/** The lake itself, once its place is settled: shape, level, islands and pier. */
+function makeLake(def: TerrainDef, rng: Rng, cx: number, cz: number, r: number, ax: number, ext: number, others: Lake[], nextKind: () => IslandKind): Lake {
   const rot = rng.range(0, Math.PI);
   const lake: Lake = {
     id: others.length,
@@ -305,7 +354,7 @@ function tryLake(def: TerrainDef, leg: LegDef, rng: Rng, cz: number, others: Lak
   lake.level = ring[Math.floor(ring.length * 0.22)] - 0.15;
   placeIslands(lake, rng, others.length === 0, nextKind);
   placeDock(def, lake, rng);
-  return { lake, bay: { z0, z1, half } };
+  return lake;
 }
 
 function placeIslands(lake: Lake, rng: Rng, forceCave: boolean, nextKind: () => IslandKind) {

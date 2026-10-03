@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PhysicsWorld } from '../physics/physics';
+import { PhysicsWorld, G, groups } from '../physics/physics';
 import { Particles, Tracers } from '../render/particles';
 import { WorkFx } from '../render/workFx';
 import { ZombieRenderer } from '../render/zombieRender';
@@ -7,9 +7,10 @@ import { AnimalRenderer } from '../render/animalRender';
 import { QUALITY, type GameRenderer } from '../render/renderer';
 import { SignatureGrid } from '../sim/signature';
 import { splitLoot, whole } from '../sim/resources';
-import { DayClock, lightAt } from '../sim/dayclock';
+import { DayClock, lightMix } from '../sim/dayclock';
+import { groundDamp, stormLevel, stormWindow, STORM_WIND, type StormWindow } from '../sim/weather';
 import { Rng } from '../core/rng';
-import { clamp } from '../core/math';
+import { clamp, clamp01, smoothstep } from '../core/math';
 import { LEGS, VEHICLES, STOCK_IDS, gearDef, type Stocks } from '../data';
 import type { GearItem } from '../sim/gear';
 import type { Surface, TerrainDef } from '../world/terrain';
@@ -18,11 +19,15 @@ import type { InputManager } from '../input/input';
 import type { AudioEngine, EngineState } from '../audio/audio';
 import { Campaign } from './campaign';
 import { Combat } from './combat';
+import { Gore } from './gore';
 import type { Ctx, NoteKind } from './ctx';
 import { CrewSystem } from './crew';
 import { CarField } from './cars';
+import { DebrisField } from './debris';
+import { TrackMarks } from '../render/trackMarks';
 import { clearShells } from '../render/shellCache';
 import { InteractRegistry } from './interact';
+import { GroundGearField } from './groundGear';
 import { ObstacleIndex } from './obstacles';
 import { Player } from './player';
 import { Projectiles } from './projectiles';
@@ -64,6 +69,13 @@ export abstract class Scene implements Ctx {
   sig = new SignatureGrid();
   obs = new ObstacleIndex();
   abstract biome: 'wasteland' | 'city';
+  /** 0 to 1: how far the convoy is into a city district of the open world. -1 means "whatever the biome says". */
+  cityMix = -1;
+
+  /** The mix the light uses: smooth in the open world, 0 or 1 everywhere else. */
+  get lightCity(): number {
+    return this.cityMix >= 0 ? this.cityMix : this.biome === 'city' ? 1 : 0;
+  }
   abstract mode: 'leg' | 'camp' | 'delve';
   terrain: TerrainDef | null = null;
   /** The map button steps through this many views (minimap alone, then larger ones). */
@@ -73,8 +85,17 @@ export abstract class Scene implements Ctx {
   input: InputManager;
   rng: Rng;
   combat: Combat;
+  /** Blood, limbs, brass and bullet holes: what a fight leaves behind. */
+  gore: Gore;
+  world?: Ctx['world'];
   time = 0;
   night = 0;
+  /** Dust storm strength, 0 clear to 1 the full wall. Smoothed, and always 0 away from a leg. */
+  storm = 0;
+  /** True while the storm is still building, false once it has peaked and is blowing out. */
+  stormRising = true;
+  private stormWin: StormWindow | null | undefined;
+  private stormTold = 0;
   players: Player[] = [];
   vehicles: Vehicle[] = [];
   zombies: ZombieSystem;
@@ -83,8 +104,12 @@ export abstract class Scene implements Ctx {
   raiders: RaiderSystem;
   crew: CrewSystem;
   cars: CarField;
+  debris = new DebrisField(this);
+  marks = new TrackMarks();
   vehicleByCollider = new Map<number, Vehicle>();
   interact = new InteractRegistry();
+  /** Gear lying in the world, waiting to be taken. */
+  groundGear: GroundGearField | null = null;
   projectiles: Projectiles;
   signatureMult = 1;
   bounds: Ctx['bounds'] = null;
@@ -124,6 +149,7 @@ export abstract class Scene implements Ctx {
     this.campaign = svc.campaign;
     this.rng = new Rng(svc.campaign.seed * 977 + svc.campaign.day * 131);
     this.combat = new Combat(this);
+    this.gore = new Gore(this);
     this.zombies = new ZombieSystem(this);
     this.phantoms = new PhantomSystem(this);
     this.playerFx = new PlayerFx(this.R);
@@ -134,6 +160,8 @@ export abstract class Scene implements Ctx {
     this.projectiles = new Projectiles(this);
     this.R.scene.add(this.root);
     this.root.add(this.work.root);
+    this.root.add(this.marks.mesh);
+    this.gore.attach(this.root);
     this.R.scene.add(this.fx.smoke.points);
     this.R.scene.add(this.fx.glow.points);
     this.R.scene.add(this.tracers.mesh);
@@ -151,6 +179,141 @@ export abstract class Scene implements Ctx {
       this.root.add(s.target);
       this.spots.push(s);
     }
+    // Binaural HRTF Acoustic Diffraction & Obstacle Occlusion:
+    // Uses multi-ray aperture testing (direct path, left/right diffraction flanks, and vertical clearance)
+    // with 3D elevation, terrain heightfield filtering, and proximity falloff to prevent open-air obstacles
+    // from causing abrupt on/off switch jumps or occluding sounds across open desert terrain.
+    this.audio.setOcclusionTester?.((fx, fz, tx, tz) => {
+      // 1. Calculate true 3D positions above local terrain
+      const fy = this.groundAt(fx, fz) + 1.3; // Listener ear height
+      const ty = this.groundAt(tx, tz) + 1.1; // Sound source height (engine / muzzle / torso)
+
+      const dx = tx - fx;
+      const dy = ty - fy;
+      const dz = tz - fz;
+      const len3D = Math.hypot(dx, dy, dz);
+      if (len3D < 0.6) return 0; // Inside own vehicle or direct contact: zero occlusion
+
+      // Total outdoor distance threshold: in open desert air, sound diffracts spherically
+      // around isolated containers; beyond 65m in open air, an isolated container has no audible acoustic shadow.
+      const isInterior =
+        ('isInterior' in this && !!(this as unknown as { isInterior?: boolean }).isInterior) ||
+        ('interiorAt' in this && typeof (this as unknown as { interiorAt: Function }).interiorAt === 'function' &&
+          (!!(this as unknown as { interiorAt: Function }).interiorAt(fx, fz, fy) ||
+           !!(this as unknown as { interiorAt: Function }).interiorAt(tx, tz, ty)));
+
+      if (!isInterior && len3D > 70) return 0;
+
+      const dirX = dx / len3D;
+      const dirY = dy / len3D;
+      const dirZ = dz / len3D;
+
+      // Filter: ignore Rapier HeightField (shapeType 7).
+      // Open desert dunes, gentle slopes, and terrain bumps must NEVER be treated as solid concrete bunker walls.
+      const notGround = (c: any) => {
+        if (!c || typeof c.shapeType !== 'function') return true;
+        return c.shapeType() !== 7;
+      };
+
+      // 2. Direct line of sight raycast
+      const centerHit = this.P.raycast(
+        fx,
+        fy,
+        fz,
+        dirX,
+        dirY,
+        dirZ,
+        len3D - 0.2,
+        groups(0xffff, G.STATIC | G.BUILD),
+        undefined,
+        notGround,
+      );
+
+      // 3. Diffraction flanks (left/right perpendicular to horizontal line-of-sight)
+      const lenXZ = Math.hypot(dx, dz);
+      const normX = -dz / (lenXZ || 1);
+      const normZ = dx / (lenXZ || 1);
+
+      // Flank spacing: 1.5m to test if sound can bend around the container/wall
+      const flankW = 1.5;
+
+      const leftDist = Math.hypot(tx - (fx + normX * flankW), dy, tz - (fz + normZ * flankW));
+      const leftHit = this.P.raycast(
+        fx + normX * flankW,
+        fy,
+        fz + normZ * flankW,
+        (tx - (fx + normX * flankW)) / (leftDist || 1),
+        dy / (leftDist || 1),
+        (tz - (fz + normZ * flankW)) / (leftDist || 1),
+        len3D - 0.2,
+        groups(0xffff, G.STATIC | G.BUILD),
+        undefined,
+        notGround,
+      );
+
+      const rightDist = Math.hypot(tx - (fx - normX * flankW), dy, tz - (fz - normZ * flankW));
+      const rightHit = this.P.raycast(
+        fx - normX * flankW,
+        fy,
+        fz - normZ * flankW,
+        (tx - (fx - normX * flankW)) / (rightDist || 1),
+        dy / (rightDist || 1),
+        (tz - (fz - normZ * flankW)) / (rightDist || 1),
+        len3D - 0.2,
+        groups(0xffff, G.STATIC | G.BUILD),
+        undefined,
+        notGround,
+      );
+
+      // Vertical clearance: test if sound spills over low barriers (like 2.4m shipping containers or fences)
+      const topY = fy + 1.8;
+      const topDist = Math.hypot(dx, ty - topY, dz);
+      const overHit = this.P.raycast(
+        fx,
+        topY,
+        fz,
+        dx / (topDist || 1),
+        (ty - topY) / (topDist || 1),
+        dz / (topDist || 1),
+        len3D - 0.2,
+        groups(0xffff, G.STATIC | G.BUILD),
+        undefined,
+        notGround,
+      );
+
+      // If all rays are clear, sound propagates unimpeded
+      if (!centerHit && !leftHit && !rightHit && !overHit) return 0;
+
+      // 4. Acoustic shadow proximity weighting:
+      // In open air, an obstacle far from both listener and source produces negligible acoustic shadowing.
+      // Proximity is strongest when listener or source is close to the barrier (inside the shadow zone).
+      let proximity = 1.0;
+      if (!isInterior) {
+        const toi = centerHit?.toi ?? leftHit?.toi ?? rightHit?.toi ?? overHit?.toi ?? len3D * 0.5;
+        const distToBarrier = Math.min(toi, Math.max(0, len3D - toi));
+        // Within 3m of the container/wall: full shadow (1.0).
+        // Smoothly tapers to 0.0 at 14m in open air so distant obstacles never cause shadow pop.
+        proximity = smoothstep(14.0, 3.0, distToBarrier);
+        if (proximity <= 0.001) return 0;
+
+        // Also scale with total distance in open air
+        const distFade = clamp01(1 - (len3D - 30) / 35);
+        proximity *= distFade;
+        if (proximity <= 0.001) return 0;
+      }
+
+      // Continuous weighted blockage across the acoustic aperture:
+      // Direct ray: 40%, Left flank: 20%, Right flank: 20%, Over-the-top: 20%
+      let blockage = 0;
+      if (centerHit) blockage += 0.4;
+      if (leftHit) blockage += 0.2;
+      if (rightHit) blockage += 0.2;
+      if (overHit) blockage += 0.2;
+
+      // Near field: anything within a few metres of the ear (own muzzle, mounted gun, crew mate) is not
+      // "behind" the wall beside you, however the rays happen to graze it.
+      return clamp(blockage * proximity * smoothstep(1.5, 6, len3D), 0, 1);
+    });
   }
 
   /** A first-person camera sits inside its own player, so that player is hidden from that view only. */
@@ -214,7 +377,11 @@ export abstract class Scene implements Ctx {
 
   radio(text: string) {
     this.services.onRadio(text);
-    this.audio.play('radio');
+    if ('playRadioChatter' in this.audio && typeof this.audio.playRadioChatter === 'function') {
+      this.audio.playRadioChatter(text);
+    } else {
+      this.audio.play('radio');
+    }
   }
 
   tip(id: string) {
@@ -244,6 +411,11 @@ export abstract class Scene implements Ctx {
   /** How far the convoy has come, 0 to 1. Later finds are better. */
   get gearProgress(): number {
     return clamp(this.campaign.history.length / Math.max(1, LEGS.legs.length - 1), 0, 1);
+  }
+
+  /** A find lands on the ground near (x, z) as a visible pickup. */
+  dropGear(item: GearItem, x: number, z: number) {
+    (this.groundGear ??= new GroundGearField(this)).add(item, x, z);
   }
 
   /**
@@ -423,6 +595,10 @@ export abstract class Scene implements Ctx {
     this.wildlife.update(dt);
     this.crew.update(dt);
     this.projectiles.update(dt);
+    this.combat.update(dt);
+    this.gore.update(dt);
+    this.groundGear?.update(dt);
+    this.debris.update(dt);
     this.P.step();
     // Post-step gameplay systems.
     for (const v of this.vehicles) if (v.faction === 'convoy' || v.kind !== 'wagon') {
@@ -434,6 +610,7 @@ export abstract class Scene implements Ctx {
     this.sig.decay(dt);
     this.modeTick(dt);
     this.clock.tick(dt);
+    this.tickWeather(dt);
     // Loot popups
     if (this.lootAccT > 0) {
       this.lootAccT -= dt;
@@ -454,8 +631,45 @@ export abstract class Scene implements Ctx {
     if (parts.length) this.notify(-1, parts.join('  '), 'good');
   }
 
+  /** Follow the day's storm window, say so on the radio as it arrives and clears, and stir up the air around each player. */
+  private tickWeather(dt: number) {
+    if (this.stormWin === undefined) this.stormWin = stormWindow(this.campaign.seed, this.campaign.day);
+    const win = this.stormWin;
+    const target = this.mode === 'leg' ? stormLevel(this.clock.t, win) : 0;
+    const prev = this.storm;
+    // Ease toward the target so a jump (a loaded save, a fresh scene) still has a wind-up.
+    this.storm += (target - this.storm) * Math.min(1, dt * 1.4);
+    if (Math.abs(this.storm - target) < 0.002) this.storm = target;
+    if (win) this.stormRising = this.clock.t < (win.start + win.end) / 2;
+    if (this.storm > 0.2 && this.stormTold === 0) {
+      this.stormTold = 1;
+      this.radio('Dust wall rolling in from the south! A wall of dust is rolling in. Raiders will lose you in it, and you will lose everything else. Watch your oil.');
+    } else if (this.storm < 0.05 && prev >= 0.05 && this.stormTold === 1) {
+      this.stormTold = 2;
+      this.radio('The dust is settling. Visibility is coming back.');
+    }
+    if (this.storm > 0.15) this.stirDust(dt);
+  }
+
+  private stirDust(dt: number) {
+    // Wind runs one way across the day so the streaks all lean together.
+    const [wx, wz] = STORM_WIND;
+    for (const p of this.players) {
+      if (p.state === 'dead') continue;
+      const px = p.vehicle?.position.x ?? p.pos.x;
+      const pz = p.vehicle?.position.z ?? p.pos.z;
+      const n = this.storm * 26 * dt;
+      let k = Math.floor(n) + (Math.random() < n - Math.floor(n) ? 1 : 0);
+      while (k-- > 0) {
+        const x = px - wx * 1.1 + (Math.random() - 0.5) * 46;
+        const z = pz - wz * 1.1 + (Math.random() - 0.5) * 46;
+        this.fx.dust(x, this.groundAt(x, z) + Math.random() * 3.5, z, wx * 5, wz * 5, 0.55, [0.78, 0.6, 0.38]);
+      }
+    }
+  }
+
   private tickNight() {
-    const light = lightAt(this.clock.t, this.biome);
+    const light = lightMix(this.clock.t, this.lightCity);
     this.night = light.night;
   }
 
@@ -493,6 +707,8 @@ export abstract class Scene implements Ctx {
     for (const v of this.vehicles) v.syncVisual(alpha, dt);
     for (const p of this.players) p.syncVisual(alpha, dt);
     this.syncExtra(alpha, dt);
+    this.debris.sync(alpha);
+    this.marks.update(dt);
     if (!this.idleCam) for (const p of this.players) p.renderCamera(alpha, dt);
     this.fx.setBudget(QUALITY[R.quality].particles);
     this.fx.update(dt);
@@ -632,8 +848,10 @@ export abstract class Scene implements Ctx {
   }
 
   protected applyLighting() {
-    const light = lightAt(this.clock.t, this.mode === 'camp' ? this.biome : this.biome);
-    this.R.setLight(light, this.biome);
+    const light = lightMix(this.clock.t, this.lightCity);
+    // A dust storm dries the ground out; otherwise some mornings start wet from rain in the night.
+    const wet = this.mode === 'leg' ? groundDamp(this.campaign.seed, this.campaign.day, this.clock.t) * (1 - this.storm) : 0;
+    this.R.setLight(light, this.biome, this.lightCity, this.storm, wet);
     // Window glow at night comes from the facade shader (it follows KIT.uGlow, set in setLight).
     // Headlights: one spot per player vehicle with lights on.
     for (let i = 0; i < 2; i++) {
@@ -669,17 +887,38 @@ export abstract class Scene implements Ctx {
     const list: EngineState[] = [];
     for (const v of this.vehicles) {
       if (v.wreck || !v.engineOn) continue;
+      const rpm = clamp(Math.abs(v.speed) / Math.max(6, v.topSpeed), 0, 1);
+      const throttle = clamp(v.lastIntent.throttle, 0, 1);
+      const lateralG = clamp((v.body.steerAngle * v.speed) / 5, -1.5, 1.5);
       list.push({
         id: v.id,
         x: v.position.x,
         z: v.position.z,
-        rpm: clamp(Math.abs(v.speed) / Math.max(6, v.topSpeed), 0, 1),
-        throttle: clamp(v.lastIntent.throttle, 0, 1),
+        rpm,
+        throttle,
         tier: v.def.tier,
         signature: Math.max(15, v.signature()),
+        speed: v.speed,
+        lateralG,
+        boost: clamp(throttle * (0.35 + 0.65 * rpm), 0, 1),
       });
     }
-    this.audio.setListeners(this.players.map((p) => ({ x: p.vehicle?.position.x ?? p.pos.x, z: p.vehicle?.position.z ?? p.pos.z })));
+    this.audio.setListeners(
+      this.players.map((p) => ({
+        x: p.vehicle?.position.x ?? p.pos.x,
+        z: p.vehicle?.position.z ?? p.pos.z,
+        yaw: p.vehicle ? p.vehicle.yaw : p.yaw,
+      })),
+    );
+    // Indoor means a player is physically inside a building (or the scene is an interior), never the biome label:
+    // that flips as the city blend crosses a threshold, which swapped every gunshot's reverb in open desert.
+    const inside = this.players.some((p) => {
+      const px = p.vehicle?.position.x ?? p.pos.x;
+      const pz = p.vehicle?.position.z ?? p.pos.z;
+      const io = this as unknown as { interiorAt?: (x: number, z: number, y: number) => boolean };
+      return !!io.interiorAt?.(px, pz, this.groundAt(px, pz) + 1);
+    });
+    this.audio.setIndoor?.(inside || ('isInterior' in this && !!(this as unknown as { isInterior?: boolean }).isInterior));
     // Being high changes what you hear: cotton wool for the mellow, a warbling echo for the rest.
     this.players.forEach((p, i) => {
       const l = p.drugs.look();
@@ -688,6 +927,7 @@ export abstract class Scene implements Ctx {
     });
     this.audio.updateEngines(list, dt);
     this.audio.updateMusic(dt);
+    this.audio.setWind(this.storm);
     this.updateMusicState();
   }
 
@@ -733,12 +973,17 @@ export abstract class Scene implements Ctx {
     this.crew.clear();
     this.raiders.clearAll();
     this.projectiles.clear();
+    this.combat.clear();
+    this.gore.dispose();
     for (const p of this.players) p.destroy();
     for (const v of this.vehicles) v.destroy();
     this.vehicles.length = 0;
+    this.debris.clear();
+    this.marks.dispose();
     clearShells();
     this.players.length = 0;
     this.work.dispose();
+    this.groundGear?.dispose();
     this.root.removeFromParent();
     disposeTree(this.root);
     this.R.scene.remove(this.fx.smoke.points);
@@ -754,6 +999,7 @@ export abstract class Scene implements Ctx {
     this.playerFx.dispose();
     this.R.setTrip(0, NO_LOOK, 0);
     this.R.setTrip(1, NO_LOOK, 0);
+    this.audio.setWind(0);
     this.ar.dispose();
     this.audio.silenceEngines();
   }
@@ -776,6 +1022,7 @@ export type SceneResult =
   | { type: 'campDone' }
   | { type: 'encounter'; id: string; spotId: string }
   | { type: 'dusk' }
+  | { type: 'haven' }
   | { type: 'delveEnter'; site: DelveSite }
   | { type: 'delveExit'; reason: 'climb' | 'lift' | 'rescue' };
 

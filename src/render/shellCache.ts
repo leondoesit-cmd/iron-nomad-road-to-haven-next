@@ -51,6 +51,11 @@ export function acquireShell(key: string, make: () => Shell): Shell {
   return e.shell;
 }
 
+/** Whether a shell is already built, so acquiring it costs nothing. */
+export function hasShell(key: string): boolean {
+  return cache.has(key);
+}
+
 export function releaseShell(key: string) {
   const e = cache.get(key);
   if (!e) return;

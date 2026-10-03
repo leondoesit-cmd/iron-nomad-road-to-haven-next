@@ -328,14 +328,12 @@ describe('the fleet is saved with the campaign', () => {
 });
 
 describe('part pickups', () => {
-  it('driving over a part puts it in the trunk', () => {
+  it('driving over a part leaves it on the ground', () => {
     const { sc, c } = leg();
     const p = sc.players[0];
     const pos = p.vehicle!.position;
     sc.loose!.drop(pos.x, pos.z, { kind: 'part', item: newPart('eng_v6', 0.7) });
     run(sc, 0.5);
-    expect(c.inventory.map((it) => it.id)).toEqual(['eng_v6']);
-    expect(c.inventory[0].cond).toBeCloseTo(0.7);
-    expect(p.notes.some((n) => /Tuned V6/.test(n.text))).toBe(true);
+    expect(c.inventory.length).toBe(0);
   });
 });

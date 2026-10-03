@@ -25,7 +25,9 @@ export function waterTick(v: Vehicle, dt: number) {
       v.dryT += dt;
       if (v.dryT > 2.5) {
         v.flooded = false;
-        if (v.driver?.isPlayer) ctx.notify(v.driver.index, 'Engine dried out: it will start again', 'good');
+        for (const pl of ctx.players) {
+          if (Math.hypot(pl.pos.x - p.x, pl.pos.z - p.z) < 25) ctx.notify(pl.index, 'Engine dried out: it will start again', 'good');
+        }
       }
     }
     return;

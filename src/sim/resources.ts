@@ -1,4 +1,5 @@
 import { STOCK_IDS, VEHICLES, type Cost, type StockId, type Stocks } from '../data';
+export { STOCK_IDS, type Cost, type StockId, type Stocks };
 import type { DrugId } from './drugs';
 
 export function newStocks(init?: Partial<Stocks>): Stocks {
@@ -29,6 +30,11 @@ export function spend(s: Stocks, cost: Cost): boolean {
   const c = normalize(cost);
   for (const id of STOCK_IDS) s[id] = Math.max(0, s[id] - (c[id] ?? 0));
   return true;
+}
+
+/** Hand back a cost that was paid for something that never happened. */
+export function refund(s: Stocks, cost: Cost) {
+  gain(s, normalize(cost));
 }
 
 export function gain(s: Stocks, delta: Partial<Stocks>) {
@@ -118,10 +124,11 @@ export interface Recipe {
   id: string;
   name: string;
   cost: Cost;
-  yields: { ammo?: number; medkit?: number; molotov?: number; flare?: number; charge?: number } & Partial<Record<DrugId, number>>;
+  yields: { ammo?: number; medkit?: number; bandage?: number; molotov?: number; flare?: number; charge?: number } & Partial<Record<DrugId, number>>;
 }
 export const RECIPES: Recipe[] = [
   { id: 'ammo', name: 'Ammo (30 rounds)', cost: { scrap: 5 }, yields: { ammo: 30 } },
+  { id: 'bandage', name: 'Bandages (3)', cost: { scrap: 3 }, yields: { bandage: 3 } },
   { id: 'medkit', name: 'Medkit', cost: { medicine: 2 }, yields: { medkit: 1 } },
   { id: 'molotov', name: 'Molotov', cost: { fuel: 1 }, yields: { molotov: 1 } },
   { id: 'flare', name: 'Flare', cost: { tech: 1 }, yields: { flare: 2 } },

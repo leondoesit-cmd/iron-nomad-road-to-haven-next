@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { ENEMIES, t, type ZombieDef, type ZombieKind } from '../data';
 import { clamp, damp, dist2, lerp, wrapAngle } from '../core/math';
 import type { Aabb } from '../world/layout';
+import { armDamageMult, damageFraction, legSpeedMult, limbsGone, maskOf, massOf, newWounds, staggerSpeed, wound, zoneOf, type AmmoSpec, type Wounds, type Zone } from '../sim/ballistics';
 import type { ZombieRenderer } from '../render/zombieRender';
 import type { Ctx } from './ctx';
 import type { Player } from './player';
@@ -58,6 +59,16 @@ export class Zombie {
   routeX = 0;
   routeZ = 0;
   routeCool = 0;
+  /** What heavy rounds have taken off, and how much each limb has taken since. */
+  wounds: Wounds = newWounds();
+  /** 0 to 1: how far it is reeling from a hit (leans back, arms thrown up). Fades on its own. */
+  stagger = 0;
+  /** Share of its walking speed left once legs are gone. */
+  moveMult = 1;
+  /** Share of its bite and claw left once arms are gone. */
+  biteMult = 1;
+  /** Which way and how hard the last bullet hit: a corpse is thrown that way. */
+  lastHit: { dx: number; dz: number; power: number } | null = null;
 
   constructor(
     public kind: ZombieKind,
@@ -210,6 +221,7 @@ export class ZombieSystem {
     ctx.campaign.stats.zombiesKilled++;
     if (killer >= 0) this.killedByPlayer[killer]++;
     ctx.fx.blood(zb.x, zb.y + 1, zb.z, 6);
+    ctx.gore.corpse(zb.x, zb.y, zb.z, zb.def.scale, zb.lastHit?.power ?? (explosive ? 2 : 0.5), zb.lastHit?.dx ?? 0, zb.lastHit?.dz ?? 0);
     ctx.audio.play('zdie', zb.x, zb.z, 0.5);
     if (zb.kind === 'bloater') {
       const d = zb.def;
@@ -228,6 +240,72 @@ export class ZombieSystem {
     }
   }
 
+  /** Rip one to three pieces off a body that a blast has just killed, and throw them. */
+  private tear(zb: Zombie, dx: number, dz: number, power: number) {
+    const ctx = this.ctx;
+    const pool = ['armL', 'armR', 'legL', 'legR', 'head'] as const;
+    const n = 1 + Math.min(2, Math.floor(power / 1.5));
+    for (let i = 0; i < n; i++) {
+      const zone = pool[Math.floor(ctx.rng.next() * pool.length)];
+      const m = maskOf(zone);
+      if ((zb.wounds.mask & m) === m) continue;
+      zb.wounds.mask |= m;
+      ctx.gore.sever(zb, zone, dx, 0.5, dz, power);
+    }
+    this.refreshWounds(zb);
+  }
+
+  /** Shove a body: it reels back at `speed` m/s along (dx, dz) and loses its footing for a moment, a heavy one barely. */
+  knock(zb: Zombie, dx: number, dz: number, speed: number) {
+    if (zb.dead || speed <= 0) return;
+    const l = Math.hypot(dx, dz) || 1;
+    zb.vx += (dx / l) * speed;
+    zb.vz += (dz / l) * speed;
+    zb.stagger = Math.min(1, zb.stagger + speed / 5);
+    // It cannot walk while it is being thrown: stunned for as long as the shove (all of a blast's pellets together) lasts.
+    // Brutes shrug off a small shove; anything that really moves them stuns them for a beat.
+    const moving = Math.hypot(zb.vx, zb.vz);
+    if (zb.kind !== 'brute' || moving > 3) zb.stun = Math.max(zb.stun, Math.min(0.6, 0.08 + moving * 0.075));
+  }
+
+  /** What a body is missing, and what that does to how it moves and bites. */
+  private refreshWounds(zb: Zombie) {
+    const g = limbsGone(zb.wounds.mask);
+    zb.moveMult = legSpeedMult(g.legs);
+    zb.biteMult = armDamageMult(g.arms);
+  }
+
+  /**
+   * A round struck. Deals the damage, shoves the body along the bullet's path, works out which part was hit, and takes
+   * off what a round that heavy can. Returns what happened, so the caller can throw the pieces.
+   */
+  bulletHit(
+    zb: Zombie,
+    h: { dmg: number; dx: number; dy: number; dz: number; x: number; y: number; z: number; head: boolean; spec: AmmoSpec; speed: number; fromX: number; fromZ: number; killer: number },
+  ): { killed: boolean; zone: Zone; off: ('head' | 'armL' | 'armR' | 'legL' | 'legR')[] } {
+    const sc = zb.def.scale;
+    // Where on the body: height as a share of it, and which side (the model's +x is the body's left).
+    const rx = Math.cos(zb.yaw);
+    const rz = -Math.sin(zb.yaw);
+    const lateral = (h.x - zb.x) * rx + (h.z - zb.z) * rz;
+    const relY = (h.y - zb.y) / (1.8 * sc);
+    let zone = zoneOf(relY, lateral, sc);
+    if (h.head) zone = 'head';
+    zb.lastHit = { dx: h.dx, dz: h.dz, power: (h.dmg * Math.max(0.2, h.spec.gore)) / zb.def.hp };
+    const killed = this.damage(zb, h.dmg, { fromX: h.fromX, fromZ: h.fromZ, head: h.head, killer: h.killer });
+    this.knock(zb, h.dx, h.dz, staggerSpeed(h.spec, h.speed, massOf(sc)) * damageFraction(h.speed / h.spec.speed));
+    const res = wound(zb.wounds, zone, h.dmg, h.spec.gore, zb.def.hp, killed, this.ctx.rng.next());
+    if (res.off.length) {
+      this.refreshWounds(zb);
+      if (res.off.includes('head') && !zb.dead) this.kill(zb, h.killer);
+    }
+    if (killed || zb.dead) {
+      // It drops where the round was heading: turn it so it topples along the shot.
+      zb.yaw = Math.atan2(-h.dx, -h.dz);
+    }
+    return { killed: killed || zb.dead, zone, off: res.off };
+  }
+
   /** Area damage with a quadratic falloff. */
   blast(x: number, z: number, radius: number, damage: number, killer: number) {
     for (const zb of this.list) {
@@ -235,11 +313,14 @@ export class ZombieSystem {
       const d = Math.hypot(zb.x - x, zb.z - z);
       if (d > radius) continue;
       const f = 1 - (d / radius) ** 2 * 0.7;
-      this.damage(zb, damage * f, { fromX: x, fromZ: z, killer, explosive: true });
-      const k = (1 - d / radius) * 6;
       const l = d || 1;
+      zb.lastHit = { dx: (zb.x - x) / l, dz: (zb.z - z) / l, power: (damage * f) / zb.def.hp };
+      const killed = this.damage(zb, damage * f, { fromX: x, fromZ: z, killer, explosive: true });
+      const k = (1 - d / radius) * 6;
       zb.vx += ((zb.x - x) / l) * k;
       zb.vz += ((zb.z - z) / l) * k;
+      // A blast that more than kills tears pieces off.
+      if (killed && damage * f >= zb.def.hp * 1.2) this.tear(zb, (zb.x - x) / l, (zb.z - z) / l, (damage * f) / zb.def.hp);
     }
   }
 
@@ -366,9 +447,11 @@ export class ZombieSystem {
       zb.stun = 0.5;
       hits++;
       this.ctx.fx.blood(zb.x, zb.y + 1, zb.z, 4);
+      // Whatever the nose hits stays on the paint.
+      v.bodywork.splat(zb.kind === 'brute' ? 0.07 : 0.04);
       if (!killed && zb.kind === 'brute') {
         // Brutes shrug off a moped.
-        v.takeHit(10 + sp, zb.x, zb.z, { ram: true, silent: true });
+        v.takeHit(10 + sp, zb.x, zb.z, { ram: true, silent: true, smash: true });
         v.shove(-fx * v.mass * 1.2, -fz * v.mass * 1.2);
       }
       if (v.def.tier === 1 && Math.random() < 0.25) v.takeHit(3, zb.x, zb.z, { ram: true, silent: true });
@@ -403,6 +486,18 @@ export class ZombieSystem {
       if (zb.dead) {
         zb.deadT += dt;
         zb.fall = Math.min(1, zb.deadT / 0.55);
+        // A body thrown by the round that killed it slides on and settles.
+        if (Math.abs(zb.vx) + Math.abs(zb.vz) > 0.05) {
+          const p = { x: zb.x + zb.vx * dt, z: zb.z + zb.vz * dt };
+          ctx.obs.resolveCircle(p, 0.3, undefined, zb.y);
+          zb.x = p.x;
+          zb.z = p.z;
+          const k = Math.exp(-5 * dt);
+          zb.vx *= k;
+          zb.vz *= k;
+          zb.y = ctx.groundAt(zb.x, zb.z);
+        }
+        zb.stagger = Math.max(0, zb.stagger - dt * 3);
         if (zb.deadT > 3.2) {
           this.list[i] = this.list[this.list.length - 1];
           this.list.pop();
@@ -457,7 +552,7 @@ export class ZombieSystem {
           p.hurt(rules.pinDps * dt, arr[0].x, arr[0].z, 'bite');
         } else {
           let dmg = 0;
-          for (const z of arr) dmg += z.def.damage / (z.kind === 'brute' ? 1.1 : 1);
+          for (const z of arr) dmg += (z.def.damage * z.biteMult) / (z.kind === 'brute' ? 1.1 : 1);
           p.hurt(dmg * dt, arr[0].x, arr[0].z, 'bite');
         }
       }
@@ -602,6 +697,7 @@ export class ZombieSystem {
     zb.attackCd -= dt;
     zb.shriekCd -= dt;
     if (zb.stun > 0) zb.stun -= dt;
+    if (zb.stagger > 0) zb.stagger = Math.max(0, zb.stagger - dt * 2.4);
     if (zb.burn > 0) {
       zb.burn -= dt;
       if (Math.random() < 0.4) ctx.fx.fire(zb.x, zb.y + 1.0, zb.z, 0.4);
@@ -638,6 +734,7 @@ export class ZombieSystem {
           break;
       }
       if (zb.hesitating) speed *= 0.12;
+      speed *= zb.moveMult;
       if (zb.hasTarget && speed > 0) {
         let aimX = zb.tx;
         let aimZ = zb.tz;
@@ -898,7 +995,7 @@ export class ZombieSystem {
         const d = Math.hypot(v.position.x - zb.x, v.position.z - zb.z);
         if (d < v.def.length * 0.5 + def.radius + 0.8) {
           zb.attackCd = 1.4;
-          v.takeHit(def.vehicleDamage ?? 28, zb.x, zb.z, { ram: true });
+          v.takeHit(def.vehicleDamage ?? 28, zb.x, zb.z, { ram: true, smash: true });
           const dx = v.position.x - zb.x;
           const dz = v.position.z - zb.z;
           const l = Math.hypot(dx, dz) || 1;
@@ -936,7 +1033,10 @@ export class ZombieSystem {
       const sc = zb.def.scale;
       const tilt = zb.dead ? zb.fall : 0;
       const sink = zb.dead ? Math.max(0, zb.deadT - 2.2) * 0.8 : 0;
-      zr.push(zb.kind, sc, zb.x, zb.y - sink + (zb.dead ? 0.1 : 0), zb.z, zb.yaw, zb.phase, zb.dead ? 0 : zb.stride, zb.dead ? 0 : zb.chase, tilt, zb.variant);
+      const legs = limbsGone(zb.wounds.mask).legs;
+      // Without legs a body drops to the ground and drags itself; with one it lists to the side.
+      const drop = zb.dead ? 0 : legs >= 2 ? 0.78 * sc : legs === 1 ? 0.06 * sc : 0;
+      zr.push(zb.kind, sc, zb.x, zb.y - sink + (zb.dead ? 0.1 : 0) - drop, zb.z, zb.yaw, zb.phase, zb.dead ? 0 : zb.stride, zb.dead ? 0 : zb.chase, tilt, zb.variant, 1, zb.wounds.mask, zb.stagger, legs >= 2 ? 0.75 : legs === 1 ? 0.12 : 0);
     }
     zr.end(time);
   }

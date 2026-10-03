@@ -58,6 +58,16 @@ export interface MapPin {
   label?: string;
 }
 
+export interface MapRoad {
+  pts: number[];
+  half: number;
+  kind: 'highway' | 'road' | 'track';
+  x0: number;
+  x1: number;
+  z0: number;
+  z1: number;
+}
+
 /** Everything a scene tells the HUD so it can draw this scene's map. Built once and refreshed in place. */
 export interface MapFrame {
   mode: 'leg' | 'delve' | 'camp';
@@ -66,6 +76,8 @@ export interface MapFrame {
   /** Road centre-line as a flat [x, z, x, z, ...] list, for legs. */
   road: number[] | null;
   roadHalf: number;
+  /** The open world's whole road network, each with its bounds so the minimap can skip what is off screen. */
+  roads: MapRoad[];
   /** Mined ground and other hatched areas, each a flat [x, z, x, z, ...] outline. */
   hazards: number[][];
   /** The whole thing, for the overview. */
@@ -87,6 +99,7 @@ export function newFrame(mode: MapFrame['mode']): MapFrame {
     base: null,
     road: null,
     roadHalf: 4,
+    roads: [],
     hazards: [],
     bounds: { x0: -100, x1: 100, z0: -100, z1: 100 },
     radiusMin: 60,
@@ -217,6 +230,8 @@ function fillRect(base: MapBase, r: MapRect, c: Rgb) {
 /** Metres per pixel of the baked ground. Fine enough that a road bend and a lake read, coarse enough to bake in a blink. */
 const WASTE_CELL = 8;
 const CITY_CELL = 3;
+/** The open world is a whole map: coarser ground, so it bakes in seconds. */
+const OPEN_CELL = 12;
 /** How far past the corridor edge the ground is still drawn. */
 const EDGE = 24;
 
@@ -229,6 +244,23 @@ export function minefieldOutline(def: TerrainDef, z0: number, z1: number, halfWi
   for (const z of zs) out.push(roadX(def, z) + halfWidth, z);
   for (let i = zs.length - 1; i >= 0; i--) out.push(roadX(def, zs[i]) - halfWidth, zs[i]);
   return out;
+}
+
+/** The open world's roads as map lines (the highway is one of them), each with its bounding box. */
+export function openRoadLines(def: TerrainDef): MapRoad[] {
+  return def.open!.roads.map((r) => {
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let z0 = Infinity;
+    let z1 = -Infinity;
+    for (let i = 0; i < r.pts.length; i += 2) {
+      x0 = Math.min(x0, r.pts[i]);
+      x1 = Math.max(x1, r.pts[i]);
+      z0 = Math.min(z0, r.pts[i + 1]);
+      z1 = Math.max(z1, r.pts[i + 1]);
+    }
+    return { pts: r.pts, half: r.half, kind: r.kind, x0, x1, z0, z1 };
+  });
 }
 
 /** Walks the road at a steady step so a map has a centre-line to draw. */
@@ -259,12 +291,16 @@ export class LegMapBaker {
     private layout: Pick<LegLayout, 'lots' | 'rural' | 'slots'>,
   ) {
     const city = def.biome === 'city';
-    const cell = city ? CITY_CELL : WASTE_CELL;
+    const open = def.open;
+    const cell = city ? CITY_CELL : open ? OPEN_CELL : WASTE_CELL;
     let x0 = Infinity;
     let x1 = -Infinity;
-    const z0 = city ? -60 : -80;
-    const z1 = def.length + (city ? 120 : 140);
-    if (city) {
+    const z0 = open ? open.z0 : city ? -60 : -80;
+    const z1 = open ? open.z1 : def.length + (city ? 120 : 140);
+    if (open) {
+      x0 = open.x0;
+      x1 = open.x1;
+    } else if (city) {
       x0 = -152;
       x1 = 152;
     } else {
@@ -302,8 +338,8 @@ export class LegMapBaker {
         const z = b.z0 + (j + 0.5) * b.cell;
         const rx = roadX(def, z);
         const half = corridorHalf(def, z) + EDGE;
-        const i0 = Math.max(0, Math.floor((rx - half - b.x0) / b.cell));
-        const i1 = Math.min(b.w - 1, Math.ceil((rx + half - b.x0) / b.cell));
+        const i0 = def.open ? 0 : Math.max(0, Math.floor((rx - half - b.x0) / b.cell));
+        const i1 = def.open ? b.w - 1 : Math.min(b.w - 1, Math.ceil((rx + half - b.x0) / b.cell));
         for (let i = i0; i <= i1; i++) {
           const x = b.x0 + (i + 0.5) * b.cell;
           const h = heightAt(def, x, z);
@@ -378,6 +414,11 @@ export class LegMapBaker {
       }
     }
     for (const r of this.layout.rural) fillRect(b, { x0: r.aabb.minX, x1: r.aabb.maxX, z0: r.aabb.minZ, z1: r.aabb.maxZ }, ROOF);
+    // A city district of the open world: its ground, blocks and zones, drawn as a city leg's map is.
+    if (this.def.open) {
+      for (const d of this.def.open.districts) fillRect(b, { x0: d.x0, x1: d.x1, z0: d.z0, z1: d.z1 }, CITY_GROUND);
+      for (const lot of this.layout.lots) if (lot.kind !== 'open') fillRect(b, lot, lot.kind === 'zone' ? CITY_ZONE : CITY_BLOCK);
+    }
     this.heights = null;
     this.water = null;
     void hs;
@@ -464,6 +505,9 @@ export const SITE_LABEL: Record<string, string> = {
   overpass: 'BRIDGE',
   windfarm: 'WIND',
   mastHill: 'MAST',
+  hubDustwell: 'DUSTWELL',
+  hubRustgate: 'RUSTGATE',
+  hubHaven: 'HAVEN',
 };
 
 /** The minimap radius for how fast a vehicle goes: tight when crawling, wide when the horizon is coming at you. */

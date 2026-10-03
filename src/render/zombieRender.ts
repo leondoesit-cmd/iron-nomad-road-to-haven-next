@@ -162,6 +162,7 @@ attribute vec3 aPivot;
 attribute vec3 aPivot2;
 attribute vec4 aAnim; // phase, stride rad/s, chase 0..1, fall
 attribute vec4 aKind; // kind id, variant 0..1, brightness, spare
+attribute vec4 aGore; // hidden-part mask, reeling 0..1, extra forward lean, spare
 uniform float uTime;
 uniform vec3 uShirt[8];
 uniform vec3 uPants[6];
@@ -198,7 +199,7 @@ float zPar = 0.0;
 int zp = int( aZ.x + 0.5 );
 float zThighL = zs * 0.6 - zCrouch;
 float zThighR = -zs * 0.6 - zCrouch;
-float zArmBase = -0.35 - zc2 * 1.15 - zArmsUp;
+float zArmBase = -0.35 - zc2 * 1.15 - zArmsUp + aGore.y * 1.5;
 if ( zp == 1 ) zOwn = zThighL;
 else if ( zp == 2 ) zOwn = zThighR;
 else if ( zp == 3 ) { zOwn = max( 0.0, -zs ) * 0.9 + 0.12 + zCrouch * 1.6; zPar = zThighL; }
@@ -228,6 +229,19 @@ const BEGIN = /* glsl */ `
 ${ANGLES}
 #endif
 vec3 transformed = vec3( position );
+// Parts a heavy round has taken off: a limb keeps a short stump at its joint, capped flat, and the rest folds away.
+float zHidden = mod( floor( aGore.x / exp2( float( zp ) ) ), 2.0 );
+if ( zHidden > 0.5 ) {
+  bool zHasStump = zp == 1 || zp == 2 || zp == 5 || zp == 6;
+  float zAlong = aPivot.y - position.y;
+  if ( zHasStump && zAlong < 0.07 ) {
+    transformed = position;
+  } else if ( zHasStump ) {
+    transformed = vec3( position.x, aPivot.y - 0.07, position.z );
+  } else {
+    transformed = aPivot;
+  }
+}
 // Brutes bulk up through the chest and arms; bloaters swell at the belly.
 float zMus = zKind > 3.5 && zKind < 4.5 ? 0.055 : 0.0;
 float zBel = zKind > 2.5 && zKind < 3.5 ? 0.16 : 0.0;
@@ -237,7 +251,9 @@ transformed = zRotX( transformed, aPivot, zOwn );
 if ( zp == 3 || zp == 4 || zp == 7 || zp == 8 ) transformed = zRotX( transformed, aPivot2, zPar );
 // Whole-body hunch about the hips, a crouch for stalkers and a drunken sway.
 float zl = smoothstep( 0.9, 1.5, transformed.y );
-transformed.z += zLean * zl * ( transformed.y - 0.9 );
+transformed.z += ( zLean + aGore.z ) * zl * ( transformed.y - 0.9 );
+// Reeling from a hit: the chest arches back and the head snaps up.
+transformed.z -= aGore.y * 0.9 * zl * ( transformed.y - 0.9 );
 transformed.y -= zCrouch * 0.18 * smoothstep( 0.3, 0.95, transformed.y );
 transformed.x += sin( zt * 0.5 ) * 0.05 * zl;
 `;
@@ -256,6 +272,12 @@ const COLOR = /* glsl */ `
   else if ( zSlot == 2 ) vColor.rgb *= uPants[ zp6 ];
   else if ( zSlot == 3 ) vColor.rgb *= zSkin;
   else if ( zSlot == 4 ) vColor.rgb *= zHair;
+  // Raw flesh where something has been torn off: the cut end of a limb, and the neck once the head is gone.
+  int zpc = int( aZ.x + 0.5 );
+  float zHid = mod( floor( aGore.x / exp2( float( zpc ) ) ), 2.0 );
+  bool zCut = zHid > 0.5 && ( zpc == 1 || zpc == 2 || zpc == 5 || zpc == 6 ) && ( aPivot.y - position.y ) > 0.0;
+  bool zNeck = zpc == 0 && position.y > 1.505 && mod( floor( aGore.x / 512.0 ), 2.0 ) > 0.5;
+  if ( zCut || zNeck ) vColor.rgb = vec3( 0.34, 0.02, 0.02 );
 }
 `;
 
@@ -310,6 +332,8 @@ export class ZombieRenderer {
   private kind: Float32Array;
   private animAttr: THREE.InstancedBufferAttribute;
   private kindAttr: THREE.InstancedBufferAttribute;
+  private gore: Float32Array;
+  private goreAttr: THREE.InstancedBufferAttribute;
   private uniforms: Record<string, THREE.IUniform> = {
     uTime: { value: 0 },
     uShirt: { value: [0x5a5446, 0x3e4a58, 0x6a3a32, 0x7a7262, 0x2e3a2c, 0x8a8478, 0x4a3a52, 0x9a8a5a].map(linear) },
@@ -329,12 +353,16 @@ export class ZombieRenderer {
     this.max = opts.max ?? MAX_ZOMBIES;
     this.anim = new Float32Array(this.max * 4);
     this.kind = new Float32Array(this.max * 4);
+    this.gore = new Float32Array(this.max * 4);
     this.uniforms.uGhostTint = { value: 1 };
     const geo = zombieGeometry();
     this.animAttr = new THREE.InstancedBufferAttribute(this.anim, 4);
     this.animAttr.setUsage(THREE.DynamicDrawUsage);
     this.kindAttr = new THREE.InstancedBufferAttribute(this.kind, 4);
     this.kindAttr.setUsage(THREE.DynamicDrawUsage);
+    this.goreAttr = new THREE.InstancedBufferAttribute(this.gore, 4);
+    this.goreAttr.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('aGore', this.goreAttr);
     geo.setAttribute('aAnim', this.animAttr);
     geo.setAttribute('aKind', this.kindAttr);
     const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
@@ -377,7 +405,7 @@ export class ZombieRenderer {
   /**
    * Add one instance. `fall` runs 0..1 for the death animation (topples backwards and sinks).
    */
-  push(kind: ZombieKind, scale: number, x: number, y: number, z: number, yaw: number, phase: number, stride: number, chase: number, fall: number, variant: number, alpha = 1) {
+  push(kind: ZombieKind, scale: number, x: number, y: number, z: number, yaw: number, phase: number, stride: number, chase: number, fall: number, variant: number, alpha = 1, goneMask = 0, reel = 0, lean = 0) {
     if (this.count >= this.max) return;
     const i = this.count++;
     this.p.set(x, y, z);
@@ -394,6 +422,9 @@ export class ZombieRenderer {
     this.kind[i * 4 + 1] = (variant % 5) / 5 + 0.1;
     this.kind[i * 4 + 2] = 0.86 + (variant % 5) * 0.05;
     this.kind[i * 4 + 3] = alpha;
+    this.gore[i * 4] = goneMask;
+    this.gore[i * 4 + 1] = reel;
+    this.gore[i * 4 + 2] = lean;
   }
 
   /** Ghosts only: how much of the colour is rainbow (1 is plainly unreal, 0 is nearly the real thing). */
@@ -406,6 +437,7 @@ export class ZombieRenderer {
     this.mesh.instanceMatrix.needsUpdate = true;
     this.animAttr.needsUpdate = true;
     this.kindAttr.needsUpdate = true;
+    this.goreAttr.needsUpdate = true;
     this.uniforms.uTime.value = time;
   }
 }

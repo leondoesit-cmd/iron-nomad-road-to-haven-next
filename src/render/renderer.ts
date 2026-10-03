@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { DEG, lerp } from '../core/math';
+import { DEG, lerp, smoothstep as smooth } from '../core/math';
 import type { LightState } from '../sim/dayclock';
 import { ATMO, installAtmosphere, setAtmosphere } from './atmosphere';
+import { installGloss } from './gloss';
 import { GLOBALS, KIT } from './materials';
 import { PostFX } from './post';
 import { SkyDome } from './sky';
@@ -11,6 +12,7 @@ import type { Look } from '../sim/drugs';
 // Fog chunks must be replaced before the first material compiles.
 installAtmosphere();
 installBreath();
+installGloss();
 
 export type QualityPreset = 'low' | 'medium' | 'high';
 export interface QualitySpec {
@@ -78,6 +80,7 @@ const _ly = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 const _z = new THREE.Color();
 const _z2 = new THREE.Color();
+const _storm = new THREE.Color();
 
 export class GameRenderer {
   gl: THREE.WebGLRenderer;
@@ -269,6 +272,7 @@ export class GameRenderer {
     this.setShadowSize(q.shadow);
     if (this.usePost) {
       if (!this.post) this.post = new PostFX(q.msaa);
+      this.post.fx.setTier(this.quality === 'high' ? 1 : 0);
       this.gl.setPixelRatio(this.baseDpr * q.scale);
     } else {
       this.post?.dispose();
@@ -383,7 +387,7 @@ export class GameRenderer {
   }
 
   /** Apply time-of-day lighting. */
-  setLight(l: LightState, biome: 'wasteland' | 'city') {
+  setLight(l: LightState, biome: 'wasteland' | 'city', cityMix = biome === 'city' ? 1 : 0, storm = 0, wet = 0) {
     this.sky.mesh.visible = true;
     this.night = l.night;
     const e = l.elevation;
@@ -391,18 +395,28 @@ export class GameRenderer {
     const hz = Math.sqrt(Math.max(0.05, 1 - e * e));
     this.sunDir.set(Math.cos(az) * hz, e, Math.sin(az) * hz).normalize();
     this.sun.color.setRGB(...l.sunColor);
-    this.sun.intensity = l.sunIntensity * 1.05;
+    // A dust storm browns the whole sky over and takes the edge off the sun.
+    const dim = 1 - l.night * 0.85;
+    this.sun.intensity = l.sunIntensity * 1.05 * (1 - 0.5 * storm);
     // The day-clock palette is authored as display (sRGB) colours.
     this.hemi.color.setRGB(...l.hemiSky, THREE.SRGBColorSpace);
     this.hemi.groundColor.setRGB(...l.hemiGround, THREE.SRGBColorSpace);
     this.hemi.intensity = l.hemiIntensity * 0.3;
     this.fog.color.setRGB(...l.fog, THREE.SRGBColorSpace);
+    if (storm > 0) {
+      _storm.setRGB(0.66 * dim, 0.5 * dim, 0.32 * dim, THREE.SRGBColorSpace);
+      this.fog.color.lerp(_storm, storm * 0.92);
+    }
     const dist = QUALITY[this.quality].draw;
-    const city = biome === 'city';
+    const city = cityMix > 0.5;
     // The wasteland has far scenery out to the mountains, so its fog is mostly height haze; the city's
     // skyline sits close behind the corridor.
-    this.fog.near = lerp(city ? 60 : 160, 22, l.night);
-    this.fog.far = lerp(city ? Math.min(dist * 1.6, 520) : dist * 3.2, 170, l.night);
+    this.fog.near = lerp(lerp(160, 60, cityMix), 22, l.night);
+    this.fog.far = lerp(lerp(dist * 3.2, Math.min(dist * 1.6, 520), cityMix), 170, l.night);
+    if (storm > 0) {
+      this.fog.near *= Math.pow(0.1, storm);
+      this.fog.far *= Math.pow(0.12, storm);
+    }
     const u = this.sky.uniforms;
     u.uSunDir.value.copy(this.sunDir);
     u.uSunColor.value.setRGB(...l.sunColor);
@@ -410,31 +424,41 @@ export class GameRenderer {
     // Zenith: deep blue by day (greyer over the city), violet at dusk, near black at night.
     const dusk = Math.min(1, Math.max(0, (l.sky[0] - l.sky[2] - 0.12) / 0.48));
     // ACES pulls saturated blue toward violet, so the authored zenith leans cyan.
-    const zd = city ? [0.4, 0.52, 0.62] : [0.2, 0.47, 0.76];
+    const zd = [lerp(0.2, 0.4, cityMix), lerp(0.47, 0.52, cityMix), lerp(0.76, 0.62, cityMix)];
     _z.setRGB(zd[0], zd[1], zd[2], THREE.SRGBColorSpace);
     _z2.setRGB(0.3, 0.29, 0.5, THREE.SRGBColorSpace);
     _z.lerp(_z2, dusk);
     _z2.setRGB(0.012, 0.018, 0.045, THREE.SRGBColorSpace);
     u.uZenith.value.copy(_z.lerp(_z2, l.night));
+    if (storm > 0) u.uZenith.value.lerp(_storm.setRGB(0.52 * dim, 0.38 * dim, 0.24 * dim, THREE.SRGBColorSpace), storm * 0.85);
     u.uGround.value.setRGB(l.hemiGround[0] * 0.8, l.hemiGround[1] * 0.75, l.hemiGround[2] * 0.7, THREE.SRGBColorSpace);
     u.uNight.value = l.night;
     u.uCloud.value = city ? 0.55 : 0.4;
     u.uMoonDir.value.set(-this.sunDir.x, Math.max(0.35, this.sunDir.y), -this.sunDir.z).normalize();
     const scatter = lerp(0.55, 0.12, l.night);
     u.uScatter.value = scatter;
-    setAtmosphere(this.sunDir, this.sun.color, scatter, lerp(city ? 0.0035 : 0.0016, 0.006, l.night), city ? 0.03 : 0.045, city ? 2 : 0);
+    setAtmosphere(
+      this.sunDir,
+      this.sun.color,
+      scatter,
+      lerp(city ? 0.0035 : 0.0016, 0.006, l.night) + 0.011 * storm,
+      lerp(city ? 0.03 : 0.045, 0.012, storm),
+      city ? 2 : 0,
+    );
     this.scene.environmentIntensity = lerp(0.85, 0.35, l.night);
     GLOBALS.uLight.value
       .copy(this.sun.color)
       .multiplyScalar(this.sun.intensity * 0.22)
       .add(_z.copy(this.hemi.color).multiplyScalar(this.hemi.intensity * 0.9 + 0.12));
     KIT.uGlow.value = 1 + l.night * 0.9;
+    GLOBALS.uWet.value = wet;
+    if (this.post) this.setScreenFx(l, city, storm, wet);
     // Exposure opens up a little at night so headlights read without crushing everything else.
     if (this.post) {
       const p = this.post.params;
-      p.exposure = lerp(1.0, 1.7, l.night);
-      p.saturation = lerp(city ? 0.92 : 1.04, 0.85, l.night);
-      p.bloom = lerp(0.025, 0.035, l.night);
+      p.exposure = lerp(1.0, 1.7, l.night) * (1 - 0.1 * storm);
+      p.saturation = lerp(city ? 0.92 : 1.04, 0.85, l.night) * (1 - 0.22 * storm);
+      p.bloom = lerp(0.018, 0.028, l.night);
       if (city) {
         p.shadowTint.setRGB(0.95, 0.99, 1.04);
         p.highTint.setRGB(1.01, 1.0, 0.97);
@@ -443,6 +467,24 @@ export class GameRenderer {
         p.highTint.setRGB(1.04, 1.0, 0.93);
       }
     }
+  }
+
+  /**
+   * Tune the screen-space lighting to the hour and the weather. Dust hangs thicker as the sun sinks (and a storm fills the
+   * air with it), so the low sun of the evening throws long shafts through whatever stands between it and the camera.
+   */
+  private setScreenFx(l: LightState, city: boolean, storm: number, wet: number) {
+    const fx = this.post!.fx.params;
+    const e = l.elevation;
+    const low = 1 - smooth(0.12, 0.62, e);
+    const day = 1 - l.night;
+    fx.aoStrength = 1;
+    fx.aoRadius = city ? 1.9 : 1.6;
+    fx.dust = (lerp(0.0008, 0.0022, low) * (city ? 1.3 : 1) + 0.0075 * storm) * day;
+    fx.dustFall = lerp(0.07, 0.035, storm);
+    fx.shafts = (lerp(0.42, 0.72, low) * (1 - 0.2 * storm) + 0.28 * storm) * day;
+    fx.sunLight.copy(this.sun.color).multiplyScalar(this.sun.intensity * 0.85 * day);
+    fx.reflect = 1 + 0.5 * wet;
   }
 
   /**
@@ -462,6 +504,17 @@ export class GameRenderer {
     this.scene.environmentIntensity = 0.05;
     _z.set(0x000000);
     setAtmosphere(this.sunDir, _z, 0, 0, 0.1, 0);
+    if (this.post) {
+      // No sun to scatter, but occlusion matters most here: the ambient light is all there is.
+      const fx = this.post.fx.params;
+      fx.aoStrength = 1;
+      fx.aoRadius = 2.2;
+      fx.dust = 0;
+      fx.shafts = 0;
+      fx.sunLight.setRGB(0, 0, 0);
+      fx.reflect = 1;
+    }
+    GLOBALS.uWet.value = 0.15;
     GLOBALS.uLight.value.copy(this.hemi.color).multiplyScalar(o.ambient * 0.6 + 0.12);
     KIT.uGlow.value = 1.6;
     if (this.post) {
@@ -534,6 +587,8 @@ export class GameRenderer {
         post.hdr.scissorTest = true;
         gl.setRenderTarget(post.hdr);
         this.renderView(i);
+        // Straight after the view, while the sun's shadow map and this camera are still the ones it was drawn with.
+        post.screenFx(gl, { camera: v.camera, rect: { x, y, w, h }, sunDir: this.sunDir, shadow: this.sun.shadow, time });
       }
       post.hdr.scissorTest = false;
       const a = this.views[0].active ? uv[0] : uv[1];

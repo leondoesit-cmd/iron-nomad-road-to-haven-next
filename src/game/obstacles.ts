@@ -106,6 +106,8 @@ export class ObstacleIndex {
     const mz = (az + bz) / 2;
     this.near(mx, mz, len / 2 + 2, (a) => {
       if (ignoreKinds?.has(a.kind)) return;
+      // Glass blocks a body but not a line of sight.
+      if (a.mat === 'glass') return;
       // `y` is a height above the ground; boxes are placed in absolute heights.
       const yy = y + (a.gy ?? 0);
       if (yy < a.y0 || yy > a.y1) return;

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import { clamp } from '../core/math';
+import { ScreenFX, type FxView } from './screenfx';
 import { lookActive, type TripView } from './trip';
 
 /**
@@ -108,6 +109,13 @@ uniform vec2 uPhase;
 //   2: blur, edge, glow, dark          3: tint rgb, brightness
 //   4: trail keep, trail zoom, trail hue, on
 uniform vec4 uFx[10];
+uniform sampler2D tDepth;
+uniform sampler2D tFxLight;
+uniform sampler2D tFxSsr;
+uniform vec2 uFxRes;
+uniform vec2 uNearFar;
+uniform float uFxOn;
+uniform float uAoK;
 varying vec2 vUv;
 ${RECTS}
 vec4 gRect;
@@ -143,6 +151,36 @@ vec3 rainbow( float h ) {
 vec3 sceneAt( vec2 uv ) {
   return texture2D( tScene, clamp( uv, gRect.xy + uTexel, gRect.zw - uTexel ) ).rgb;
 }
+float linZ( float d ) {
+  return ( uNearFar.x * uNearFar.y ) / ( ( uNearFar.y - uNearFar.x ) * d - uNearFar.y );
+}
+// The half-resolution AO and scattered light, upsampled with weights that fall off across depth edges, so occlusion never
+// leaks from a car onto the ground behind it.
+vec4 fxUp( vec2 uv ) {
+  vec2 hp = uv * uFxRes - 0.5;
+  vec2 base = floor( hp );
+  vec2 f = hp - base;
+  float zc = linZ( texture2D( tDepth, uv ).r );
+  float dzX = dFdx( zc );
+  float dzY = dFdy( zc );
+  float tol = max( 0.04 * abs( zc ) + 0.12, ( abs( dzX ) + abs( dzY ) ) * 1.5 );
+  vec4 sum = vec4( 0.0 );
+  float wsum = 0.0;
+  for ( int j = 0; j < 2; j++ ) {
+    for ( int i = 0; i < 2; i++ ) {
+      vec2 tuv = clamp( ( base + vec2( float( i ), float( j ) ) + 0.5 ) / uFxRes, gRect.xy, gRect.zw );
+      float zi = linZ( texture2D( tDepth, tuv ).r );
+      vec2 dp = ( tuv - uv ) * uRes;
+      float zExp = zc + dzX * dp.x + dzY * dp.y;
+      float wb = ( i == 0 ? 1.0 - f.x : f.x ) * ( j == 0 ? 1.0 - f.y : f.y );
+      float diff = min( abs( zi - zc ), abs( zi - zExp ) );
+      float w = wb * exp( - diff / tol ) + 1e-4;
+      sum += texture2D( tFxLight, tuv ) * w;
+      wsum += w;
+    }
+  }
+  return sum / max( wsum, 1e-4 );
+}
 float lumaAt( vec2 uv ) {
   return log2( 1.0 + dot( sceneAt( uv ), vec3( 0.2126, 0.7152, 0.0722 ) ) );
 }
@@ -167,6 +205,7 @@ void main() {
   vec3 bloom;
   vec3 edgeAdd = vec3( 0.0 );
   float hueA = 0.0;
+  vec2 fxUv = vUv;
   if ( f4.w > 0.5 ) {
     vec2 p = q0 * ax;
     float rr = rr0;
@@ -187,6 +226,7 @@ void main() {
     p *= 1.0 + w * 0.02 * sin( rr * 16.0 - ph * 2.0 );
     vec2 q1 = p / ax;
     vec2 uvw = ctr + q1 * span;
+    fxUv = clamp( uvw, r.xy, r.zw );
     // Chromatic aberration, bigger toward the edges.
     float ca = f0.w * 0.014 * ( 0.3 + rr );
     vec2 off = normalize( q1 + vec2( 1e-5 ) ) * ca * span;
@@ -216,6 +256,20 @@ void main() {
   } else {
     col = texture2D( tScene, vUv ).rgb;
     bloom = texture2D( tBloom, vUv ).rgb;
+  }
+  if ( uFxOn > 0.5 ) {
+    vec4 fl = fxUp( fxUv );
+    // Occlusion dims the ambient light, so it eases off where the picture is already bright (sunlit ground, lamps). The
+    // multi-bounce fit stops pale surfaces going muddy in creases.
+    float lum = dot( col, vec3( 0.2126, 0.7152, 0.0722 ) );
+    float ao = fl.a;
+    ao = max( ao, ( ( ao * 0.586 - 1.516 ) * ao + 1.93 ) * ao );
+    col *= mix( 1.0, min( ao, 1.0 ), uAoK * ( 1.0 - 0.72 * smoothstep( 0.45, 2.4, lum ) ) );
+    vec4 sr = texture2D( tFxSsr, fxUv );
+    col = mix( col, sr.rgb, sr.a );
+    float zc = abs( linZ( texture2D( tDepth, fxUv ).r ) );
+    float creviceShield = mix( ao * ao, 1.0, smoothstep( 6.0, 50.0, zc ) );
+    col += fl.rgb * ( 1.0 - col * 0.35 ) * creviceShield;
   }
   vec3 c = col + bloom * uBloom;
   c = aces( c * uExposure * ( f4.w > 0.5 ? 1.0 + f3.w : 1.0 ) / 0.6 );
@@ -270,6 +324,14 @@ const LEVELS = 6;
 
 export class PostFX {
   hdr: THREE.WebGLRenderTarget;
+  /** The scene's depth, resolved from the multisampled target, for the screen-space effects. */
+  readonly depth: THREE.DepthTexture;
+  /** Ambient occlusion, volumetric light and reflections. */
+  readonly fx: ScreenFX;
+  /** Turn the screen-space lighting off (the composite then skips it). */
+  fxEnabled = true;
+  /** Set once a view has run the screen-space passes this frame. */
+  private fxRan = false;
   private down: THREE.WebGLRenderTarget[] = [];
   private up: THREE.WebGLRenderTarget[] = [];
   private quad = new FullScreenQuad();
@@ -282,7 +344,7 @@ export class PostFX {
   private histIdx = 0;
   private histValid = false;
   /** Five vec4s per half, in the layout the composite shader reads. */
-  private fx = Array.from({ length: 10 }, () => new THREE.Vector4());
+  private fxVecs = Array.from({ length: 10 }, () => new THREE.Vector4());
   private phase = new THREE.Vector2();
   private rectA = new THREE.Vector4(0, 0, 0.5, 1);
   private rectB = new THREE.Vector4(0.5, 0, 1, 1);
@@ -290,20 +352,26 @@ export class PostFX {
   height = 0;
   params: PostParams = {
     exposure: 1,
-    bloom: 0.03,
+    bloom: 0.02,
     bloomThreshold: 1.6,
     bloomScatter: 0.7,
     vignette: 0.32,
     grain: 0.025,
     saturation: 1.0,
-    contrast: 1.04,
+    contrast: 1.08,
     shadowTint: new THREE.Color(0.96, 0.98, 1.04),
     highTint: new THREE.Color(1.03, 1.0, 0.95),
   };
 
   constructor(samples: number) {
     const opts = { type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, magFilter: THREE.LinearFilter, minFilter: THREE.LinearFilter, generateMipmaps: false };
-    this.hdr = new THREE.WebGLRenderTarget(4, 4, { ...opts, depthBuffer: true, samples });
+    this.depth = new THREE.DepthTexture(4, 4);
+    this.depth.format = THREE.DepthFormat;
+    this.depth.type = THREE.UnsignedIntType;
+    this.depth.minFilter = THREE.NearestFilter;
+    this.depth.magFilter = THREE.NearestFilter;
+    this.hdr = new THREE.WebGLRenderTarget(4, 4, { ...opts, depthBuffer: true, samples, depthTexture: this.depth });
+    this.fx = new ScreenFX(this.depth);
     for (let i = 0; i < LEVELS; i++) {
       this.down.push(new THREE.WebGLRenderTarget(4, 4, opts));
       this.up.push(new THREE.WebGLRenderTarget(4, 4, opts));
@@ -342,7 +410,14 @@ export class PostFX {
         uHasPrev: { value: 0 },
         uTexel: { value: new THREE.Vector2(1, 1) },
         uPhase: { value: this.phase },
-        uFx: { value: this.fx },
+        uFx: { value: this.fxVecs },
+        tDepth: { value: this.depth },
+        tFxLight: { value: null },
+        tFxSsr: { value: null },
+        uFxRes: { value: new THREE.Vector2(1, 1) },
+        uNearFar: { value: new THREE.Vector2(0.2, 2600) },
+        uFxOn: { value: 0 },
+        uAoK: { value: 1 },
         ...rects,
       },
       vertexShader: VERT,
@@ -369,19 +444,19 @@ export class PostFX {
     const on = t.active && lookActive(l);
     this.phase.setComponent(i === 0 ? 0 : 1, t.phase);
     if (!on) {
-      for (let k = 0; k < 5; k++) this.fx[o + k].set(0, 0, 0, 0);
+      for (let k = 0; k < 5; k++) this.fxVecs[o + k].set(0, 0, 0, 0);
       return;
     }
     const keep = l.trail > 0.01 ? Math.exp(-Math.max(dt, 1 / 240) / (l.trail * 0.35)) : 0;
-    this.fx[o].set(l.hue, l.sat, l.warp, l.chroma);
-    this.fx[o + 1].set(l.dbl, l.kaleido, l.tunnel, l.pulse);
-    this.fx[o + 2].set(l.blur, l.edge, l.glow, l.dark);
-    this.fx[o + 3].set(l.tintR, l.tintG, l.tintB, l.bright);
-    this.fx[o + 4].set(clamp(keep, 0, 0.97), l.trail * 0.006 + l.kaleido * 0.004, l.hue * 0.03, 1);
+    this.fxVecs[o].set(l.hue, l.sat, l.warp, l.chroma);
+    this.fxVecs[o + 1].set(l.dbl, l.kaleido, l.tunnel, l.pulse);
+    this.fxVecs[o + 2].set(l.blur, l.edge, l.glow, l.dark);
+    this.fxVecs[o + 3].set(l.tintR, l.tintG, l.tintB, l.bright);
+    this.fxVecs[o + 4].set(clamp(keep, 0, 0.97), l.trail * 0.006 + l.kaleido * 0.004, l.hue * 0.03, 1);
   }
 
   private wantTrails() {
-    return this.fx[4].x > 0.001 || this.fx[9].x > 0.001;
+    return this.fxVecs[4].x > 0.001 || this.fxVecs[9].x > 0.001;
   }
 
   private ensureHist(w: number, h: number) {
@@ -399,6 +474,7 @@ export class PostFX {
     this.width = w;
     this.height = h;
     this.hdr.setSize(w, h);
+    this.fx.setSize(w, h);
     let lw = w;
     let lh = h;
     for (let i = 0; i < LEVELS; i++) {
@@ -413,6 +489,13 @@ export class PostFX {
   setRects(a: [number, number, number, number], b: [number, number, number, number]) {
     this.rectA.set(...a);
     this.rectB.set(...b);
+  }
+
+  /** Run the screen-space lighting for a view that has just been drawn into `hdr`. */
+  screenFx(gl: THREE.WebGLRenderer, view: FxView) {
+    if (!this.fxEnabled) return;
+    this.fx.run(gl, this.hdr, view);
+    this.fxRan = true;
   }
 
   /** Bloom and composite the HDR target to the canvas (or `out`). */
@@ -455,6 +538,13 @@ export class PostFX {
     const u = cm.uniforms;
     u.tScene.value = this.hdr.texture;
     u.tBloom.value = this.up[0].texture;
+    u.tFxLight.value = this.fx.lightTexture;
+    u.tFxSsr.value = this.fx.ssr.texture;
+    u.uFxRes.value.set(this.fx.lightWidth, this.fx.lightHeight);
+    u.uFxOn.value = this.fxEnabled && this.fxRan ? 1 : 0;
+    u.uNearFar.value.set(this.fx.near, this.fx.far);
+    u.uAoK.value = this.fx.params.aoStrength;
+    this.fxRan = false;
     u.uBloom.value = p.bloom;
     u.uExposure.value = p.exposure;
     u.uVignette.value = p.vignette;
@@ -496,6 +586,8 @@ export class PostFX {
 
   dispose() {
     this.hdr.dispose();
+    this.depth.dispose();
+    this.fx.dispose();
     for (const t of [...this.down, ...this.up, ...this.hist]) t.dispose();
     this.copyMat.dispose();
     this.downMat.dispose();

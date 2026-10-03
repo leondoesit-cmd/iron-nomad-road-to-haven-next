@@ -10,7 +10,7 @@ import {
   type Stocks,
 } from '../src/data';
 import { Rng } from '../src/core/rng';
-import { canAfford, checkTierUp, newStocks, spend, splitLoot, gain } from '../src/sim/resources';
+import { canAfford, checkTierUp, newStocks, spend, splitLoot, gain, refund } from '../src/sim/resources';
 import {
   applyLoyalty,
   campVerdict,
@@ -40,7 +40,8 @@ describe('data tables', () => {
   });
   it('every leg references only known encounters and route targets', () => {
     for (const l of LEGS.legs) expect(l.sets.length).toBeGreaterThan(3);
-    expect(LEGS.route.next[LEGS.route.start].length).toBe(2);
+    expect(LEGS.route.next.L1.length).toBe(2);
+    expect(LEGS.legs.find((l) => l.id === LEGS.route.start)?.open).toBeTruthy();
   });
   it('has a result string for every encounter choice', () => {
     for (const e of ENCOUNTERS) for (const c of e.choices) expect(t(`enc.${e.id}.${c.id}.result`)).not.toBe(`enc.${e.id}.${c.id}.result`);
@@ -373,5 +374,17 @@ describe('damage model', () => {
   it('collision damage rises with speed and the other body mass', () => {
     expect(collisionDamage(3, 900, 900)).toBe(0);
     expect(collisionDamage(20, 900, 4500)).toBeGreaterThan(collisionDamage(20, 900, 100));
+  });
+
+  it('a failed chance branch still grants its story fragment', () => {
+    const e = { chance: { p: 1, fail: { fragment: true } } };
+    expect(resolveEffects(e, new Rng(1)).fragment).toBe(true);
+  });
+  it('refund undoes a spend', () => {
+    const s = newStocks();
+    s.scrap = 10;
+    expect(spend(s, { scrap: 4 })).toBe(true);
+    refund(s, { scrap: 4 });
+    expect(s.scrap).toBe(10);
   });
 });

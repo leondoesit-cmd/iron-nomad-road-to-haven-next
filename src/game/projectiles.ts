@@ -126,6 +126,12 @@ export class Projectiles {
         ctx.zombies.burnArea(b.x, b.z, b.r, 24, dt, b.owner?.index ?? -1);
         ctx.wildlife.burnArea(b.x, b.z, b.r, 24, dt, b.owner?.index ?? -1);
         ctx.raiders.burnArea(b.x, b.z, b.r, 18, dt);
+        if (b.tick <= 0) {
+          b.tick = 0.5;
+          for (const pl of ctx.players) {
+            if (pl.state === 'foot' && pl.invuln <= 0 && Math.hypot(pl.pos.x - b.x, pl.pos.z - b.z) < b.r) pl.hurt(7, b.x, b.z, 'fire');
+          }
+        }
         for (const v of ctx.vehicles) {
           if (v.faction === 'raider' && Math.hypot(v.position.x - b.x, v.position.z - b.z) < b.r + 1.5) v.takeHit(10 * dt, b.x, b.z, { incendiary: true, silent: true });
         }

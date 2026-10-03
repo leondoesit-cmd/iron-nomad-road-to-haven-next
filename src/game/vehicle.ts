@@ -4,15 +4,18 @@ import { BoatBody, type Chassis } from '../physics/boat';
 import { buildBoatVisual, type BoatVisual } from '../render/boatModels';
 import { boatFx, waterTick } from './waterfx';
 import { applyHit, collisionDamage, facingOf, newHealth, performance, repairStep, tickHazards, type DamageEvent, type VehicleHealth } from '../sim/damage';
-import { effectiveStats, terrainDrag, terrainGrip, type Stats } from '../sim/parts';
+import { effectiveStats, terrainDrag, terrainGrip, type PartItem, type Stats } from '../sim/parts';
 import { fromHealth, toHealth, type VehicleBuild } from '../sim/garage';
+import { stormOilMult } from '../sim/weather';
 import { oilBurn, oilState, oilWear, type OilState } from '../sim/oil';
 import { buildRaiderBuggy, buildVehicleVisual, buildWagon, defaultLook, lookOf, mountsOfChassis, type VehicleVisual } from '../render/vehicleModels';
-import { buildLoad, deckOf, deckRoom, loadCount, loadKey, noLoad, type Load } from '../render/cargoLoad';
+import { buildLoad, deckOf, deckRoom, layoutLoad, loadCount, loadKey, noLoad, type Load, type Placed } from '../render/cargoLoad';
 import { PLAYER_COLORS } from '../render/palette';
 import { shared, disposeTree } from '../render/dispose';
 import { clamp, damp, lerp } from '../core/math';
 import { chassisDef, type VehicleDef } from '../data';
+import { Bodywork } from './bodywork';
+import { CarGlass } from './carGlass';
 import type { Ctx } from './ctx';
 
 /** Neutral vehicles are abandoned cars nobody has claimed: raiders ignore them, and driving one makes it the convoy's. */
@@ -58,6 +61,10 @@ export class Vehicle {
   def: VehicleDef;
   body: Chassis;
   visual: VehicleVisual;
+  /** Crumpling, loose parts, mud and blood, tyre marks. */
+  bodywork: Bodywork;
+  /** The windows: what has cracked or gone, and what breaks them. */
+  glass: CarGlass;
   health: VehicleHealth;
   /** The vehicle's identity and fitted parts. Null for raiders and crew. */
   build: VehicleBuild | null;
@@ -151,6 +158,8 @@ export class Vehicle {
     ctx.vehicleByCollider.set(this.body.collider.handle, this);
     this.hideSeats();
     this.snapshotPrev();
+    this.bodywork = new Bodywork(this);
+    this.glass = new CarGlass(this);
     if (o.hulk) this.makeHulk();
   }
 
@@ -202,10 +211,14 @@ export class Vehicle {
     this.fuel = fuelFrac * this.tankMax;
     const old = this.visual;
     const wasSeated = { d: old.driver?.root.visible, p: old.passenger?.root.visible };
+    this.bodywork.commit();
+    this.bodywork.release();
     this.group.remove(old.root);
     disposeTree(old.root);
     old.dispose();
     this.visual = this.makeVisual(PLAYER_COLORS[Math.max(0, this.ownerIndex)]);
+    this.bodywork.attach();
+    this.glass.bind();
     this.loadMesh = null;
     this.loadSeen = '';
     this.group.add(this.visual.root);
@@ -228,6 +241,22 @@ export class Vehicle {
     if (!b) return;
     fromHealth(b, this.health, this.fuel / Math.max(0.001, this.tankMax));
     if (this.wreck) b.hp = 0.02;
+    this.bodywork.commit();
+  }
+
+  /** A fitted part has come off in a crash: the stats follow it. The model is left alone, it has already lost the part. */
+  fitLost() {
+    const b = this.build;
+    if (!b) return;
+    const hpFrac = this.health.hp / this.health.maxHp;
+    this.stats = effectiveStats(this.def, b.fit);
+    const fresh = toHealth(b);
+    this.health.maxHp = fresh.maxHp;
+    this.health.hp = hpFrac * fresh.maxHp;
+    this.health.armor = fresh.armor;
+    this.health.armorBonus = fresh.armorBonus;
+    this.tankMax = this.stats.tank;
+    this.fuel = Math.min(this.fuel, this.tankMax);
   }
 
   get neutral() {
@@ -288,28 +317,69 @@ export class Vehicle {
     this.engineOn = !this.startFail;
   }
 
-  /** The share of the convoy's spare fuel, oil and parts that rides on this vehicle: handed out one item at a time. */
+  /** What is on this vehicle's deck right now, as last drawn. */
+  load: Load = noLoad();
+
+  /** The convoy's own cars that carry cargo, in a stable order. */
+  private carriers(): Vehicle[] {
+    const carriers = this.ctx.vehicles.filter((q) => q.faction === 'convoy' && q.build && !q.wreck && mountsOfChassis(q.def));
+    carriers.sort((a, b) => a.ownerIndex - b.ownerIndex || a.id - b.id);
+    return carriers;
+  }
+
+  /**
+   * The share of the convoy's spare parts, fuel and oil that rides on this vehicle. A part stowed on a particular car
+   * stays on it; the rest are dealt round the cars with room, one item at a time.
+   */
   private wantedLoad(): Load {
     const load = noLoad();
     if (this.faction !== 'convoy' || !this.build || this.wreck) return load;
     const camp = this.ctx.campaign;
-    const carriers = this.ctx.vehicles.filter((q) => q.faction === 'convoy' && q.build && !q.wreck && mountsOfChassis(q.def));
-    carriers.sort((a, b) => a.ownerIndex - b.ownerIndex || a.id - b.id);
+    const carriers = this.carriers();
     const mine = carriers.indexOf(this);
     if (mine < 0) return load;
-    const items: (keyof Load)[] = [];
-    const add = (kind: keyof Load, n: number) => {
-      for (let i = 0; i < n; i++) items.push(kind);
+    const room = carriers.map((q) => deckRoom(deckOf(mountsOfChassis(q.def)!.m, mountsOfChassis(q.def)!.g0)));
+    const used = carriers.map(() => 0);
+    const mark = (ci: number, add: () => void) => {
+      if (ci === mine) add();
+      used[ci]++;
     };
-    add('crates', Math.min(2, Math.ceil(camp.inventory.length / 6)));
-    add('fuel', Math.min(3, Math.floor(camp.stocks.fuel / 5)));
-    add('oil', camp.items.oil > 0.05 ? Math.min(3, Math.ceil(camp.items.oil / 0.5 - 0.05)) : 0);
-    const anchor = mountsOfChassis(this.def)!;
-    const room = deckRoom(deckOf(anchor.m, anchor.g0));
-    items.forEach((kind, i) => {
-      if (i % carriers.length === mine && loadCount(load) < room) load[kind]++;
+    // Parts first: the ones put on a car stay there.
+    const loose: PartItem[] = [];
+    for (const it of camp.inventory) {
+      const ci = it.on ? carriers.findIndex((q) => q.build!.uid === it.on) : -1;
+      if (ci >= 0 && used[ci] < room[ci]) mark(ci, () => load.parts.push({ uid: it.uid, id: it.id }));
+      else loose.push(it);
+    }
+    let hidden = 0;
+    let turn = 0;
+    for (const it of loose) {
+      let placed = false;
+      for (let k = 0; k < carriers.length && !placed; k++) {
+        const ci = (turn + k) % carriers.length;
+        if (used[ci] >= room[ci]) continue;
+        mark(ci, () => load.parts.push({ uid: it.uid, id: it.id }));
+        turn = ci + 1;
+        placed = true;
+      }
+      if (!placed) hidden++;
+    }
+    // Overflow heaps up in a crate or two on the first car.
+    const crates = Math.min(2, Math.ceil(hidden / 6));
+    if (mine === 0 && crates > 0 && loadCount(load) < room[0]) load.crates = Math.min(crates, room[0] - loadCount(load));
+    const cans: ('fuel' | 'oil')[] = [];
+    for (let i = 0; i < Math.min(3, Math.floor(camp.stocks.fuel / 5)); i++) cans.push('fuel');
+    for (let i = 0; i < (camp.items.oil > 0.05 ? Math.min(3, Math.ceil(camp.items.oil / 0.5 - 0.05)) : 0); i++) cans.push('oil');
+    cans.forEach((kind, i) => {
+      if (i % carriers.length === mine && loadCount(load) < room[mine]) load[kind]++;
     });
     return load;
+  }
+
+  /** Redraw the deck now rather than at the next half-second tick: used when something was just taken off or put on. */
+  refreshLoadNow() {
+    this.loadSeen = '';
+    this.refreshLoad();
   }
 
   private refreshLoad() {
@@ -317,6 +387,7 @@ export class Vehicle {
     const key = loadKey(want);
     if (key === this.loadSeen) return;
     this.loadSeen = key;
+    this.load = want;
     if (this.loadMesh) {
       this.visual.inner.remove(this.loadMesh);
       this.loadMesh = null;
@@ -330,6 +401,28 @@ export class Vehicle {
     }
   }
 
+  /** Everything on the deck with its place in the world, for lifting it off and for flying things onto it. */
+  deckSpots(): (Placed & { world: THREE.Vector3 })[] {
+    const anchor = mountsOfChassis(this.def);
+    if (!anchor || this.faction !== 'convoy' || !this.build) return [];
+    const inner = this.visual.inner;
+    inner.updateWorldMatrix(true, false);
+    return layoutLoad(deckOf(anchor.m, anchor.g0), this.load).map((t) => ({ ...t, world: inner.localToWorld(new THREE.Vector3(t.x, t.y + 0.15, t.z)) }));
+  }
+
+  /** The world position the next thing put on the deck will land on. */
+  nextDeckSpot(extra: Partial<Load> & { part?: { uid: string; id: string } }): THREE.Vector3 | null {
+    const anchor = mountsOfChassis(this.def);
+    if (!anchor) return null;
+    const next: Load = { ...this.load, parts: [...this.load.parts], ...extra, part: undefined } as Load;
+    if (extra.part) next.parts.push(extra.part);
+    const placed = layoutLoad(deckOf(anchor.m, anchor.g0), next);
+    const at = extra.part ? placed.find((t) => t.uid === extra.part!.uid) : placed[placed.length - 1];
+    if (!at) return null;
+    this.visual.inner.updateWorldMatrix(true, false);
+    return this.visual.inner.localToWorld(new THREE.Vector3(at.x, at.y + 0.15, at.z));
+  }
+
   /** Tell the driver as the sump runs down, once per threshold, and again if it is topped up and falls back. */
   private oilWatch() {
     const st = oilState(this.health.comp.oil);
@@ -338,7 +431,10 @@ export class Vehicle {
     this.oilSeen = st;
     if (!worse || !this.driver?.isPlayer || this.faction !== 'convoy') return;
     if (st === 'low') this.ctx.notify(this.driver.index, 'Oil is low: top up with a can', 'warn');
-    else this.ctx.notify(this.driver.index, 'Out of oil: the engine is wrecking itself!', 'bad');
+    else {
+      this.ctx.notify(this.driver.index, 'Out of oil: the engine is wrecking itself!', 'bad');
+      this.ctx.radio("Engine sumps dry, we're seizing up!");
+    }
   }
 
   /** Current Signature: engines are Noise in cities and Dust on the open road. */
@@ -429,7 +525,7 @@ export class Vehicle {
     // Oil: burnt by the miles. Short of it the engine labours; run dry and it grinds itself to pieces.
     if (this.faction === 'convoy' && this.engineOn && !this.wreck && this.def.physics.kind !== 'boat') {
       const c = this.health.comp;
-      c.oil = Math.max(0, c.oil - oilBurn(Math.abs(this.speed) * dt, dt, c.engine, ctx.campaign.difficulty.drain));
+      c.oil = Math.max(0, c.oil - oilBurn(Math.abs(this.speed) * dt, dt, c.engine, ctx.campaign.difficulty.drain) * stormOilMult(ctx.storm));
       const wear = oilWear(c.oil, dt) * (Math.abs(this.speed) > 1 ? 1 : 0.4);
       if (wear > 0) c.engine = Math.max(0, c.engine - wear);
     }
@@ -446,8 +542,9 @@ export class Vehicle {
     // Collisions: damage by relative speed and mass ratio.
     if (this.body.impact > 0 && !this.wreck) {
       const dmg = collisionDamage(this.body.impact, this.mass, 3500);
+      this.glass.crash(this.body.impact, this.body.impactDirX, this.body.impactDirZ);
       if (dmg > 0.5) {
-        this.takeHit(dmg, this.position.x - this.body.impactDirX, this.position.z - this.body.impactDirZ, { ram: true, silent: true });
+        this.takeHit(dmg, this.position.x + this.body.impactDirX, this.position.z + this.body.impactDirZ, { ram: true, silent: true });
         if (this.stats.ram > 0 && this.faction === 'convoy') this.rammedOthers(dmg);
         if (this.driver?.isPlayer) {
           ctx.input.rumble(this.driver.index, clamp(this.body.impact / 14, 0.2, 1), 0.6, 160);
@@ -458,6 +555,8 @@ export class Vehicle {
         ctx.fx.spark(this.position.x, this.position.y, this.position.z, 5, 5);
       }
     }
+
+    this.bodywork.tick(dt);
 
     // Signature at 3 Hz.
     this.sigT -= dt;
@@ -543,6 +642,7 @@ export class Vehicle {
     const base = isT2 ? 14 : front ? 15 : 18;
     ctx.combat.shoot(ox, oy, oz, dx, dy, dz, {
       side: this.faction === 'raider' ? 'raider' : 'convoy',
+      ammo: this.faction === 'raider' ? 'raider' : 'turret',
       ownVehicle: this,
       damage: base * dmgMult,
       spread: isT2 ? 0.03 : front ? 0.026 : 0.022,
@@ -555,11 +655,13 @@ export class Vehicle {
     });
     ctx.fx.flash(ox, oy, oz, 1.1);
     ctx.audio.play('mg', ox, oz, 0.7);
+    // Belt-fed brass spills over the side of a convoy gun.
+    if (this.faction !== 'raider' && Math.random() < 0.6) ctx.gore.eject('rifle', ox - dx * 0.4, oy - 0.1, oz - dz * 0.4, Math.atan2(dx, dz), this.body.body.linvel().x, this.body.body.linvel().z);
     return true;
   }
 
   /** Apply damage from a source at (srcX, srcZ). Returns true if this killed the vehicle. */
-  takeHit(raw: number, srcX: number, srcZ: number, o: { incendiary?: boolean; ram?: boolean; pierce?: number; silent?: boolean; wheel?: number } = {}): boolean {
+  takeHit(raw: number, srcX: number, srcZ: number, o: { incendiary?: boolean; ram?: boolean; pierce?: number; silent?: boolean; wheel?: number; at?: [number, number, number]; blast?: number; smash?: boolean } = {}): boolean {
     if (this.wreck) return false;
     const ctx = this.ctx;
     const dir = Math.atan2(srcX - this.position.x, srcZ - this.position.z);
@@ -570,6 +672,9 @@ export class Vehicle {
     const res = applyHit(h, raw, { facing, roll: () => ctx.rng.next(), incendiary: o.incendiary, ram: o.ram, wheel: o.wheel });
     h.armor = savedArmor;
     this.sinceHit = 0;
+    // Crashes dent the body where the physics found the contact; everything else is shaped here.
+    if (!o.ram || o.blast !== undefined || o.smash) this.bodywork.hit({ dmg: res.dealt, srcX, srcZ, at: o.at, blast: o.blast, smash: o.smash });
+    if (o.blast !== undefined) this.glass.blast(o.blast);
     this.report(res.events);
     if (this.driver?.isPlayer && !o.silent) ctx.input.rumble(this.driver.index, 0.4, 0.5, 90);
     if (this.passenger && !o.silent) ctx.input.rumble(this.passenger.index, 0.25, 0.4, 70);
@@ -602,6 +707,8 @@ export class Vehicle {
   }
 
   private destroyNow() {
+    this.glass.shatterAll();
+    this.bodywork.wreck();
     this.makeHulk();
     this.burnT = 30;
     const p = this.position;
@@ -613,6 +720,7 @@ export class Vehicle {
 
   /** Burnt out: charred, dead, and good for nothing but parts. */
   makeHulk() {
+    this.glass.shatterAll(true);
     this.wreck = true;
     this.engineOn = false;
     this.health.destroyed = true;
@@ -707,6 +815,7 @@ export class Vehicle {
       this.fireFx += dt;
     }
     v.setHeadlights(this.lights && !this.wreck);
+    this.bodywork.frame(dt);
     (v as BoatVisual).animate?.(dt, this.engineOn ? this.lastIntent.throttle : 0, sp);
     // Gun pivot follows the aim point.
     if (v.gun && this.gunAim) {
@@ -727,6 +836,7 @@ export class Vehicle {
   }
 
   destroy() {
+    this.bodywork.dispose();
     this.ctx.vehicleByCollider.delete(this.body.collider.handle);
     this.body.destroy();
     disposeTree(this.group);

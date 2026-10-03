@@ -6,6 +6,7 @@ import { Hud } from '../ui/hud';
 import { FocusUI } from '../ui/focus';
 import { Campaign } from './campaign';
 import { LegScene } from './legScene';
+import { WorldMemory, type WorldPose } from './worldMemory';
 import { Scene, type SceneResult, type SceneServices } from './scene';
 import { initPhysics, FIXED_STEP } from '../physics/physics';
 import { LEGS, legById, t, validateData } from '../data';
@@ -193,7 +194,12 @@ export class Game {
     this.overlays.pauseFocus.seats = n;
   }
 
+  private attractWorld: WorldMemory | null = null;
+  /** The open world's memory: kept from one dawn to the next, saved at each Ledger. */
+  world: WorldMemory | null = null;
+
   newCampaign() {
+    this.world = null;
     this.setSolo(this.solo);
     this.campaign = new Campaign([this.overlays.callsign(0), this.overlays.callsign(1)], this.solo);
     this.campaign.seed = (Math.random() * 1e6) | 0;
@@ -211,6 +217,7 @@ export class Game {
     this.setSolo(c.solo);
     this.input.autoJoinKeyboard();
     this.campaign = c;
+    this.world = c.worldSave ? WorldMemory.restore(c.worldSave) : null;
     // Resume at the Ledger that was saved at dawn.
     this.beginLedger();
   }
@@ -231,13 +238,14 @@ export class Game {
     }
   }
 
-  beginLeg(legId: string) {
+  beginLeg(legId: string, start?: WorldPose) {
     this.disposeScene();
     this.overlays.hideAll();
     this.campaign.legId = legId;
     const leg = legById(legId);
     this.R.resize();
-    const sc = new LegScene(this.services(), leg);
+    if (leg.open) this.world ??= new WorldMemory();
+    const sc = new LegScene(this.services(), leg, leg.open ? { memory: this.world!, start } : {});
     sc.onResult = (r) => this.onSceneResult(r);
     sc.openWorkbench = (p, v) => this.openWorkbench(p, v);
     sc.openInventory = (p) => this.openInventory(p);
@@ -246,7 +254,7 @@ export class Game {
     this.paused = false;
     this.hud.setVisible(true);
     this.focus.active = false;
-    this.hud.showBanner(leg.name.toUpperCase(), leg.subtitle, 5);
+    this.hud.showBanner(leg.name.toUpperCase(), start ? `Day ${this.campaign.day}` : leg.subtitle, 5);
     this.audio.setMusic('travel');
     this.startLock = 0.5;
   }
@@ -300,10 +308,14 @@ export class Game {
       });
       return;
     }
-    if (r.type === 'dusk' && this.scene instanceof LegScene) {
+    if ((r.type === 'dusk' || r.type === 'haven') && this.scene instanceof LegScene) {
       this.phase = 'vote';
-      this.scene.paused = true;
-      this.overlays.showCampDecision(this.scene.leg, (siteId, hot) => this.beginCamp(siteId, hot));
+      const sc = this.scene;
+      sc.paused = true;
+      if (sc.leg.open) {
+        const hub = sc.hubNearby();
+        this.overlays.showCampDecision(sc.leg, (siteId, hot) => this.beginCamp(siteId, hot), sc.campOptions(), hub);
+      } else this.overlays.showCampDecision(sc.leg, (siteId, hot) => this.beginCamp(siteId, hot));
       return;
     }
     if (r.type === 'campDone') this.afterCamp();
@@ -313,6 +325,11 @@ export class Game {
     const leg = this.scene instanceof LegScene ? this.scene.leg : legById(this.campaign.legId);
     // Carry over vehicle HP before the leg is torn down.
     this.snapshotVehicles();
+    if (this.scene instanceof LegScene && leg.open) {
+      // The world remembers the day; the Ledger knows which hub, if any, the convoy is camped at.
+      this.campaign.hub = this.scene.hubNearby();
+      if (this.world) this.scene.capture(this.world);
+    } else this.campaign.hub = leg.endHub ?? null;
     this.disposeScene();
     this.overlays.hideAll();
     this.campaign.hotCamp = hot;
@@ -396,14 +413,18 @@ export class Game {
     }
     camp.enterLedgerMode();
     this.hud.setVisible(false);
+    this.campaign.worldSave = this.world ? this.world.serialize() : undefined;
     saveCampaign(this.campaign);
-    this.overlays.showLedger(camp, (nextLegId) => {
-      this.campaign.history.push(this.campaign.legId);
-      this.campaign.legId = nextLegId;
-      this.campaign.day++;
-      this.hud.setVisible(true);
-      this.beginLeg(nextLegId);
-    });
+    this.overlays.showLedger(camp, (nextLegId) => this.rollOut(nextLegId));
+  }
+
+  /** Leave the Ledger for the next morning. In the open world that is wherever the convoy slept. */
+  rollOut(nextLegId: string) {
+    this.campaign.history.push(this.campaign.legId);
+    this.campaign.legId = nextLegId;
+    this.campaign.day++;
+    this.hud.setVisible(true);
+    this.beginLeg(nextLegId, legById(nextLegId).open ? (this.world?.camp ?? undefined) : undefined);
   }
 
   fail(reason: string) {
@@ -440,7 +461,9 @@ export class Game {
     const svc = this.services();
     svc.onRadio = () => {};
     svc.onTip = () => {};
-    const sc = new LegScene(svc, legById('L1'));
+    // The demo drives the open world's highway; one shared layout, so the demo can loop without rebuilding the map.
+    this.attractWorld ??= new WorldMemory();
+    const sc = new LegScene(svc, legById('W'), { memory: this.attractWorld });
     sc.onResult = () => {};
     sc.pendingResult = true; // no encounters or camp decisions in the demo
     sc.players[0].autopilot = { speed: 17 };
@@ -467,7 +490,7 @@ export class Game {
   // ------------------------------------------------------------------ loop
 
   private frame(now: number) {
-    const raw = Math.min(0.25, (now - this.last) / 1000);
+    const raw = Math.min(0.25, Math.max(0.0001, (now - this.last) / 1000));
     this.last = now;
     this.frameMs = raw * 1000;
     this.fpsEma += (1 / Math.max(raw, 1e-4) - this.fpsEma) * 0.05;

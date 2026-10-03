@@ -293,7 +293,7 @@ describe('keyboard and mouse bindings', () => {
     win.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { code: 'KeyJ' }));
     im.pollJoin();
     expect(im.slots[0]).toEqual({ kind: 'kb', set: 1 });
-    win.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { code: 'Tab' }));
+    win.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { code: 'Digit3' }));
     im.sample(DT);
     expect(im.intents[0].held & (1 << Btn.Back)).not.toBe(0);
   });

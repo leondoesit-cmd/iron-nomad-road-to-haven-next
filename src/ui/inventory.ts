@@ -14,7 +14,10 @@ import {
   giveItem,
   itemAt,
   moveBelt,
+  repairItem,
+  repairPrice,
   scrapOf,
+  sortBag,
   statsOf,
   takeFromBag,
   unequipBelt,
@@ -22,20 +25,21 @@ import {
   type GearItem,
   type Result,
 } from '../sim/gear';
-import { UTILITIES, utilityName, type Player } from '../game/player';
+import { MEDKIT_HEAL, UTILITIES, utilityName, type Player } from '../game/player';
+import { BLEED, STAMINA, wearLabel, wearOf } from '../sim/vitals';
 import type { Game } from '../game/game';
 import type { Campaign } from '../game/campaign';
 import type { Slot } from '../input/input';
 import { btnLabel, escapeHtml } from './hud';
 import type { FocusItem } from './focus';
+import { dollSvg, gearIcon, itemIcon, slotGlyph } from './gearIcons';
 
 type Act = (player: number) => void;
 
 const KIND_LABEL: Record<GearDef['kind'], string> = { wear: 'Worn', gun: 'Firearm', melee: 'Melee', tool: 'Tool' };
 const UTILITY_SHORT: Record<(typeof UTILITIES)[number], string> = { flare: 'Flare', molotov: 'Molotov', charge: 'Charge', horn: 'Horn' };
 
-/** Medkits heal this much when used on yourself from the inventory. */
-export const MEDKIT_HEAL = 60;
+const UTILITY_ICON = { flare: 'flare', molotov: 'molotov', charge: 'charge', horn: 'horn' } as const;
 
 /** What a view needs from whatever hosts it: the pause screen, or the Dawn Ledger's Gear tab. */
 export interface InventoryHost {
@@ -107,14 +111,34 @@ export class InventoryView {
     this.act(r);
   }
 
-  private heal() {
+  private heal(kind: 'medkit' | 'bandage' = 'medkit') {
     const p = this.p!;
-    if (this.c.items.medkit <= 0 || p.hp >= p.maxHp - 0.5) return;
-    this.c.items.medkit--;
-    p.heal(MEDKIT_HEAL);
-    this.msg = `Patched up: +${MEDKIT_HEAL} HP`;
+    if (this.c.items[kind] <= 0 || (p.hp >= p.maxHp - 0.5 && p.bleed.level <= 0)) return;
+    const before = p.hp;
+    // The same rules as the quick belt, minus the busy hands: nobody is shooting at you in here.
+    if (!p.useDressing(kind)) return;
+    p.fireCd = 0;
+    p.meleeCd = 0;
+    this.msg = `${kind === 'medkit' ? 'Patched up' : 'Bandaged'}: +${Math.round(p.hp - before)} HP`;
     this.host.audio.play('confirm');
     this.host.rerender();
+  }
+
+  private repair(uid: string) {
+    const it = findItem(this.loadout, uid);
+    const item = it ? itemAt(this.loadout, it) : null;
+    if (!item) return;
+    const cost = repairPrice(item);
+    if (cost <= 0) return;
+    if (this.c.stocks.scrap < cost) return this.act({ ok: false, reason: `Repairs need ${cost} Scrap` });
+    this.c.stocks.scrap -= cost;
+    repairItem(item);
+    this.act({ ok: true, note: `Repaired the ${gearDef(item.id).name}: -${cost} Scrap` });
+  }
+
+  private sort() {
+    sortBag(this.loadout);
+    this.act({ ok: true, note: 'Bag sorted: guns, blades, tools, then clothes' });
   }
 
   private pickUtility(u: (typeof UTILITIES)[number]) {
@@ -134,41 +158,34 @@ export class InventoryView {
     return this.host.btn(id, inner, act, enabled, cls, title);
   }
 
-  private rarityDot(d: GearDef) {
-    return `<i class="pip r${d.rarity}">${'◆'.repeat(d.rarity)}</i>`;
-  }
-
   /** The name of a button as this person's own controller or keyboard calls it. */
   private key(btn: string): string {
     return btnLabel(this.host.slot(this.p!.index), btn);
   }
 
-  /** One short line of what an item does, for the small buttons. */
-  private brief(d: GearDef): string {
-    if (d.gun) return `${d.gun.pellets && d.gun.pellets > 1 ? `${d.gun.dmg}×${d.gun.pellets}` : d.gun.dmg} dmg · ${d.gun.mag} rds`;
-    if (d.melee) return `${d.melee.dmg} dmg`;
-    if (d.tool) return 'tool';
-    const s = describeStats(d.stats)[0];
-    return s ? s.text : '—';
-  }
-
-  private itemBtn(zone: 'worn' | 'belt' | 'bag', key: string | number, it: GearItem | null, label: string, held = false): string {
+  /** One square of the grid: the item's picture, a caption, and a rarity-coloured edge. Empty squares show what goes there. */
+  private itemBtn(zone: 'worn' | 'belt' | 'bag', key: string | number, it: GearItem | null, label: string, held = false, ghost: WearSlot | null = null): string {
     const id = `${zone}:${key}`;
-    if (!it) return `<button class="slotbtn empty" disabled data-slot="${id}"><small>${label}</small><b>—</b></button>`;
+    if (!it) {
+      const g = ghost ? slotGlyph(ghost) : '';
+      return `<button class="tile empty ${zone}" disabled data-slot="${id}"><span class="ic">${g}</span><small>${label}</small></button>`;
+    }
     const d = gearDef(it.id);
     const on = this.sel === it.uid ? ' sel' : '';
     const hl = held ? ' held' : '';
-    const mag = d.gun && it.mag !== undefined ? ` <em>${it.mag}/${d.gun.mag}</em>` : '';
+    const mag = d.gun && it.mag !== undefined ? `<em class="cnt">${it.mag}</em>` : '';
+    const wear = (d.gun || d.melee) && wearOf(it.cond) < 0.995 ? `<u class="wear ${wearOf(it.cond) < 0.3 ? 'bad' : wearOf(it.cond) < 0.6 ? 'mid' : ''}" style="--w:${Math.round(wearOf(it.cond) * 100)}%"></u>` : '';
     return this.btn(
       id,
-      `<small>${label} ${this.rarityDot(d)}</small><b>${escapeHtml(d.name)}${mag}</b><em>${escapeHtml(this.brief(d))}</em>`,
+      `<span class="ic">${gearIcon(d, this.p!.index)}</span><small>${label}</small>${mag}${wear}<i class="pip r${d.rarity}">${'◆'.repeat(d.rarity)}</i>`,
       () => {
         this.sel = it.uid;
         this.msg = '';
         this.host.rerender();
       },
       true,
-      `slotbtn r${d.rarity}${on}${hl}`,
+      `tile r${d.rarity} ${zone}${on}${hl}`,
+      d.name,
     );
   }
 
@@ -178,20 +195,32 @@ export class InventoryView {
     const L = this.loadout;
     const stats = statsOf(L);
 
-    // ---- wearing
-    const wear = WEAR_SLOTS.map((slot) => this.itemBtn('worn', slot, L.worn[slot] ?? null, GEAR.labels[slot], false)).join('');
+    // ---- wearing: the survivor in the middle, a square for each place on the body around them
+    const slotTile = (slot: WearSlot) => this.itemBtn('worn', slot, L.worn[slot] ?? null, GEAR.labels[slot], false, slot);
+    const doll = `<div class="doll">
+        <div class="dollcol">${(['head', 'body', 'hands', 'feet'] as const).map(slotTile).join('')}</div>
+        <div class="dollfig">${dollSvg(L.worn, p.index)}</div>
+        <div class="dollcol">${(['face', 'back', 'legs'] as const).map(slotTile).join('')}</div>
+      </div>`;
 
     // ---- belt and utility
-    const belt = Array.from({ length: BELT_SIZE }, (_, i) => this.itemBtn('belt', i, L.belt[i] ?? null, `${i + 1}`, L.sel === i)).join('');
+    const belt = Array.from({ length: BELT_SIZE }, (_, i) => {
+      const it = L.belt[i] ?? null;
+      const t = this.itemBtn('belt', i, it, it ? gearDef(it.id).short ?? gearDef(it.id).name : 'Free', L.sel === i);
+      return t.replace('class="', `data-n="${i + 1}" class="`);
+    }).join('');
     const util = UTILITIES.map((u) => {
       const n = u === 'horn' ? '∞' : String(this.c.items[u]);
-      return this.btn(`util:${u}`, `${UTILITY_SHORT[u]} <em>${n}</em>`, () => this.pickUtility(u), true, `chipbtn${p.utility === u ? ' on' : ''}`);
+      return this.btn(`util:${u}`, `<span class="ic">${itemIcon(UTILITY_ICON[u])}</span><small>${UTILITY_SHORT[u]}</small><em class="cnt">${n}</em>`, () => this.pickUtility(u), true, `tile util${p.utility === u ? ' held' : ''}`, UTILITY_SHORT[u]);
     }).join('');
 
     // ---- bag
     const cap = bagCap(L);
     const cells: string[] = [];
-    for (let i = 0; i < Math.max(cap, L.bag.length); i++) cells.push(this.itemBtn('bag', L.bag[i]?.uid ?? `e${i}`, L.bag[i] ?? null, i < cap ? 'Bag' : 'Over'));
+    for (let i = 0; i < Math.max(cap, L.bag.length); i++) {
+      const it = L.bag[i] ?? null;
+      cells.push(this.itemBtn('bag', it?.uid ?? `e${i}`, it, it ? gearDef(it.id).short ?? gearDef(it.id).name : i < cap ? '' : 'Over'));
+    }
     const over = L.bag.length > cap ? ' bad' : '';
 
     // ---- effects, in words
@@ -199,7 +228,7 @@ export class InventoryView {
     const pc = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
     const add = (label: string, v: number, goodWhenHigh: boolean) => {
       if (Math.abs(v) < 0.005) return;
-      eff.push(`<span class="${(v > 0) === goodWhenHigh ? 'good' : 'badc'}">${label} ${pc(v)}</span>`);
+      eff.push(`<span class="pill ${(v > 0) === goodWhenHigh ? 'good' : 'badc'}">${label} ${pc(v)}</span>`);
     };
     add('Armour', stats.armor, true);
     add('Spore guard', stats.spore, true);
@@ -214,15 +243,16 @@ export class InventoryView {
     return `
         <section class="invcol">
           <h3>Wearing</h3>
-          <div class="invlist">${wear}</div>
-          <div class="effects">${eff.length ? eff.join(' · ') : '<span class="mutedtxt">No bonuses or penalties</span>'}</div>
+          ${doll}
+          <div class="effects">${eff.length ? eff.join('') : '<span class="mutedtxt">No bonuses or penalties</span>'}</div>
         </section>
         <section class="invcol">
           <h3>In hand <small>${escapeHtml(this.key('LB'))} swaps</small></h3>
           <div class="invbelt">${belt}</div>
-          <div class="chips">${util}</div>
-          <h3>Bag <small class="${over}">${L.bag.length}/${cap}</small></h3>
+          <div class="invutil">${util}</div>
+          <h3>Bag <small class="${over}">${L.bag.length}/${cap}</small>${this.btn('sortbag', 'Sort', () => this.sort(), L.bag.length > 1, 'chipbtn sortbtn', 'Guns, blades, tools, then clothes')}</h3>
           <div class="invbag">${cells.join('')}</div>
+          <div class="invsupply">${this.supplyHtml()}</div>
         </section>
         <section class="invcol detail">${this.detailHtml()}</section>`;
   }
@@ -230,9 +260,28 @@ export class InventoryView {
   /** The medkit button, for the footer. */
   footHtml(): string {
     const p = this.p!;
-    const hurt = p.hp < p.maxHp - 0.5;
+    const hurt = p.hp < p.maxHp - 0.5 || p.bleed.level > 0;
     const meds = this.c.items.medkit;
-    return this.btn('heal', `Medkit <em>×${meds}</em>`, () => this.heal(), meds > 0 && hurt, '', hurt ? (meds > 0 ? `Patch yourself up: +${MEDKIT_HEAL} HP` : 'No medkits: craft some at camp') : 'You are not hurt');
+    const bands = this.c.items.bandage;
+    const bandage = this.btn('heal-b', `<span class="mini">${itemIcon('medkit')}</span>Bandage <em>×${bands}</em>`, () => this.heal('bandage'), bands > 0 && hurt, '', hurt ? (bands > 0 ? `Stops bleeding, +${BLEED.bandageHeal} HP` : 'No bandages: craft some at camp') : 'You are not hurt');
+    const kit = this.btn('heal', `<span class="mini">${itemIcon('medkit')}</span>Medkit <em>×${meds}</em>`, () => this.heal('medkit'), meds > 0 && hurt, '', hurt ? (meds > 0 ? `Patch yourself up: +${MEDKIT_HEAL} HP and stop any bleeding` : 'No medkits: craft some at camp') : 'You are not hurt');
+    return bandage + kit;
+  }
+
+  /** Ammunition, dressings and how the body is doing: the numbers a fight turns on. */
+  private supplyHtml(): string {
+    const p = this.p!;
+    const it = this.c.items;
+    const chip = (label: string, v: string, cls = '') => `<span class="pill ${cls}">${label} ${v}</span>`;
+    const wounds = p.bleed.level > 0 ? chip('Bleeding', `×${p.bleed.level}`, 'badc') : '';
+    return [
+      chip('Rounds', String(this.c.ammo), this.c.ammo < 20 ? 'badc' : 'good'),
+      chip('Bandages', String(it.bandage), it.bandage ? 'good' : 'badc'),
+      chip('Medkits', String(it.medkit), it.medkit ? 'good' : 'badc'),
+      chip('Health', `${Math.round(p.hp)}/${p.maxHp}`, p.hp < p.maxHp * 0.5 ? 'badc' : 'good'),
+      chip('Wind', `${Math.round((p.stamina.value / STAMINA.max) * 100)}%`, p.stamina.winded ? 'badc' : 'good'),
+      wounds,
+    ].join('');
   }
 
   /** The right-hand column: what the selected item is, how it compares with what is worn, and what can be done with it. */
@@ -246,11 +295,15 @@ export class InventoryView {
     }
     const d = gearDef(it.id);
     const lines: string[] = [];
-    lines.push(`<h3 class="rname r${d.rarity}">${escapeHtml(d.name)}</h3>`);
-    lines.push(`<div class="sub2">${RARITY_NAMES[d.rarity].toUpperCase()} · ${d.slot ? GEAR.labels[d.slot].toUpperCase() : KIND_LABEL[d.kind].toUpperCase()}${spot.zone === 'bag' ? '' : ' · ' + (spot.zone === 'worn' ? 'WORN' : 'ON THE BELT')}</div>`);
+    lines.push(`<div class="bigcard r${d.rarity}"><div class="bigic">${gearIcon(d, p.index)}</div><div><h3 class="rname r${d.rarity}">${escapeHtml(d.name)}</h3>`);
+    lines.push(`<div class="sub2">${RARITY_NAMES[d.rarity].toUpperCase()} · ${d.slot ? GEAR.labels[d.slot].toUpperCase() : KIND_LABEL[d.kind].toUpperCase()}${spot.zone === 'bag' ? '' : ' · ' + (spot.zone === 'worn' ? 'WORN' : 'ON THE BELT')}</div></div></div>`);
     lines.push(`<p class="blurb">${escapeHtml(d.blurb)}</p>`);
     for (const l of describeStats(d.stats)) lines.push(`<div class="stat ${l.good ? 'good' : 'badc'}">${escapeHtml(l.text)}</div>`);
     for (const l of describeWeapon(d)) lines.push(`<div class="stat">${escapeHtml(l)}</div>`);
+    if (d.gun || d.melee) {
+      const c = wearOf(it.cond);
+      lines.push(`<div class="stat ${c >= 0.6 ? 'good' : 'badc'}">${wearLabel(it.cond)} · ${Math.round(c * 100)}% condition${c < 0.3 && d.gun ? ' · jams' : c < 0.6 ? (d.gun ? ' · loose spread' : ' · dull edge') : ''}</div>`);
+    }
     // Against what is on the body in that slot already.
     if (spot.zone === 'bag' && d.slot) {
       const cur = L.worn[d.slot];
@@ -261,6 +314,8 @@ export class InventoryView {
     }
 
     const acts: string[] = [];
+    const fix = repairPrice(it);
+    if (fix > 0) acts.push(this.btn('a-repair', `Repair <em>${fix} Scrap</em>`, () => this.repair(it.uid), this.c.stocks.scrap >= fix, '', this.c.stocks.scrap >= fix ? 'Back to like-new' : `You have ${Math.floor(this.c.stocks.scrap)} Scrap`));
     if (spot.zone === 'bag') {
       if (d.kind === 'wear') acts.push(this.btn('a-equip', `Wear it`, () => this.act(equipFromBag(L, it.uid))));
       else {
@@ -348,6 +403,7 @@ export class InventoryScreen implements InventoryHost {
     f.onCancel = () => this.close();
     this.prevTick = f.onTick;
     f.onTick = (input) => {
+      if (wasPressed(input.intents[p.index], Btn.Inventory)) return this.close();
       if (wasPressed(input.intents[p.index], Btn.X)) this.view.quick(f.items[f.cursor[p.index]]?.el.dataset.fid ?? '');
     };
     this.render();

@@ -25,6 +25,20 @@ export interface DriveEnv {
   surface?: (x: number, z: number) => { grip: number; drag: number };
 }
 
+/** A point where something presses on the chassis, in the vehicle's frame. */
+export interface Contact {
+  x: number;
+  y: number;
+  z: number;
+  /** Unit normal, pointing out of the chassis toward what it touches. */
+  nx: number;
+  ny: number;
+  nz: number;
+  impulse: number;
+  /** Rapier handle of the collider that was hit. */
+  other: number;
+}
+
 export const defaultEnv = (): DriveEnv => ({ power: 1, grip: 1, topSpeedMult: 1, forceMult: 1, travelMult: 1, engineOn: true });
 
 export function rotateByQuat(q: { x: number; y: number; z: number; w: number }, vx: number, vy: number, vz: number): [number, number, number] {
@@ -56,6 +70,11 @@ export class VehicleBody {
   impactDirX = 0;
   impactDirZ = 0;
   private prevVel = { x: 0, y: 0, z: 0 };
+  private prevSpin = { x: 0, y: 0, z: 0 };
+  /** This step's change of velocity (world, m/s) then of spin (world, rad/s): what the bolted-on parts feel. */
+  shock = [0, 0, 0, 0, 0, 0];
+  /** Spin right now (world, rad/s). */
+  spin: [number, number, number] = [0, 0, 0];
   grounded = 0;
   flipTimer = 0;
   private tmpV = { x: 0, y: 0, z: 0 };
@@ -172,9 +191,14 @@ export class VehicleBody {
     const gripLock = Math.atan((this.wheelbase * aLat) / Math.max(av * av, 9));
     const lock = Math.min(this.maxSteer, gripLock);
     const target = -input.steer * lock;
-    this.steerAngle = damp(this.steerAngle, target, p.wheelCount === 2 ? 11 : 9, dt);
+    // The wheel comes back to centre faster than it goes over, so a tap on the stick is a nudge and not a lurch.
+    const returning = Math.abs(target) < Math.abs(this.steerAngle) || target * this.steerAngle < 0;
+    this.steerAngle = damp(this.steerAngle, target, (p.wheelCount === 2 ? 11 : 9) * (returning ? 1.5 : 1), dt);
     // Positive wheel angle turns left (yaw increases), so the target yaw rate has the same sign.
     this.yawTarget = (this.speed * Math.tan(this.steerAngle)) / this.wheelbase;
+    // Handbrake with the wheel over: the stability assist is told to want a much tighter turn, so the tail comes round
+    // quickly and the yaw cap below is what keeps it a slide rather than a spin.
+    if (input.handbrake && p.wheelCount !== 2) this.yawTarget *= 2.1;
 
     let force = 0;
     let decel = 0; // m/s^2 applied against the direction of travel
@@ -206,7 +230,7 @@ export class VehicleBody {
         if (cp) sg = env.surface(cp.x, cp.z).grip;
       }
       let slip = this.baseSlip * env.grip * sg * (flat ? 0.45 : 1);
-      if (handbrake && this.rear[i]) slip *= 0.42; // lets the tail step out
+      if (handbrake && this.rear[i]) slip *= 0.55; // lets the tail step out
       this.ctl.setWheelFrictionSlip(i, slip);
       this.ctl.setWheelMaxSuspensionTravel(i, p.suspension.travel * env.travelMult);
     }
@@ -237,6 +261,30 @@ export class VehicleBody {
       const yawRate = w.x * up[0] + w.y * up[1] + w.z * up[2];
       const k = clamp(this.yawTarget - yawRate, -3, 3) * Math.min(1, 5 * dt) * 0.55;
       this.body.setAngvel({ x: w.x + up[0] * k, y: w.y + up[1] * k, z: w.z + up[2] * k }, true);
+    }
+
+    // Drift control. The handbrake lets the tail step out, but a slide should be something the driver steers, not a
+    // spin that happens to them: the yaw rate is capped, sideways speed bleeds off (slowly under the handbrake, quickly
+    // once it is released) and the car swings back to where it is going.
+    if (g >= 2 && av > 2) {
+      const f = this.forward();
+      const up = this.up();
+      const lv0 = this.body.linvel();
+      // Sideways direction on the ground: up x forward.
+      const sx = up[1] * f[2] - up[2] * f[1];
+      const sy = up[2] * f[0] - up[0] * f[2];
+      const sz = up[0] * f[1] - up[1] * f[0];
+      const lat = lv0.x * sx + lv0.y * sy + lv0.z * sz;
+      const k = (input.handbrake ? 0.5 : 3.2) * (g / this.wheelCount);
+      const dLat = lat * (Math.exp(-k * dt) - 1);
+      this.body.applyImpulse({ x: sx * dLat * this.mass, y: sy * dLat * this.mass, z: sz * dLat * this.mass }, true);
+      const w = this.body.angvel();
+      const yawRate = w.x * up[0] + w.y * up[1] + w.z * up[2];
+      const cap = Math.max((p.wheelCount === 2 ? 1.9 : 1.7) * (input.handbrake ? 1 : 0.8), Math.abs(this.yawTarget) * 1.1);
+      if (Math.abs(yawRate) > cap) {
+        const d = (Math.sign(yawRate) * cap - yawRate) * Math.min(1, 40 * dt);
+        this.body.setAngvel({ x: w.x + up[0] * d, y: w.y + up[1] * d, z: w.z + up[2] * d }, true);
+      }
     }
 
     // Braking is a controlled deceleration along the direction of travel, scaled by how many wheels are down.
@@ -318,6 +366,44 @@ export class VehicleBody {
     this.prevVel.x = lv.x;
     this.prevVel.y = lv.y;
     this.prevVel.z = lv.z;
+    const w = this.body.angvel();
+    this.shock[0] = dvx;
+    this.shock[1] = dvy;
+    this.shock[2] = dvz;
+    this.shock[3] = w.x - this.prevSpin.x;
+    this.shock[4] = w.y - this.prevSpin.y;
+    this.shock[5] = w.z - this.prevSpin.z;
+    this.prevSpin.x = w.x;
+    this.prevSpin.y = w.y;
+    this.prevSpin.z = w.z;
+    this.spin[0] = w.x;
+    this.spin[1] = w.y;
+    this.spin[2] = w.z;
+  }
+
+  /**
+   * Where the chassis is being pressed right now, from Rapier's narrow phase: the real contact points, in the vehicle's
+   * frame, with the impulse at each. Contacts under the car (the ground carrying it) are left out.
+   */
+  contacts(out: Contact[] = []): Contact[] {
+    out.length = 0;
+    const w = this.P.world;
+    const mine = this.collider.handle;
+    w.narrowPhase.contactPairsWith(mine, (h2) => {
+      w.narrowPhase.contactPair(mine, h2, w.bodies, (m, flipped) => {
+        const n = flipped ? m.localNormal2() : m.localNormal1();
+        // The normal points from shape 1 to shape 2: flipped data describes the pair the other way round.
+        const sgn = flipped ? -1 : 1;
+        if (n.y * sgn < -0.65) return;
+        for (let i = 0; i < m.numContacts(); i++) {
+          if (m.contactDist(i) > 0.03) continue;
+          const p = flipped ? m.localContactPoint2(i) : m.localContactPoint1(i);
+          if (!p) continue;
+          out.push({ x: p.x, y: p.y, z: p.z, nx: n.x * sgn, ny: n.y * sgn, nz: n.z * sgn, impulse: m.contactImpulse(i), other: h2 });
+        }
+      });
+    });
+    return out;
   }
 
   rightSelf() {
@@ -327,6 +413,8 @@ export class VehicleBody {
     this.body.setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.prevVel = { x: 0, y: 0, z: 0 };
+    this.prevSpin = { x: 0, y: 0, z: 0 };
     this.flipTimer = 0;
   }
 
@@ -336,6 +424,7 @@ export class VehicleBody {
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.prevVel = { x: 0, y: 0, z: 0 };
+    this.prevSpin = { x: 0, y: 0, z: 0 };
   }
 
   /** Push horizontally (knockback, ram). */

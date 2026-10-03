@@ -4,7 +4,8 @@ import { FacadeBuilder, facadeMaterial } from './facade';
 import { appendFurn } from './furniture';
 import { kitMaterial } from './materials';
 import { hash2 } from '../core/rng';
-import { levelBase, subtractRects, wallPieces, wellRails, type BuildingPlan, type FloorMat, type Opening, type Rect, type Stair, type Wall, T_EXT } from '../world/interiors';
+import { PaneSet, type PaneSpec } from './glass';
+import { levelBase, paneKey, paneKind, subtractRects, wallPieces, wellRails, type BuildingPlan, type FloorMat, type Opening, type Rect, type Stair, type Wall, T_EXT } from '../world/interiors';
 import type { RuralBuilding } from '../world/settlements';
 
 /**
@@ -29,7 +30,7 @@ const TRIM = [0xd8d4c8, 0xc8c0a8, 0x5a4630, 0x8a8a84];
 const DOOR_COL = [0x6a5238, 0xa89a80, 0x4a5a58, 0x7a3a2c, 0x8a8478];
 
 export interface BuildingGeometry {
-  levels: { shell: THREE.BufferGeometry | null; trim: THREE.BufferGeometry | null; inside: THREE.BufferGeometry | null }[];
+  levels: { shell: THREE.BufferGeometry | null; trim: THREE.BufferGeometry | null; inside: THREE.BufferGeometry | null; panes: PaneSpec[] }[];
   roof: THREE.BufferGeometry | null;
 }
 
@@ -50,13 +51,14 @@ export function buildBuildingGeometry(rb: RuralBuilding): BuildingGeometry {
       const r = plan.rooms.find((q) => q.level === L && x >= q.x0 - 0.2 && x <= q.x1 + 0.2 && z >= q.z0 - 0.2 && z <= q.z1 + 0.2);
       return r ? r.tint : 0xc8c4b8;
     };
-    walls(rb, plan, L, base, fb, trim, roomTint, rnd);
+    const panes: PaneSpec[] = [];
+    walls(rb, plan, L, base, fb, trim, roomTint, rnd, panes);
     floors(plan, L, base, fb, inside, rnd);
     if (L > 0) slab(plan, L, base, inside);
     for (const s of plan.stairs) if (s.level === L) stairs(plan, s, base, inside);
     for (const f of plan.furn) if (f.level === L) appendFurn(inside, f, base + (L === 0 ? 0.012 : 0.004));
     for (const d of plan.debris) if (d.level === L) appendFurn(inside, { kind: 'rubble', level: L, x: d.x, z: d.z, yaw: 0, w: d.r * 2, d: d.r * 2, h: 0.4, seed: Math.floor(d.x * 13 + d.z * 7), solid: false }, base);
-    levels.push({ shell: fb.empty ? null : fb.build(), trim: trim.empty ? null : trim.build(), inside: inside.empty ? null : inside.build() });
+    levels.push({ shell: fb.empty ? null : fb.build(), trim: trim.empty ? null : trim.build(), inside: inside.empty ? null : inside.build(), panes });
   }
   const roof = new MeshBuilder();
   roof.jitter = 0.04;
@@ -67,7 +69,7 @@ export function buildBuildingGeometry(rb: RuralBuilding): BuildingGeometry {
 
 // ------------------------------------------------------------------------------------------ walls
 
-function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, fb: FacadeBuilder, trim: MeshBuilder, roomTint: (x: number, z: number) => number, rnd: (k: number) => number) {
+function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, fb: FacadeBuilder, trim: MeshBuilder, roomTint: (x: number, z: number) => number, rnd: (k: number) => number, panes: PaneSpec[]) {
   const extTint = new THREE.Color(rb.tint);
   const trimCol = TRIM[Math.floor(rnd(1) * TRIM.length)];
   const cap = S.concrete(0xcfc8b8, 0.7);
@@ -103,7 +105,8 @@ function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, f
         else trim.box(w.c + w.out * 0.04, py - 0.18, mid, w.t + 0.08, 0.5, along, S.concrete(0x7c7a74, 0.6));
       }
     }
-    for (const op of w.ops) opening(rb, plan, w, op, base, trim, trimCol, rnd);
+    const wallIndex = plan.walls.indexOf(w);
+    for (const op of w.ops) opening(rb, plan, w, op, base, trim, trimCol, rnd, panes, wallIndex);
   }
 }
 
@@ -123,7 +126,7 @@ function boxAlong(trim: MeshBuilder, w: Wall, u: number, y: number, perp: number
   else trim.box(w.c + perp, y, u, deep, h, along, color, tilt, yaw, 0);
 }
 
-function opening(rb: RuralBuilding, plan: BuildingPlan, w: Wall, op: Opening, base: number, trim: MeshBuilder, trimCol: number, rnd: (k: number) => number) {
+function opening(rb: RuralBuilding, plan: BuildingPlan, w: Wall, op: Opening, base: number, trim: MeshBuilder, trimCol: number, rnd: (k: number) => number, panes: PaneSpec[], wallIndex: number) {
   const width = op.b - op.a;
   const mid = (op.a + op.b) / 2;
   const k = Math.floor((op.a * 7 + w.c * 13) * 10);
@@ -214,7 +217,9 @@ function opening(rb: RuralBuilding, plan: BuildingPlan, w: Wall, op: Opening, ba
   boxAlong(trim, w, mid, base + head - 0.035, 0, width, 0.07, deep, fr);
   boxAlong(trim, w, mid, base + sill + 0.03, 0, width + 0.1, 0.06, w.t + 0.1, S.concrete(0xcfc8b8, 0.6));
   if (op.glass === 'intact') {
-    boxAlong(trim, w, mid, cy, 0, width - 0.1, hgt - 0.1, 0.012, S.glass(0x22323c));
+    // The glass is a pane of its own, so it can crack and go; the bars across it stay in the frame.
+    const out = w.out || 1;
+    panes.push({ key: paneKey(wallIndex, op), kind: paneKind(plan.look, op), c: w.axis === 'x' ? [mid, cy, w.c] : [w.c, cy, mid], n: w.axis === 'x' ? [0, 0, out] : [out, 0, 0], hw: (width - 0.1) / 2, hh: (hgt - 0.1) / 2 });
     if (width > 1.1) boxAlong(trim, w, mid, cy, 0, 0.04, hgt - 0.1, 0.03, fr);
     boxAlong(trim, w, mid, cy, 0, width - 0.1, 0.04, 0.03, fr);
   } else if (op.glass === 'broken') {
@@ -453,6 +458,8 @@ export class BuildingView {
   group = new THREE.Group();
   levels: THREE.Group[] = [];
   insides: THREE.Mesh[] = [];
+  /** The glass of each storey. */
+  paneSets: PaneSet[] = [];
   roof: THREE.Group | null = null;
   private geos: THREE.BufferGeometry[] = [];
   readonly plan: BuildingPlan;
@@ -462,7 +469,16 @@ export class BuildingView {
 
   constructor(public rb: RuralBuilding) {
     this.plan = rb.plan;
-    const g = buildBuildingGeometry(rb);
+    this.build();
+    const p = this.plan;
+    this.cx = (p.x0 + p.x1) / 2;
+    this.cz = (p.z0 + p.z1) / 2;
+    this.radius = Math.hypot(p.x1 - p.x0, p.z1 - p.z0) / 2;
+  }
+
+  /** Make the meshes from the plan as it is now. */
+  private build() {
+    const g = buildBuildingGeometry(this.rb);
     const kit = kitMaterial();
     const facade = facadeMaterial();
     const add = (parent: THREE.Group, geo: THREE.BufferGeometry | null, mat: THREE.Material, inside = false) => {
@@ -479,6 +495,10 @@ export class BuildingView {
       add(lg, lv.shell, facade);
       add(lg, lv.trim, kit);
       add(lg, lv.inside, kit, true);
+      const ps = new PaneSet();
+      for (const sp of lv.panes) ps.add(sp);
+      lg.add(ps.group);
+      this.paneSets.push(ps);
       this.group.add(lg);
       this.levels.push(lg);
     });
@@ -487,10 +507,34 @@ export class BuildingView {
       add(this.roof, g.roof, kit);
       this.group.add(this.roof);
     }
-    const p = this.plan;
-    this.cx = (p.x0 + p.x1) / 2;
-    this.cz = (p.z0 + p.z1) / 2;
-    this.radius = Math.hypot(p.x1 - p.x0, p.z1 - p.z0) / 2;
+  }
+
+  /** The plan changed (a wall was breached): throw the meshes away and build them again. */
+  rebuild() {
+    // Panes that were hurt stay hurt: the plan only knows which have gone.
+    const hurt: [string, number][] = [];
+    for (const ps of this.paneSets) for (const k of ps.keys()) if (ps.stageOf(k) > 0 && ps.stageOf(k) < 3) hurt.push([k, ps.stageOf(k)]);
+    for (const ps of this.paneSets) ps.dispose();
+    this.paneSets = [];
+    for (const g of this.geos) g.dispose();
+    this.geos = [];
+    for (const l of this.levels) l.removeFromParent();
+    this.roof?.removeFromParent();
+    this.levels = [];
+    this.insides = [];
+    this.roof = null;
+    this.build();
+    for (const [k, stage] of hurt) {
+      const set = this.pane(k);
+      const sp = set?.spec(k);
+      if (set && sp) set.crack(k, stage as 1 | 2, [sp.c[0] + (Math.random() - 0.5) * sp.hw, sp.c[1] + (Math.random() - 0.5) * sp.hh, sp.c[2]]);
+    }
+  }
+
+  /** The set of panes a window's pane is in, by its key. */
+  pane(key: string): PaneSet | null {
+    for (const ps of this.paneSets) if (ps.has(key)) return ps;
+    return null;
   }
 
   /** True if a point stands within the walls. */
@@ -518,6 +562,7 @@ export class BuildingView {
   }
 
   dispose() {
+    for (const ps of this.paneSets) ps.dispose();
     for (const g of this.geos) g.dispose();
     this.group.removeFromParent();
   }

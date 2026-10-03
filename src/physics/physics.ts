@@ -29,8 +29,8 @@ export const GROUPS = {
   prop: groups(G.PROP, G.STATIC | G.VEHICLE),
   /** Camp structures (blocking elements). */
   build: groups(G.BUILD, G.VEHICLE | G.PLAYER),
-  /** What wheel rays can hit. */
-  wheelRays: groups(0xffff, G.STATIC | G.BUILD),
+  /** What wheel rays can hit: the ground, built things, and parts that have come off a vehicle and lie in the road. */
+  wheelRays: groups(0xffff, G.STATIC | G.BUILD | G.PROP),
 };
 
 let ready: Promise<void> | null = null;
@@ -102,9 +102,9 @@ export class PhysicsWorld {
   }
 
   /** Cast a ray. Returns distance or null. */
-  raycast(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number, filter = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD), exclude?: RigidBody) {
+  raycast(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number, filter = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD), exclude?: RigidBody, predicate?: (collider: Collider) => boolean) {
     const ray = new RAPIER.Ray({ x: ox, y: oy, z: oz }, { x: dx, y: dy, z: dz });
-    const hit = this.world.castRayAndGetNormal(ray, maxDist, true, undefined, filter, undefined, exclude);
+    const hit = this.world.castRayAndGetNormal(ray, maxDist, true, undefined, filter, undefined, exclude, predicate);
     if (!hit) return null;
     return { toi: hit.timeOfImpact, normal: hit.normal, collider: hit.collider };
   }

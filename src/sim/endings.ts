@@ -106,6 +106,7 @@ export function resolveEffects(e: EncounterEffects, rng: Rng): ResolvedEffects {
     out.loyalty += f.loyalty;
     out.ambush += f.ambush;
     out.zombies += f.zombies;
+    if (f.fragment) out.fragment = true;
   }
   return out;
 }

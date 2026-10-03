@@ -2,6 +2,7 @@ import { PARTS, chassisDef, partDef, type Cost, type PartSlot, type Stocks, type
 import { clamp } from '../core/math';
 import { newHealth, type VehicleHealth } from './damage';
 import { OIL_CRITICAL, OIL_LOW } from './oil';
+import type { BodySave } from './bodywork';
 import { effectiveStats, newUid, slotsOf, type Fit, type PartItem, type Stats } from './parts';
 
 /** The two player colours, repeated here so the sim stays free of render imports. */
@@ -38,6 +39,8 @@ export interface VehicleBuild {
   comp: BuildComp;
   /** Fraction of the tank. */
   fuel: number;
+  /** Dents, loose and missing parts, and the mud and blood on the paint. Absent on a clean, straight vehicle. */
+  body?: BodySave;
 }
 
 export function freshComp(def: VehicleDef): BuildComp {
@@ -108,7 +111,7 @@ export function currentCond(b: VehicleBuild, slot: PartSlot): number {
     case 'armor':
       return b.comp.plates;
     default:
-      return 1;
+      return b.fit[slot]?.cond ?? 1;
   }
 }
 

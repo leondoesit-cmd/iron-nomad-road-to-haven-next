@@ -2,10 +2,13 @@ import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { addKit, fitSignature, type Mounts, type Rig } from './attachments';
 import { addWheels, blank, bodyMat, headlamp, lightMat as lampOn, lightOffMat as lampOff, rider, taillight, wheelSpec, type VehicleVisual } from './vehicleKit';
-import { acquireShell, releaseShell, type Shell } from './shellCache';
+import { acquireShell, hasShell, releaseShell, type Shell } from './shellCache';
 import { heavyGun } from './parts';
 import { partDef, type VehicleDef } from '../data';
+import { partMeta, partTag, type PartRange } from './bodyParts';
+import { PaneSet } from './glass';
 import type { VehicleLook } from './vehicleModels';
+import type { CarPane } from '../sim/glass';
 
 /**
  * Drivable versions of the cars standing along the road: hatchback, sedan, pickup and van.
@@ -59,6 +62,43 @@ function rnd(seed: number) {
     s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
     return s / 4294967296;
   };
+}
+
+/**
+ * The windows of a car as panes of glass, in the chassis frame: the windscreen, the rear window (a van has none), and the
+ * side windows either side of the pillar. They are not part of the shell, so they can crack and go while the body stays.
+ */
+export function carPanes(def: VehicleDef): CarPane[] {
+  const sp = SPECS[def.id as Spec['id']];
+  if (!sp) return [];
+  const g0 = restHeight(def);
+  const hw = sp.W / 2;
+  const out: CarPane[] = [];
+  // A sloped pane laid between two points of the side profile ([y, z]); `out` is +1 for glass that faces forward, -1 backward.
+  const sloped = (key: string, kind: CarPane['kind'], a: [number, number], c: [number, number], width: number, facing: 1 | -1) => {
+    const dy = c[0] - a[0];
+    const dz = c[1] - a[1];
+    const len = Math.hypot(dy, dz);
+    const n: [number, number, number] = facing > 0 ? [0, -dz / len, dy / len] : [0, dz / len, -dy / len];
+    out.push({ key, kind, c: [0, (a[0] + c[0]) / 2 - g0, (a[1] + c[1]) / 2], n, hw: width / 2, hh: len / 2 });
+  };
+  sloped('ws', 'screen', [sp.belt + 0.02, sp.wsBase], [sp.roof - (sp.id === 'van' ? 0.1 : 0), sp.wsTop], sp.W - (sp.id === 'van' ? 0.3 : 0.32), 1);
+  if (sp.id === 'hatch' || sp.id === 'sedan') sloped('rw', 'rear', [sp.belt + 0.06, sp.rwBase], [sp.roof, sp.rwTop], sp.W - 0.38, -1);
+  else if (sp.id === 'pickup') out.push({ key: 'rw', kind: 'rear', c: [0, sp.belt + 0.55 - g0, sp.rwBase], n: [0, 0, -1], hw: (sp.W - 0.7) / 2, hh: 0.18 });
+  // Side windows: between the screen's top and the rear glass's top, split at the centre pillar of a two-door.
+  const y0 = sp.belt + 0.05;
+  const y1 = (sp.id === 'van' ? sp.roof - 0.12 : sp.roof - 0.04);
+  const z1 = sp.wsTop - 0.06;
+  const z0 = sp.id === 'hatch' || sp.id === 'sedan' ? sp.rwTop + 0.06 : sp.rwBase + 0.06;
+  const split = sp.id === 'hatch' ? -0.3 : sp.id === 'sedan' ? -0.34 : null;
+  const runs: [number, number][] = split === null ? [[z0, z1]] : [[split + 0.04, z1], [z0, split - 0.04]];
+  for (const sx of [1, -1] as const) {
+    runs.forEach(([za, zb], i) => {
+      if (zb - za < 0.2) return;
+      out.push({ key: `s${sx > 0 ? 'L' : 'R'}${i}`, kind: 'side', c: [sx * (hw - 0.08), (y0 + y1) / 2 - g0, (za + zb) / 2], n: [sx, 0, 0], hw: (zb - za) / 2, hh: (y1 - y0) / 2 });
+    });
+  }
+  return out;
 }
 
 /** Where loose cargo can ride on a car, in the chassis frame (the body's own ground frame shifted down to the chassis centre). */
@@ -139,7 +179,12 @@ function lowerBody(b: MeshBuilder, sp: Spec, d: VehicleDef, paint: ReturnType<ty
   const archTop = R * 2 + 0.06;
   for (const sx of [1, -1]) {
     const x = sx * (hw - 0.07);
-    for (const [a, c] of zones) b.rbox(x, yc, (a + c) / 2, 0.14, h, Math.abs(a - c), 0.04, paint);
+    zones.forEach(([a, c], zi) => {
+      // The flank between the wheels is the door: it can hang off its hinge and be torn away.
+      if (zi === 1) b.mark(partTag('door', sx), partMeta({ kind: 'door', side: sx as 1 | -1, pivot: [x, yc, Math.max(a, c)] }));
+      b.rbox(x, yc, (a + c) / 2, 0.14, h, Math.abs(a - c), 0.04, paint);
+      if (zi === 1) b.end();
+    });
     for (const wz of [wf, wr]) {
       // Fender above the arch, and the lip that rounds its opening.
       b.rbox(x, (archTop + sp.belt) / 2, wz, 0.14, Math.max(0.05, sp.belt - archTop), gap * 2, 0.04, paint);
@@ -207,8 +252,12 @@ function lights(b: MeshBuilder, rig: Rig, sp: Spec, big: boolean) {
 function trim(b: MeshBuilder, sp: Spec, trimMat: ReturnType<typeof S.metal>) {
   const hw = sp.W / 2;
   const nose = sp.L / 2;
+  b.mark(partTag('bumper', 'front'), partMeta({ kind: 'bumper', pivot: [0, 0.4, nose - 0.08] }));
   b.rbox(0, 0.4, nose + 0.06, sp.W + 0.02, 0.17, 0.14, 0.05, trimMat);
+  b.end();
+  b.mark(partTag('bumper', 'rear'), partMeta({ kind: 'bumper', pivot: [0, 0.4, -nose + 0.08] }));
   b.rbox(0, 0.4, -nose - 0.06, sp.W + 0.02, 0.17, 0.14, 0.05, trimMat);
+  b.end();
   void hw;
 }
 
@@ -218,12 +267,16 @@ function doors(b: MeshBuilder, sp: Spec, zA: number, zB: number) {
   const seam = S.plastic(0x0e0e0e, 0.3);
   for (const sx of [1, -1]) {
     const x = sx * (hw + 0.004);
+    b.mark(partTag('door', sx), partMeta({ kind: 'door', side: sx as 1 | -1 }));
     for (const z of [zA, (zA + zB) / 2, zB]) b.box(x, (sp.sill + sp.belt) / 2 + 0.04, z, 0.006, sp.belt - sp.sill - 0.12, 0.01, seam);
     b.box(x + sx * 0.012, sp.belt - 0.12, zA - 0.16, 0.02, 0.025, 0.16, S.chrome(0xb4b8bc));
     b.box(x + sx * 0.012, sp.belt - 0.12, (zA + zB) / 2 - 0.16, 0.02, 0.025, 0.16, S.chrome(0xb4b8bc));
+    b.end();
     // Mirror on a stalk.
+    b.mark(partTag('mirror', sx), partMeta({ kind: 'mirror', side: sx as 1 | -1, pivot: [sx * (hw - 0.04), sp.belt + 0.02, sp.wsBase + 0.04] }));
     b.rod(sx * (hw - 0.04), sp.belt + 0.02, sp.wsBase + 0.04, sx * (hw + 0.1), sp.belt + 0.12, sp.wsBase + 0.1, 0.012, S.plastic(0x1a1a1a), 6);
     b.rbox(sx * (hw + 0.12), sp.belt + 0.14, sp.wsBase + 0.12, 0.05, 0.14, 0.2, 0.02, S.plastic(0x1a1a1a, 0.4));
+    b.end();
   }
 }
 
@@ -239,13 +292,6 @@ function weather(b: MeshBuilder, sp: Spec, look: VehicleLook) {
   }
   // A dent in the bonnet on some.
   if (look.seed % 4 === 0) b.rbox((r() - 0.5) * 0.6, sp.hood + 0.004, sp.L / 2 - 0.9, 0.5, 0.012, 0.4, 0.004, S.paint(look.paint, 1), 0.05, 0.3, 0.03);
-  // Cracked screen: a few bright lines.
-  for (let i = 0; i < 2; i++) {
-    const t = r();
-    const y = sp.belt + (sp.roof - sp.belt) * (0.3 + t * 0.4);
-    const z = sp.wsBase + (sp.wsTop - sp.wsBase) * (0.3 + t * 0.4);
-    b.box((r() - 0.5) * 0.9, y, z + 0.02, 0.4, 0.006, 0.004, S.paint(0xd0d6da, 0.1), 0, 0, r() * 3);
-  }
 }
 
 // ------------------------------------------------------------------ the four bodies
@@ -255,11 +301,9 @@ function hatchBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, 
   const nose = sp.L / 2;
   // Bonnet and cowl.
   b.rbox(0, sp.hood - 0.04, (nose + sp.wsBase) / 2 - 0.02, sp.W - 0.1, 0.1, nose - sp.wsBase - 0.04, 0.05, paint, -0.02, 0, 0);
-  // Windscreen and pillars.
-  slab(b, [sp.belt + 0.02, sp.wsBase], [sp.roof, sp.wsTop], sp.W - 0.26, 0.016, glass);
+  // Pillars; the windows are panes of their own (see carPanes).
   // Roof and tailgate.
   b.rbox(0, sp.roof + 0.015, (sp.wsTop + sp.rwTop) / 2, sp.W - 0.24, 0.07, sp.wsTop - sp.rwTop + 0.12, 0.04, roofMat);
-  slab(b, [sp.belt + 0.06, sp.rwBase], [sp.roof, sp.rwTop], sp.W - 0.3, 0.016, glass);
   b.rbox(0, sp.belt + 0.01, -nose + 0.2, sp.W - 0.12, 0.1, 0.42, 0.05, paint);
   for (const sx of [1, -1]) {
     const xo = sx * (hw - 0.08);
@@ -276,9 +320,7 @@ function sedanBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, 
   const hw = sp.W / 2;
   const nose = sp.L / 2;
   b.rbox(0, sp.hood - 0.04, (nose + sp.wsBase) / 2 - 0.02, sp.W - 0.1, 0.1, nose - sp.wsBase - 0.04, 0.05, paint, -0.02, 0, 0);
-  slab(b, [sp.belt + 0.02, sp.wsBase], [sp.roof, sp.wsTop], sp.W - 0.26, 0.016, glass);
   b.rbox(0, sp.roof + 0.015, (sp.wsTop + sp.rwTop) / 2, sp.W - 0.24, 0.07, sp.wsTop - sp.rwTop + 0.12, 0.04, roofMat);
-  slab(b, [sp.belt + 0.06, sp.rwBase], [sp.roof, sp.rwTop], sp.W - 0.3, 0.016, glass);
   // Boot lid.
   b.rbox(0, sp.belt + 0.02, (-nose + sp.rwBase) / 2 + 0.05, sp.W - 0.12, 0.1, sp.rwBase + nose - 0.1, 0.05, paint);
   for (const sx of [1, -1]) {
@@ -296,11 +338,9 @@ function pickupBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>,
   const hw = sp.W / 2;
   const nose = sp.L / 2;
   b.rbox(0, sp.hood - 0.04, (nose + sp.wsBase) / 2 - 0.02, sp.W - 0.1, 0.12, nose - sp.wsBase - 0.04, 0.05, paint, -0.02, 0, 0);
-  slab(b, [sp.belt + 0.02, sp.wsBase], [sp.roof, sp.wsTop], sp.W - 0.28, 0.016, glass);
   b.rbox(0, sp.roof + 0.015, (sp.wsTop + sp.rwTop) / 2 + 0.02, sp.W - 0.22, 0.08, sp.wsTop - sp.rwTop + 0.12, 0.04, roofMat);
   // Cab back wall with a small rear window.
   b.rbox(0, (sp.belt + sp.roof) / 2 - 0.1, sp.rwBase - 0.04, sp.W - 0.16, sp.roof - sp.belt - 0.2, 0.08, 0.03, paint);
-  b.box(0, sp.belt + 0.55, sp.rwBase + 0.01, sp.W - 0.7, 0.36, 0.012, glass);
   for (const sx of [1, -1]) {
     const xo = sx * (hw - 0.08);
     b.rod(xo, sp.belt, sp.wsBase, xo - sx * 0.05, sp.roof, sp.wsTop, 0.034, paint, 6);
@@ -327,7 +367,6 @@ function vanBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, ro
   const nose = sp.L / 2;
   // Short bonnet and a tall box behind the cab.
   b.rbox(0, sp.hood - 0.04, (nose + sp.wsBase) / 2 - 0.02, sp.W - 0.1, 0.12, nose - sp.wsBase - 0.04, 0.05, paint, -0.03, 0, 0);
-  slab(b, [sp.belt + 0.02, sp.wsBase], [sp.roof - 0.1, sp.wsTop], sp.W - 0.24, 0.016, glass);
   // Cargo box: solid sides and roof from behind the cab to the tail.
   const zf = sp.rwBase;
   const zr = -nose + 0.06;
@@ -351,6 +390,15 @@ function vanBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, ro
 // ------------------------------------------------------------------ assembly
 
 function makeShell(def: VehicleDef, look: VehicleLook): Shell {
+  const g = makeShellSteps(def, look);
+  for (;;) {
+    const r = g.next();
+    if (r.done) return r.value;
+  }
+}
+
+/** `makeShell` in slices: it yields between the big parts of the body, so a car can be built over a few ticks. */
+function* makeShellSteps(def: VehicleDef, look: VehicleLook): Generator<void, Shell> {
   const sp = SPECS[def.id as Spec['id']];
   const g0 = restHeight(def);
   const lamps: Shell['lamps'] = [];
@@ -381,12 +429,15 @@ function makeShell(def: VehicleDef, look: VehicleLook): Shell {
   const trimMat = look.seed % 3 === 0 ? rust : S.metal(0x6a6c6e, 0.9);
   lowerBody(b, sp, def, paint, look);
   trim(b, sp, trimMat);
+  yield;
   if (sp.id === 'hatch') hatchBody(b, sp, paint, roofMat, glass, def);
   else if (sp.id === 'sedan') sedanBody(b, sp, paint, roofMat, glass, def);
   else if (sp.id === 'pickup') pickupBody(b, sp, paint, roofMat, glass, def, rust);
   else vanBody(b, sp, paint, roofMat, glass, def, rust);
+  yield;
   lights(b, rig, sp, sp.id === 'pickup' || sp.id === 'van');
   weather(b, sp, look);
+  yield;
   const nativeGun = false;
   const wpnPart = look.fit.weapon;
   const m = mountsFor(sp, def.physics.wheelRadius);
@@ -395,8 +446,11 @@ function makeShell(def: VehicleDef, look: VehicleLook): Shell {
   const kitLook = look;
   addKit(b, rig, fixedGun ? m : { ...m, gun: undefined }, kitLook, { nativeGun });
   b.groundShade(0.0, 0.5, 0.35);
+  yield;
   const geo = b.build();
   geo.translate(0, -g0, 0);
+  // The body was built on the ground and is shifted to the chassis centre: the joints move with it.
+  for (const r of (geo.userData.parts ?? []) as PartRange[]) if (r.meta.pivot) r.meta = { ...r.meta, pivot: [r.meta.pivot[0], r.meta.pivot[1] - g0, r.meta.pivot[2]] };
   geo.computeBoundingSphere();
   geo.computeBoundingBox();
   return { geo, lamps, tails, muzzle };
@@ -404,6 +458,15 @@ function makeShell(def: VehicleDef, look: VehicleLook): Shell {
 
 function shellKey(def: VehicleDef, look: VehicleLook): string {
   return `${def.id}|${look.paint}|${look.stripe}|${look.stripeColor}|${look.seed}|${Math.round(look.wear * 10)}|${fitSignature(look.fit)}`;
+}
+
+/** Build a car's shell ahead of the car itself, a slice per step, so spawning it later is a cache hit and not a dropped frame. */
+export function* prepareCarShell(def: VehicleDef, look: VehicleLook): Generator<void> {
+  const key = shellKey(def, look);
+  if (hasShell(key) || !SPECS[def.id as Spec['id']]) return;
+  const shell = yield* makeShellSteps(def, look);
+  acquireShell(key, () => shell);
+  releaseShell(key);
 }
 
 export function buildCar(def: VehicleDef, wheelLocal: [number, number, number][], steered: boolean[], look: VehicleLook): VehicleVisual {
@@ -415,6 +478,13 @@ export function buildCar(def: VehicleDef, wheelLocal: [number, number, number][]
   v.body.castShadow = true;
   v.body.receiveShadow = true;
   v.inner.add(v.body);
+  // The windows: panes of their own over the open shell. A beaten-up car comes with its screen already cracked.
+  const panes = new PaneSet();
+  for (const p of carPanes(def)) panes.add(p);
+  v.inner.add(panes.group);
+  v.panes = panes;
+  const screen = panes.spec('ws');
+  if (screen && look.wear > 0.55) panes.crack('ws', look.wear > 0.8 ? 2 : 1, [screen.c[0] + ((look.seed % 7) - 3) * 0.12, screen.c[1], screen.c[2]]);
   for (const l of shell.lamps) headlamp(v, new MeshBuilder(), l.x, l.y, l.z, l.r, false);
   for (const t of shell.tails) taillight(v, t.x, t.y, t.z, t.w, t.h, t.amber);
   if (shell.muzzle) v.muzzle.position.set(...shell.muzzle);
@@ -464,7 +534,10 @@ export function buildCar(def: VehicleDef, wheelLocal: [number, number, number][]
   v.smoke.position.set(-0.3, 0.3 - g0 + 0.4, -SPECS[def.id as Spec['id']].L / 2);
   v.inner.add(v.smoke);
   v.damageTint = () => {};
-  v.dispose = () => releaseShell(key);
+  v.dispose = () => {
+    panes.dispose();
+    releaseShell(key);
+  };
   return v;
 }
 

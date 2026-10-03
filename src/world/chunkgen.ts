@@ -8,12 +8,15 @@ import {
   type MineSpawn,
   type PickupSpawn,
   type PropSpawn,
+  type SignSpawn,
   type ScavZone,
   type ZombieSpawn,
 } from './layout';
 import type { BuildingRole, Facing, PlannedStreet } from './cityPlan';
-import { CHUNK, chunkHeights } from './terrain';
+import { CHUNK, chunkHeightsSteps } from './terrain';
+import { cityChunk } from './openWorld';
 import { hash2 } from '../core/rng';
+import { shopPaneBoxes } from './shopGlass';
 
 export interface BuildingSpec {
   aabb: Aabb;
@@ -28,6 +31,8 @@ export interface BuildingSpec {
   front?: Facing;
   /** A shopfront with its own drawn sign on the boulevard-facing wall. */
   shop?: string;
+  /** An ordinary building dressed as an Israeli apartment block: balconies, roller shutters, solar water heaters. */
+  israeli?: boolean;
 }
 
 export interface ChunkData {
@@ -35,9 +40,13 @@ export interface ChunkData {
   cz: number;
   key: number;
   heights: Float32Array;
+  /** True for a chunk of city: city ground, boulevard road, sidewalks and facades. */
+  city: boolean;
   aabbs: Aabb[];
   buildings: BuildingSpec[];
   props: PropSpawn[];
+  /** Drawn signs hung on this chunk's walls and canopies. */
+  signs: SignSpawn[];
   pickups: PickupSpawn[];
   zombies: ZombieSpawn[];
   mines: MineSpawn[];
@@ -55,10 +64,12 @@ export class ChunkSource {
   layout: LegDefLayout;
   private cache = new Map<number, ChunkData>();
   private buildingAabbs: BuildingSpec[] = [];
+  /** Panes of glass over the shopfronts of the street, each in the chunk its centre is in. */
+  private shopGlass: Aabb[] = [];
 
   constructor(public leg: LegDef) {
     this.layout = buildLayout(leg);
-    if (leg.biome === 'city') this.makeBuildings();
+    if (this.layout.lots.length || this.layout.landmarks.length) this.makeBuildings();
   }
 
   private makeBuildings() {
@@ -80,7 +91,9 @@ export class ChunkSource {
         hp: 99999,
         tint: Math.floor(hash2(lot.slot, lot.strip * 3 + lot.side, 17) * 4),
       };
-      this.buildingAabbs.push({ aabb, floors, stepped: roll > 0.72 && !lot.fixed, style: lot.style, tint: lot.tint, shop: lot.shop });
+      const spec: BuildingSpec = { aabb, floors, stepped: roll > 0.72 && !lot.fixed, style: lot.style, tint: lot.tint, shop: lot.shop, israeli: L.plan?.vernacular === 'israeli' };
+      this.buildingAabbs.push(spec);
+      this.shopGlass.push(...shopPaneBoxes(spec));
     }
     // Landmarks smaller than their lot are not lots at all: they are buildings with a forecourt.
     for (const lm of L.landmarks) {
@@ -88,21 +101,59 @@ export class ChunkSource {
     }
   }
 
+  /** Whether a chunk's data is already made, so `get` is free. */
+  has(cx: number, cz: number): boolean {
+    return this.cache.has(chunkKey(cx, cz));
+  }
+
+  /** Chunks being made a slice at a time by `step`. */
+  private making = new Map<number, Generator<void, ChunkData>>();
+
   get(cx: number, cz: number): ChunkData {
     const key = chunkKey(cx, cz);
-    let c = this.cache.get(key);
+    const c = this.cache.get(key);
     if (c) return c;
+    // Finish whatever a stepped build has done already, or build it all at once.
+    const g = this.making.get(key) ?? this.make(cx, cz);
+    this.making.delete(key);
+    for (;;) {
+      const r = g.next();
+      if (r.done) {
+        this.cache.set(key, r.value);
+        return r.value;
+      }
+    }
+  }
+
+  /** Do one slice of the work of making a chunk. Returns true once it is made and `get` is free. */
+  step(cx: number, cz: number): boolean {
+    const key = chunkKey(cx, cz);
+    if (this.cache.has(key)) return true;
+    let g = this.making.get(key);
+    if (!g) this.making.set(key, (g = this.make(cx, cz)));
+    const r = g.next();
+    if (!r.done) return false;
+    this.making.delete(key);
+    this.cache.set(key, r.value);
+    return true;
+  }
+
+  private *make(cx: number, cz: number): Generator<void, ChunkData> {
+    const key = chunkKey(cx, cz);
     const L = this.layout;
+    const heights = yield* chunkHeightsSteps(L.terrain, cx, cz);
     const buildings = this.buildingAabbs.filter((b) => inChunk(cx, cz, (b.aabb.minX + b.aabb.maxX) / 2, (b.aabb.minZ + b.aabb.maxZ) / 2));
     const aabbs = L.aabbs.filter((a) => inChunk(cx, cz, (a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2));
-    c = {
+    return {
       cx,
       cz,
       key,
-      heights: chunkHeights(L.terrain, cx, cz),
-      aabbs: [...buildings.map((b) => b.aabb), ...aabbs],
+      heights,
+      city: L.terrain.biome === 'city' || cityChunk(L.terrain.open, cx, cz),
+      aabbs: [...buildings.map((b) => b.aabb), ...this.shopGlass.filter((a) => inChunk(cx, cz, (a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2)), ...aabbs],
       buildings,
       props: L.props.filter((p) => inChunk(cx, cz, p.x, p.z)),
+      signs: L.signs.filter((p) => inChunk(cx, cz, p.x, p.z)),
       pickups: L.pickups.filter((p) => inChunk(cx, cz, p.x, p.z)),
       zombies: L.zombies.filter((p) => inChunk(cx, cz, p.x, p.z)),
       mines: L.mines.filter((p) => inChunk(cx, cz, p.x, p.z)),
@@ -110,8 +161,11 @@ export class ChunkSource {
       blocks: L.slots.filter((s) => s.z1 > cz * CHUNK && s.z0 < (cz + 1) * CHUNK).map((s) => ({ z0: s.z0, z1: s.z1 })),
       patches: L.streets.filter((s) => !s.silent && s.x1 > cx * CHUNK && s.x0 < (cx + 1) * CHUNK && s.z1 > cz * CHUNK && s.z0 < (cz + 1) * CHUNK),
     };
-    this.cache.set(key, c);
-    return c;
+  }
+
+  /** Every city building, for the far view of a district. */
+  cityBuildings(): BuildingSpec[] {
+    return this.buildingAabbs;
   }
 
   /** All obstacle boxes, used by AI and projectiles. */

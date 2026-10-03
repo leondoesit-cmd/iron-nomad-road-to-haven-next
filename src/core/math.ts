@@ -10,8 +10,9 @@ export const smoothstep = (e0: number, e1: number, x: number) => {
   const t = clamp01((x - e0) / (e1 - e0));
   return t * t * (3 - 2 * t);
 };
-/** Frame-rate independent exponential smoothing. */
-export const damp = (a: number, b: number, lambda: number, dt: number) => lerp(a, b, 1 - Math.exp(-lambda * dt));
+/** Frame-rate independent exponential smoothing. Clamped so non-positive or invalid dt never diverges. */
+export const damp = (a: number, b: number, lambda: number, dt: number) =>
+  dt <= 0 || !Number.isFinite(dt) ? a : lerp(a, b, 1 - Math.exp(-Math.max(0, lambda * dt)));
 
 export function wrapAngle(a: number) {
   a = (a + Math.PI) % TAU;
@@ -20,7 +21,7 @@ export function wrapAngle(a: number) {
 }
 export const angleDiff = (from: number, to: number) => wrapAngle(to - from);
 export function dampAngle(a: number, b: number, lambda: number, dt: number) {
-  return a + angleDiff(a, b) * (1 - Math.exp(-lambda * dt));
+  return dt <= 0 || !Number.isFinite(dt) ? a : a + angleDiff(a, b) * (1 - Math.exp(-Math.max(0, lambda * dt)));
 }
 export const dist2 = (ax: number, az: number, bx: number, bz: number) => Math.hypot(ax - bx, az - bz);
 export const distSq = (ax: number, az: number, bx: number, bz: number) => (ax - bx) * (ax - bx) + (az - bz) * (az - bz);

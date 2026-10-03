@@ -1,6 +1,7 @@
 import type { Cost, Stocks } from '../data';
 import { canAfford, costText } from './resources';
 import type { VehicleHealth } from './damage';
+import { STRAIGHT } from './bodywork';
 
 export type RepairKind = 'fire' | 'leak' | 'tire' | 'engine' | 'mount' | 'body';
 
@@ -26,6 +27,12 @@ export interface RepairOpts {
   weapon?: boolean;
   /** Extra speed from a Mechanic or a workshop (1 = normal). */
   speed?: number;
+  /** How bent the body is, 0..1: a crumpled car wants hammering out even when its hit points are full. */
+  dents?: number;
+  /** Doors, mirrors and bumpers that have come off. */
+  missing?: number;
+  /** Windows that have gone. */
+  glass?: number;
 }
 
 /** The single most urgent thing wrong, with what it costs. Fire first, then leaks, tyres, engine, mount, hull. */
@@ -45,7 +52,10 @@ export function planRepair(h: VehicleHealth, stocks: Stocks, o: RepairOpts = {})
   if (flat >= 0) return job('tire', o.spare ? 'Swap on the spare' : 'Patch a tyre', o.spare ? 3 : 4.5, o.spare ? {} : { scrap: 2 }, flat);
   if (h.comp.engine < 0.999) return job('engine', 'Rebuild the engine', 7, { parts: 3 }, undefined, { scrap: 9 });
   if (o.weapon && h.comp.mount < 0.999) return job('mount', 'Fix the weapon mount', 4, { parts: 2 }, undefined, { scrap: 6 });
-  if (h.hp < h.maxHp - 0.5 || h.comp.plates < 0.999) return job('body', 'Hammer out the bodywork', 5, { scrap: 2 });
+  const bent = (o.dents ?? 0) > STRAIGHT;
+  if (h.hp < h.maxHp - 0.5 || h.comp.plates < 0.999 || bent) return job('body', bent ? 'Hammer out the dents' : 'Hammer out the bodywork', 5, { scrap: 2 });
+  if ((o.missing ?? 0) > 0) return job('body', 'Weld a missing panel back on', 5, { scrap: 3 });
+  if ((o.glass ?? 0) > 0) return job('body', 'Cut and fit new glass', 4, { scrap: 2 });
   return null;
 }
 

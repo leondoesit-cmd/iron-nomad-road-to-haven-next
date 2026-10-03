@@ -33,7 +33,15 @@ export interface CamParams {
    * (on foot and at the gun) or along the vehicle's heading plus `lookYaw` / `lookPitch` (driving).
    */
   eye?: THREE.Vector3 | null;
+  /** What a gun does to the view this frame: muzzle climb and twitch (radians), roll, and the push back (metres). */
+  kick?: { pitch: number; yaw: number; roll: number; back: number };
 }
+
+// Scratch vectors: the camera updates every frame for every player, so it must not make garbage.
+const _desired = new THREE.Vector3();
+const _lookAt = new THREE.Vector3();
+const _from = new THREE.Vector3();
+const _dir = new THREE.Vector3();
 
 /**
  * Chase camera tuned for the short, wide strip each player gets: it sits far back and high,
@@ -55,6 +63,7 @@ export class ChaseCamera {
   occlude: (from: THREE.Vector3, dir: THREE.Vector3, maxDist: number) => number = () => Infinity;
   groundAt: (x: number, z: number) => number = () => 0;
   fovKick = 0;
+  private kick: CamParams['kick'] = undefined;
 
   addShake(a: number) {
     this.shake = Math.min(1.2, this.shake + a);
@@ -66,20 +75,21 @@ export class ChaseCamera {
 
   update(dt: number, t: CamTarget, mode: CamMode, p: CamParams) {
     this.mode = mode;
+    this.kick = p.kick;
     if (p.eye) {
       this.updateFirst(dt, t, mode, p, p.eye);
       return;
     }
     const speedFrac = clamp(t.speed / Math.max(1, t.topSpeed), 0, 1);
-    const targetDist = p.dist * (1 + 0.25 * speedFrac);
-    const targetHeight = p.height;
+    const targetDist = (p.dist ?? 5) * (1 + 0.25 * speedFrac);
+    const targetHeight = p.height ?? 2;
     const k = this.initialized ? 1 : 100;
-    this.dist = damp(this.dist, targetDist, 3.5 * k, dt);
-    this.height = damp(this.height, targetHeight, 3.5 * k, dt);
+    this.dist = damp(this.dist || 5, targetDist, 3.5 * k, dt);
+    this.height = damp(this.height || 2, targetHeight, 3.5 * k, dt);
     let camYaw: number;
     let pitch = 0;
-    const desired = new THREE.Vector3();
-    const lookAt = new THREE.Vector3();
+    const desired = _desired;
+    const lookAt = _lookAt;
     if (mode === 'vehicle' || mode === 'camp') {
       // Chase the heading with a little lag so corners read; the right stick looks around.
       const base = t.yaw + (p.lookBack ? Math.PI : 0) + p.lookYaw;
@@ -112,8 +122,8 @@ export class ChaseCamera {
     }
 
     // Keep out of walls: pull the camera in along the ray from the target.
-    const from = new THREE.Vector3(t.x, t.y + Math.min(this.height, 1.6), t.z);
-    const dir = desired.clone().sub(from);
+    const from = _from.set(t.x, t.y + Math.min(this.height, 1.6), t.z);
+    const dir = _dir.copy(desired).sub(from);
     const len = dir.length();
     if (len > 0.01) {
       dir.divideScalar(len);
@@ -121,11 +131,18 @@ export class ChaseCamera {
       if (hit < len) desired.copy(from).addScaledVector(dir, Math.max(1.0, hit - 0.35));
     }
     const gy = this.groundAt(desired.x, desired.z) + 0.7;
-    if (desired.y < gy) desired.y = gy;
+    if (Number.isFinite(gy) && desired.y < gy) desired.y = gy;
+
+    if (!Number.isFinite(desired.x) || !Number.isFinite(desired.y) || !Number.isFinite(desired.z)) {
+      desired.set(t.x || 0, (t.y || 0) + 3, (t.z || 0) - 6);
+    }
+    if (!Number.isFinite(lookAt.x) || !Number.isFinite(lookAt.y) || !Number.isFinite(lookAt.z)) {
+      lookAt.set(t.x || 0, (t.y || 0) + 1, (t.z || 0) + 10);
+    }
 
     const posK = mode === 'foot' || mode === 'gunner' ? (p.crisp ? 45 : 22) : 14;
     const lookK = p.crisp ? 90 : 18;
-    if (!this.initialized) {
+    if (!this.initialized || !Number.isFinite(this.pos.x)) {
       this.pos.copy(desired);
       this.look.copy(lookAt);
       this.initialized = true;
@@ -137,7 +154,10 @@ export class ChaseCamera {
       this.look.y = damp(this.look.y, lookAt.y, lookK, dt);
       this.look.z = damp(this.look.z, lookAt.z, lookK, dt);
     }
-    this.fwd.set(this.look.x - this.pos.x, 0, this.look.z - this.pos.z).normalize();
+    // Looking straight down leaves no horizontal run: keep the last heading rather than collapse to zero.
+    const fx = this.look.x - this.pos.x;
+    const fz = this.look.z - this.pos.z;
+    if (fx * fx + fz * fz > 1e-10) this.fwd.set(fx, 0, fz).normalize();
 
     // Shake
     this.shakeT += dt * 38;
@@ -171,11 +191,24 @@ export class ChaseCamera {
   }
 
   apply(cam: THREE.PerspectiveCamera) {
+    if (!Number.isFinite(this.pos.x) || !Number.isFinite(this.pos.y) || !Number.isFinite(this.pos.z)) {
+      this.pos.set(0, 3, -6);
+    }
+    if (!Number.isFinite(this.look.x) || !Number.isFinite(this.look.y) || !Number.isFinite(this.look.z)) {
+      this.look.set(0, 1, 10);
+    }
     cam.position.copy(this.pos);
     if (this.shake > 0.001) {
       cam.position.x += Math.sin(this.shakeT * 1.7) * this.shake * 0.12;
       cam.position.y += Math.cos(this.shakeT * 2.3) * this.shake * 0.1;
     }
     cam.lookAt(this.look);
+    const k = this.kick;
+    if (k && (k.pitch || k.yaw || k.roll || k.back)) {
+      cam.translateZ(k.back);
+      cam.rotateX(k.pitch);
+      cam.rotateY(k.yaw);
+      cam.rotateZ(k.roll);
+    }
   }
 }

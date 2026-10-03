@@ -1,4 +1,4 @@
-import { partDef, type LegDef, type SetPiece, type Stocks, type ZombieKind } from '../data';
+import { legById, partDef, type LegDef, type SetPiece, type Stocks, type ZombieKind } from '../data';
 import { rollPartSpec } from '../sim/parts';
 import type { DrugId } from '../sim/drugs';
 import { OIL_CAN } from '../sim/oil';
@@ -8,6 +8,7 @@ import { buildRoadside, buildSite, type RuralBuilding, type SiteContent } from '
 import { isLakeSite, lakeAt } from './lakes';
 import { delveName, delveSiteKind, type DelveSite } from './delveSites';
 import { planById } from './plans';
+import { districtAt, nearestRoad, type District } from './openWorld';
 import type { BuildingRole, CityPlan, Facing, LandmarkKind, PlannedPlace, PlannedStreet } from './cityPlan';
 
 export type AabbKind = 'building' | 'wall' | 'car' | 'rock' | 'barricade' | 'crate' | 'pillar' | 'tower' | 'partition' | 'furniture' | 'stair' | 'floor' | 'dock';
@@ -33,6 +34,14 @@ export interface Aabb {
   ramp?: { x: number; y: number; z: number; hx: number; hy: number; hz: number; q: [number, number, number, number] };
   /** Ground height under the box, cached by the obstacle index so line-of-sight heights can be relative to it. */
   gy?: number;
+  /** What it is made of, when the kind alone does not say: decides what a bullet can punch through. */
+  mat?: import('../sim/ballistics').Surface;
+  /** A wall piece of a building: the index of its wall in the building's plan, so a breach can find its siblings. */
+  wall?: number;
+  /** A pane of glass (with `mat: 'glass'`): the kind it is, which decides how much it takes. */
+  pane?: import('../sim/glass').GlassKind;
+  /** A pane that is not part of a building's plan (a shopfront): the way it faces, as (x, z) of its outward normal. */
+  paneN?: [number, number];
 }
 
 export type PropKind =
@@ -82,7 +91,11 @@ export type PropKind =
   | 'bench'
   | 'parkBays'
   | 'cafeTable'
-  | 'cafeChair';
+  | 'cafeChair'
+  | 'tram'
+  | 'bus'
+  | 'busShelter'
+  | 'floodlight';
 
 export interface PropSpawn {
   kind: PropKind;
@@ -96,6 +109,22 @@ export interface PropSpawn {
   tag?: number;
   /** Power spans only: rise from one end to the other. */
   dy?: number;
+}
+
+/** What a drawn sign looks like: the bus station's green board, the light rail's red one, the stadium's, a shop's. */
+export type SignTheme = 'bus' | 'rail' | 'stadium' | 'shop' | 'bank' | 'pharmacy' | 'cafe' | 'market';
+
+/** A flat panel with a title (usually Hebrew) over a line of English, hung on a wall or canopy. `yaw` is the way it faces. */
+export interface SignSpawn {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  w: number;
+  h: number;
+  text: string;
+  sub?: string;
+  theme: SignTheme;
 }
 
 export type PickupKind = 'fuel' | 'oil' | 'scrap' | 'parts' | 'tech' | 'rations' | 'medicine' | 'ammo' | 'fragment' | 'chassis' | 'part';
@@ -316,6 +345,7 @@ export class LegLayoutImpl implements LegLayout {
   mines: MineSpawn[] = [];
   pickups: PickupSpawn[] = [];
   props: PropSpawn[] = [];
+  signs: SignSpawn[] = [];
   cars: CarSpawn[] = [];
   zombies: ZombieSpawn[] = [];
   aabbs: Aabb[] = [];
@@ -333,6 +363,10 @@ export class LegLayoutImpl implements LegLayout {
     this.leg = leg;
     this.terrain = makeTerrainDef(leg);
     this.rng = new Rng(leg.seed * 7919 + 13);
+    if (leg.open) {
+      this.buildOpen();
+      return;
+    }
     if (leg.biome === 'city') {
       if (leg.plan) this.buildPlannedGrid(planById(leg.plan));
       else this.buildCityGrid();
@@ -348,6 +382,7 @@ export class LegLayoutImpl implements LegLayout {
       this.cityAmbient();
       this.roadsideKit();
       this.buildMetro();
+      if (this.plan?.vernacular === 'israeli') this.shopSigns();
     } else {
       this.buildSites();
       const n0 = [this.props.length, this.pickups.length, this.aabbs.length];
@@ -366,6 +401,124 @@ export class LegLayoutImpl implements LegLayout {
     // Later passes (parked cars, rocks) may overlap earlier spawns: nothing spawns inside an obstacle.
     this.zombies = this.zombies.filter((z) => !this.blockedAt(z.x, z.z, 0.3));
     this.pickups = this.pickups.filter((p) => !this.blockedAt(p.x, p.z, 0.2) || p.kind === 'fragment' || p.kind === 'chassis');
+  }
+
+  // ---------------------------------------------------------------- the open world
+
+  /**
+   * The open-world leg: the wasteland machinery along the highway, content spread over the whole map, and each city
+   * district built as its own city leg and dropped in at its place.
+   */
+  private buildOpen() {
+    const leg = this.leg;
+    const T = this.terrain;
+    const o = T.open!;
+    for (const s of leg.sets) this.place(s);
+    this.end = { x: o.haven.x, z: o.haven.z, radius: o.haven.radius };
+    this.start = { x: roadX(T, 12), z: 12, yaw: Math.atan2(roadSlope(T, 12), 1) };
+    this.campSpots = [
+      { x: this.end.x + 26, z: leg.length + 40 },
+      { x: this.end.x - 26, z: leg.length + 40 },
+    ];
+    this.buildSites();
+    this.raiderCamps();
+    const n0 = [this.props.length, this.pickups.length, this.aabbs.length];
+    this.wastelandAmbient();
+    this.openAmbient();
+    this.roadsideJams();
+    this.roadsideKit();
+    this.sideRoadKit();
+    const inSite = (x: number, z: number) => T.sites.some((s) => s.radius > 0 && Math.hypot(x - s.x, z - s.z) < s.radius * 0.95);
+    this.props = this.props.filter((p, i) => i < n0[0] || !inSite(p.x, p.z));
+    this.pickups = this.pickups.filter((p, i) => i < n0[1] || !inSite(p.x, p.z));
+    this.aabbs = this.aabbs.filter((a, i) => i < n0[2] || !inSite((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2));
+    this.buildLakes();
+    this.cars = this.cars.filter((c) => !waterAt(T, c.x, c.z));
+    // Nothing of the desert stands inside a city.
+    const outside = (x: number, z: number) => !districtAt(o, x, z);
+    this.props = this.props.filter((p) => outside(p.x, p.z));
+    this.pickups = this.pickups.filter((p) => outside(p.x, p.z));
+    this.zombies = this.zombies.filter((q) => outside(q.x, q.z));
+    this.cars = this.cars.filter((c) => outside(c.x, c.z));
+    this.aabbs = this.aabbs.filter((a) => outside((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2));
+    this.rural = this.rural.filter((b) => outside((b.aabb.minX + b.aabb.maxX) / 2, (b.aabb.minZ + b.aabb.maxZ) / 2));
+    this.mines = this.mines.filter((m) => outside(m.x, m.z));
+    for (const d of o.districts) this.absorbDistrict(d);
+    this.zombies = this.zombies.filter((z) => !this.blockedAt(z.x, z.z, 0.3));
+    this.pickups = this.pickups.filter((p) => !this.blockedAt(p.x, p.z, 0.2) || p.kind === 'fragment' || p.kind === 'chassis');
+  }
+
+  /** Builds a district's city leg on its own, slides it north to its place, and merges it into this layout. */
+  private absorbDistrict(d: District) {
+    const sub = new LegLayoutImpl(legById(d.legId));
+    sub.shiftZ(d.dz);
+    this.plan = sub.plan;
+    this.slots.push(...sub.slots);
+    this.strips.push(...sub.strips);
+    this.passages.push(...sub.passages);
+    this.streets.push(...sub.streets);
+    this.places.push(...sub.places);
+    this.landmarks.push(...sub.landmarks);
+    this.zones.push(...sub.zones);
+    this.ambushes.push(...sub.ambushes);
+    this.encounters.push(...sub.encounters);
+    this.tips.push(...sub.tips);
+    this.mines.push(...sub.mines);
+    this.pickups.push(...sub.pickups);
+    this.props.push(...sub.props);
+    this.signs.push(...sub.signs);
+    this.cars.push(...sub.cars);
+    this.zombies.push(...sub.zombies);
+    this.aabbs.push(...sub.aabbs);
+    this.delves.push(...sub.delves);
+    this.barricades.push(...sub.barricades);
+    this.terrain.delves.push(...sub.terrain.delves);
+    this.terrain.streets = [...(this.terrain.streets ?? []), ...(sub.terrain.streets ?? [])];
+    for (const lot of sub.lots) {
+      this.lots.push(lot);
+      this.indexLot(lot);
+    }
+  }
+
+  /** Slides everything in a built layout north by dz. Used once, on a city leg that is about to join the open world. */
+  shiftZ(dz: number) {
+    const seen = new Set<object>();
+    const once = <T extends object>(o: T, fn: (o: T) => void) => {
+      if (seen.has(o)) return;
+      seen.add(o);
+      fn(o);
+    };
+    for (const s of this.slots) s.z0 += dz, (s.z1 += dz);
+    for (const l of this.lots) l.z0 += dz, (l.z1 += dz);
+    for (const s of this.streets) s.z0 += dz, (s.z1 += dz);
+    for (const p of this.places) p.z += dz;
+    for (const lm of this.landmarks) once(lm.aabb, (a) => this.shiftAabb(a, dz));
+    for (const a of this.aabbs) once(a, (q) => this.shiftAabb(q, dz));
+    for (const z of this.zones) {
+      z.z += dz;
+      for (const c of z.containers) c.z += dz;
+    }
+    for (const a of this.ambushes) a.z += dz;
+    for (const e of this.encounters) e.z += dz;
+    for (const t of this.tips) t.z += dz;
+    for (const m of this.mines) m.z += dz;
+    for (const p of this.pickups) p.z += dz;
+    for (const p of this.props) p.z += dz;
+    for (const g of this.signs) g.z += dz;
+    for (const c of this.cars) c.z += dz;
+    for (const q of this.zombies) (q.z += dz), (q.cluster += 100000);
+    for (const b of this.barricades) b.z += dz;
+    for (const d of this.delves) d.z += dz;
+    for (const d of this.terrain.delves) once(d, (q) => (q.z += dz));
+    for (const st of this.terrain.streets ?? []) st.z0 += dz, (st.z1 += dz);
+    this.lotGrid.clear();
+    for (const l of this.lots) this.indexLot(l);
+  }
+
+  private shiftAabb(a: Aabb, dz: number) {
+    a.minZ += dz;
+    a.maxZ += dz;
+    if (a.ramp) a.ramp.z += dz;
   }
 
   // ---------------------------------------------------------------- roadside kit
@@ -496,7 +649,7 @@ export class LegLayoutImpl implements LegLayout {
           lot.tint = o.tint;
           lot.landmark = o.landmark;
           lot.shop = o.shop;
-          lot.fixed = !!(o.landmark || o.shop);
+          lot.fixed = !!(o.landmark || o.shop || o.fixed);
         }
         this.lots.push(lot);
         this.indexLot(lot);
@@ -504,6 +657,7 @@ export class LegLayoutImpl implements LegLayout {
     }
     this.layOutStreets(plan);
     this.dressLandmarks(plan);
+    this.layRail(plan);
     this.terrain.streets = this.streets.filter((q) => (q.kind === 'asphalt' || q.kind === 'tarmac') && !q.silent).map(({ x0, x1, z0, z1 }) => ({ x0, x1, z0, z1 }));
   }
 
@@ -536,7 +690,80 @@ export class LegLayoutImpl implements LegLayout {
     }
   }
 
-  private pave(kind: 'paving' | 'lawn' | 'tarmac', x0: number, x1: number, z0: number, z1: number) {
+
+  // ---------------------------------------------------------------- the light rail
+
+  /**
+   * The light-rail line down one east-west street: a concrete slab with two tracks, an island platform at each station
+   * with a canopy and a name board, and a tram or two standing where the plan says. The masts and overhead wire are drawn
+   * with the slab, from the same rectangle.
+   */
+  private layRail(plan: CityPlan) {
+    const r = plan.rail;
+    if (!r) return;
+    const slot = this.slots[r.block];
+    const zc = slot.z1 + r.centre;
+    const edge = BOULEVARD_HALF + SIDEWALK;
+    const xs = (d: number) => r.side * (edge + d);
+    const span = (a: number, b: number): [number, number] => [Math.min(xs(a), xs(b)), Math.max(xs(a), xs(b))];
+    const push = (kind: 'rail' | 'platform', x0: number, x1: number, z0: number, z1: number) =>
+      this.streets.push({ id: `${plan.id}:${kind}${this.streets.length}`, kind, x0, x1, z0, z1 });
+    const [sx0, sx1] = span(r.from, r.to);
+    push('rail', sx0, sx1, zc - r.width / 2, zc + r.width / 2);
+    for (const st of r.stations) {
+      const [x0, x1] = span(st.from, st.to);
+      push('platform', x0, x1, zc - 1.6, zc + 1.6);
+      this.places.push({ id: st.id, name: st.name, sub: st.sub, x: (x0 + x1) / 2, z: zc, r: 30 });
+      // The name board hangs from the canopy's fascia on both long sides, so the road and the tracks each see one.
+      for (const face of [-1, 1]) {
+        this.signs.push({ x: (x0 + x1) / 2, y: 3.5, z: zc + face * 2.3, yaw: face > 0 ? 0 : Math.PI, w: 7.2, h: 1.3, text: st.he, sub: st.name.replace(' STATION', ''), theme: 'rail' });
+      }
+      for (let i = 0; i < 3; i++) this.plainProp('bench', x0 + ((i + 0.7) * (x1 - x0)) / 3.4, zc + (i % 2 ? 0.9 : -0.9), i % 2 ? Math.PI : 0, 1, i + 1);
+    }
+    for (const t of r.trams) {
+      const x = xs(t.at);
+      const z = zc + t.track * 3.9;
+      const heading = t.dir * r.side;
+      this.plainProp('tram', x, z, heading > 0 ? Math.PI / 2 : -Math.PI / 2, 1, 1 + this.props.length);
+      this.aabbs.push({ id: newAabbId(), minX: x - 18, maxX: x + 18, minZ: z - 1.4, maxZ: z + 1.4, y0: 0, y1: 3.7, kind: 'pillar', hp: 99999 });
+    }
+  }
+
+  /** Shop signs over the ground floors that face Haim Ozer, in Hebrew over English, the way the real street has them. */
+  private shopSigns() {
+    const names: [string, string, SignTheme][] = [
+      ['פלאפל', 'FALAFEL', 'cafe'],
+      ['סופר', 'SUPERMARKET', 'market'],
+      ['בית מרקחת', 'PHARMACY', 'pharmacy'],
+      ['בנק', 'BANK', 'bank'],
+      ['קפה', 'CAFÉ', 'cafe'],
+      ['פיצה', 'PIZZA', 'cafe'],
+      ['מספרה', 'BARBER', 'shop'],
+      ['סלולר', 'CELLULAR', 'shop'],
+      ['נעליים', 'SHOES', 'shop'],
+      ['פרחים', 'FLOWERS', 'shop'],
+      ['צילום', 'PHOTO', 'shop'],
+      ['קיוסק', 'KIOSK', 'market'],
+      ['שווארמה', 'SHAWARMA', 'cafe'],
+      ['ספרים', 'BOOKS', 'shop'],
+      ['תכשיטים', 'JEWELLERY', 'shop'],
+      ['מכולת', 'GROCERY', 'market'],
+    ];
+    for (const lot of this.lots) {
+      if (lot.kind !== 'building' || lot.fixed || lot.strip !== 0) continue;
+      const len = lot.z1 - lot.z0;
+      const n = len > 52 ? 3 : 2;
+      for (let i = 0; i < n; i++) {
+        const h = hash2(Math.round(lot.z0) + i * 7, lot.side * 3 + i, 4411);
+        const [he, en, theme] = names[Math.floor(h * names.length) % names.length];
+        const z = lot.z0 + ((i + 0.5) * len) / n;
+        // The wall that faces the boulevard: -x for a lot on the left, +x for one on the right.
+        this.signs.push({ x: lot.side === 1 ? lot.x0 - 0.16 : lot.x1 + 0.16, y: 3.72, z, yaw: lot.side === 1 ? -Math.PI / 2 : Math.PI / 2, w: 4.4 + h * 1.6, h: 0.95, text: he, sub: en, theme });
+      }
+    }
+  }
+
+  private pave(kind: 'paving' | 'lawn' | 'tarmac' | 'pitch', x0: number, x1: number, z0: number, z1: number) {
     this.streets.push({ id: `${this.plan?.id ?? 'plan'}:pv${this.streets.length}`, kind, x0: Math.min(x0, x1), x1: Math.max(x0, x1), z0, z1 });
   }
 
@@ -549,6 +776,7 @@ export class LegLayoutImpl implements LegLayout {
     const rng = new Rng(this.leg.seed ^ 0x7e11);
     const faceYaw = (dx: number, dz: number) => Math.atan2(dx, dz);
     const ground = (id: string, kind: PickupKind, amount: number, x: number, z: number) => this.pickups.push({ id: this.id(id), kind, amount, x, z, y: 0 });
+    const depthZ = (l: Lot) => l.z1 - l.z0;
     const lamp = (x: number, z: number, towardX: number) => this.plainProp('streetlight', x, z, x < towardX ? 0 : Math.PI, 1, 1 + this.props.length);
     let cluster = 6100;
 
@@ -649,6 +877,51 @@ export class LegLayoutImpl implements LegLayout {
           pushZombies(this, rng, lx + 3, lot.z0 + 50, 1, ['screamer'], 2, true, cluster++);
           break;
         }
+        case 'busStation': {
+          // The forecourt between Haim Ozer and the terminal hall: dark tarmac, the buses that never left, shelters for the
+          // people who were waiting for them, and the big sign over the doors. The commuters are still here.
+          const hallFront = 13;
+          this.pave('tarmac', lot.x0, xAt(hallFront), lot.z0 + 2, lot.z1 - 2);
+          for (let k = 0; k < 5; k++) {
+            const bz = lot.z0 + 14 + k * 21;
+            const south = k % 2 === 1;
+            this.plainProp('bus', xAt(4.6), bz, south ? Math.PI : 0, 1, 11 + k);
+            this.aabbs.push({ id: newAabbId(), minX: xAt(4.6) - 1.4, maxX: xAt(4.6) + 1.4, minZ: bz - 6.2, maxZ: bz + 6.2, y0: 0, y1: 3.2, kind: 'pillar', hp: 99999 });
+            this.plainProp('busShelter', xAt(9.2), bz + 4, faceYaw(-out, 0), 1, 21 + k);
+          }
+          lamp(xAt(hallFront - 1.4), lot.z0 + 6, xAt(0));
+          lamp(xAt(hallFront - 1.4), lot.z1 - 6, xAt(0));
+          // Signs: the hall's name along its roof line, and one on the glass tower beside it.
+          this.signs.push({ x: xAt(hallFront) - out * 0.2, y: 13.9, z: cz, yaw: faceYaw(-out, 0), w: 26, h: 3.2, text: 'תחנה מרכזית פתח תקווה', sub: 'PETAH TIKVA CENTRAL BUS STATION', theme: 'bus' });
+          this.signs.push({ x: xAt(hallFront) - out * 0.2, y: 3.5, z: cz, yaw: faceYaw(-out, 0), w: 12, h: 0.9, text: 'כרטיסים · יציאות', sub: 'TICKETS · DEPARTURES', theme: 'bus' });
+          ground('bs', 'scrap', 10, xAt(7), lot.z0 + 30);
+          ground('bs', 'rations', 2, xAt(10.5), lot.z0 + 52);
+          ground('bs', 'tech', 1, xAt(11), lot.z0 + 88);
+          ground('bs', 'medicine', 1, xAt(9), lot.z0 + 70);
+          pushZombies(this, rng, xAt(8), cz - 18, 9, ['walker', 'walker', 'walker', 'runner'], 12, true, cluster++);
+          pushZombies(this, rng, xAt(8), cz + 22, 5, ['walker', 'runner'], 9, true, cluster++);
+          pushZombies(this, rng, xAt(20), cz, 1, ['brute'], 3, true, cluster++);
+          break;
+        }
+        case 'stadium': {
+          // The pitch: striped grass between the stands, goals at both ends. The two corners left open are the way in.
+          this.pave('pitch', lot.x0 + 17, lot.x0 + 73, lot.z0 + 7, lot.z1 - 7);
+          for (const [fx, fz] of [[8.5, 3], [81.5, 3], [8.5, depthZ(lot) - 3], [81.5, depthZ(lot) - 3]] as const) {
+            // Each mast's lamps face the middle of the pitch.
+            this.plainProp('floodlight', lot.x0 + fx, lot.z0 + fz, faceYaw(cx - (lot.x0 + fx), cz - (lot.z0 + fz)), 1, 1);
+          }
+          this.signs.push({ x: lot.x0 - 0.2, y: 8.6, z: cz, yaw: faceYaw(-out, 0), w: 26, h: 3.4, text: 'אצטדיון המושבה', sub: 'HAMOSHAVA STADIUM', theme: 'stadium' });
+          // The gate on the forecourt side: a ticket kiosk and some turnstile-shaped debris, and the supporters who never left.
+          ground('st', 'scrap', 16, lot.x0 + 3, lot.z0 + 40);
+          ground('st', 'fuel', 5, lot.x0 + 45, cz + 10);
+          ground('st', 'rations', 2, lot.x0 + 40, cz - 8);
+          ground('st', 'medicine', 1, lot.x0 + 52, cz + 18);
+          ground('st', 'ammo', 12, lot.x0 + 36, cz - 20);
+          pushZombies(this, rng, lot.x0 + 45, cz, 12, ['walker', 'walker', 'walker', 'runner'], 22, true, cluster++);
+          pushZombies(this, rng, lot.x0 + 45, cz - 30, 2, ['brute'], 6, true, cluster++);
+          pushZombies(this, rng, lot.x0 + 45, cz + 34, 1, ['screamer'], 3, true, cluster++);
+          break;
+        }
       }
     }
     // Shopfronts with a drawn sign: tables and chairs out on the sidewalk, and something to eat inside.
@@ -677,7 +950,7 @@ export class LegLayoutImpl implements LegLayout {
 
   /** True if a point (with radius) falls inside a solid building lot or an authored obstacle. */
   blockedAt(x: number, z: number, r: number): boolean {
-    if (this.leg.biome === 'city') {
+    if (this.lotGrid.size) {
       const arr = this.lotGrid.get(Math.floor(z / 16));
       if (arr) {
         for (const l of arr) {
@@ -1090,6 +1363,97 @@ export class LegLayoutImpl implements LegLayout {
     for (let z = 300; z < this.leg.length; z += 340) {
       const rx = roadX(T, z);
       pushZombies(this, rng, rx + rng.range(-30, 30), z, rng.int(2, 4), ['walker'], 8, false, 3000 + z);
+    }
+  }
+
+  /**
+   * Raiders hole up in some of the places off the highway. Come near one and they hear the engines: the same ambush the
+   * authored ones are, but wherever the convoy happens to be going, and stronger the further from the start.
+   */
+  private raiderCamps() {
+    const rng = new Rng(this.leg.seed ^ 0x2a1d);
+    const T = this.terrain;
+    for (const s of T.sites) {
+      if (!(s.kind === 'depot' || s.kind === 'gasStop' || s.kind === 'motel' || s.kind === 'mastHill' || s.kind === 'farm')) continue;
+      if (Math.abs(s.x - roadX(T, s.z)) < 250 || !rng.chance(0.5)) continue;
+      const reach = Math.hypot(s.x, s.z - 12);
+      this.ambushes.push({
+        id: this.id('a'),
+        x: s.x,
+        z: s.z,
+        buggies: Math.min(5, 2 + Math.floor(reach / 1200)),
+        wagon: reach > 1800 && rng.chance(0.5) ? 1 : 0,
+        triggerRadius: 170,
+        canyon: false,
+      });
+    }
+  }
+
+  /**
+   * The rest of the map: rocks, dead trees, bones, scrap, the odd fuel can and wandering dead, one roll per 60 m square,
+   * leaving the strip along the highway to `wastelandAmbient`. Its own random stream.
+   */
+  private openAmbient() {
+    const rng = new Rng(this.leg.seed ^ 0x09e1);
+    const T = this.terrain;
+    const o = T.open!;
+    const CELL = 60;
+    for (let i = Math.floor(o.x0 / CELL) + 1; i < Math.floor(o.x1 / CELL) - 1; i++) {
+      for (let j = Math.floor(o.z0 / CELL) + 1; j < Math.floor(o.z1 / CELL) - 1; j++) {
+        const x = (i + rng.next()) * CELL;
+        const z = (j + rng.next()) * CELL;
+        // A roll per kind, always made, so a change in one never shifts the others.
+        const rRock = rng.next();
+        const rBig = rng.next();
+        const rTree = rng.next();
+        const rBones = rng.next();
+        const rScrap = rng.next();
+        const rFuel = rng.next();
+        const rDead = rng.next();
+        const ox = rng.range(-20, 20);
+        const oz = rng.range(-20, 20);
+        if (Math.abs(x - roadX(T, z)) < 130) continue;
+        if (nearestRoad(o, x, z).edge < 8) continue;
+        const y = heightAt(T, x, z);
+        if (rRock < 0.5) {
+          const big = rBig < 0.12;
+          this.props.push({ kind: 'rock', x, y, z, yaw: rng.range(0, 6.28), scale: big ? rng.range(2.4, 4.2) : rng.range(0.6, 1.6), seed: rng.int(0, 9999) });
+          if (big) {
+            const r = 1.4 * 3;
+            this.aabbs.push({ id: newAabbId(), minX: x - r, maxX: x + r, minZ: z - r, maxZ: z + r, y0: y - 1, y1: y + 4, kind: 'rock', hp: 9999 });
+          }
+        }
+        if (rTree < 0.14) this.props.push({ kind: 'deadTree', x: x + ox, y: heightAt(T, x + ox, z + oz), z: z + oz, yaw: rng.range(0, 6.28), scale: rng.range(0.8, 1.5), seed: rng.int(0, 99) });
+        if (rBones < 0.04) this.props.push({ kind: 'bones', x: x - ox, y: heightAt(T, x - ox, z - oz), z: z - oz, yaw: rng.range(0, 6.28), scale: 1, seed: rng.int(0, 99) });
+        if (rScrap < 0.05) this.pickups.push({ id: this.id('os'), kind: 'scrap', amount: rng.int(5, 10), x: x + oz, z: z + ox, y: heightAt(T, x + oz, z + ox) });
+        if (rFuel < 0.005) this.pickups.push({ id: this.id('of'), kind: 'fuel', amount: 5, x: x - oz, z: z + ox, y: heightAt(T, x - oz, z + ox) });
+        if (rDead < 0.014) pushZombies(this, rng, x, z, rng.int(2, 4), ['walker'], 10, false, 3000 + i * 57 + j);
+      }
+    }
+  }
+
+  /** Oil cans and the odd part along the side roads, like the highway's, but sparser. */
+  private sideRoadKit() {
+    const rng = new Rng(this.leg.seed ^ 0x51de);
+    const T = this.terrain;
+    for (const road of T.open!.roads) {
+      if (road.kind !== 'road') continue;
+      const p = road.pts;
+      let acc = rng.range(0, 140);
+      for (let k = 2; k < p.length; k += 2) {
+        acc += Math.hypot(p[k] - p[k - 2], p[k + 1] - p[k - 1]);
+        if (acc < 140) continue;
+        acc = rng.range(0, 60);
+        const side = rng.sign();
+        const x = p[k] + side * rng.range(7, 22);
+        const z = p[k + 1] + rng.range(-8, 8);
+        if (rng.chance(0.4)) this.pickups.push({ id: this.id('so'), kind: 'oil', amount: OIL_CAN, x, z, y: heightAt(T, x, z) });
+        if (rng.chance(0.14)) {
+          const spec = rollPartSpec(rng, { minMk: 1, maxMk: rng.chance(0.2) ? 2 : 1 });
+          this.pickups.push({ id: this.id('sp'), kind: 'part', amount: partDef(spec.id).mk, part: spec, x: x - side * 4, z, y: heightAt(T, x - side * 4, z) });
+        }
+        if (rng.chance(0.22) && Math.abs(p[k] - roadX(T, z)) > 60) this.addCar(p[k] + side * rng.range(5.6, 8.4), z, rng.range(0, 6.28), rng.int(0, 9999));
+      }
     }
   }
 

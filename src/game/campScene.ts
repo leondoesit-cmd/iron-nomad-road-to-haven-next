@@ -64,6 +64,9 @@ export function sectorOf(dx: number, dz: number) {
   return Math.round(a / (Math.PI / 4)) % 8;
 }
 
+/** The camps that sit inside a city: they take the city's rules and look even on a wasteland leg. */
+const CITY_CAMPS = new Set(['carPark', 'plaza']);
+
 export class CampScene extends Scene {
   biome: 'wasteland' | 'city';
   mode = 'camp' as const;
@@ -123,7 +126,7 @@ export class CampScene extends Scene {
     private ledgerOnly = false,
   ) {
     super(svc);
-    this.biome = leg.biome;
+    this.biome = leg.biome === 'city' || CITY_CAMPS.has(siteId) ? 'city' : leg.biome;
     this.siteName = STRUCTURES.sites[siteId]?.name ?? 'Camp';
     this.rng2 = new Rng(leg.seed + svc.campaign.day * 101 + siteId.length);
     this.legRngSeed = leg.seed * 13 + svc.campaign.day;
@@ -142,7 +145,8 @@ export class CampScene extends Scene {
     this.spawnConvoyCamp();
     this.cars.everything = true;
     for (const c of this.campCars) this.cars.add(c);
-    const hub = leg.endHub ? LEGS.hubs[leg.endHub] : null;
+    const hubId = svc.campaign.hub ?? leg.endHub;
+    const hub = hubId ? LEGS.hubs[hubId] : null;
     this.safeNight = !!hub?.safeNight && !ledgerOnly;
     this.planRaid();
     if (ledgerOnly) {
@@ -988,11 +992,13 @@ export class CampScene extends Scene {
     for (const z of this.zombies.list) z.dead = true;
     this.zombies.list.length = 0;
     this.projectiles.clear();
+    this.combat.clear();
     const c = this.campaign;
     c.stats.nights++;
     const lines: string[] = [];
     const crew: string[] = [];
-    const hub = this.leg.endHub ? LEGS.hubs[this.leg.endHub] : null;
+    const hubId = this.campaign.hub ?? this.leg.endHub;
+    const hub = hubId ? LEGS.hubs[hubId] : null;
     lines.push(`${hub?.safeNight ? 'A safe night at ' + hub.name : 'Night ' + c.day + ' at the ' + this.siteName}. ${this.safeNight ? 'No raid came.' : `Raid type: ${this.raidKind}. Threat ${this.plan.threat}.`}`);
     if (!this.safeNight) lines.push(`Camp Signature ${Math.round(this.signatureS)} (${this.hot ? 'hot' : 'cold'} camp). Waves faced: ${Math.min(3, this.waveCleared + (this.waveActive ? 1 : 0))}/3.`);
     const kills = c.stats.zombiesKilled + c.stats.raidersKilled - this.kills0;

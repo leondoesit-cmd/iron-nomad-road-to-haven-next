@@ -98,12 +98,14 @@ export class LedgerPanel {
   }
 
   private get nextLegs(): string[] {
+    // The open world has no next road: the morning rolls out from camp, wherever camp is.
+    if (legById(this.c.legId).open) return [this.c.legId];
     return LEGS.route.next[this.c.legId] ?? [];
   }
 
   private get hub() {
-    const leg = legById(this.c.legId);
-    return leg.endHub ? LEGS.hubs[leg.endHub] : null;
+    const id = this.c.hub ?? legById(this.c.legId).endHub;
+    return id ? LEGS.hubs[id] : null;
   }
 
   private btn(id: string, label: string, act: Act, enabled = true, title = '') {
@@ -128,7 +130,7 @@ export class LedgerPanel {
     const owedTotal = c.crewLive.reduce((a, m) => a + Object.values(m.owed).reduce((x, y) => x + (y ?? 0), 0), 0);
     const left = `<section><h3>Stores</h3>${stocksHtml}
       <div class="stockrow"><span>Ammo</span><b>${c.ammo}</b></div>
-      <div class="stockrow"><span>Medkits / Flares / Molotovs / Charges</span><b>${c.items.medkit}/${c.items.flare}/${c.items.molotov}/${c.items.charge}</b></div>
+      <div class="stockrow"><span>Bandages / Medkits / Flares / Molotovs / Charges</span><b>${c.items.bandage}/${c.items.medkit}/${c.items.flare}/${c.items.molotov}/${c.items.charge}</b></div>
       <div class="stockrow"><span>Pharmacy</span><b>${drugsHtml}</b></div>
       <div class="stockrow"><span>Salvaged chassis</span><b>${c.chassis}</b></div>
       <div class="stockrow"><span>Radio fragments</span><b>${c.fragments.size}/4</b></div>
@@ -306,7 +308,7 @@ export class LedgerPanel {
         <div class="btns">
           ${owed.length ? this.btn(`pay-${m.id}`, `Pay cut <span class="cost">${escapeHtml(owedTxt)}</span>`, () => { settleCut(m, this.c.stocks, true); this.ok(`Paid ${m.name}`); }) : '<span class="mutedtxt">Cut paid</span>'}
           ${owed.length ? this.btn(`short-${m.id}`, `Short the crew <span class="cost">keep it, -15 loyalty</span>`, () => { settleCut(m, this.c.stocks, false); this.warn(`${m.name} noticed.`); }) : ''}
-          ${this.btn(`fire-${m.id}`, 'Dismiss', () => { m.alive = false; m.deserted = true; this.c.axes.notoriety += 0; this.say(`${m.name} left the convoy.`); this.render(); })}
+          ${this.btn(`fire-${m.id}`, 'Dismiss', () => { m.deserted = true; this.say(`${m.name} left the convoy.`); this.render(); })}
         </div></div>`);
     }
     if (!parts.length) parts.push('<div class="mutedtxt">No crew yet.</div>');
@@ -329,6 +331,10 @@ export class LedgerPanel {
   }
 
   private routeHtml() {
+    if (legById(this.c.legId).open) {
+      const done = this.c.flags.haven ? `<div class="mutedtxt">You reached Haven. The road ends there, but the country does not.</div><div class="btns">${this.btn('end', 'See how it went', () => this.sliceEnd())}</div>` : '';
+      return `<div class="card"><h4>The open road</h4><div class="mutedtxt">At dawn the convoy rolls out from here. Any road, or none: the highway runs north through Petah Tikva to Rustgate and Haven, and the country either side of it is yours.</div>${done}</div>`;
+    }
     const next = this.nextLegs;
     if (!next.length) {
       return `<div class="card"><h4>End of the vertical slice</h4><div class="mutedtxt">The road north continues in the Beta.</div><div class="btns">${this.btn('end', 'See how it went', () => this.sliceEnd())}</div></div>`;
@@ -399,6 +405,7 @@ export class LedgerPanel {
     const y = r.yields;
     if (y.ammo) this.c.ammo += y.ammo;
     if (y.medkit) this.c.items.medkit += y.medkit;
+    if (y.bandage) this.c.items.bandage += y.bandage;
     if (y.molotov) this.c.items.molotov += y.molotov;
     if (y.flare) this.c.items.flare += y.flare;
     if (y.charge) this.c.items.charge += y.charge;

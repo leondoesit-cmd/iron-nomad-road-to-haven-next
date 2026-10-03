@@ -8,8 +8,9 @@ import type { Fit } from '../sim/parts';
 import { partDef } from '../data';
 import { bedroll, crate, exhaust, heavyGun, jerryCan, plate, rivets, shock, signPlate, spareTyre, strap } from './parts';
 import { addKit, type KitLook, type Mounts } from './attachments';
+import { partMeta, partTag } from './bodyParts';
 import { addWheels, blank, bodyMat, finish, headlamp, liveRig, rider, taillight, wheelSpec, type VehicleVisual } from './vehicleKit';
-import { buildCar, carMounts } from './carModels';
+import { buildCar, carMounts, prepareCarShell } from './carModels';
 
 export type { VehicleVisual, WheelVisual } from './vehicleKit';
 
@@ -133,7 +134,9 @@ export function buildMoped(def: VehicleDef, wheelLocal: [number, number, number]
   // Rear rack with a crate, a jerry can and a bedroll.
   b.pipe([[0.15, 0.13, -0.66], [0.15, 0.14, -1.06], [-0.15, 0.14, -1.06], [-0.15, 0.13, -0.66]], 0.012, frame, 6);
   for (let i = 0; i < 4; i++) b.rod(0.15, 0.14, -0.72 - i * 0.1, -0.15, 0.14, -0.72 - i * 0.1, 0.009, frame, 6);
+  b.mark(partTag('crate'), partMeta({ kind: 'crate', pivot: [-0.06, 0.15, -0.9] }));
   crate(b, -0.06, 0.29, -0.9, 0.28, 0.28, 0.28, 0.08);
+  b.end();
   jerryCan(b, 0.15, 0.15, -0.78, color, Math.PI / 2, false);
   bedroll(b, 0, 0.47, -0.88, 0.42, 0.07, 0x5b5a3e);
   strap(b, [[-0.21, 0.15, -0.9], [-0.21, 0.44, -0.9], [0.09, 0.44, -0.9], [0.09, 0.15, -0.9]]);
@@ -228,16 +231,24 @@ export function buildQuad(def: VehicleDef, wheelLocal: [number, number, number][
   headlamp(v, b, 0.25, 0.2, 0.905, 0.05, false);
   headlamp(v, b, -0.25, 0.2, 0.905, 0.05, false);
   // Road-sign side plates as improvised armour.
+  b.mark(partTag('sign', 1), partMeta({ kind: 'sign', side: 1, pivot: [0.45, 0.04, 0.1] }));
   signPlate(b, 0.5, 0.04, 0.1, 0.62, 0.3, C.signYellow, 0, Math.PI / 2, 0.04);
+  b.end();
+  b.mark(partTag('sign', -1), partMeta({ kind: 'sign', side: -1, pivot: [-0.45, 0.04, 0.1] }));
   signPlate(b, -0.5, 0.04, 0.1, 0.62, 0.3, C.signYellow, 0, -Math.PI / 2, -0.04);
+  b.end();
   // The fixed LMG on the front rack is drawn by the weapon kit, so a better mount changes how it looks.
   b.pipe([[0.3, 0.16, 0.66], [0.3, 0.2, 0.92], [-0.3, 0.2, 0.92], [-0.3, 0.16, 0.66]], 0.014, frame, 6);
   // Rear rack loaded with salvage.
   b.pipe([[0.32, 0.25, -0.62], [0.34, 0.27, -1.08], [-0.34, 0.27, -1.08], [-0.32, 0.25, -0.62]], 0.016, frame, 6);
+  b.mark(partTag('crate'), partMeta({ kind: 'crate', pivot: [-0.15, 0.28, -0.86] }));
   crate(b, -0.15, 0.43, -0.86, 0.32, 0.3, 0.32, 0.1);
+  b.end();
   jerryCan(b, 0.2, 0.28, -0.8, color, Math.PI / 2);
   jerryCan(b, 0.2, 0.28, -1.0, 0x5a6442, Math.PI / 2);
+  b.mark(partTag('spare'), partMeta({ kind: 'spare', pivot: [0, 0.4, -0.9] }));
   spareTyre(b, 0, 0.66, -0.9, 0.24, 0.12, 0, 0.3);
+  b.end();
   strap(b, [[-0.33, 0.27, -0.86], [-0.33, 0.6, -0.86], [0.33, 0.6, -0.86], [0.33, 0.27, -0.86]]);
   exhaust(b, [[0.1, -0.15, -0.2], [0.18, -0.12, -0.6], [0.24, 0.1, -0.9], [0.24, 0.12, -1.1]], 0.025, 0.055);
   taillight(v, 0.2, 0.18, -1.1);
@@ -294,9 +305,11 @@ export function buildBuggy(def: VehicleDef, wheelLocal: [number, number, number]
   // Grille, bull bar and ram spikes.
   b.rbox(0, 0.02, 1.76, 1.2, 0.34, 0.06, 0.02, S.metal(0x1f2022, 0.5));
   for (let i = 0; i < 9; i++) b.box(-0.48 + i * 0.12, 0.02, 1.8, 0.03, 0.3, 0.03, S.chrome(0x9da2a6));
+  b.mark(partTag('bullbar'), partMeta({ kind: 'bullbar', pivot: [0, 0.0, 1.8] }));
   b.pipe([[0.82, -0.3, 1.86], [0.82, 0.32, 1.92], [-0.82, 0.32, 1.92], [-0.82, -0.3, 1.86]], 0.045, steel, 10);
   b.pipe([[0.82, 0.02, 1.9], [-0.82, 0.02, 1.9]], 0.04, steel, 10);
   plate(b, 0, -0.18, 1.95, 1.7, 0.3, 0.03, S.steel(0x5c6064, 0.85), -0.15, 0, 0);
+  b.end();
   for (let i = 0; i < 5; i++) b.add('cone12', -0.6 + i * 0.3, -0.18, 2.12, 0.08, 0.26, 0.08, S.steel(0x7a7e82, 0.6), Math.PI / 2, 0, 0);
   // Headlights in buckets on the bull bar, plus a roof light bar.
   headlamp(v, b, 0.56, 0.28, 1.97, 0.1);
@@ -346,12 +359,18 @@ export function buildBuggy(def: VehicleDef, wheelLocal: [number, number, number]
   // Corrugated roof plate in rust.
   for (let i = 0; i < 7; i++) b.cyl(-0.6 + i * 0.2, 1.4, -0.16, 0.12, 0.66, 0.12, rust, Math.PI / 2, 0, 0, 8);
   // Roof light bar.
+  b.mark(partTag('lightbar'), partMeta({ kind: 'lightbar', pivot: [0, 1.42, 0.12] }));
   b.rbox(0, 1.47, 0.12, 0.9, 0.1, 0.12, 0.03, S.plastic(0x1a1a1a));
+  b.end();
   headlamp(v, b, 0.3, 1.47, 0.19, 0.04, false);
   headlamp(v, b, -0.3, 1.47, 0.19, 0.04, false);
   // Doors: road signs welded in place.
+  b.mark(partTag('door', 1), partMeta({ kind: 'door', side: 1, pivot: [0.77, 0.2, 0.54] }));
   signPlate(b, 0.77, 0.2, 0.05, 0.98, 0.5, C.signYellow, 0, Math.PI / 2, 0);
+  b.end();
+  b.mark(partTag('door', -1), partMeta({ kind: 'door', side: -1, pivot: [-0.77, 0.2, 0.54] }));
   signPlate(b, -0.77, 0.2, 0.05, 0.98, 0.5, 0xc2402e, 0, -Math.PI / 2, 0);
+  b.end();
   // Bed: floor at y = 0 so the gunner stands on it.
   b.box(0, -0.06, -1.3, 1.5, 0.1, 1.5, S.steel(0x5a5a56, 0.8));
   for (let i = 0; i < 6; i++) b.box(-0.6 + i * 0.24, 0.0, -1.3, 0.05, 0.03, 1.46, S.steel(0x444442, 0.8));
@@ -364,10 +383,14 @@ export function buildBuggy(def: VehicleDef, wheelLocal: [number, number, number]
   // Gun post, cargo, spare wheel and jerry cans.
   b.cyl(0, 0.38, -0.95, 0.1, 0.8, 0.1, steel, 0, 0, 0, 12);
   b.cyl(0, 0.0, -0.95, 0.28, 0.04, 0.28, steel, 0, 0, 0, 12);
+  b.mark(partTag('spare'), partMeta({ kind: 'spare', pivot: [0.38, 0.1, -1.72] }));
   spareTyre(b, 0.38, 0.3, -1.72, 0.36, 0.22, Math.PI / 2, 0);
+  b.end();
   jerryCan(b, -0.5, 0.0, -1.5, color, 0);
   jerryCan(b, -0.5, 0.0, -1.2, 0x55603e, 0);
+  b.mark(partTag('crate'), partMeta({ kind: 'crate', pivot: [-0.05, 0.0, -1.62] }));
   crate(b, -0.05, 0.15, -1.62, 0.42, 0.3, 0.38, 0.3);
+  b.end();
   strap(b, [[-0.66, 0.36, -1.38], [-0.32, 0.36, -1.38]]);
   // Exhaust stacks behind the cab.
   for (const sx of [1, -1]) exhaust(b, [[sx * 0.6, -0.1, 0.62], [sx * 0.8, 0.05, 0.4], [sx * 0.82, 0.6, 0.3], [sx * 0.82, 1.1, 0.32]], 0.04, 0.065);
@@ -505,7 +528,11 @@ export function buildWagon(def: VehicleDef, wheelLocal: [number, number, number]
   b.rbox(0, 0.32, 0.1, 2.2, 1.05, 3.4, 0.06, rust);
   // Overlapping armour plates along each flank, riveted.
   for (const sx of [1, -1]) {
-    for (let i = 0; i < 4; i++) plate(b, sx * 1.13, 0.35, -1.25 + i * 0.85, 0.95, 0.85, 0.05, i % 2 ? armour : rust, 0, sx * Math.PI / 2, 0);
+    for (let i = 0; i < 4; i++) {
+      b.mark(partTag('sign', `${sx}:${i}`), partMeta({ kind: 'sign', side: sx as 1 | -1, pivot: [sx * 1.1, 0.35, -1.25 + i * 0.85] }));
+      plate(b, sx * 1.13, 0.35, -1.25 + i * 0.85, 0.95, 0.85, 0.05, i % 2 ? armour : rust, 0, sx * Math.PI / 2, 0);
+      b.end();
+    }
     // Spikes along the hull.
     for (let i = 0; i < 6; i++) b.add('cone12', sx * 1.32, 0.48 + (i % 2) * 0.22, -1.6 + i * 0.66, 0.12, 0.6, 0.12, S.steel(0x8a8e92, 0.5), 0, 0, -sx * Math.PI / 2);
     // Wheel arches.
@@ -595,4 +622,12 @@ export function buildVehicleVisual(def: VehicleDef, wheelLocal: [number, number,
     default:
       return buildBuggy(def, wheelLocal, steered, look);
   }
+}
+
+/**
+ * Do the heavy part of a car's model ahead of time, a slice per step. Spawning the car afterwards finds it ready.
+ * Only the found-car chassis have anything to prepare; the rest build in one go and nothing is lost by it.
+ */
+export function* prepareVehicleVisual(def: VehicleDef, build: VehicleBuild): Generator<void> {
+  if (def.id === 'hatch' || def.id === 'sedan' || def.id === 'pickup' || def.id === 'van') yield* prepareCarShell(def, lookOf(build));
 }

@@ -1,3 +1,4 @@
+import { buildPartModel } from './partModels';
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { C } from './palette';
@@ -631,6 +632,131 @@ function benchProto(seed: number): MeshBuilder {
 }
 
 
+
+// ------------------------------------------------------------------------------------------ the transport hub
+
+/** A city bus, 12 m long, white with a coloured band, in the livery of one of the three big operators; engines off for good. */
+function busProto(seed: number): MeshBuilder {
+  const b = new MeshBuilder();
+  b.jitter = 0.02;
+  const band = [0x1f7a3a, 0x1c4fa0, 0x0e5a46, 0xb5232a][seed % 4];
+  const body = S.paint(0xe3e2da, 0.8);
+  const stripe = S.paint(band, 0.7);
+  const glass = S.glass(0x0e1418);
+  b.rbox(0, 1.65, 0, 2.5, 2.5, 12, 0.14, body);
+  b.box(0, 0.78, 0, 2.52, 0.55, 12.02, stripe);
+  b.box(0, 2.78, 0, 2.52, 0.16, 12.02, stripe);
+  for (const sx of [-1.26, 1.26]) {
+    for (let i = 0; i < 6; i++) b.box(sx, 2.0, -4.7 + i * 1.88, 0.06, 0.95, 1.62, glass);
+    b.box(sx, 1.2, 4.4, 0.07, 1.5, 1.2, S.paint(0x2a3138, 0.6));
+  }
+  b.box(0, 2.0, 6.0, 2.2, 1.15, 0.06, glass, 0.06, 0, 0);
+  b.box(0, 2.88, 6.02, 1.7, 0.26, 0.05, S.glow(0xff9a20, 0.5));
+  b.box(0, 0.58, 6.0, 2.52, 0.3, 0.2, S.rubber(0x1a1a1c));
+  b.box(0, 0.58, -6.0, 2.52, 0.3, 0.2, S.rubber(0x1a1a1c));
+  b.box(0, 3.1, -1.2, 1.7, 0.34, 4.2, S.paint(0xb9bcbc, 0.7));
+  b.box(0, 3.1, 3.4, 1.4, 0.22, 1.6, S.paint(0xb9bcbc, 0.7));
+  for (const [z, dual] of [[3.9, false], [-2.5, true], [-3.5, true]] as const) {
+    void dual;
+    for (const sx of [-1.12, 1.12]) {
+      b.cyl(sx, 0.5, z, 1.0, 0.3, 1.0, S.rubber(0x1b1b1d), 0, 0, Math.PI / 2, 12);
+      b.cyl(sx + Math.sign(sx) * 0.1, 0.5, z, 0.55, 0.12, 0.55, S.metal(0x8a9096, 0.5), 0, 0, Math.PI / 2, 10);
+    }
+  }
+  return b;
+}
+
+/** A bus stop shelter: a flat roof on posts, a glass back with an advertising panel, a bench. It opens towards +Z. */
+function busShelterProto(seed: number): MeshBuilder {
+  const b = new MeshBuilder();
+  const frame = S.steel(0x4a4e52, 0.55);
+  b.box(0, 2.55, 0, 4.4, 0.1, 1.8, S.paint(seed % 2 ? 0x1f7a3a : 0x1c4fa0, 0.6));
+  for (const x of [-2.0, 2.0]) for (const z of [-0.7, 0.7]) b.rod(x, 0, z, x, 2.5, z, 0.04, frame, 6);
+  b.box(0, 1.25, -0.72, 4.0, 2.2, 0.04, S.glass(0x1c262c));
+  b.box(1.2, 1.3, -0.68, 1.1, 1.5, 0.03, S.paint(0xd9d4c4, 0.6));
+  b.box(0, 0.45, -0.4, 3.0, 0.06, 0.4, S.steel(0x3a3d40, 0.6));
+  b.box(0, 0.25, -0.4, 2.9, 0.4, 0.05, S.steel(0x3a3d40, 0.6));
+  return b;
+}
+
+/**
+ * A Red Line tram: five articulated modules, 36 m, white with a red band and big windows, black bellows between the modules,
+ * a red nose at each end, pantographs up to the wire. Dead now, and dusty. Local +Z is the direction it faces.
+ */
+function tramProto(seed: number): MeshBuilder {
+  const b = new MeshBuilder();
+  b.jitter = 0.015;
+  const white = S.paint(0xe6e8e6, 0.85);
+  const red = S.paint(0xb9151b, 0.7);
+  const glass = S.glass(0x0f171c);
+  const door = S.paint(0x2a3138, 0.6);
+  const dark = S.rubber(0x1a1a1c);
+  const modLen = 6.6;
+  const gap = 0.75;
+  const n = 5;
+  const total = n * modLen + (n - 1) * gap;
+  for (let i = 0; i < n; i++) {
+    const zc = -total / 2 + modLen / 2 + i * (modLen + gap);
+    b.rbox(0, 2.0, zc, 2.65, 2.6, modLen, 0.16, white);
+    b.box(0, 0.98, zc, 2.67, 0.6, modLen + 0.02, red);
+    b.box(0, 3.38, zc, 2.3, 0.16, modLen - 0.4, S.paint(0xb9bcbc, 0.7));
+    for (const sx of [-1.33, 1.33]) {
+      b.box(sx, 1.85, zc - 1.6, 0.07, 1.95, 1.3, door);
+      b.box(sx, 2.3, zc + 0.5, 0.06, 1.0, 1.9, glass);
+      b.box(sx, 2.3, zc + 2.45, 0.06, 1.0, 1.2, glass);
+      b.box(sx, 2.3, zc - 2.85, 0.06, 1.0, 0.7, glass);
+    }
+    // The bogies under the module and its wheels.
+    b.box(0, 0.5, zc, 2.2, 0.5, 3.4, dark);
+    for (const sx of [-1.0, 1.0]) for (const dz of [-1.2, 1.2]) b.cyl(sx, 0.4, zc + dz, 0.8, 0.22, 0.8, S.steel(0x5c6266, 0.6), 0, 0, Math.PI / 2, 12);
+    if (i < n - 1) b.box(0, 2.0, zc + modLen / 2 + gap / 2, 2.35, 2.45, gap + 0.1, dark);
+  }
+  // Noses: a red face with a raked dark windscreen, headlights and a coupler.
+  for (const end of [-1, 1]) {
+    const z = end * (total / 2);
+    b.box(0, 1.9, z - end * 0.05, 2.62, 2.4, 0.2, red);
+    b.box(0, 2.55, z + end * 0.04, 2.2, 1.2, 0.06, glass, -end * 0.3, 0, 0);
+    for (const sx of [-0.95, 0.95]) b.box(sx, 1.0, z + end * 0.08, 0.3, 0.18, 0.05, S.glow(0xfff2c8, 0.3));
+    b.box(0, 0.75, z + end * 0.15, 0.5, 0.2, 0.3, dark);
+  }
+  // Pantographs: two, on modules two and four, folded half up.
+  const pz = [-modLen - gap, modLen + gap].map((o) => o * 0.5);
+  for (const z of pz) {
+    b.box(0, 3.5, z, 1.6, 0.1, 1.0, S.steel(0x3a3d40, 0.6));
+    b.rod(-0.5, 3.5, z - 0.4, 0, 4.4, z, 0.035, S.steel(0x2e3032, 0.6), 5);
+    b.rod(0.5, 3.5, z + 0.4, 0, 4.4, z, 0.035, S.steel(0x2e3032, 0.6), 5);
+    b.box(0, 4.45, z, 1.7, 0.05, 0.12, S.steel(0x2e3032, 0.6));
+  }
+  void seed;
+  return b;
+}
+
+/** A floodlight mast: a tapering lattice tower 30 m tall, with a bank of lamps at the top facing +Z. */
+function floodlightProto(): MeshBuilder {
+  const b = new MeshBuilder();
+  const steel = S.steel(0x7d8184, 0.55);
+  const h = 30;
+  for (const [lx, lz] of [[1, 1], [-1, 1], [-1, -1], [1, -1]]) b.rod(lx * 0.9, 0, lz * 0.9, lx * 0.35, h, lz * 0.35, 0.07, steel, 6);
+  for (let y = 3; y < h; y += 4) {
+    const k = 0.9 - (0.55 * y) / h;
+    b.rod(-k, y, k, k, y, k, 0.025, steel, 4);
+    b.rod(k, y, k, k, y, -k, 0.025, steel, 4);
+    b.rod(k, y, -k, -k, y, -k, 0.025, steel, 4);
+    b.rod(-k, y, -k, -k, y, k, 0.025, steel, 4);
+  }
+  b.box(0, h + 0.1, 0.1, 5.4, 0.2, 0.3, steel);
+  for (let row = 0; row < 3; row++) {
+    for (let i = 0; i < 6; i++) {
+      b.box(-2.25 + i * 0.9, h + 0.65 + row * 0.7, 0.4, 0.78, 0.58, 0.3, S.glow(0xfff0c0, 0.7));
+      b.box(-2.25 + i * 0.9, h + 0.65 + row * 0.7, 0.22, 0.84, 0.64, 0.12, S.steel(0x2e3032, 0.6));
+    }
+  }
+  b.box(0, h + 1.6, 0.1, 5.4, 0.12, 0.3, steel);
+  b.rod(0, h + 1.7, 0.1, 0, h + 3.2, 0.1, 0.03, steel, 4);
+  b.sphereAt(0, h + 3.3, 0.1, 0.1, S.glow(0xff3a2a, 2));
+  return b;
+}
+
 /** A row of five painted parking bays (2.6 m wide, 5 m deep), centred on x with the bays running out along +Z. */
 function parkBaysProto(seed: number): MeshBuilder {
   const b = new MeshBuilder();
@@ -727,6 +853,14 @@ function build(kind: PropKind, seed: number, tag: number): MeshBuilder {
       return cafeTableProto(seed);
     case 'cafeChair':
       return cafeChairProto(seed);
+    case 'bus':
+      return busProto(seed);
+    case 'busShelter':
+      return busShelterProto(seed);
+    case 'tram':
+      return tramProto(seed);
+    case 'floodlight':
+      return floodlightProto();
     default:
       return new MeshBuilder();
   }
@@ -752,7 +886,6 @@ export function appendProp(target: MeshBuilder, p: PropSpawn) {
 
 export interface PickupModel {
   group: THREE.Group;
-  glow: THREE.Mesh;
 }
 
 const glowTex = (() => {
@@ -776,7 +909,6 @@ export const glowTexture = glowTex;
 
 const pickupGeo = new Map<string, THREE.BufferGeometry>();
 const pickupMat = kitMaterial();
-const glowMats = new Map<number, THREE.SpriteMaterial>();
 
 function pickupGeometry(kind: string): THREE.BufferGeometry {
   let g = pickupGeo.get(kind);
@@ -784,6 +916,12 @@ function pickupGeometry(kind: string): THREE.BufferGeometry {
   const b = new MeshBuilder();
   b.jitter = 0.03;
   const steel = S.steel(0x6a6e72, 0.6);
+  if (kind.startsWith('part:')) {
+    buildPartModel(b, kind.slice(5));
+    g = shared(b.build());
+    pickupGeo.set(kind, g);
+    return g;
+  }
   switch (kind) {
     case 'fuel':
       jerryCan(b, 0, 0, 0, C.fuel, 0.3);
@@ -877,42 +1015,15 @@ export function makeCarryModel(kind: string): THREE.Group {
   return g;
 }
 
-const GLOW: Record<string, number> = {
-  fuel: 0xff5a3a,
-  oil: 0xe0b030,
-  scrap: 0xcfd6dc,
-  parts: 0xffa030,
-  tech: 0x3adc9c,
-  rations: 0xf0d090,
-  medicine: 0xffffff,
-  ammo: 0xd8c050,
-  fragment: 0x3ad0ff,
-  chassis: 0x3aa0ff,
-  // Vehicle parts glow by quality: common, uncommon, rare.
-  part1: 0xe6dcc0,
-  part2: 0x7ddc7a,
-  part3: 0xffb454,
-};
-
 export function makePickup(kind: string): PickupModel {
   const group = new THREE.Group();
   const mesh = new THREE.Mesh(pickupGeometry(kind), pickupMat);
   mesh.castShadow = true;
   group.add(mesh);
-  const gc = GLOW[kind] ?? 0xffffff;
-  let m = glowMats.get(gc);
-  if (!m) {
-    m = shared(new THREE.SpriteMaterial({ map: glowTexture(), color: gc, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false }));
-    glowMats.set(gc, m);
-  }
-  const sprite = new THREE.Sprite(m);
-  sprite.scale.set(kind === 'chassis' ? 4.2 : 2.0, kind === 'chassis' ? 4.2 : 2.0, 1);
-  sprite.position.y = 0.4;
-  group.add(sprite);
-  return { group, glow: sprite as unknown as THREE.Mesh };
+  return { group };
 }
 
-/** A tall thin beam so valuable pickups read from a distance. */
+/** A tall thin beam, for the markers of delve chests and keys. */
 export function makeBeam(color: number, height = 14): THREE.Mesh {
   const g = new THREE.CylinderGeometry(0.06, 0.12, height, 8, 1, true);
   const m = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(1.6), transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });

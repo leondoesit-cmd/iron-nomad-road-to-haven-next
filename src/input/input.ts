@@ -107,6 +107,7 @@ export class InputManager {
   private mouseDX = 0;
   private mouseDY = 0;
   private mouseBtns = 0;
+  private wheelAcc = 0;
   /** Whether the game is in a state where clicking should capture the pointer (set by Game). */
   canCapture: () => boolean = () => false;
   /** Fired when the browser releases the pointer (Esc, alt-tab) so the game can pause. */
@@ -181,6 +182,16 @@ export class InputManager {
     this.target.addEventListener('mouseup', (e) => {
       this.mouseBtns &= ~(1 << e.button);
     });
+    this.target.addEventListener(
+      'wheel',
+      (e) => {
+        if (!this.mouseLocked) return;
+        e.preventDefault();
+        // Trackpads send many small deltas; a notch is a mouse wheel click or a swipe's worth.
+        this.wheelAcc += e.deltaMode === 0 ? e.deltaY / 60 : e.deltaY;
+      },
+      { passive: false },
+    );
     this.target.addEventListener('contextmenu', (e) => {
       if (this.mouseLocked || this.canCapture() || this.pending?.device === 'mouse') e.preventDefault();
     });
@@ -292,6 +303,7 @@ export class InputManager {
   }
 
   swapSeats() {
+    if (this.seats < 2) return;
     this.slots = [this.slots[1], this.slots[0]];
   }
 
@@ -443,6 +455,7 @@ export class InputManager {
       let ldy = 0;
       let usingMouse = false;
       it.aimAssist = this.settings.aimAssist[p];
+      it.toolStep = 0;
       if (slot?.kind !== 'pad') this.shareT[p] = 0;
 
       if (slot?.kind === 'pad') {
@@ -525,6 +538,10 @@ export class InputManager {
           ldx = pend[0];
           ldy = pend[1];
           this.mouseDX = this.mouseDY = 0;
+          if (Math.abs(this.wheelAcc) >= 1) {
+            it.toolStep = Math.sign(this.wheelAcc);
+            this.wheelAcc -= it.toolStep;
+          }
           // Free aim with the mouse needs far less assist than Q/E turning.
           it.aimAssist = this.settings.aimAssist[p] * 0.6;
           for (const a of actionsFor('mouse')) {
@@ -561,7 +578,11 @@ export class InputManager {
       it.held = held;
       for (let b = 0; b < BTN_COUNT; b++) {
         if (held & (1 << b)) this.holdTime[p][b] += dt;
-        else this.holdTime[p][b] = 0;
+        else {
+          // The frame it lets go, remember how long it was down: `heldTime` is already back to zero by then.
+          it.releasedAfter[b] = it.released & (1 << b) ? this.holdTime[p][b] : 0;
+          this.holdTime[p][b] = 0;
+        }
       }
       it.heldTime = this.holdTime[p];
       this.prevHeld[p] = held;

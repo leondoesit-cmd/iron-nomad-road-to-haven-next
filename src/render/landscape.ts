@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { CHUNK, corridorHalf, heightAt, roadX, type TerrainDef } from '../world/terrain';
 import { hash2, noise2 } from '../core/rng';
 import { smoothstep } from '../core/math';
-import { cliffDetail } from './chunkview';
+import { FACADE_TINT, cliffDetail } from './chunkview';
+import type { BuildingSpec } from '../world/chunkgen';
 import { makeTerrainMaterial, type TerrainUniforms } from './terrainMaterial';
 import { FacadeBuilder, facadeMaterial } from './facade';
 import { MeshBuilder } from './builder';
@@ -32,15 +33,63 @@ export class Landscape {
   /** Every roadside building of the leg, each cut away on its own when someone steps inside. */
   buildings: BuildingView[] = [];
 
+  /** The open world's city, drawn whole from far away: one mesh per chunk, put away when that chunk is loaded in detail. */
+  private cityFar = new Map<string, THREE.Mesh>();
+
   constructor(
     private def: TerrainDef,
     layout?: Pick<LegLayout, 'rural' | 'props'>,
+    cityBuildings?: BuildingSpec[],
   ) {
     if (def.biome === 'wasteland') {
       this.buildFarTerrain();
       this.buildLakes();
       if (layout) this.buildSettlements(layout);
+      if (def.open && cityBuildings?.length) this.buildDistrictFar(cityBuildings);
     } else this.buildSkyline();
+  }
+
+  /** Plain walls and roofs for every building of a district, so Petah Tikva shows on the horizon before its chunks stream in. */
+  private buildDistrictFar(buildings: BuildingSpec[]) {
+    const byChunk = new Map<string, FacadeBuilder>();
+    for (const bs of buildings) {
+      const a = bs.aabb;
+      const key = `${Math.floor((a.minX + a.maxX) / 2 / CHUNK)}:${Math.floor((a.minZ + a.maxZ) / 2 / CHUNK)}`;
+      let fb = byChunk.get(key);
+      if (!fb) byChunk.set(key, (fb = new FacadeBuilder()));
+      const k = hash2(Math.round(a.minX), Math.round(a.maxZ), 78);
+      const tall = bs.floors >= 9;
+      const style = bs.style ?? (tall ? (k < 0.35 ? 3 : k < 0.75 ? 0 : 2) : k < 0.45 ? 1 : k < 0.75 ? 2 : 0);
+      const seed = hash2(Math.round(a.minX * 2), Math.round(a.minZ * 2), 77);
+      const tint = new THREE.Color(bs.tint ?? FACADE_TINT[style][Math.floor(seed * FACADE_TINT[style].length) % FACADE_TINT[style].length]);
+      const h = a.y1 + (bs.stepped ? 6.6 : 0);
+      const corners: [number, number][] = [[a.minX, a.maxZ], [a.maxX, a.maxZ], [a.maxX, a.minZ], [a.minX, a.minZ], [a.minX, a.maxZ]];
+      for (let i = 0; i < 4; i++) {
+        const [ax, az] = corners[i];
+        const [bx, bz] = corners[i + 1];
+        const len = Math.hypot(bx - ax, bz - az);
+        const target = style === 3 ? 1.6 : 2.6 + seed * 0.7;
+        fb.wall(ax, az, bx, bz, 0, h, 0, tint, style, seed * 97 + i * 0.37, 3.3, len / Math.max(1, Math.round(len / target)));
+      }
+      const b = fb.pos.length / 3;
+      fb.pos.push(a.minX, h, a.minZ, a.minX, h, a.maxZ, a.maxX, h, a.maxZ, a.maxX, h, a.minZ);
+      for (let i = 0; i < 4; i++) {
+        fb.nor.push(0, 1, 0);
+        fb.col.push(0.3, 0.3, 0.3);
+        fb.uv.push(0, -100);
+        fb.fd.push(0, 0, 3.3, 3);
+      }
+      fb.idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+    }
+    for (const [key, fb] of byChunk) {
+      const g = fb.build();
+      this.geos.push(g);
+      const m = new THREE.Mesh(g, facadeMaterial());
+      m.frustumCulled = true;
+      m.receiveShadow = false;
+      this.group.add(m);
+      this.cityFar.set(key, m);
+    }
   }
 
   /**
@@ -83,9 +132,10 @@ export class Landscape {
   private buildFarTerrain() {
     const def = this.def;
     // Chunk grid the hole mask covers.
-    const halfW = 1500;
-    const z0 = -600;
-    const z1 = def.length + 900;
+    const open = def.open;
+    const halfW = open ? open.x1 + 800 : 1500;
+    const z0 = open ? def.zMin - 600 : -600;
+    const z1 = open ? def.zMax + 700 : def.length + 900;
     this.cx0 = Math.floor((-halfW - 200) / CHUNK);
     this.cw = Math.ceil((halfW + 200) / CHUNK) - this.cx0 + 1;
     this.cz0 = Math.floor(z0 / CHUNK);
@@ -106,10 +156,10 @@ export class Landscape {
     for (let u = -halfW; u <= halfW; ) {
       us.push(u);
       const a = Math.abs(u);
-      u += a < 240 ? 10 : a < 600 ? 20 : 40;
+      u += open ? (a < open.x1 ? 24 : 60) : a < 240 ? 10 : a < 600 ? 20 : 40;
     }
     const zs: number[] = [];
-    for (let z = z0; z <= z1; z += 16) zs.push(z);
+    for (let z = z0; z <= z1; z += open ? 24 : 16) zs.push(z);
     const cols = us.length;
     const rows = zs.length;
     const pos = new Float32Array(cols * rows * 3);
@@ -120,14 +170,15 @@ export class Landscape {
       const z = zs[r];
       const rx = roadX(def, z);
       for (let c = 0; c < cols; c++) {
-        const x = rx + us[c];
+        // In the open world the grid is laid over the map, not strung along the road.
+        const x = (open ? 0 : rx) + us[c];
         // Slightly below the detailed chunks, so any seam hides under them.
         const h = heightAt(def, x, z) + cliffDetail(def, x, z) - 0.6;
         const i = r * cols + c;
         pos[i * 3] = x;
         pos[i * 3 + 1] = h;
         pos[i * 3 + 2] = z;
-        const d = Math.abs(us[c]);
+        const d = Math.abs(x - rx);
         const cliff = smoothstep(corridorHalf(def, z) + 1, corridorHalf(def, z) + 10, d);
         const sand = smoothstep(0.5, 0.78, noise2(x / 36 + 3, z / 36, def.seed + 72)) * (1 - cliff);
         const k = 0.93 + hash2(c, r, 5) * 0.14;
@@ -195,6 +246,8 @@ export class Landscape {
     if (x < 0 || z < 0 || x >= this.cw || z >= this.ch) return;
     this.loaded[(z * this.cw + x) * 4] = on ? 255 : 0;
     this.loadedTex.needsUpdate = true;
+    const far = this.cityFar.get(`${cx}:${cz}`);
+    if (far) far.visible = !on;
   }
 
   /** Towers behind the city corridor, standing on the rubble slopes. */

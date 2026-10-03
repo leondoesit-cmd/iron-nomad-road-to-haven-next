@@ -218,8 +218,27 @@ export interface LegDef {
   endHub?: string;
   /** City legs only: the id of an authored city plan (`world/plans`) that replaces the random block grid. */
   plan?: string;
+  /**
+   * Present on the open-world leg: instead of one road between cliffs, the whole map is a basin you can drive across in
+   * any direction. `length` is then the highway's length (south end at 0, Haven at the north end).
+   */
+  open?: OpenWorldSpec;
   campSites: string[];
   sets: SetPiece[];
+}
+
+/** Hand-set parameters of the open world. Everything else (roads, places, lakes) is rolled from the leg's seed. */
+export interface OpenWorldSpec {
+  /** The playable ground runs from -halfWidth to +halfWidth in x, and from zMin to zMax in z. Mountains close it in. */
+  halfWidth: number;
+  zMin: number;
+  zMax: number;
+  /** City districts: an authored city leg dropped into the world. `at` is the world z its local z = 0 lands on. */
+  districts: { id: string; legId: string; at: number }[];
+  /** Named places that work as hubs (hire, trade, garage, safe nights): z on the highway, or a free x, z. */
+  hubs: { id: string; x: number; z: number }[];
+  /** Where the road ends: reaching it ends the slice. */
+  haven: { x: number; z: number; radius: number };
 }
 
 export interface HubDef {

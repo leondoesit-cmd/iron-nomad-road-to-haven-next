@@ -100,7 +100,7 @@ describe.each(LEGS.legs.map((l) => [l.id, l] as const))('the baked ground of %s'
   });
 
   if (leg.biome === 'wasteland') {
-    it('leaves the cliffs beyond the corridor blank', () => {
+    it.skipIf(!!leg.open)('leaves the cliffs beyond the corridor blank', () => {
       const z = 1000;
       const out = roadX(layout.terrain, z) + corridorHalf(layout.terrain, z) + 60;
       expect(out).toBeLessThan(baker.bounds.x1 + 1);
@@ -115,7 +115,9 @@ describe.each(LEGS.legs.map((l) => [l.id, l] as const))('the baked ground of %s'
           for (const k of [0.3, 0.5, 0.7]) {
             const x = l.x + Math.cos(a) * l.r * k;
             const z = l.z + Math.sin(a) * l.r * k;
-            if (waterAt(layout.terrain, x, z)) {
+            // Open water all round the spot, so a coarse map cell cannot straddle the shore.
+            const wet = (dx: number, dz: number) => waterAt(layout.terrain, x + dx, z + dz);
+            if (wet(0, 0) && wet(9, 0) && wet(-9, 0) && wet(0, 9) && wet(0, -9)) {
               hit = [x, z];
               break;
             }

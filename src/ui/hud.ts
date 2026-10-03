@@ -1,5 +1,6 @@
 import { gearDef, t } from '../data';
-import { DRUGS, DRUG_IDS } from '../sim/drugs';
+import { DRUGS } from '../sim/drugs';
+import { STAMINA, bleedLabel, wearLabel, wearOf } from '../sim/vitals';
 import { LABEL, whole } from '../sim/resources';
 import { loyaltyBand } from '../sim/loyalty';
 import { SALVAGE_STAGES } from '../sim/salvage';
@@ -10,11 +11,13 @@ import { PLAYER_CSS } from '../render/palette';
 import type { Scene, CompassPin } from '../game/scene';
 import type { LegScene } from '../game/legScene';
 import type { CampScene } from '../game/campScene';
-import type { Player } from '../game/player';
+import { QUICK, type Player, type QuickId } from '../game/player';
+import { heldItem } from '../sim/gear';
 import type { Vehicle } from '../game/vehicle';
 import { promptLabel, type Slot } from '../input/input';
 import type { MapFrame } from './mapdata';
 import { MapPainter, PIN_COLOR } from './minimap';
+import { stormLabel, stormMapRadius } from '../sim/weather';
 
 /** The key or button a prompt names, as this seat has it bound. */
 export function btnLabel(slot: Slot | null, btn: string): string {
@@ -55,6 +58,7 @@ class PlayerHud {
       <div class="corner bl">
         <div class="tag" data-k="vname">ON FOOT</div>
         <div class="bar" data-k="hpbar"><div class="fill" data-k="hpfill"></div></div>
+        <div class="bar stam" data-k="stambar"><div class="fill" data-k="stamfill"></div></div>
         <div class="row" data-k="fuelrow"><div class="bar fuel" data-k="fuelbar"><div class="fill" data-k="fuelfill"></div></div><span class="val" data-k="fuelval"></span></div>
         <div class="row" data-k="oilrow"><div class="bar oil" data-k="oilbar"><div class="fill" data-k="oilfill"></div></div><span class="val" data-k="oilval">OIL</span></div>
         <div class="row"><div class="speed" data-k="speed">0<small>km/h</small></div><div class="comp" data-k="comp"></div></div>
@@ -325,7 +329,7 @@ export class Hud {
     const hostW = h.root.clientWidth || 640;
     const hostH = h.root.clientHeight || 360;
     const v = p.vehicle;
-    const mv = { seat: p.index, x: view.x, z: view.z, yaw: view.yaw, speed: v ? Math.abs(v.speed) : p.moveSpeed, color: PLAYER_CSS[p.index] };
+    const mv = { seat: p.index, x: view.x, z: view.z, yaw: view.yaw, speed: v ? Math.abs(v.speed) : p.moveSpeed, color: PLAYER_CSS[p.index], reach: stormMapRadius(scene.storm) };
     h.setStyle('minimap', 'display', frame && mode === 0 ? 'block' : 'none');
     h.setStyle('mapfull', 'display', frame && mode > 0 ? 'block' : 'none');
     if (!frame) return;
@@ -363,15 +367,24 @@ export class Hud {
     if (p.pinned >= 2) chips.push('<span class="chip bad">PINNED</span>');
     if (p.crouch && p.state === 'foot') chips.push('<span class="chip good">CROUCHED</span>');
     if (leg && leg.hordeCountdown(p) > 0) chips.push(`<span class="chip bad">HORDE ${formatClock(leg.hordeCountdown(p))}</span>`);
+    if (p.bleed.level > 0 && p.state !== 'downed') chips.push(`<span class="chip bad">${bleedLabel(p.bleed.level)}</span>`);
+    if (p.stamina.winded && p.state === 'foot') chips.push('<span class="chip warn">WINDED</span>');
     for (const s of p.drugs.status()) chips.push(`<span class="chip ${s.kind}">${s.text}</span>`);
-    const dsel = p.drugs.selected;
-    if ((p.state === 'foot' || p.state === 'driving') && !p.beltOpen && scene.campaign.items[dsel] > 0) chips.push(`<span class="chip">${btnLabel(slot, 'Down')} ${DRUGS[dsel].name.toUpperCase()} ×${scene.campaign.items[dsel]}</span>`);
+    const qsel = p.quickSel;
+    const qn = scene.campaign.items[qsel];
+    // A dressing is worth showing while hurt; a drug only while you have one.
+    const dressing = qsel === 'bandage' || qsel === 'medkit';
+    if ((p.state === 'foot' || p.state === 'driving') && !p.beltOpen && qn > 0 && (!dressing || p.hp < p.maxHp - 0.5 || p.bleed.level > 0)) {
+      chips.push(`<span class="chip${dressing && p.bleed.level > 0 ? ' good' : ''}">${btnLabel(slot, 'Down')} ${quickName(qsel).toUpperCase()} ×${qn}</span>`);
+    }
     h.setHtml('chips', chips.join(''));
     this.updateTrip(h, p, scene, slot);
 
     // Compass
     const cam = p.cam;
-    const cyaw = Math.atan2(cam.look.x - cam.pos.x, cam.look.z - cam.pos.z);
+    const lookDx = cam.look.x - cam.pos.x;
+    const lookDz = cam.look.z - cam.pos.z;
+    const cyaw = Math.hypot(lookDx, lookDz) > 1e-3 ? Math.atan2(lookDx, lookDz) : p.cam.yaw;
     const myPos = { x: v ? v.position.x : p.pos.x, z: v ? v.position.z : p.pos.z };
     const pp = partner ? (partner.vehicle ? partner.vehicle.position : partner.pos) : null;
     h.drawCompass(cyaw, pins, myPos, pp ? { x: pp.x, z: pp.z } : null, PLAYER_CSS[p.index], PLAYER_CSS[1 - p.index], this.uiScale);
@@ -384,9 +397,11 @@ export class Hud {
       h.setStyle('legfill', 'width', `${clamp(myPos.z / L, 0, 1) * 100}%`);
       h.setStyle('legme', 'left', `${clamp(myPos.z / L, 0, 1) * 100}%`);
       h.setStyle('legdusk', 'left', '72%');
+      h.setStyle('legdusk', 'display', leg.leg.open ? 'none' : '');
       const sec = leg.clock.secondsToDark;
       h.setText('clock', leg.clock.night ? '+' + formatClock((leg.clock.t - 1) * leg.clock.dayLength) : formatClock(sec));
-      h.setText('daytag', leg.clock.dusk ? (leg.clock.night ? 'INTO THE NIGHT' : 'TO DARK') : 'TO DUSK BELL');
+      const dust = stormLabel(leg.storm, leg.stormRising);
+      h.setText('daytag', leg.clock.dusk ? (leg.clock.night ? 'INTO THE NIGHT' : 'TO DARK') : dust ? `TO DUSK BELL · ${dust}` : 'TO DUSK BELL');
       h.setStyle('legbar', 'display', '');
     } else {
       h.setStyle('legbar', 'display', 'none');
@@ -412,6 +427,7 @@ export class Hud {
     const cur = v ?? p.ownVehicle;
     if (v && (p.state === 'driving' || p.state === 'gunner')) {
       h.setText('vname', v.def.name.toUpperCase());
+      h.setStyle('stambar', 'display', 'none');
       const f = v.hpFrac;
       h.setStyle('hpfill', 'width', `${f * 100}%`);
       h.setClass('hpbar', f < 0.25 ? 'crit' : f < 0.55 ? 'low' : '');
@@ -431,8 +447,13 @@ export class Hud {
       );
     } else if (p.state === 'foot' || p.state === 'entering' || p.state === 'downed' || p.state === 'dead') {
       h.setText('vname', p.state === 'dead' ? 'DOWN FOR GOOD' : 'ON FOOT');
+      // Stamina shows only while it is being used, so a rested survivor has a clean corner.
+      const wind = p.stamina.value / STAMINA.max;
+      h.setStyle('stambar', 'display', p.state === 'foot' && (wind < 0.995 || p.stamina.winded) ? 'block' : 'none');
+      h.setStyle('stamfill', 'width', `${wind * 100}%`);
+      h.setClass('stambar', p.stamina.winded ? 'stam winded' : 'stam');
       h.setStyle('hpfill', 'width', `${(p.hp / p.maxHp) * 100}%`);
-      h.setClass('hpbar', p.hp < 25 ? 'crit' : p.hp < 55 ? 'low' : '');
+      h.setClass('hpbar', p.bleed.level > 0 ? 'bleed' : p.hp < 25 ? 'crit' : p.hp < 55 ? 'low' : '');
       h.setStyle('fuelrow', 'display', cur && !cur.wreck ? 'flex' : 'none');
       if (cur) {
         const ff = cur.fuel / cur.tankMax;
@@ -470,8 +491,10 @@ export class Hud {
     } else {
       const eq = p.equip;
       h.setText('wname', p.reloadT > 0 ? 'RELOADING' : p.heldName().toUpperCase());
-      if (eq === 'gun') h.el('ammo').innerHTML = `${p.mag}<small>/${camp.ammo}</small>`;
-      else if (eq === 'melee') h.el('ammo').innerHTML = `<small>${Math.round(p.meleeDamage())} DMG</small>`;
+      const worn = eq === 'gun' || eq === 'melee' ? heldItem(p.gear) : null;
+      const cond = worn && wearOf(worn.cond) < 0.6 ? `<small class="${wearOf(worn.cond) < 0.3 ? 'bad' : 'warn'}"> ${wearLabel(worn.cond).toUpperCase()}</small>` : '';
+      if (eq === 'gun') h.el('ammo').innerHTML = `${p.mag}<small>/${camp.ammo}</small>${cond}`;
+      else if (eq === 'melee') h.el('ammo').innerHTML = `<small>${Math.round(p.meleeDamage())} DMG</small>${cond}`;
       else if (eq === 'wrench') h.el('ammo').innerHTML = `<small>${whole(camp.stocks.scrap)} SCRAP · ${whole(camp.stocks.parts)} PARTS</small>`;
       else if (eq === 'crowbar') h.el('ammo').innerHTML = `<small>${camp.inventory.length}/${camp.inventoryCap} PARTS</small>`;
       else if (eq === 'jerrycan') h.el('ammo').innerHTML = `<small>${camp.stocks.fuel.toFixed(1)} FU · ${Math.round(camp.items.oil * 100)}% OIL</small>`;
@@ -577,6 +600,11 @@ export class Hud {
       if (c.oil < OIL_LOW) parts.push(chip(c.oil < OIL_CRITICAL ? 'OIL DRY' : 'OIL LOW', c.oil < OIL_CRITICAL ? 'bad' : 'warn'));
       else parts.push(chip(`OIL ${Math.round(c.oil * 100)}%`));
       parts.push(chip(`BODY ${Math.round(v.hpFrac * 100)}%`, v.hpFrac < 0.35 ? 'bad' : v.hpFrac < 0.65 ? 'warn' : ''));
+      const bent = v.bodywork.dentLevel();
+      if (bent > 0.5) parts.push(chip('CRUMPLED', 'warn'));
+      else if (bent > 0.06) parts.push(chip('DENTED'));
+      const off = v.bodywork.missing();
+      if (off) parts.push(chip(`${off} PANEL${off > 1 ? 'S' : ''} OFF`, 'warn'));
       if (v.health.leaking) parts.push(chip('LEAKING', 'bad'));
       if (v.health.burning) parts.push(chip('ON FIRE', 'bad'));
     }
@@ -624,13 +652,13 @@ export class Hud {
       return;
     }
     const items = scene.campaign.items;
-    const sel = d.selected;
-    const slots = DRUG_IDS.map((id) => {
-      const def = DRUGS[id];
+    const sel = p.quickSel;
+    const slots = QUICK.map((id) => {
+      const q = quickDef(id);
       const n = items[id];
-      return `<div class="slot${id === sel ? ' sel' : ''}${n <= 0 ? ' none' : ''}" style="--dc:${def.color}"><b>${def.glyph}</b><i>${n}</i></div>`;
+      return `<div class="slot${id === sel ? ' sel' : ''}${n <= 0 ? ' none' : ''}" style="--dc:${q.color}"><b>${q.glyph}</b><i>${n}</i></div>`;
     }).join('');
-    const def = DRUGS[sel];
+    const def = quickDef(sel);
     const hint = p.state === 'driving' ? `hold to cycle · release, then tap ${btnLabel(slot, 'Down')} to take` : `◀ ▶ to choose · release to close · tap ${btnLabel(slot, 'Down')} to take`;
     h.setHtml('belt', `<div class="slots">${slots}</div><div class="slotname" style="color:${def.color}">${def.name} ×${items[sel]}</div><div class="slotblurb">${def.blurb}</div><div class="slothint">${hint}</div>`);
     h.setStyle('belt', 'display', 'flex');
@@ -656,7 +684,13 @@ export class Hud {
           .join('')
       : '<div style="opacity:.7">No crew yet. Hire at a Waypoint.</div>';
     const items = `FLARES ${c.items.flare} · MOLOTOVS ${c.items.molotov} · CHARGES ${c.items.charge} · MEDKITS ${c.items.medkit} · STIMS ${c.items.stim} · PAINKILLERS ${c.items.painkiller} · ADRENALINE ${c.items.adrenaline} · HAZE ${c.items.haze} · AMMO ${c.ammo}`;
-    const route = leg ? `${leg.leg.name.toUpperCase()} · ${Math.round(leg.leg.length - (p.vehicle?.position.z ?? p.pos.z))} m TO CAMP` : 'CAMP';
+    const here = p.vehicle?.position ?? p.pos;
+    const haven = leg?.leg.open ? leg.src.layout.end : null;
+    const route = leg
+      ? haven
+        ? `${leg.leg.name.toUpperCase()} · ${(Math.hypot(haven.x - here.x, haven.z - here.z) / 1000).toFixed(1)} km TO HAVEN`
+        : `${leg.leg.name.toUpperCase()} · ${Math.round(leg.leg.length - here.z)} m TO CAMP`
+      : 'CAMP';
     h.setHtml(
       'sheet',
       `<h4>CONVOY SHEET · ${route}</h4><div class="stocks">${stocks}</div><div style="margin-top:4px;font-family:var(--mono)">${items}</div><h4 style="margin-top:8px">CREW</h4><div class="crew">${crew}</div><div style="margin-top:6px;opacity:.7;font-family:var(--mono)">FRAGMENTS ${c.fragments.size}/4 · CHASSIS ${c.chassis}</div>`,
@@ -669,3 +703,13 @@ export function escapeHtml(s: string) {
 }
 
 void t;
+
+/** What a quick-belt slot shows: dressings are ours, everything else is a drug. */
+function quickDef(id: QuickId): { name: string; glyph: string; color: string; blurb: string } {
+  if (id === 'bandage') return { name: 'Bandage', glyph: '✚', color: '#e8e0c8', blurb: 'Stops bleeding and mends a little. Quick: your hands are busy for under a second.' };
+  if (id === 'medkit') return { name: 'Medkit', glyph: '✜', color: '#ff6f5f', blurb: 'Stops bleeding and heals 60. Your hands are busy for over a second.' };
+  return DRUGS[id];
+}
+function quickName(id: QuickId): string {
+  return quickDef(id).name;
+}

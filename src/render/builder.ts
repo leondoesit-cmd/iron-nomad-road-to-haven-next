@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import type { PartMeta, PartRange } from './bodyParts';
 
 /**
  * A surface: albedo plus physically based parameters, written per vertex so one mesh can mix paint,
@@ -96,6 +97,9 @@ export class MeshBuilder {
   srf: number[] = [];
   uv: number[] = [];
   idx: number[] = [];
+  /** Runs of vertices that belong to parts which can come off the finished model (see bodyParts.ts). */
+  parts: PartRange[] = [];
+  private open: { tag: string; v0: number; i0: number; meta: PartMeta }[] = [];
   private m = new THREE.Matrix4();
   private nm = new THREE.Matrix3();
   private v = new THREE.Vector3();
@@ -111,6 +115,23 @@ export class MeshBuilder {
 
   seed(n: number) {
     this.rnd = (n | 0) || 1;
+  }
+
+  /**
+   * Everything added until the matching `end()` is one part that can come off the model later: its vertices stay
+   * a contiguous run in the merged mesh. The same tag may be marked more than once; the runs are joined up afterwards.
+   */
+  mark(tag: string, meta: PartMeta) {
+    this.open.push({ tag, v0: this.pos.length / 3, i0: this.idx.length, meta });
+    return this;
+  }
+
+  end() {
+    const o = this.open.pop();
+    if (!o) return this;
+    const v1 = this.pos.length / 3;
+    if (v1 > o.v0) this.parts.push({ tag: o.tag, v0: o.v0, v1, i0: o.i0, i1: this.idx.length, meta: o.meta });
+    return this;
   }
   private rand() {
     this.rnd = (Math.imul(this.rnd, 1664525) + 1013904223) | 0;
@@ -434,6 +455,7 @@ export class MeshBuilder {
     g.setIndex(this.pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(this.idx, 1) : new THREE.Uint16BufferAttribute(this.idx, 1));
     g.computeBoundingSphere();
     g.computeBoundingBox();
+    if (this.parts.length) g.userData.parts = this.parts.slice();
     return g;
   }
 }

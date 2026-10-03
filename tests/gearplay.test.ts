@@ -376,9 +376,9 @@ describe('the inventory key', () => {
     const key = (type: 'keydown' | 'keyup', code: string) => win.dispatchEvent(Object.assign(new Event(type, { cancelable: true }), { code, repeat: false }));
     const b = defaultBindings();
     expect(b.pad.inventory).toBe(Btn.Left);
-    expect(b.kb[0].inventory).toBe('Digit3');
+    expect(b.kb[0].inventory).toBe('Tab');
     expect(b.kb[1].inventory).toBe('KeyI');
-    key('keydown', 'Digit3');
+    key('keydown', 'Tab');
     im.sample(DT);
     expect(im.intents[0].pressed & (1 << Btn.Inventory)).not.toBe(0);
   });
@@ -649,5 +649,62 @@ describe('the gear sim and the campaign agree', () => {
     const rng = new Rng(9);
     for (let i = 0; i < 100; i++) expect(() => gearDef(newGear(['h_cap', 'w_rifle', 'k_frame'][i % 3]).id)).not.toThrow();
     expect(rng.next()).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('gear lying on the ground', () => {
+  /** Hold A for a couple of seconds. */
+  function holdA(h: ReturnType<typeof fakeServices>, sc: LegScene, who: number, secs = 1.2) {
+    const it = h.intents[who];
+    it.device = 'keyboard';
+    it.held |= 1 << Btn.A;
+    it.pressed = 1 << Btn.A;
+    for (let i = 0; i < Math.round(secs / DT); i++) {
+      sc.tick(DT);
+      it.pressed = 0;
+    }
+    it.held &= ~(1 << Btn.A);
+    it.released = 1 << Btn.A;
+    sc.tick(DT);
+    it.released = 0;
+    sc.tick(DT);
+  }
+
+  it('a find lies in the world until someone takes it, and a hold of A puts it in their bag', () => {
+    const { h, sc, p } = scene();
+    const find = newGear('h_riot');
+    sc.dropGear(find, p.pos.x, p.pos.z);
+    expect(sc.groundGear!.count).toBe(1);
+    expect(p.gear.bag.some((b) => b.uid === find.uid)).toBe(false);
+    holdA(h, sc, 0);
+    expect(p.gear.bag.some((b) => b.uid === find.uid)).toBe(true);
+    expect(sc.groundGear!.count).toBe(0);
+    expect(sc.interact.list.some((i) => i.id === `gear:${find.uid}`)).toBe(false);
+  });
+
+  it('a full bag leaves it where it lies, and nothing is scrapped', () => {
+    const { h, sc, c, p } = scene();
+    while (p.gear.bag.length < bagCap(p.gear)) p.gear.bag.push(newGear('h_cap'));
+    const scrap = c.stocks.scrap;
+    const find = newGear('h_riot');
+    sc.dropGear(find, p.pos.x, p.pos.z);
+    holdA(h, sc, 0);
+    expect(sc.groundGear!.count).toBe(1);
+    expect(p.gear.bag.some((b) => b.uid === find.uid)).toBe(false);
+    expect(c.stocks.scrap).toBe(scrap);
+    // Make room and it can be taken.
+    p.gear.bag.pop();
+    holdA(h, sc, 0);
+    expect(sc.groundGear!.count).toBe(0);
+    expect(p.gear.bag.some((b) => b.uid === find.uid)).toBe(true);
+  });
+
+  it('only people on foot can take it', () => {
+    const { sc, p } = scene();
+    sc.dropGear(newGear('h_riot'), p.pos.x, p.pos.z);
+    const ix = sc.interact.list.find((i) => i.id.startsWith('gear:'))!;
+    expect(ix.enabled(p)).toBe(true);
+    p.state = 'driving';
+    expect(ix.enabled(p)).toBe(false);
   });
 });

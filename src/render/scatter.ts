@@ -5,6 +5,7 @@ import { bushTexture, grassTexture } from './proctex';
 import { shared } from './dispose';
 import { hash2, noise2 } from '../core/rng';
 import { CHUNK, corridorHalf, heightAt, normalAt, roadX, surfaceAt, type TerrainDef } from '../world/terrain';
+import { cityChunk, nearestRoad } from '../world/openWorld';
 import type { Aabb, PropSpawn } from '../world/layout';
 
 /**
@@ -228,7 +229,16 @@ function blockedBy(aabbs: Aabb[], props: PropSpawn[], x: number, z: number, r: n
  * has a collider, and nothing is placed on the road, in a building or on another prop.
  */
 export function buildScatter(def: TerrainDef, cx: number, cz: number, aabbs: Aabb[], props: PropSpawn[], density: number, extraBlock?: (x: number, z: number) => boolean): ScatterSet {
-  const city = def.biome === 'city';
+  const g = buildScatterSteps(def, cx, cz, aabbs, props, density, extraBlock);
+  for (;;) {
+    const r = g.next();
+    if (r.done) return r.value;
+  }
+}
+
+/** `buildScatter` in slices: it yields between phases and every few rows, so a streaming chunk can spread it over several ticks. */
+export function* buildScatterSteps(def: TerrainDef, cx: number, cz: number, aabbs: Aabb[], props: PropSpawn[], density: number, extraBlock?: (x: number, z: number) => boolean): Generator<void, ScatterSet> {
+  const city = def.biome === 'city' || cityChunk(def.open, cx, cz);
   const x0 = cx * CHUNK;
   const z0 = cz * CHUNK;
   const seed = def.seed * 7 + 3;
@@ -243,6 +253,10 @@ export function buildScatter(def: TerrainDef, cx: number, cz: number, aabbs: Aab
     return out;
   };
   const roadClear = (x: number, z: number, margin: number) => {
+    if (def.open && !city) {
+      const hit = nearestRoad(def.open, x, z);
+      return hit.edge > margin;
+    }
     const half = city ? 10.2 : def.roadHalf;
     return Math.abs(x - roadX(def, z)) > half + margin;
   };
@@ -251,6 +265,7 @@ export function buildScatter(def: TerrainDef, cx: number, cz: number, aabbs: Aab
   const gStep = city ? 3.2 : 2.0;
   const gn = Math.floor(CHUNK / gStep);
   for (let gz = 0; gz < gn; gz++) {
+    if (gz % 8 === 7) yield;
     for (let gx = 0; gx < gn; gx++) {
       const p = jitter(gx, gz, gStep, 11);
       const x = p.x;
@@ -280,6 +295,7 @@ export function buildScatter(def: TerrainDef, cx: number, cz: number, aabbs: Aab
     const sStep = 7.5;
     const sn = Math.floor(CHUNK / sStep);
     for (let gz = 0; gz < sn; gz++) {
+      if (gz % 4 === 3) yield;
       for (let gx = 0; gx < sn; gx++) {
         const p = jitter(gx, gz, sStep, 31);
         const x = p.x;
@@ -298,7 +314,7 @@ export function buildScatter(def: TerrainDef, cx: number, cz: number, aabbs: Aab
   }
   // Boulders heaped along the cliff feet (outside the drivable corridor), breaking up the base line.
   const boulders: Spot[][] = [[], [], []];
-  if (!city) {
+  if (!city && !def.open) {
     const bStep = 6;
     for (let k = 0; k < CHUNK / bStep; k++) {
       for (const side of [-1, 1]) {
@@ -319,6 +335,7 @@ export function buildScatter(def: TerrainDef, cx: number, cz: number, aabbs: Aab
   const pStep = city ? 5 : 5.5;
   const pn = Math.floor(CHUNK / pStep);
   for (let gz = 0; gz < pn; gz++) {
+    if (gz % 8 === 7) yield;
     for (let gx = 0; gx < pn; gx++) {
       const p = jitter(gx, gz, pStep, 51);
       const x = p.x;
@@ -334,6 +351,7 @@ export function buildScatter(def: TerrainDef, cx: number, cz: number, aabbs: Aab
       pebbles[v].push({ x, y: heightAt(def, x, z) - (v === 2 ? 0.2 : 0.03), z, yaw: k * 40, s: v === 2 ? 0.6 + k * 2.5 : 0.7 + k * 0.8, tilt: [nrm[2] * 0.9, -nrm[0] * 0.9] });
     }
   }
+  yield;
   // Cinder country is dark: ash-grey tufts and black rock, not straw and sandstone.
   const dim = def.theme === 'cinder' ? 0.5 : 1;
   const grassTint = (_: number, s: Spot) => {
@@ -354,12 +372,11 @@ export function buildScatter(def: TerrainDef, cx: number, cz: number, aabbs: Aab
     if (city) return _col.setRGB(0.72 + h * 0.2, 0.72 + h * 0.2, 0.74 + h * 0.2);
     return _col.setRGB(0.85 + h * 0.3, 0.8 + h * 0.25, 0.75 + h * 0.2).multiplyScalar(dim * 0.7 + 0.3);
   };
-  const set: ScatterSet = {
-    grass: instanced(grassGeometry(), grassMaterial(), grass, grassTint),
-    shrubs: instanced(bushGeometry(), cardMaterial('bush'), shrubs, shrubTint),
-    pebbles: [],
-    boulders: [],
-  };
+  const set: ScatterSet = { grass: null, shrubs: null, pebbles: [], boulders: [] };
+  set.grass = instanced(grassGeometry(), grassMaterial(), grass, grassTint);
+  yield;
+  set.shrubs = instanced(bushGeometry(), cardMaterial('bush'), shrubs, shrubTint);
+  yield;
   boulders.forEach((list, v) => {
     const im = instanced(boulderGeometry(v), kitMaterial(), list, rockTint);
     if (im) {
@@ -368,6 +385,7 @@ export function buildScatter(def: TerrainDef, cx: number, cz: number, aabbs: Aab
       set.boulders.push(im);
     }
   });
+  yield;
   pebbles.forEach((list, v) => {
     const im = instanced(pebbleGeometry(v), kitMaterial(), list, rockTint);
     if (im) set.pebbles.push(im);

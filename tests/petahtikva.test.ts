@@ -37,6 +37,8 @@ describe('Petah Tikva on the route', () => {
       for (const n of LEGS.route.next[id] ?? []) walk(n);
     };
     walk(LEGS.route.start);
+    // The three-road campaign the open world replaced is still on the books (and still playable by id).
+    walk('L1');
     for (const l of LEGS.legs) expect(seen.has(l.id), `${l.id} unreachable`).toBe(true);
   });
 
@@ -60,7 +62,7 @@ describe('the plan', () => {
   it('keeps every building column inside the corridor and clear of the boulevard sidewalk', () => {
     for (const s of L.strips) {
       expect(Math.min(Math.abs(s.x0), Math.abs(s.x1))).toBeGreaterThanOrEqual(BOULEVARD_HALF + SIDEWALK - 1e-9);
-      expect(Math.max(Math.abs(s.x0), Math.abs(s.x1))).toBeLessThanOrEqual(150);
+      expect(Math.max(Math.abs(s.x0), Math.abs(s.x1))).toBeLessThanOrEqual(210);
     }
   });
 
@@ -252,7 +254,7 @@ describe('getting around', () => {
     const cell = 2;
     const x0 = -150;
     const z0 = -40;
-    const w = Math.ceil(300 / cell);
+    const w = Math.ceil(380 / cell);
     const h = Math.ceil((leg.length + 80 - z0) / cell);
     const free = (i: number, j: number) => {
       const x = x0 + (i + 0.5) * cell;
@@ -287,6 +289,15 @@ describe('getting around', () => {
     expect(reached(L.end.x, L.end.z)).toBe(true);
     const shop = lotAt(1, 0, PT_BLOCK.cityHall);
     expect(reached(9, (shop.z0 + shop.z1) / 2)).toBe(true);
+    // The Red Line's platforms, the bus station's forecourt, and the middle of the stadium pitch (through a corner gap).
+    for (const p of plan.rail!.stations) {
+      const pl = L.places.find((q) => q.id === p.id)!;
+      expect(reached(pl.x, pl.z), p.id).toBe(true);
+    }
+    const stn = lotAt(1, 0, PT_BLOCK.station);
+    expect(reached(stn.x0 + 5, (stn.z0 + stn.z1) / 2 + 9)).toBe(true);
+    const pitch = L.streets.find((s) => s.kind === 'pitch')!;
+    expect(reached((pitch.x0 + pitch.x1) / 2, (pitch.z0 + pitch.z1) / 2)).toBe(true);
   });
 });
 
@@ -320,4 +331,171 @@ describe('arriving in the places', () => {
     expect(h.banners.length).toBe(before);
     sc.dispose();
   }, 60000);
+});
+
+describe('the real geography', () => {
+  const at = (id: string) => L.places.find((p) => p.id === id)!;
+
+  it('runs south to north the way the real centre does: City Hall, the square, the Red Line, the bus station', () => {
+    expect(at('cityHall').z).toBeLessThan(at('foundersSquare').z);
+    expect(at('foundersSquare').z).toBeLessThan(at('railPinsker').z);
+    expect(at('railPinsker').z).toBeLessThan(at('busStation').z);
+    // About two hundred metres from City Hall to the square and about half a kilometre on to the bus station.
+    expect(at('foundersSquare').z - at('cityHall').z).toBeGreaterThan(150);
+    expect(at('foundersSquare').z - at('cityHall').z).toBeLessThan(260);
+    expect(at('busStation').z - at('foundersSquare').z).toBeGreaterThan(400);
+    expect(at('busStation').z - at('foundersSquare').z).toBeLessThan(650);
+    // The stadium is out to the side, beyond the bus station's column.
+    expect(at('stadium').x).toBeGreaterThan(at('busStation').x + 80);
+  });
+
+  it('dresses the ordinary buildings as Israeli apartment blocks, with shop signs in Hebrew on Haim Ozer', () => {
+    expect(plan.vernacular).toBe('israeli');
+    const ordinary = src.cityBuildings().filter((b) => !b.role && !b.shop);
+    expect(ordinary.length).toBeGreaterThan(40);
+    for (const b of ordinary) expect(b.israeli).toBe(true);
+    for (const b of src.cityBuildings().filter((q) => q.role)) expect(b.israeli).toBeFalsy();
+    const shops = L.signs.filter((g) => g.theme !== 'bus' && g.theme !== 'rail' && g.theme !== 'stadium');
+    expect(shops.length).toBeGreaterThan(40);
+    expect(shops.every((g) => /[\u0590-\u05ff]/.test(g.text) && !!g.sub)).toBe(true);
+    // Each sits on a boulevard-facing wall, just off it, at shop height.
+    for (const g of shops) {
+      expect(Math.abs(g.x)).toBeGreaterThan(BOULEVARD_HALF + SIDEWALK - 0.5);
+      expect(Math.abs(g.x)).toBeLessThan(BOULEVARD_HALF + SIDEWALK + 0.5);
+      expect(g.y).toBeGreaterThan(3);
+      expect(g.y).toBeLessThan(4.3);
+    }
+  });
+
+  it('gives each chunk the signs that hang in it', () => {
+    const g = L.signs.find((q) => q.theme === 'bus')!;
+    const c = src.get(Math.floor(g.x / 128), Math.floor(g.z / 128));
+    expect(c.signs).toContain(g);
+    for (const other of [src.get(0, 0), src.get(0, 1)]) for (const s of other.signs) expect(Math.floor(s.z / 128)).toBe(other.cz);
+  });
+});
+
+describe('the Red Line', () => {
+  const rail = plan.rail!;
+  const slab = L.streets.find((s) => s.kind === 'rail')!;
+  const platforms = L.streets.filter((s) => s.kind === 'platform');
+  const jab = L.slots[PT_BLOCK.jabotinsky];
+  const edge = BOULEVARD_HALF + SIDEWALK;
+
+  it('is a double track on a slab down the middle of Jabotinsky Road, ending at a buffer by Haim Ozer', () => {
+    expect(jab.street).toBe('jabotinsky');
+    expect(slab.z0).toBeGreaterThanOrEqual(jab.z1);
+    expect(slab.z1).toBeLessThanOrEqual(jab.z1 + jab.cross);
+    expect(slab.z1 - slab.z0).toBe(rail.width);
+    expect(slab.x0).toBeCloseTo(edge + rail.from, 6);
+    expect(slab.x1).toBeCloseTo(edge + rail.to, 6);
+    // The street under it is paved, and the slab does not run into a building.
+    expect(surfaceAt(L.terrain, (slab.x0 + slab.x1) / 2, jab.z1 + 1)).toBe('asphalt');
+    const buildings = src.allAabbs().filter((a) => a.kind === 'building');
+    for (const b of buildings) expect(b.minX < slab.x1 && b.maxX > slab.x0 && b.minZ < slab.z1 && b.maxZ > slab.z0, `building at ${b.minX},${b.minZ} on the rails`).toBe(false);
+  });
+
+  it('has an island platform at each of Central Station, Pinsker and Kiryat Arye, between the two tracks', () => {
+    expect(platforms).toHaveLength(3);
+    expect(rail.stations.map((s) => s.id)).toEqual(['railCentral', 'railPinsker', 'railKiryatArye']);
+    for (const p of platforms) {
+      expect(p.x0).toBeGreaterThanOrEqual(slab.x0);
+      expect(p.x1).toBeLessThanOrEqual(slab.x1);
+      expect(p.z0).toBeGreaterThan(slab.z0 + 3);
+      expect(p.z1).toBeLessThan(slab.z1 - 3);
+      expect(p.x1 - p.x0).toBeGreaterThanOrEqual(38);
+    }
+    for (const st of rail.stations) expect(L.places.some((p) => p.id === st.id && p.name === st.name)).toBe(true);
+    // A name board on each side of each canopy, in Hebrew over English.
+    for (const st of rail.stations) expect(L.signs.filter((g) => g.theme === 'rail' && g.text === st.he)).toHaveLength(2);
+  });
+
+  it('has a tram standing on the line at each end, solid, with room to walk round them', () => {
+    const trams = L.props.filter((p) => p.kind === 'tram');
+    expect(trams).toHaveLength(rail.trams.length);
+    for (const t of trams) {
+      expect(L.blockedAt(t.x, t.z, 0.3)).toBe(true);
+      expect(t.z).toBeGreaterThan(slab.z0);
+      expect(t.z).toBeLessThan(slab.z1);
+      expect(Math.abs(t.yaw)).toBeCloseTo(Math.PI / 2, 6);
+    }
+    // The walk across the tracks between the two trams is clear.
+    const zc = (slab.z0 + slab.z1) / 2;
+    expect(L.blockedAt((slab.x0 + slab.x1) / 2, zc, 0.5)).toBe(false);
+  });
+
+  it('ends beside the Central Bus Station, and names itself when you arrive', () => {
+    const central = platforms.find((p) => p.x0 < slab.x0 + 10)!;
+    const stn = lotAt(1, 0, PT_BLOCK.station);
+    expect(central.x0).toBeGreaterThanOrEqual(stn.x0);
+    expect(central.x1).toBeLessThanOrEqual(stn.x1 + 30);
+    expect(stn.z0 - central.z1).toBeLessThan(25);
+    const h = fakeServices();
+    const sc = new LegScene(h.svc, leg);
+    for (const p of sc.players) p.exitVehicle(false);
+    run(sc, 7);
+    const pl = L.places.find((q) => q.id === 'railPinsker')!;
+    sc.players[0].placeAt(pl.x, pl.z, 0);
+    run(sc, 4);
+    expect(h.banners, JSON.stringify(h.banners)).toEqual(expect.arrayContaining([expect.stringMatching(/^PINSKER STATION/)]));
+    sc.dispose();
+  }, 60000);
+});
+
+describe('the Central Bus Station and HaMoshava Stadium', () => {
+  it('the bus station is a long hall on Haim Ozer behind a forecourt, with buses in the bays and the hub tower beside it', () => {
+    const lot = lotAt(1, 0, PT_BLOCK.station);
+    expect(lot.landmark).toBe('busStation');
+    const hall = L.landmarks.find((l) => l.role === 'busTerminal')!;
+    expect(hall.aabb.maxZ - hall.aabb.minZ).toBeGreaterThan(90);
+    expect(hall.aabb.minX).toBeGreaterThan(lot.x0 + 8);
+    expect(hall.aabb.minZ).toBeGreaterThanOrEqual(lot.z0);
+    expect(hall.aabb.maxZ).toBeLessThanOrEqual(lot.z1);
+    expect(hall.aabb.y1).toBeGreaterThan(14);
+    const buses = L.props.filter((p) => p.kind === 'bus');
+    expect(buses.length).toBeGreaterThanOrEqual(4);
+    for (const b of buses) {
+      expect(L.blockedAt(b.x, b.z, 0.2)).toBe(true);
+      expect(b.x).toBeGreaterThan(lot.x0);
+      expect(b.x).toBeLessThan(hall.aabb.minX);
+    }
+    expect(L.props.filter((p) => p.kind === 'busShelter').length).toBeGreaterThanOrEqual(4);
+    const tower = lotAt(1, 1, PT_BLOCK.station);
+    expect(tower.kind).toBe('building');
+    expect(tower.fixed).toBe(true);
+    expect(tower.floors).toBeGreaterThanOrEqual(14);
+    expect(L.streets.some((s) => s.kind === 'tarmac' && s.x0 === lot.x0)).toBe(true);
+    const sign = L.signs.find((g) => g.theme === 'bus' && g.text === 'תחנה מרכזית פתח תקווה')!;
+    expect(sign.sub).toContain('CENTRAL BUS STATION');
+    expect(sign.y).toBeGreaterThan(10);
+    expect(L.places.some((p) => p.id === 'busStation')).toBe(true);
+  });
+
+  it('the stadium is two long stands, two low ends and a pitch with four floodlights, open at the corners', () => {
+    const lot = lotAt(1, 3, PT_BLOCK.station);
+    expect(lot.landmark).toBe('stadium');
+    const sides = L.landmarks.filter((l) => l.role === 'standSide');
+    const ends = L.landmarks.filter((l) => l.role === 'standEnd');
+    expect(sides).toHaveLength(2);
+    expect(ends).toHaveLength(2);
+    for (const s of sides) expect(s.aabb.maxZ - s.aabb.minZ).toBeGreaterThan(5 * (s.aabb.maxX - s.aabb.minX));
+    for (const l of [...sides, ...ends]) {
+      expect(l.aabb.minX).toBeGreaterThanOrEqual(lot.x0 - 1e-9);
+      expect(l.aabb.maxX).toBeLessThanOrEqual(lot.x1 + 1e-9);
+      expect(l.aabb.minZ).toBeGreaterThanOrEqual(lot.z0 - 1e-9);
+      expect(l.aabb.maxZ).toBeLessThanOrEqual(lot.z1 + 1e-9);
+    }
+    expect(sides.map((s) => s.front).sort()).toEqual(['e', 'w']);
+    expect(ends.map((s) => s.front).sort()).toEqual(['n', 's']);
+    const pitch = L.streets.find((s) => s.kind === 'pitch')!;
+    expect(pitch.x1 - pitch.x0).toBeGreaterThan(50);
+    expect(pitch.z1 - pitch.z0).toBeGreaterThan(95);
+    expect(L.blockedAt((pitch.x0 + pitch.x1) / 2, (pitch.z0 + pitch.z1) / 2, 0.5)).toBe(false);
+    // The stands are solid and the corners are open.
+    for (const s of sides) expect(L.blockedAt((s.aabb.minX + s.aabb.maxX) / 2, (s.aabb.minZ + s.aabb.maxZ) / 2, 0)).toBe(true);
+    expect(L.blockedAt(pitch.x0 + 2.5, lot.z0 + 3, 0.6)).toBe(false);
+    expect(L.props.filter((p) => p.kind === 'floodlight')).toHaveLength(4);
+    expect(L.signs.some((g) => g.theme === 'stadium' && g.sub === 'HAMOSHAVA STADIUM')).toBe(true);
+    expect(L.places.some((p) => p.id === 'stadium')).toBe(true);
+  });
 });

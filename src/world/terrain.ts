@@ -1,8 +1,9 @@
 import type { LegDef } from '../data';
 import { Rng, fbm2, hash2, noise2 } from '../core/rng';
 import { clamp, smoothstep, lerp } from '../core/math';
-import { dockDeckAt, lakeAdjust, lakeWater, planLakeSites, planLakes, type Bay, type Lake, type WaterHit } from './lakes';
-import { planMainlandDelve, type DelveSite } from './delveSites';
+import { dockDeckAt, lakeAdjust, lakeWater, planLakeSites, planLakes, planOpenLakes, type Bay, type Lake, type WaterHit } from './lakes';
+import { delveName, delveSiteKind, planMainlandDelve, snapYaw, type DelveSite, type DelveTheme } from './delveSites';
+import { addRoad, districtAt, districtMask, makeOpenWorld, nearestRoad, nearestRoadAny, type OpenWorld, type RoadPath } from './openWorld';
 
 export const CHUNK = 128;
 export const CELL = 2; // heightfield resolution in metres
@@ -43,6 +44,10 @@ export type SiteKind =
   | 'overpass'
   | 'windfarm'
   | 'mastHill'
+  // The two named hubs of the open world.
+  | 'hubDustwell'
+  | 'hubRustgate'
+  | 'hubHaven'
   // Lakeside places and the ways underground (see world/lakes.ts, world/delveSites.ts).
   | 'lakeDock'
   | 'islandShack'
@@ -70,6 +75,8 @@ export interface Site {
   lake?: number;
   island?: number;
   delve?: string;
+  /** Ground height of the flattened pad. Highway sites leave it out and take the road's own height. */
+  h?: number;
 }
 
 /** Level ground under a building, so its floor sits flush with the terrain. */
@@ -85,7 +92,12 @@ export interface TerrainDef {
   biome: 'wasteland' | 'city';
   seed: number;
   length: number;
+  /** The playable ground ends here along z (mountains beyond). A corridor leg is walled just outside its two ends. */
+  zMin: number;
+  zMax: number;
   roadHalf: number;
+  /** Present on the open-world leg: its roads, districts and edges. */
+  open?: OpenWorld;
   ramps: Ramp[];
   canyons: Canyon[];
   minefields: Minefield[];
@@ -108,7 +120,9 @@ export function makeTerrainDef(leg: LegDef): TerrainDef {
     biome: leg.biome,
     seed: leg.seed,
     length: leg.length,
-    roadHalf: leg.biome === 'city' ? 7 : 4.2,
+    zMin: leg.open ? leg.open.zMin : -60,
+    zMax: leg.open ? leg.open.zMax : leg.length + 160,
+    roadHalf: leg.biome === 'city' ? 7 : leg.open ? 7 : 4.2,
     ramps: [],
     canyons: [],
     minefields: [],
@@ -120,6 +134,7 @@ export function makeTerrainDef(leg: LegDef): TerrainDef {
     delves: [],
     theme: leg.theme ?? 'dust',
   };
+  if (leg.open) makeOpenWorld(def, leg);
   for (const s of leg.sets) {
     if (s.type === 'rampCache') {
       def.ramps.push({
@@ -139,8 +154,15 @@ export function makeTerrainDef(leg: LegDef): TerrainDef {
     }
   }
   if (leg.biome === 'wasteland') {
-    def.sites = planSites(def, leg);
+    if (def.open) def.sites = planHubs(def);
+    def.sites.push(...planSites(def, leg));
     def.lakes = planLakes(def, leg).lakes;
+    if (def.open) def.lakes.push(...planOpenLakes(def, leg, def.lakes));
+    const open = def.open ? planOpenSites(def, leg) : null;
+    if (open) {
+      def.sites.push(...open.sites);
+      def.delves.push(...open.delves);
+    }
     const lakeSites = planLakeSites(def, leg);
     def.sites.push(...lakeSites.sites);
     def.delves.push(...lakeSites.delves);
@@ -163,6 +185,9 @@ const SITE_SPEC: Record<SiteKind, { off: [number, number]; radius: number }> = {
   overpass: { off: [0, 0], radius: 34 },
   windfarm: { off: [90, 130], radius: 0 },
   mastHill: { off: [60, 90], radius: 26 },
+  hubDustwell: { off: [0, 0], radius: 62 },
+  hubRustgate: { off: [0, 0], radius: 72 },
+  hubHaven: { off: [0, 0], radius: 84 },
   lakeDock: { off: [0, 0], radius: 0 },
   islandShack: { off: [0, 0], radius: 0 },
   islandWreck: { off: [0, 0], radius: 0 },
@@ -182,7 +207,90 @@ export function keepOutZ(def: TerrainDef, leg: LegDef): (z: number) => boolean {
     const len = s.type === 'minefield' ? (s.length as number) : (ext[s.type] ?? 0);
     keepOut.push([s.at - 60, s.at + len + 60]);
   }
-  return (z) => !keepOut.some(([a, b]) => z > a && z < b) && !def.canyons.some((c) => z > c.z0 - 90 && z < c.z1 + 90);
+  const cities = def.open ? def.open.districts : [];
+  for (const h of def.open?.hubs ?? []) keepOut.push([h.z - 130, h.z + 130]);
+  if (def.open) keepOut.push([def.open.haven.z - 160, def.open.haven.z + 160]);
+  return (z) => !keepOut.some(([a, b]) => z > a && z < b) && !def.canyons.some((c) => z > c.z0 - 90 && z < c.z1 + 90) && !cities.some((d) => z > d.z0 - 120 && z < d.z1 + 120);
+}
+
+/** The named hubs sit beside the highway where the cross roads meet it. */
+function planHubs(def: TerrainDef): Site[] {
+  const out: Site[] = [];
+  const rng = new Rng(def.seed * 17 + 5);
+  for (const h of def.open!.hubs) {
+    const kind: SiteKind = h.id === 'dustwell' ? 'hubDustwell' : 'hubRustgate';
+    const rx = roadX(def, h.z);
+    out.push({ kind, z: h.z, side: h.x > rx ? 1 : -1, off: Math.abs(h.x - rx), radius: SITE_SPEC[kind].radius, seed: rng.int(1, 99999), x: h.x });
+  }
+  const hv = def.open!.haven;
+  const rx = roadX(def, hv.z);
+  out.push({ kind: 'hubHaven', z: hv.z, side: hv.x > rx ? 1 : -1, off: Math.abs(hv.x - rx), radius: SITE_SPEC.hubHaven.radius, seed: rng.int(1, 99999), x: hv.x });
+  return out;
+}
+
+const FAR_ROTATION: SiteKind[] = ['hamlet', 'farm', 'depot', 'mastHill', 'farm', 'motel', 'hamlet', 'gasStop', 'depot'];
+
+/**
+ * Places scattered over the whole map, away from the highway: one candidate per 400 m square. Each gets a dirt track
+ * to the nearest road. A few of them are ways underground instead.
+ */
+function planOpenSites(def: TerrainDef, leg: LegDef): { sites: Site[]; delves: DelveSite[] } {
+  const o = def.open!;
+  const rng = new Rng(leg.seed * 43 + 11);
+  const sites: Site[] = [];
+  const delves: DelveSite[] = [];
+  const STEP = 400;
+  let k = Math.floor(rng.range(0, FAR_ROTATION.length));
+  let nd = 0;
+  const near = (x: number, z: number, d: number) => (s: { x: number; z: number; radius?: number }) => Math.hypot(s.x - x, s.z - z) < d + (s.radius ?? 0);
+  for (let i = Math.floor((o.x0 + 260) / STEP); i <= Math.floor((o.x1 - 260) / STEP); i++) {
+    for (let j = Math.floor((o.z0 + 260) / STEP); j <= Math.floor((o.z1 - 360) / STEP); j++) {
+      if (rng.next() > 0.46) continue;
+      const x = (i + rng.range(0.15, 0.85)) * STEP;
+      const z = (j + rng.range(0.15, 0.85)) * STEP;
+      if (Math.abs(x) > o.x1 - 260 || z < o.z0 + 260 || z > o.z1 - 360 || Math.abs(x - roadX(def, z)) < 150 || Math.hypot(x, z - 12) < 260 || Math.hypot(x - o.haven.x, z - o.haven.z) < 320) continue;
+      // Well clear of every district's rectangle.
+      if (o.districts.some((d) => Math.hypot(Math.max(d.x0 - x, 0, x - d.x1), Math.max(d.z0 - z, 0, z - d.z1)) < 150)) continue;
+      const wantDelve = rng.next() < 0.16;
+      const kind: SiteKind = wantDelve ? 'delveMine' : FAR_ROTATION[k++ % FAR_ROTATION.length];
+      const radius = SITE_SPEC[kind].radius;
+      if (def.sites.some(near(x, z, radius + 90)) || sites.some(near(x, z, radius + 160))) continue;
+      if (def.lakes.some((l) => Math.hypot(l.x - x, l.z - z) < l.reach + radius + 50)) continue;
+      if (buttes(def, x, z) > 0.5 || buttes(def, x + radius, z) > 0.5 || buttes(def, x - radius, z) > 0.5) continue;
+      // The track to the nearest road must not run through a lake.
+      const hit = nearestRoadAny(o, x, z);
+      const tx = hit.px;
+      const tz = hit.pz;
+      const reach = hit.d;
+      if (reach > 1500) continue;
+      let wet = false;
+      for (let u = 0; u <= 1 && !wet; u += 0.04) wet = def.lakes.some((l) => Math.hypot(l.x - (x + (tx - x) * u), l.z - (z + (tz - z) * u)) < l.reach + 12);
+      if (wet) continue;
+      const h = baseHeight(def, x, z);
+      const seed = rng.int(1, 99999);
+      if (wantDelve) {
+        const theme: DelveTheme = (['mine', 'cave', 'bunker'] as const)[nd % 3];
+        const id = `${leg.id}:m${nd++}`;
+        const yaw = snapYaw(Math.atan2(tx - x, tz - z));
+        delves.push({ id, theme, x, z, yaw, seed, name: delveName(theme, seed), tier: Math.min(3, leg.index + 1), island: false });
+        sites.push({ kind: delveSiteKind(theme), z, side: x > tx ? 1 : -1, off: reach, radius: 26, seed, x, delve: id, h });
+      } else sites.push({ kind, z, side: x > tx ? 1 : -1, off: reach, radius, seed, x, h });
+      // A winding track, from the edge of the pad to the road.
+      const len = Math.hypot(tx - x, tz - z);
+      const n = Math.max(2, Math.ceil(len / 12));
+      const p1 = rng.range(0, 6.28);
+      const nxn = -(tz - z) / len;
+      const nzn = (tx - x) / len;
+      const pts: number[] = [];
+      for (let q = 0; q <= n; q++) {
+        const u = q / n;
+        const off = Math.sin(Math.PI * u) ** 0.7 * Math.min(60, len * 0.2) * Math.sin(u * len / 150 + p1);
+        pts.push(x + (tx - x) * u + nxn * off, z + (tz - z) * u + nzn * off);
+      }
+      addRoad(o, { id: `track${sites.length}`, kind: 'track', half: 2.6, pts });
+    }
+  }
+  return { sites, delves };
 }
 
 /** Where roadside places go: spaced along the leg, clear of the authored set pieces. */
@@ -215,14 +323,17 @@ function planSites(def: TerrainDef, leg: LegDef): Site[] {
 /** 0 in the narrow, craggy stretches, 1 in the wide basins where the cliffs stand back and the horizon opens. */
 export function openness(def: TerrainDef, z: number): number {
   if (def.biome === 'city') return 0;
+  if (def.open) return 1;
   const [p1, p2] = def.phase;
   return smoothstep(-0.45, 0.4, 0.62 * Math.sin(z / 260 + p1 * 3) + 0.38 * Math.sin(z / 131 + p2 * 5));
 }
 
 /** 0 on the hard flats, 1 in the rolling dune seas. */
-export function duneness(def: TerrainDef, z: number): number {
+export function duneness(def: TerrainDef, z: number, x?: number): number {
   if (def.biome === 'city') return 0;
   const [, , p3, p4] = def.phase;
+  // In the open world dune seas are patches on the map, not bands across the road.
+  if (def.open && x !== undefined) return smoothstep(0.05, 0.62, noise2(x / 520 + 31, z / 520 - 17, def.seed + 211) * 0.75 + noise2(x / 190, z / 190 + 9, def.seed + 212) * 0.25);
   return smoothstep(-0.05, 0.6, 0.62 * Math.sin(z / 250 + p3 * 2) + 0.38 * Math.sin(z / 97 + p4 * 3));
 }
 
@@ -231,7 +342,16 @@ export function roadX(def: TerrainDef, z: number): number {
   if (def.biome === 'city') return 0;
   const lead = smoothstep(0, 260, z);
   const [p1, p2] = def.phase;
-  return lead * (46 * Math.sin(z / 330 + p1) + 20 * Math.sin(z / 141 + p2));
+  return (1 - cityBump(def, z)) * lead * (46 * Math.sin(z / 330 + p1) + 20 * Math.sin(z / 141 + p2));
+}
+
+/** 1 while the highway runs through a city district (dead straight and level), easing in and out over 200 m. */
+function cityBump(def: TerrainDef, z: number): number {
+  const o = def.open;
+  if (!o || !o.districts.length) return 0;
+  let b = 0;
+  for (const d of o.districts) b = Math.max(b, smoothstep(d.z0 - 200, d.z0, z) * (1 - smoothstep(d.z1, d.z1 + 200, z)));
+  return b;
 }
 
 /** dx/dz of the road, for heading. */
@@ -243,11 +363,13 @@ export function roadElev(def: TerrainDef, z: number): number {
   if (def.biome === 'city') return 0;
   const lead = smoothstep(0, 200, z);
   const [, , p3, p4] = def.phase;
-  return lead * (6 * Math.sin(z / 470 + p3) + 1.8 * Math.sin(z / 173 + p4));
+  return (1 - cityBump(def, z)) * lead * (6 * Math.sin(z / 470 + p3) + 1.8 * Math.sin(z / 173 + p4));
 }
 
 /** Half-width of the open corridor at z: the wasteland is wide, canyons squeeze it. */
 export function corridorHalf(def: TerrainDef, z: number): number {
+  // The open world has no corridor: the mountains stand at the edge of the map.
+  if (def.open) return def.open.x1;
   let w = def.biome === 'city' ? 150 : lerp(190, 460, openness(def, z));
   for (const c of def.canyons) {
     const t = smoothstep(c.z0, c.z0 + 70, z) * (1 - smoothstep(c.z1 - 70, c.z1, z));
@@ -264,6 +386,7 @@ export function corridorHalf(def: TerrainDef, z: number): number {
 /** Flat-topped mesas standing in the open country. They keep clear of the road and of any roadside site. */
 export function buttes(def: TerrainDef, x: number, z: number): number {
   if (def.biome === 'city') return 0;
+  if (def.open) return openButtes(def, x, z);
   const STEP = 190;
   const i0 = Math.floor(z / STEP);
   let out = 0;
@@ -283,6 +406,33 @@ export function buttes(def: TerrainDef, x: number, z: number): number {
     const H = 10 + hash2(i, 6, def.seed + 100) * 30;
     const t = smoothstep(r, r * 0.6, dd);
     out = Math.max(out, H * t * (1 - 0.1 * noise2(x / 6, z / 6, def.seed + 101)));
+  }
+  return out;
+}
+
+/** Mesas scattered over the map on a jittered grid, clear of roads, places and the cities. */
+function openButtes(def: TerrainDef, x: number, z: number): number {
+  const o = def.open!;
+  const STEP = 340;
+  const i0 = Math.floor(x / STEP);
+  const j0 = Math.floor(z / STEP);
+  let out = 0;
+  for (let i = i0 - 1; i <= i0 + 1; i++) {
+    for (let j = j0 - 1; j <= j0 + 1; j++) {
+      if (hash2(i, j, def.seed + 95) > 0.34) continue;
+      const xc = (i + 0.2 + hash2(i, j, def.seed + 96) * 0.6) * STEP;
+      const zc = (j + 0.2 + hash2(i, j, def.seed + 97) * 0.6) * STEP;
+      const r = 16 + hash2(i, j, def.seed + 98) * 28;
+      const dd = Math.hypot(x - xc, z - zc);
+      if (dd > r * 1.1) continue;
+      if (Math.abs(xc - roadX(def, zc)) < 110 || districtMask(o, xc, zc) > 0 || zc < o.z0 + 200 || zc > o.z1 - 200 || Math.abs(xc) > o.x1 - 300) continue;
+      if (Math.hypot(xc, zc - 12) < 160) continue;
+      if (nearestRoad(o, xc, zc).d < 70) continue;
+      if (def.sites.some((s) => Math.hypot(s.x - xc, s.z - zc) < s.radius + r + 20)) continue;
+      const H = 10 + hash2(i, j, def.seed + 100) * 30;
+      const t = smoothstep(r, r * 0.6, dd);
+      out = Math.max(out, H * t * (1 - 0.1 * noise2(x / 6, z / 6, def.seed + 101)));
+    }
   }
   return out;
 }
@@ -344,14 +494,18 @@ export function baseHeight(def: TerrainDef, x: number, z: number): number {
   }
   const dx = x - rx;
   const d = Math.abs(dx);
-  const w = smoothstep(def.roadHalf + 1, def.roadHalf + 18, d);
-  const dn = duneness(def, z);
-  const dunes = lerp(0.9, 8.6, dn) * fbm2(x / lerp(120, 70, dn), z / lerp(120, 70, dn), def.seed, 3) + lerp(0.35, 1.4, dn) * fbm2(x / 19, z / 19, def.seed + 7, 2);
-  let h = re + w * dunes;
+  let h: number;
+  if (def.open) h = openGround(def, x, z, re, d);
+  else {
+    const w = smoothstep(def.roadHalf + 1, def.roadHalf + 18, d);
+    const dn = duneness(def, z);
+    const dunes = lerp(0.9, 8.6, dn) * fbm2(x / lerp(120, 70, dn), z / lerp(120, 70, dn), def.seed, 3) + lerp(0.35, 1.4, dn) * fbm2(x / 19, z / 19, def.seed + 7, 2);
+    h = re + w * dunes;
+  }
   for (const s of def.sites) {
     if (s.radius <= 0 || Math.abs(z - s.z) > s.radius * 1.4) continue;
     const p = 1 - smoothstep(s.radius * 0.78, s.radius * 1.3, Math.hypot(x - s.x, z - s.z));
-    if (p > 0) h += (re - h) * p;
+    if (p > 0) h += ((s.h ?? re) - h) * p;
   }
   for (const f of def.foundations) {
     if (z < f.z0 - 3.5 || z > f.z1 + 3.5 || x < f.x0 - 3.5 || x > f.x1 + 3.5) continue;
@@ -364,18 +518,37 @@ export function baseHeight(def: TerrainDef, x: number, z: number): number {
     const rh = rampHeight(r, x, z, xc);
     if (rh > 0) h = Math.max(h, re + rh);
   }
-  // Cliff walls bound the corridor. They rise too steeply to climb.
+  // A city district is level ground, and fades back into the desert beyond its edge.
+  if (def.open) {
+    const m = districtMask(def.open, x, z);
+    if (m > 0) h -= h * m;
+  }
+  // Cliff walls bound the corridor (in the open world, the whole map). They rise too steeply to climb.
   const ch = corridorHalf(def, z);
   const cliff = smoothstep(ch, ch + 11, d);
   h += cliff * (30 + 14 * noise2(x / 37, z / 37, def.seed + 3)) + Math.max(0, d - ch - 11) * 0.5;
-  // Dead end beyond the last camp ground.
-  const endWall = smoothstep(def.length + 150, def.length + 170, z);
-  const startWall = 1 - smoothstep(-70, -50, z);
+  // Dead ends beyond the first and last ground.
+  const endWall = smoothstep(def.zMax - 10, def.zMax + 10, z);
+  const startWall = 1 - smoothstep(def.zMin - 10, def.zMin + 10, z);
   h += (endWall + startWall) * 36;
   return h;
 }
 
+/** The open world's ground: dunes in patches, gentle hills away from the highway, flat beside every road. */
+function openGround(def: TerrainDef, x: number, z: number, re: number, dHighway: number): number {
+  const o = def.open!;
+  const hit = nearestRoad(o, x, z);
+  const w = hit.edge === Infinity ? 1 : smoothstep(1, 18, hit.edge);
+  const dn = duneness(def, z, x);
+  const dunes = lerp(0.9, 8.6, dn) * fbm2(x / lerp(120, 70, dn), z / lerp(120, 70, dn), def.seed, 3) + lerp(0.35, 1.4, dn) * fbm2(x / 19, z / 19, def.seed + 7, 2);
+  // Long swells of ground, standing back from the highway so it stays easy to drive.
+  const far = smoothstep(60, 240, dHighway);
+  const swell = far * (13 * fbm2(x / 760 + 5, z / 760 - 3, def.seed + 201, 3) + 5 * fbm2(x / 230 - 8, z / 230 + 2, def.seed + 202, 2));
+  return re + w * dunes + swell;
+}
+
 export function surfaceAt(def: TerrainDef, x: number, z: number): Surface {
+  if (def.open) return openSurface(def, x, z);
   const rx = roadX(def, z);
   const d = Math.abs(x - rx);
   if (def.biome === 'city') {
@@ -391,6 +564,28 @@ export function surfaceAt(def: TerrainDef, x: number, z: number): Surface {
   if (def.lakes.length && lakeWater(def.lakes, x, z)) return 'mud';
   const sand = noise2(x / 65 + 40, z / 65 - 11, def.seed + 21);
   if (sand > lerp(0.7, 0.5, duneness(def, z))) return 'sand';
+  const mud = noise2(x / 48 - 90, z / 48 + 33, def.seed + 45);
+  if (mud > 0.76 && heightAt(def, x, z) < roadElev(def, z) + 0.8) return 'mud';
+  return 'hardpan';
+}
+
+function openSurface(def: TerrainDef, x: number, z: number): Surface {
+  const o = def.open!;
+  const dist = districtAt(o, x, z);
+  if (dist) {
+    // The boulevard is the highway; streets are rectangles; everything else in the district is packed earth.
+    if (Math.abs(x - roadX(def, z)) < 7) return 'asphalt';
+    if (def.streets) for (const s of def.streets) if (x >= s.x0 && x <= s.x1 && z >= s.z0 && z <= s.z1) return 'asphalt';
+    return 'hardpan';
+  }
+  const hit = nearestRoad(o, x, z);
+  if (hit.road) {
+    if (hit.edge < 0) return hit.road.kind === 'track' ? 'hardpan' : 'asphalt';
+    if (hit.edge < 3) return 'hardpan';
+  }
+  if (def.lakes.length && lakeWater(def.lakes, x, z)) return 'mud';
+  const sand = noise2(x / 65 + 40, z / 65 - 11, def.seed + 21);
+  if (sand > lerp(0.7, 0.5, duneness(def, z, x))) return 'sand';
   const mud = noise2(x / 48 - 90, z / 48 + 33, def.seed + 45);
   if (mud > 0.76 && heightAt(def, x, z) < roadElev(def, z) + 0.8) return 'mud';
   return 'hardpan';
@@ -421,6 +616,19 @@ export function chunkHeights(def: TerrainDef, cx: number, cz: number): Float32Ar
   const z0 = cz * CHUNK;
   for (let c = 0; c <= n; c++) {
     for (let r = 0; r <= n; r++) out[c * (n + 1) + r] = heightAt(def, x0 + c * CELL, z0 + r * CELL);
+  }
+  return out;
+}
+
+/** `chunkHeights` in slices: yields after every `perSlice` columns, and returns the finished heights. */
+export function* chunkHeightsSteps(def: TerrainDef, cx: number, cz: number, perSlice = 5): Generator<void, Float32Array> {
+  const n = CELLS;
+  const out = new Float32Array((n + 1) * (n + 1));
+  const x0 = cx * CHUNK;
+  const z0 = cz * CHUNK;
+  for (let c = 0; c <= n; c++) {
+    for (let r = 0; r <= n; r++) out[c * (n + 1) + r] = heightAt(def, x0 + c * CELL, z0 + r * CELL);
+    if (c % perSlice === perSlice - 1) yield;
   }
   return out;
 }

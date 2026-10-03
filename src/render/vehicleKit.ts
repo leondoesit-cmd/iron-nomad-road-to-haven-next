@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { PaneSet } from './glass';
 import { MeshBuilder, S } from './builder';
 import { Humanoid } from './humanoid';
 import type { VehicleDef } from '../data';
@@ -42,6 +43,10 @@ export interface VehicleVisual {
   /** World-space-ish anchor for muzzle flashes (child of gun or body). */
   muzzle: THREE.Object3D;
   headlights: THREE.Mesh[];
+  /** Brake and indicator lenses, so a crumpled tail can carry them along. */
+  tails?: THREE.Mesh[];
+  /** The car's windows, in the chassis frame. */
+  panes?: PaneSet;
   smoke: THREE.Object3D;
   /** Where the second seat's occupant stands (bed gun post or passenger seat), in the chassis frame. */
   gunSeat: [number, number, number];
@@ -236,6 +241,7 @@ export function taillight(v: VehicleVisual, x: number, y: number, z: number, w =
   m.position.set(x, y, z);
   m.scale.set(w, h, 0.03);
   v.inner.add(m);
+  (v.tails ??= []).push(m);
 }
 
 export function rider(color: number, helmet: number): Humanoid {

@@ -302,6 +302,12 @@ export class SiteBuilder {
         return this.windfarm();
       case 'mastHill':
         return this.mastHill();
+      case 'hubDustwell':
+        return this.hub(22, 6, 'Dustwell');
+      case 'hubRustgate':
+        return this.hub(36, 12, 'Rustgate');
+      case 'hubHaven':
+        return this.hub(44, 14, 'Haven');
       default:
         // Lakeside places and the ways underground live in lakeSites.ts.
         return lakeSite(this);
@@ -436,13 +442,13 @@ export class SiteBuilder {
       const x = cx + tw * rng.range(8, 24);
       const z = cz + rng.range(-34, 34);
       const sideways = rng.chance(0.5);
-      const w = sideways ? 2.6 : 6.1;
-      const d = sideways ? 6.1 : 2.6;
+      const w = sideways ? 2.5 : 6.1;
+      const d = sideways ? 6.1 : 2.5;
       if (!this.clearRoad(x - w / 2, x + w / 2, z - d / 2, z + d / 2, 10) || !this.free(x - w / 2, x + w / 2, z - d / 2, z + d / 2, 1)) continue;
       const stack = rng.chance(0.35);
-      this.prop('container', x, z, sideways ? Math.PI / 2 : 0, 1, rng.int(0, 5));
-      this.solid('crate', x, z, w, d, stack ? 5.3 : 2.7);
-      if (stack) this.prop('container', x, z, sideways ? Math.PI / 2 : 0, 1, rng.int(0, 5), -2.65);
+      this.prop('container', x, z, sideways ? 0 : Math.PI / 2, 1, rng.int(0, 5));
+      this.solid('crate', x, z, w, d, stack ? 5.3 : 2.65).mat = 'sheet';
+      if (stack) this.prop('container', x, z, sideways ? 0 : Math.PI / 2, 1, rng.int(0, 5), -2.65);
     }
     this.prop('fuelTank', cx - tw * 30, cz - 4, 0);
     this.solid('tower', cx - tw * 30, cz - 4, 9.6, 9.6, 9);
@@ -457,6 +463,56 @@ export class SiteBuilder {
     if (rng.chance(0.6)) this.pickup('tech', cx - tw * 18, cz - 30, rng.int(1, 2));
     this.zombies(cx - tw * 6, cz - 16, rng.int(3, 5), 16);
     this.zombies(cx + tw * 6, cz + 16, rng.int(2, 4), 12);
+  }
+
+  /**
+   * A named hub: a walled compound of welded shipping containers, stacked two high, with a gate on the side that faces
+   * the highway and a market, a workshop and a water tower inside. Nobody lives here who wants the convoy dead.
+   */
+  private hub(half: number, perSide: number, name: string) {
+    const { cx, cz, tw, rng } = this;
+    const gate = 5;
+    const boxAt = (x: number, z: number, sideways: boolean, stack: boolean) => {
+      const w = sideways ? 2.5 : 6.1;
+      const d = sideways ? 6.1 : 2.5;
+      this.prop('container', x, z, sideways ? 0 : Math.PI / 2, 1, rng.int(0, 5));
+      this.solid('crate', x, z, w, d, stack ? 5.3 : 2.65).mat = 'sheet';
+      if (stack) this.prop('container', x, z, sideways ? 0 : Math.PI / 2, 1, rng.int(0, 5), -2.65);
+    };
+    const step = (half * 2) / perSide;
+    for (let i = 0; i <= perSide; i++) {
+      const t = -half + i * step;
+      // North and south walls run along x; east and west run along z. The gate is in the wall facing the road.
+      for (const sz of [-1, 1]) boxAt(cx + t, cz + sz * half, false, rng.chance(0.7));
+      for (const sx of [-1, 1]) {
+        if (sx === tw && Math.abs(t) < gate + 2) continue;
+        boxAt(cx + sx * half, cz + t, true, rng.chance(0.7));
+      }
+    }
+    // The gate: a banner over it and a pair of barrels either side.
+    this.prop('banner', cx + tw * half, cz, tw > 0 ? Math.PI / 2 : -Math.PI / 2, 1.6, 4);
+    for (const dz of [-gate - 1, gate + 1]) this.prop('barrel', cx + tw * (half + 2), cz + dz, 0);
+    // A water tower in the middle, a workshop, a stall or two and stores.
+    this.prop('waterTower', cx - tw * (half * 0.35), cz - half * 0.3, 0);
+    this.solid('tower', cx - tw * (half * 0.35), cz - half * 0.3, 6.4, 6.4, 12);
+    this.building(cx - tw * (half * 0.45), cz + half * 0.4, half * 0.7, half * 0.5, 1, 'warehouse', 0, rng.pick(PANEL), 'gable', { door: tw, margin: 4 });
+    if (half > 30) {
+      this.building(cx + tw * (half * 0.2), cz + half * 0.55, 12, 9, 1, 'store', 2, rng.pick(STUCCO), 'flat', { door: tw, margin: 4 });
+      this.building(cx + tw * (half * 0.3), cz - half * 0.55, 10, 8, 1, 'house', 2, rng.pick(STUCCO), 'gable', { door: tw, margin: 4 });
+    } else this.building(cx + tw * (half * 0.3), cz - half * 0.5, 7, 6, 1, 'shack', 0, rng.pick(PANEL), 'gable', { door: tw, margin: 4 });
+    const stalls = half > 30 ? 4 : 2;
+    for (let i = 0; i < stalls; i++) {
+      const x = cx + tw * (half * 0.5) - tw * 0;
+      const z = cz - half * 0.5 + (i + 0.5) * ((half * 1.0) / stalls) + rng.range(-1, 1);
+      if (!this.free(x - 3, x + 3, z - 3, z + 3, 1.5)) continue;
+      this.prop('canopy', x, z, Math.PI / 2, 0.8);
+      this.prop('crateStack', x + 1, z + 1.5, rng.range(0, 6), 1, 2);
+    }
+    this.pickup('scrap', cx, cz + 4, rng.int(14, 20));
+    this.pickup('fuel', cx - tw * 6, cz - 6, 5);
+    this.pickup('parts', cx + tw * 4, cz + 8, rng.int(8, 12));
+    if (half > 30) this.pickup('tech', cx - tw * 10, cz + 10, rng.int(2, 3));
+    void name;
   }
 
   private overpass() {

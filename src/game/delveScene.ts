@@ -295,7 +295,7 @@ export class DelveScene extends Scene {
       camp.ammo += c.loot.ammo;
       bits.push(`+${c.loot.ammo} rounds`);
     }
-    for (const k of ['medkit', 'charge', 'molotov', 'flare'] as const) {
+    for (const k of ['medkit', 'bandage', 'charge', 'molotov', 'flare'] as const) {
       const n = c.loot[k];
       if (n) {
         camp.items[k] += n;
@@ -312,7 +312,7 @@ export class DelveScene extends Scene {
     if (bits.length) by.note(bits.join('  '), 'good');
     // The hoard always pays in gear; a chest sometimes does. Seeded by the chest, so it cannot be rerolled by reloading.
     const find = gearDrop(new Rng(hashString(c.id) ^ this.site.seed), c.boss ? 'hoard' : 'chest', { tier: this.site.tier, progress: this.gearProgress });
-    if (find) this.addGear(by, find);
+    if (find) this.dropGear(find, c.x, c.z);
     this.audio.play('loot', c.x, c.z, 0.9);
     this.fx.spark(c.x, 0.8, c.z, 6, 4);
     this.sig.emit(c.x, c.z, 40, 'noise');

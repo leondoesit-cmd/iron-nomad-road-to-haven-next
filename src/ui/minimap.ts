@@ -1,5 +1,5 @@
 import type { CompassPin } from '../game/scene';
-import { MapProjection, fitRect, headingFor, radiusFor, type MapBase, type MapFrame, type MapPin, type MapPinKind } from './mapdata';
+import { MapProjection, fitRect, headingFor, radiusFor, type MapBase, type MapFrame, type MapPin, type MapPinKind, type MapRoad } from './mapdata';
 
 /** Colours of the markers shared by the compass and the maps. */
 export const PIN_COLOR: Record<MapPinKind, string> = {
@@ -37,6 +37,8 @@ export interface MapView {
   /** Metres per second, for the zoom. */
   speed: number;
   color: string;
+  /** Share of the usual minimap radius that can be seen: dust in the air shrinks it. Missing means all of it. */
+  reach?: number;
 }
 
 /** Pins that stay on the rim of the minimap when they are out of range, so the way to them is never lost. */
@@ -100,7 +102,7 @@ export class MapPainter {
     const g = this.prepare(canvas, size, size);
     if (!g) return;
     const R = size / 2;
-    const target = radiusFor(f, v.speed);
+    const target = radiusFor(f, v.speed) * (v.reach ?? 1);
     this.radius = this.radius === 0 ? target : this.radius + (target - this.radius) * Math.min(1, dt * 2.5);
     const scale = (R - 3) / this.radius;
     const P = this.proj.set(v.x, v.z, v.yaw, scale, R, R);
@@ -236,6 +238,36 @@ export class MapPainter {
 
   private layers(g: CanvasRenderingContext2D, P: MapProjection, f: MapFrame, v: MapView, o: { labels: boolean; rim: number; size: number; overview?: boolean }) {
     const s = P.scale;
+    // The open world's roads: only those that reach the view, tracks only up close.
+    if (f.roads.length) {
+      const reach = (o.size / 2 + 24) / s;
+      const near = (r: MapRoad) => r.x1 > P.cx - reach && r.x0 < P.cx + reach && r.z1 > P.cz - reach && r.z0 < P.cz + reach;
+      const draw = (r: MapRoad, col: string, width: number) => {
+        g.beginPath();
+        for (let i = 0; i < r.pts.length; i += 2) {
+          const x = P.x(r.pts[i], r.pts[i + 1]);
+          const y = P.y(r.pts[i], r.pts[i + 1]);
+          if (i === 0) g.moveTo(x, y);
+          else g.lineTo(x, y);
+        }
+        g.strokeStyle = col;
+        g.lineWidth = width;
+        g.stroke();
+      };
+      g.lineJoin = 'round';
+      g.lineCap = 'round';
+      const wide = !!o.overview;
+      for (const kind of ['track', 'road', 'highway'] as const) {
+        for (const r of f.roads) {
+          if (r.kind !== kind || !near(r)) continue;
+          if (kind === 'track' && (wide || s < 0.35)) continue;
+          const w = Math.max(kind === 'track' ? 1.2 : 1.6, r.half * 2 * s);
+          if (kind !== 'track') draw(r, 'rgba(14,11,8,0.85)', w + 2);
+          draw(r, kind === 'track' ? 'rgba(120,100,70,0.7)' : kind === 'road' ? '#7a7466' : '#8a8272', w);
+        }
+      }
+      g.lineWidth = 1;
+    }
     // Road.
     if (f.road && f.road.length > 3) {
       const path = () => {
