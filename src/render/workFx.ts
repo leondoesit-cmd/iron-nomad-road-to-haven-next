@@ -156,11 +156,9 @@ function ringTexture(): THREE.Texture {
   const c = document.createElement('canvas');
   c.width = c.height = 128;
   const g = c.getContext('2d')!;
-  const grad = g.createRadialGradient(64, 64, 20, 64, 64, 62);
-  grad.addColorStop(0, 'rgba(255,255,255,0)');
-  grad.addColorStop(0.62, 'rgba(255,255,255,0.12)');
-  grad.addColorStop(0.78, 'rgba(255,255,255,1)');
-  grad.addColorStop(0.88, 'rgba(255,255,255,0.25)');
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 62);
+  grad.addColorStop(0, 'rgba(255,255,255,0.7)');
+  grad.addColorStop(0.35, 'rgba(255,255,255,0.35)');
   grad.addColorStop(1, 'rgba(255,255,255,0)');
   g.fillStyle = grad;
   g.fillRect(0, 0, 128, 128);
@@ -171,12 +169,12 @@ function ringTexture(): THREE.Texture {
 let DOT_MAT: THREE.SpriteMaterial | null = null;
 const RING_MATS = new Map<boolean, THREE.SpriteMaterial>();
 function dotMat() {
-  return (DOT_MAT ??= shared(new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(1, 0.95, 0.8), transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false })));
+  return (DOT_MAT ??= shared(new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(1, 0.95, 0.8), transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false })));
 }
 function ringMat(ok: boolean) {
   let m = RING_MATS.get(ok);
   if (!m) {
-    m = shared(new THREE.SpriteMaterial({ map: ringTexture(), color: ok ? new THREE.Color(1, 0.8, 0.32) : new THREE.Color(1, 0.3, 0.25), transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
+    m = shared(new THREE.SpriteMaterial({ map: ringTexture(), color: ok ? new THREE.Color(1, 0.8, 0.32) : new THREE.Color(1, 0.3, 0.25), transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
     RING_MATS.set(ok, m);
   }
   return m;
@@ -187,11 +185,11 @@ function paintLabel(c: HTMLCanvasElement, text: string, css: string) {
   const g = c.getContext('2d');
   if (!g) return;
   g.clearRect(0, 0, c.width, c.height);
-  g.font = '700 40px "Barlow Condensed", "Arial Narrow", sans-serif';
+  g.font = '600 30px "Barlow Condensed", "Arial Narrow", sans-serif';
   g.textAlign = 'center';
   g.textBaseline = 'middle';
-  g.lineWidth = 8;
-  g.strokeStyle = 'rgba(10,8,6,0.9)';
+  g.lineWidth = 5;
+  g.strokeStyle = 'rgba(10,8,6,0.75)';
   g.lineJoin = 'round';
   g.strokeText(text, 256, 50);
   g.fillStyle = css;
@@ -386,7 +384,7 @@ export class WorkFx {
       f.ok = target.ok;
       f.ring.material = ringMat(target.ok);
     }
-    f.label.position.set(target.pos.x, target.pos.y + 0.6, target.pos.z);
+    f.label.position.set(target.pos.x, target.pos.y + 0.35, target.pos.z);
     const text = `${target.css}|${target.text}`;
     if (text !== f.text && typeof document !== 'undefined') {
       f.text = text;
@@ -402,7 +400,7 @@ export class WorkFx {
       paintLabel(f.canvas, target.text, target.css);
       const m = (f.label.material as THREE.SpriteMaterial).map;
       if (m) m.needsUpdate = true;
-      f.label.scale.set(2.6, 0.49, 1);
+      f.label.scale.set(1.5, 0.28, 1);
     }
   }
 
@@ -429,7 +427,7 @@ export class WorkFx {
     tex.colorSpace = THREE.SRGBColorSpace;
     const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false });
     const sprite = new THREE.Sprite(mat);
-    sprite.scale.set(2.6, 0.49, 1);
+    sprite.scale.set(1.5, 0.28, 1);
     sprite.position.copy(at);
     sprite.renderOrder = 50;
     this.root.add(sprite);
@@ -464,14 +462,14 @@ export class WorkFx {
       c.height = lh * lines.length + 16;
       const g = c.getContext('2d');
       if (!g) return;
-      g.font = '700 38px "Barlow Condensed", "Arial Narrow", sans-serif';
+      g.font = '600 28px "Barlow Condensed", "Arial Narrow", sans-serif';
       g.textAlign = 'center';
       g.textBaseline = 'middle';
       g.lineJoin = 'round';
       lines.forEach((l, i) => {
         const y = 8 + lh * i + lh / 2;
-        g.lineWidth = 7;
-        g.strokeStyle = 'rgba(10,8,6,0.92)';
+        g.lineWidth = 5;
+        g.strokeStyle = 'rgba(10,8,6,0.75)';
         g.strokeText(l.text.toUpperCase(), 320, y);
         g.fillStyle = l.css ?? '#f4f1e6';
         g.fillText(l.text.toUpperCase(), 320, y);
@@ -480,7 +478,7 @@ export class WorkFx {
       tex.colorSpace = THREE.SRGBColorSpace;
       const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false, opacity: 0 });
       const sprite = new THREE.Sprite(mat);
-      sprite.scale.set(3.2, (3.2 * c.height) / c.width, 1);
+      sprite.scale.set(2.0, (2.0 * c.height) / c.width, 1);
       sprite.renderOrder = 60;
       this.root.add(sprite);
       t = { sprite, text, seen: 0, a: 0 };
@@ -564,8 +562,8 @@ export class WorkFx {
       g.a = g.seen > 0.12 ? Math.max(0, g.a - dt * 6) : Math.min(1, g.a + dt * 8);
       g.group.visible = g.a > 0.02;
       const pulse = 0.75 + 0.25 * Math.sin(this.clock * 6);
-      g.edgeMat.opacity = 0.85 * g.a * (g.state === 'idle' ? 1 : pulse);
-      g.fillMat.opacity = 0.24 * g.a * pulse;
+      g.edgeMat.opacity = 0.45 * g.a * (g.state === 'idle' ? 1 : pulse);
+      g.fillMat.opacity = 0.07 * g.a;
       if (g.a <= 0 && g.seen > 0.12) this.dropGhost(id);
     }
     for (const [key, h] of this.hovers) {
@@ -625,8 +623,8 @@ export class WorkFx {
       }
       f.on = Math.min(1, f.on + dt * 8);
       const pulse = 0.85 + Math.sin(this.clock * 6) * 0.1;
-      f.ring.scale.setScalar(pulse * f.on);
-      for (const d of f.dots) d.scale.setScalar((0.34 + Math.sin(this.clock * 3 + d.position.x * 3) * 0.04) * f.on);
+      f.ring.scale.setScalar(0.3 * pulse * f.on);
+      for (const d of f.dots) d.scale.setScalar(0.12 * f.on);
     }
     for (let i = this.labels.length - 1; i >= 0; i--) {
       const l = this.labels[i];
