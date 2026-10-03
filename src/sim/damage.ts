@@ -167,6 +167,10 @@ export function repairStep(h: VehicleHealth): string {
     h.comp.engine = Math.min(1, h.comp.engine + 0.5);
     return 'engine';
   }
+  if ((h.comp.radiator ?? 1) < 1) {
+    h.comp.radiator = Math.min(1, (h.comp.radiator ?? 1) + 0.6);
+    return 'radiator';
+  }
   if (h.comp.mount < 1) {
     h.comp.mount = 1;
     return 'mount';
@@ -195,6 +199,10 @@ export function fixOneComponent(h: VehicleHealth): string {
     h.comp.engine = Math.min(1, h.comp.engine + 0.5);
     return 'engine';
   }
+  if ((h.comp.radiator ?? 1) < 1) {
+    h.comp.radiator = Math.min(1, (h.comp.radiator ?? 1) + 0.6);
+    return 'radiator';
+  }
   if (h.comp.mount < 1) {
     h.comp.mount = 1;
     return 'mount';
@@ -208,6 +216,7 @@ export function needsRepair(h: VehicleHealth) {
     h.burning ||
     h.leaking ||
     h.comp.engine < 1 ||
+    (h.comp.radiator ?? 1) < 0.7 ||
     h.comp.mount < 1 ||
     h.comp.tires.some((t) => t <= 0)
   );
