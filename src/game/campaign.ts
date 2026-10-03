@@ -1,12 +1,16 @@
-import { LEGS, MERCS, PARTS, VEHICLES, hasChassis, hasPart, partDef, type MercRole, type PartSlot, type Stocks } from '../data';
+import { FIT_SLOTS, FUEL_TYPES, LEGS, MERCS, PARTS, VEHICLES, hasChassis, hasPart, mountsFor, partDef, type FuelType, type MercRole, type PartSlot, type Stocks } from '../data';
 import { newAxes, type Axes } from '../sim/endings';
 import { newStocks } from '../sim/resources';
 import { newMerc, type Merc } from '../sim/loyalty';
 import { GARAGE_MAX, PLAYER_PAINT, buildName, buildValue, dismantleYield, freshComp, inventoryCap, installPart, newBuild, type VehicleBuild } from '../sim/garage';
-import { newPart, scrapValue, seedUids, type PartItem } from '../sim/parts';
+import { newPart, newUid, scrapValue, seedUids, type PartItem, type Tyres } from '../sim/parts';
 import { addToBag, allItems, sanitizeLoadout, scrapOf, starterLoadout, type GearItem, type Loadout } from '../sim/gear';
 import { DrugState, type DrugId, type DrugSave } from '../sim/drugs';
 import type { WorldSave } from './worldMemory';
+import { fuelOf } from '../sim/engines';
+import { addReserve } from '../sim/fuel';
+import { WATER_RESERVE_MAX } from '../sim/fluids';
+import { cleanPanels } from '../sim/paint';
 
 export interface PlayerSave {
   name: string;
@@ -29,6 +33,10 @@ export interface Items extends Record<DrugId, number> {
   charge: number;
   /** Engine oil in the trucks, in sumps: one can is half a sump. */
   oil: number;
+  /** Diesel in the reserve cans, in FU. Petrol is `stocks.fuel`. */
+  diesel: number;
+  /** Water for the radiators, in litres. */
+  water: number;
 }
 
 /** The most spare oil the convoy can stow. */
@@ -54,7 +62,7 @@ export class Campaign {
   hub: string | null = null;
   stocks: Stocks = newStocks(LEGS.start.stocks);
   ammo = LEGS.start.ammo;
-  items: Items = { medkit: 1, bandage: 2, molotov: 1, flare: 2, charge: 0, painkiller: 1, stim: 1, adrenaline: 0, alcohol: 1, weed: 0, haze: 0, mushrooms: 0, lsd: 0, ayahuasca: 0, oil: 1 };
+  items: Items = { medkit: 1, bandage: 2, molotov: 1, flare: 2, charge: 0, painkiller: 1, stim: 1, adrenaline: 0, alcohol: 1, weed: 0, haze: 0, mushrooms: 0, lsd: 0, ayahuasca: 0, oil: 1, diesel: 0, water: 30 };
   /** What each player has in their blood. Saved, so a trip survives a camp and a reload. */
   drugs: [DrugState, DrugState] = [new DrugState(), new DrugState()];
   chassis = 0;
@@ -218,15 +226,22 @@ export class Campaign {
     return true;
   }
 
-  /** Pour spare fuel into the convoy's reserve cans. */
-  stowFuel(amount: number) {
-    this.stocks.fuel += amount;
+  /** Pour spare fuel into the convoy's reserve cans. Petrol and diesel are kept apart. */
+  stowFuel(amount: number, type: FuelType = 'petrol') {
+    addReserve(this, type, amount);
   }
 
   /** Stow loose oil cans. Returns how much fitted; the rest has nowhere to go. */
   stowOil(amount: number): number {
     const take = Math.max(0, Math.min(amount, OIL_RESERVE_MAX - this.items.oil));
     this.items.oil += take;
+    return take;
+  }
+
+  /** Stow water cans. Returns how much fitted; the rest has nowhere to go. */
+  stowWater(amount: number): number {
+    const take = Math.max(0, Math.min(amount, WATER_RESERVE_MAX - this.items.water));
+    this.items.water += take;
     return take;
   }
 
@@ -312,6 +327,8 @@ export class Campaign {
     if (Array.isArray(d.drugs)) c.drugs = [DrugState.restore(d.drugs[0]), DrugState.restore(d.drugs[1])];
     if ('garage' in d && Array.isArray(d.garage)) {
       const m = d as ReturnType<Campaign['serialize']>;
+      // Reserve every stored id before sanitizing can mint new ones (an old tyre set becomes four tyres), so a repaired item never collides with a saved one.
+      seedUids([...uidsIn(m.garage), ...uidsIn(m.inventory)]);
       c.garage = m.garage.filter((b) => hasChassis(b.chassis)).map(sanitizeBuild);
       c.inventory = (m.inventory ?? []).filter((p) => hasPart(p.id));
       // Reserve every stored id before sanitizing can mint new ones, so a repaired item never collides with a saved one.
@@ -324,7 +341,7 @@ export class Campaign {
     seedUids([
       ...c.garage.map((b) => b.uid),
       ...c.inventory.map((p) => p.uid),
-      ...c.garage.flatMap((b) => Object.values(b.fit).map((p) => p!.uid)),
+      ...c.garage.flatMap((b) => [...Object.values(b.fit).map((p) => p!.uid), ...b.tyres.flatMap((t) => (t ? [t.uid] : []))]),
       ...c.players.flatMap((p) => allItems(p.gear).map((g) => g.uid)),
     ]);
     c.settleActives();
@@ -361,7 +378,7 @@ function migrateV1(c: Campaign, d: LegacySave) {
     for (const slot of ['engine', 'armor', 'wheels', 'weapon', 'utility'] as const) {
       const mk = p.mods?.[slot] ?? 0;
       if (mk <= 0) continue;
-      const def = PARTS.parts.find((x) => x.slot === slot && x.mk === Math.min(3, mk));
+      const def = PARTS.parts.find((x) => !x.stock && x.slot === slot && x.mk === Math.min(3, mk));
       if (def) installPart(b, newPart(def.id, 1));
     }
     c.garage.push(b);
@@ -375,11 +392,25 @@ function sanitizeBuild(b: VehicleBuild): VehicleBuild {
   const fit: VehicleBuild['fit'] = {};
   for (const slot of Object.keys(b.fit ?? {}) as PartSlot[]) {
     const it = b.fit[slot];
-    if (it && hasPart(it.id) && partDef(it.id).slot === slot) fit[slot] = it;
+    // Tyres are one per wheel now; a fitted door may sit on either side.
+    if (it && hasPart(it.id) && FIT_SLOTS.includes(slot) && mountsFor(partDef(it.id).slot).includes(slot)) fit[slot] = it;
   }
   const fresh = freshComp(def);
   const comp = { ...fresh, ...(b.comp ?? {}) };
-  comp.oil = Number.isFinite(comp.oil) ? Math.min(1, Math.max(0, comp.oil)) : 1;
+  const unit = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1);
+  comp.oil = unit(comp.oil);
+  comp.radiator = unit(comp.radiator);
+  comp.gearbox = unit(comp.gearbox);
+  comp.coolant = unit(comp.coolant);
   if (!Array.isArray(comp.tires) || comp.tires.length !== def.physics.wheelCount) comp.tires = fresh.tires;
-  return { ...b, fit, comp, stripe: b.stripe ?? 0, stripeColor: b.stripeColor ?? 0xe9dfc7, fuel: b.fuel ?? 1, hp: Math.max(0.01, b.hp ?? 1) };
+  // Tyres: keep what is there; an old save fitted one set to every wheel, which becomes a tyre on each.
+  const wheels = def.physics.wheelCount;
+  const saved = Array.isArray(b.tyres) ? b.tyres : [];
+  const isTyre = (t: PartItem | null | undefined): t is PartItem => !!t && hasPart(t.id) && partDef(t.id).slot === 'wheels';
+  let tyres: Tyres = Array.from({ length: wheels }, (_, i) => (isTyre(saved[i]) ? saved[i] : null));
+  const legacy = (b.fit as Record<string, PartItem | undefined> | undefined)?.wheels;
+  if (isTyre(legacy) && !tyres.some(Boolean)) tyres = tyres.map((_, i) => ({ uid: newUid('p'), id: legacy.id, cond: comp.tires[i] ?? legacy.cond }));
+  // Saves from before engines had a fuel: the tank holds whatever the engine in the bay burns.
+  const tank: FuelType = FUEL_TYPES.includes(b.tank) ? b.tank : fuelOf(def, fit);
+  return { ...b, fit, tyres, comp, tank, panels: cleanPanels(b.panels), stripe: b.stripe ?? 0, stripeColor: b.stripeColor ?? 0xe9dfc7, fuel: b.fuel ?? 1, hp: Math.max(0.01, b.hp ?? 1) };
 }

@@ -13,6 +13,7 @@ import type { Mounts } from './attachments';
  */
 export interface Load {
   fuel: number;
+  diesel: number;
   oil: number;
   /** Overflow: spare parts that did not fit on a deck are heaped in crates. */
   crates: number;
@@ -20,9 +21,9 @@ export interface Load {
   parts: { uid: string; id: string }[];
 }
 
-export const noLoad = (): Load => ({ fuel: 0, oil: 0, crates: 0, parts: [] });
-export const loadKey = (l: Load) => `${l.fuel}.${l.oil}.${l.crates}.${l.parts.map((p) => p.uid).join(',')}`;
-export const loadCount = (l: Load) => l.fuel + l.oil + l.crates + l.parts.length;
+export const noLoad = (): Load => ({ fuel: 0, diesel: 0, oil: 0, crates: 0, parts: [] });
+export const loadKey = (l: Load) => `${l.fuel}.${l.diesel}.${l.oil}.${l.crates}.${l.parts.map((p) => p.uid).join(',')}`;
+export const loadCount = (l: Load) => l.fuel + l.diesel + l.oil + l.crates + l.parts.length;
 
 /** A flat area cargo can sit on, in the chassis frame. */
 export interface Deck {
@@ -50,7 +51,7 @@ export function deckRoom(d: Deck): number {
 
 /** One thing on a deck, in the chassis frame. */
 export interface Placed {
-  kind: 'part' | 'crate' | 'fuel' | 'oil';
+  kind: 'part' | 'crate' | 'fuel' | 'diesel' | 'oil';
   /** Part items: which one. */
   uid?: string;
   id?: string;
@@ -69,6 +70,7 @@ export function layoutLoad(deck: Deck, load: Load): Placed[] {
   for (const p of load.parts) things.push({ kind: 'part', uid: p.uid, id: p.id });
   for (let i = 0; i < load.crates; i++) things.push({ kind: 'crate' });
   for (let i = 0; i < load.fuel; i++) things.push({ kind: 'fuel' });
+  for (let i = 0; i < (load.diesel ?? 0); i++) things.push({ kind: 'diesel' });
   for (let i = 0; i < load.oil; i++) things.push({ kind: 'oil' });
   const out: Placed[] = [];
   const cols = deck.stack ? 1 : Math.max(1, Math.floor((deck.hw * 2) / 0.34));
@@ -108,7 +110,7 @@ export function buildLoad(deck: Deck, load: Load, key: string): THREE.Mesh | nul
         buildPartModel(pm, t.id!);
         b.appendMatrix(pm, new THREE.Matrix4().compose(new THREE.Vector3(t.x, t.y, t.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), t.yaw), new THREE.Vector3(PART_SCALE, PART_SCALE, PART_SCALE)));
       } else if (t.kind === 'crate') crate(b, t.x, t.y + 0.11, t.z, deck.stack ? 0.34 : 0.32, 0.22, 0.3, t.yaw);
-      else if (t.kind === 'fuel') jerryCan(b, t.x, t.y, t.z, C.fuel, t.yaw);
+      else if (t.kind === 'fuel' || t.kind === 'diesel') jerryCan(b, t.x, t.y, t.z, t.kind === 'diesel' ? C.diesel : C.fuel, t.yaw);
       else oilCan(b, t.x, t.y, t.z, t.yaw);
     }
     geo = shared(b.build());

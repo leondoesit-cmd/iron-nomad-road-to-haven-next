@@ -3,7 +3,8 @@ import { modelKey } from '../render/workFx';
 import { prepareVehicleVisual } from '../render/vehicleModels';
 import { chassisDef } from '../data';
 import { sitePos } from './hauling';
-import { partName, type PartItem } from '../sim/parts';
+import { newPart, partName, type PartItem } from '../sim/parts';
+import { colorName } from '../sim/paint';
 import { rollCar, type CarStatus } from '../sim/cars';
 import { SALVAGE_STAGES, lootText, salvageLoot, type SalvageCtx, type SalvageKind } from '../sim/salvage';
 import { newAabbId, type Aabb, type CarSpawn } from '../world/layout';
@@ -248,6 +249,7 @@ export class CarField {
       chassis: v.def.id,
       burnt: v.wreck,
       fit: b ? { ...b.fit } : undefined,
+      tyres: b ? [...b.tyres] : undefined,
       comp: b?.comp,
       progress: ctx.gearProgress,
     };
@@ -263,9 +265,15 @@ export class CarField {
       else scrapped += r.scrap;
     }
     const oil = loot.oil > 0 ? ctx.campaign.stowOil(loot.oil) : 0;
+    if (loot.water) ctx.campaign.stowWater(loot.water);
     let text = lootText({ ...loot, items: kept, oil }, partName);
     if (scrapped) text += `${text === 'Nothing worth taking' ? '' : ', '}${scrapped} Scrap (no room for the rest)`;
     p.note(text, kept.length || scrapped ? 'good' : 'info');
+    if (loot.paint) {
+      // A spray can rolls out of the glovebox and lands at the searcher's feet.
+      ctx.loose?.drop(p.pos.x + Math.sin(p.yaw) * 1.3, p.pos.z + Math.cos(p.yaw) * 1.3, { kind: 'paint', color: loot.paint.color, charges: loot.paint.charges });
+      p.note(`A spray can (${colorName(loot.paint.color)}): pick it up and paint a panel`, 'good');
+    }
     {
       const site = sitePos(v, (['wheel', 'hood', 'flank', 'rear'] as const)[Math.min(3, stage)]);
       if (loot.gear) ctx.dropGear(loot.gear, site.x, site.z);
@@ -277,14 +285,25 @@ export class CarField {
     // What the car loses.
     if (b) {
       if (stage === 0) {
-        delete b.fit.wheels;
+        // Every tyre is off: bare hubs.
+        b.tyres = b.tyres.map(() => newPart('tyre_none', 1));
         v.health.comp.tires = v.health.comp.tires.map(() => 0);
       } else if (stage === 1) {
-        delete b.fit.engine;
+        for (const [slot, none] of [['gearbox', 'gbx_none'], ['exhaust', 'exh_none']] as const) b.fit[slot] = newPart(none, 1);
+        v.health.comp.gearbox = 0;
+        // The engine is out: the bay is empty, not back to a factory motor that was never there.
+        b.fit.engine = newPart('eng_none', 1);
         v.health.comp.engine = 0;
         v.engineOn = false;
       } else if (stage === 2) {
         for (const s of ['armor', 'weapon', 'utility', 'front', 'roof', 'rear', 'side'] as const) delete b.fit[s];
+        // And the radiator behind the grille comes out with the front end.
+        b.fit.cooling = newPart('rad_none', 1);
+        v.health.comp.radiator = 0;
+        v.health.comp.coolant = 0;
+        for (const [slot, none] of [['hood', 'hood_none'], ['doorL', 'door_none'], ['doorR', 'door_none'], ['suspension', 'sus_none'], ['brakes', 'brk_none']] as const) {
+          if ((v.def.slots ?? []).includes(slot)) b.fit[slot] = newPart(none, 1);
+        }
         v.health.hp = Math.min(v.health.hp, v.health.maxHp * 0.12);
         v.health.comp.plates = 0.1;
       }

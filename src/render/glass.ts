@@ -45,7 +45,7 @@ let clearMat: THREE.MeshStandardMaterial | null = null;
 let frostMat: THREE.MeshStandardMaterial | null = null;
 let crazedMat: THREE.MeshStandardMaterial | null = null;
 let crackMat: THREE.MeshStandardMaterial | null = null;
-let crackTex: THREE.CanvasTexture | null = null;
+let crackTex: THREE.Texture | null = null;
 
 function glassMaterial(opacity: number, color: number, rough: number): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({ color, transparent: true, opacity, roughness: rough, metalness: 0.1, side: THREE.DoubleSide, depthWrite: false, envMapIntensity: 1.5, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
@@ -60,8 +60,12 @@ export const paneMaterials = () => ({
 });
 
 /** A web of cracks from the middle: jagged spokes, a ring or two, and a pit where the blow landed. */
-function crackTexture(): THREE.CanvasTexture {
+function crackTexture(): THREE.Texture {
   if (crackTex) return crackTex;
+  if (typeof document === 'undefined') {
+    crackTex = shared(new THREE.Texture());
+    return crackTex;
+  }
   const S = 256;
   const c = document.createElement('canvas');
   c.width = c.height = S;

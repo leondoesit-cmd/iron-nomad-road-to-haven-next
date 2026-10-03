@@ -1,8 +1,10 @@
-import type { PartSlot, Stocks } from '../data';
+import { chassisDef, hasChassis, partDef, type PartSlot, type Stocks } from '../data';
 import { Rng } from '../core/rng';
 import type { BuildComp } from './garage';
-import { newPart, rollPart, type Fit, type PartItem } from './parts';
+import { newPart, rollPart, type Fit, type PartItem, type Tyres } from './parts';
+import { factoryIdFor } from './drivetrain';
 import { gearDrop, type GearItem } from './gear';
+import { foundCan } from './paint';
 
 /** What is being stripped. Raiders carry better kit than a family car. */
 export type SalvageKind = 'car' | 'raider' | 'wagon' | 'convoy';
@@ -32,6 +34,7 @@ export interface SalvageCtx {
   burnt: boolean;
   /** For a lost convoy vehicle: what was bolted to it, and how worn. */
   fit?: Fit;
+  tyres?: Tyres;
   comp?: BuildComp;
   /** How far the convoy has come, 0 to 1. */
   progress?: number;
@@ -45,6 +48,10 @@ export interface SalvageLoot {
   oil: number;
   /** A piece of personal gear in the cabin or trunk, now and then. */
   gear?: GearItem;
+  /** A spray can in the glovebox, now and then. */
+  paint?: { color: number; charges: number };
+  /** Water drained from the radiator, in litres. */
+  water?: number;
 }
 
 const CAR_MK = [0.72, 0.24, 0.04];
@@ -77,20 +84,46 @@ export function salvageLoot(stage: number, c: SalvageCtx): SalvageLoot {
     out.items.push({ ...it, cond: Math.min(it.cond, 0.45) });
     return true;
   };
+  /** A part the car left the factory with, if the roll lets you have it. */
+  const factory = (slot: PartSlot, chance: number): boolean => {
+    if (!hasChassis(c.chassis) || !rng.chance(chance)) return false;
+    const def = chassisDef(c.chassis);
+    const id = slot === 'engine' ? def.stockEngine : slot === 'cooling' ? def.stockRadiator : factoryIdFor(def, slot);
+    if (!id) return false;
+    // A convoy vehicle gives back what it really had; a stranger's car is whatever the road did to it.
+    const live = c.comp ? (slot === 'engine' ? c.comp.engine : slot === 'cooling' ? c.comp.radiator ?? 1 : slot === 'gearbox' ? c.comp.gearbox ?? 1 : undefined) : undefined;
+    const worn = slot === 'engine' || slot === 'cooling' || slot === 'gearbox';
+    out.items.push(newPart(id, worn ? (live !== undefined ? Math.min(live, 0.45) : rng.range(condLo, condHi)) : 1));
+    return true;
+  };
   const rollOne = (slots: PartSlot[]) => {
     const mk = rollMk(rng, mkProbs);
     out.items.push(rollPart(rng, { slots, minMk: mk, maxMk: mk, condLo, condHi }));
   };
   switch (stage) {
-    case 0:
-      if (!own('wheels')) rollOne(['wheels']);
+    case 0: {
+      // The tyres come off one at a time: half the wheels' worth, the best of them.
+      const wheels = hasChassis(c.chassis) ? chassisDef(c.chassis).physics.wheelCount : 4;
+      const take = Math.max(1, Math.floor(wheels / 2));
+      const fitted = (c.tyres ?? []).filter((t): t is PartItem => !!t && !partDef(t.id).empty);
+      for (let i = 0; i < take; i++) {
+        const mine = fitted[i];
+        if (mine) out.items.push({ ...mine, cond: Math.min(mine.cond, 0.45) });
+        else if (hasChassis(c.chassis) && !rng.chance(raid ? 0.45 : 0.15)) out.items.push(newPart(`tyre_${c.chassis}`, rng.range(condLo, condHi)));
+        else rollOne(['wheels']);
+      }
       if (!c.burnt) out.stocks.scrap = rng.int(2, 4);
       break;
+    }
     case 1:
-      if (!own('engine')) rollOne(['engine']);
+      // Most cars give up their own engine, which is how a diesel van's motor ends up in a hatchback.
+      if (!own('engine') && !factory('engine', raid ? 0.2 : 0.7)) rollOne(['engine']);
       // Pulling an engine drains the sump: a burnt-out one has nothing left in it.
       if (!c.burnt) out.oil = Math.round(new Rng((Math.imul(c.seed | 0, 40503) + 7) >>> 0).range(0.2, 0.5) * 100) / 100;
       out.stocks.parts = Math.max(1, Math.round(rng.int(3, 6) * burn));
+      // Drawn after everything above, so those finds are what they always were: the gearbox and the pipe come out with it.
+      if (!own('gearbox')) factory('gearbox', raid ? 0.25 : 0.55);
+      if (!own('exhaust')) factory('exhaust', raid ? 0.2 : 0.45);
       break;
     case 2: {
       out.stocks.scrap = Math.round(rng.int(8, 16) * burn);
@@ -99,6 +132,16 @@ export function salvageLoot(stage: number, c: SalvageCtx): SalvageLoot {
       if (!hadArmor && rng.chance(0.5 * burn + (raid ? 0.3 : 0))) rollOne(['armor']);
       if (rng.chance(0.22 * burn + (raid ? 0.2 : 0))) rollOne(['front', 'roof', 'rear', 'side']);
       if (raid && rng.chance(0.4)) rollOne(['weapon']);
+      // Drawn last, so the finds above are what they always were. The radiator is behind the grille.
+      if (!own('cooling')) {
+        if (!factory('cooling', burn * 0.6) && !c.burnt && rng.chance(0.12)) rollOne(['cooling']);
+      }
+      // The body panels and the running gear come off with the bodywork.
+      for (const slot of ['hood', 'doorL', 'doorR'] as PartSlot[]) if (!own(slot)) factory(slot, burn * 0.4);
+      if (!own('suspension')) factory('suspension', burn * 0.3);
+      if (!own('brakes')) factory('brakes', burn * 0.3);
+      // And the water in the radiator runs out onto the road, for anyone with a can.
+      if (!c.burnt) out.water = Math.round(rng.range(2, 6) * 10) / 10;
       break;
     }
     default: {
@@ -120,6 +163,8 @@ export function salvageLoot(stage: number, c: SalvageCtx): SalvageLoot {
       if (c.kind !== 'convoy') {
         const g = gearDrop(rng, c.kind === 'wagon' ? 'wreck' : c.kind === 'raider' ? 'raider' : 'trunk', { progress: c.progress });
         if (g && !(c.burnt && rng.chance(0.55))) out.gear = g;
+        // Drawn after the gear, so every earlier find is what it always was.
+        if (!c.burnt && rng.chance(0.12)) out.paint = foundCan(() => rng.next());
       }
     }
   }
@@ -133,5 +178,7 @@ export function lootText(l: SalvageLoot, name: (it: PartItem) => string): string
   for (const k of Object.keys(l.stocks)) if (l.stocks[k as keyof Stocks]) bits.push(`${Math.round(l.stocks[k as keyof Stocks] as number)} ${labels[k] ?? k}`);
   if (l.ammo) bits.push(`${l.ammo} rounds`);
   if (l.oil > 0.01) bits.push(`${Math.round(l.oil * 200)}% of an oil can`);
+  if (l.paint) bits.push('a spray can');
+  if (l.water) bits.push(`${l.water.toFixed(0)} L of water`);
   return bits.length ? bits.join(', ') : 'Nothing worth taking';
 }

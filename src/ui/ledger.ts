@@ -5,6 +5,7 @@ import { PLAYER_CSS } from '../render/palette';
 import { DRUG_IDS, DRUGS, type DrugId } from '../sim/drugs';
 import { LABEL, RECIPES, canAfford, checkTierUp, costText, spend, whole } from '../sim/resources';
 import { buildName, defOf, maxHpOf, needsService, rebuildOnto, serviceBuild, serviceCost, statsOf } from '../sim/garage';
+import { engineLine, engineSpec } from '../sim/engines';
 import { loyaltyBand, settleCut } from '../sim/loyalty';
 import { moraleOf } from '../sim/loyalty';
 import type { Game } from '../game/game';
@@ -122,7 +123,7 @@ export class LedgerPanel {
     const hub = this.hub;
     const leg = legById(c.legId);
     const stocksHtml = (['fuel', 'rations', 'scrap', 'parts', 'tech', 'medicine'] as StockId[])
-      .map((k) => `<div class="stockrow"><span>${LABEL[k]}</span><b>${k === 'fuel' ? c.stocks[k].toFixed(1) : whole(c.stocks[k])}</b></div>`)
+      .map((k) => `<div class="stockrow"><span>${LABEL[k]}${k === 'fuel' ? ' (petrol)' : ''}</span><b>${k === 'fuel' ? c.stocks[k].toFixed(1) : whole(c.stocks[k])}</b></div>${k === 'fuel' ? `<div class="stockrow"><span>Diesel</span><b>${c.items.diesel.toFixed(1)}</b></div>` : ''}`)
       .join('');
     const drugsHtml = DRUG_IDS.filter((d) => c.items[d] > 0).map((d) => `${DRUGS[d].name} ${c.items[d]}`).join(' · ') || 'Nothing';
     const isDrug = (r: (typeof RECIPES)[number]) => DRUG_IDS.some((d) => r.yields[d]);
@@ -141,7 +142,7 @@ export class LedgerPanel {
       ${hub?.features.includes('trade') ? `<h3>Trader</h3><div class="card"><div class="btns">${this.tradeButtons()}</div></div>` : ''}
       </section>`;
     const cards = (c.solo ? [0] : [0, 1]).map((i) => this.vehicleCard(i)).join('');
-    const mid = `<section><h3>Vehicles</h3>${cards}<div class="mutedtxt">Tanks are filled from the convoy reserve (${c.stocks.fuel.toFixed(1)} FU) when you roll out. Upgrades take effect straight away.</div></section>`;
+    const mid = `<section><h3>Vehicles</h3>${cards}<div class="mutedtxt">Tanks are filled from the convoy reserve (${c.stocks.fuel.toFixed(1)} FU petrol, ${c.items.diesel.toFixed(1)} FU diesel) with whatever each engine burns when you roll out. Upgrades take effect straight away.</div></section>`;
     const right = `<section><h3>Crew</h3>${this.crewHtml(owedTotal)}<h3>Next road</h3>${this.routeHtml()}</section>`;
     const tabs = `<span class="tabs">${this.btn('tab-main', 'Ledger', () => this.setTab('main'), true).replace('<button', `<button class="tabbtn${this.tab === 'main' ? ' on' : ''}"`)}${this.btn('tab-garage', `Garage${c.inventory.length ? ` <small>${c.inventory.length} parts</small>` : ''}`, () => this.setTab('garage'), true).replace('<button', `<button class="tabbtn${this.tab === 'garage' ? ' on' : ''}"`)}${this.btn('tab-gear', 'Gear', () => this.setTab('gear'), true).replace('<button', `<button class="tabbtn${this.tab === 'gear' ? ' on' : ''}"`)}</span>`;
     const foot = `<div style="grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:2px solid rgba(38,28,16,.4);padding-top:6px">
@@ -238,6 +239,16 @@ export class LedgerPanel {
         canAfford(this.c.stocks, o.cost),
       ),
     );
+    const diesel = this.btn(
+      'buy-diesel',
+      `Buy 5 FU diesel <span class="cost">${costText({ scrap: 16 })}</span>`,
+      () => {
+        if (!this.buyCost({ scrap: 16 })) return this.deny('Not enough Scrap');
+        this.c.items.diesel += 5;
+        this.ok('Bought 5 FU diesel');
+      },
+      canAfford(this.c.stocks, { scrap: 16 }),
+    );
     return (
       offers
       .map((o) =>
@@ -252,7 +263,7 @@ export class LedgerPanel {
           canAfford(this.c.stocks, o.cost),
         ),
       )
-      .concat(drugBtns)
+      .concat(diesel, drugBtns)
       .join('')
     );
   }
@@ -272,6 +283,7 @@ export class LedgerPanel {
     lines.push(
       `<h4><span class="pcolor" style="background:${PLAYER_CSS[i]}"></span>${escapeHtml(sv.name.toUpperCase())} · ${escapeHtml(buildName(b))}</h4>`,
       `<div class="sub2">HP ${Math.round(b.hp * maxHpOf(b))}/${Math.round(maxHpOf(b))} · ARMOR ${Math.round(st.armor * 100)}% · TANK ${st.tank.toFixed(0)} FU · TOP ${Math.round(def.topSpeedKmh * st.topSpeedMult)} km/h · W ${def.width} m</div>`,
+      `<div class="sub2">${escapeHtml(engineLine(engineSpec(def, b.fit)).toUpperCase())} · TANK ${b.tank.toUpperCase()} · COOLING ${Math.round(st.coolKw)} kW</div>`,
     );
     const btns: string[] = [];
     btns.push(this.btn(`rep${i}`, `Service <span class="cost">${service ? costText(cost) : 'OK'}</span>`, () => this.service(i, cost), service && canAfford(c.stocks, cost)));

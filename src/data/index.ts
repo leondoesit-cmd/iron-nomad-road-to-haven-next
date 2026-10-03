@@ -20,9 +20,36 @@ export type Cost = Partial<Record<StockId | 'fu', number>>;
 export type ModuleSlot = 'engine' | 'armor' | 'wheels' | 'weapon' | 'utility';
 export const MODULE_SLOTS: ModuleSlot[] = ['engine', 'armor', 'wheels', 'weapon', 'utility'];
 
-/** Every place a part can be bolted on. The first five are the performance slots, the last four are mounts. */
-export type PartSlot = 'engine' | 'wheels' | 'armor' | 'weapon' | 'utility' | 'front' | 'roof' | 'rear' | 'side';
-export const PART_SLOTS: PartSlot[] = ['engine', 'wheels', 'armor', 'weapon', 'utility', 'front', 'roof', 'rear', 'side'];
+/** Every place a part can be bolted on. Engine and radiator are the powertrain, then the performance slots, then four mounts. */
+export type PartSlot =
+  | 'engine'
+  | 'cooling'
+  | 'gearbox'
+  | 'exhaust'
+  | 'wheels'
+  | 'suspension'
+  | 'brakes'
+  | 'hood'
+  | 'doorL'
+  | 'doorR'
+  | 'armor'
+  | 'weapon'
+  | 'utility'
+  | 'front'
+  | 'roof'
+  | 'rear'
+  | 'side';
+/**
+ * Every part category. `wheels` is the category of a tyre: tyres are fitted one per wheel (see `VehicleBuild.tyres`), never
+ * as a slot of their own, and `doorL` is the category of a door, which fits either side.
+ */
+export const PART_SLOTS: PartSlot[] = ['engine', 'cooling', 'gearbox', 'exhaust', 'wheels', 'suspension', 'brakes', 'hood', 'doorL', 'doorR', 'armor', 'weapon', 'utility', 'front', 'roof', 'rear', 'side'];
+/** Slots that hold one part directly in `Fit`. Everything but the tyres, which are one per wheel. */
+export const FIT_SLOTS: PartSlot[] = PART_SLOTS.filter((s) => s !== 'wheels');
+/** Which mounts a part of this category can be bolted to. A door fits either side; a tyre fits any wheel. */
+export function mountsFor(category: PartSlot): PartSlot[] {
+  return category === 'doorL' || category === 'doorR' ? ['doorL', 'doorR'] : [category];
+}
 export const MOUNT_SLOTS: PartSlot[] = ['front', 'roof', 'rear', 'side'];
 export type WeaponMount = 'none' | 'front' | 'bed';
 
@@ -93,6 +120,49 @@ export interface VehicleDef {
   /** Can turn up abandoned on the road. */
   found?: boolean;
   lootWeight?: number;
+  /** The engine and radiator it left the factory with (part ids). Missing on boats and raider rigs: they have no powertrain to swap. */
+  stockEngine?: string;
+  stockRadiator?: string;
+  /** Size class of the engine bay, 1 (scooter frame) to 5 (truck). A bigger engine still goes in, but is forced. */
+  bay?: number;
+}
+
+export type FuelType = 'petrol' | 'diesel';
+export const FUEL_TYPES: FuelType[] = ['petrol', 'diesel'];
+
+export interface GearboxSpec {
+  rating: number;
+  gearing: number;
+  mass: number;
+}
+export interface SuspensionSpec {
+  load: number;
+  travel: number;
+  mass: number;
+}
+export interface BrakeSpec {
+  power: number;
+  energy: number;
+}
+export interface ExhaustSpec {
+  flow: number;
+  noise: number;
+}
+
+/** What an engine is, whatever it is bolted into. */
+export interface EngineSpec {
+  /** Displacement, for display. */
+  litres: number;
+  /** Peak output. */
+  kw: number;
+  /** Dry weight in kg. */
+  mass: number;
+  /** Physical size class, 0 (nothing) to 5. Compare with a chassis' `bay`. */
+  size: number;
+  fuel: FuelType;
+  layout?: string;
+  /** Turbo or supercharger. */
+  blown?: boolean;
 }
 
 export interface PartStats {
@@ -116,6 +186,8 @@ export interface PartStats {
   ram?: number;
   light?: number;
   spare?: number;
+  /** Extra air through the engine bay, as a share (a vented or missing bonnet). */
+  airflow?: number;
 }
 
 export interface PartDef {
@@ -130,6 +202,22 @@ export interface PartDef {
   cost: Cost;
   /** Relative chance to turn up in salvage. */
   weight: number;
+  /** Engines only: what the motor is. Its power, weight, fuel and size replace the old flat percentages. */
+  engine?: EngineSpec;
+  /** Radiators only: heat the core can reject at full airflow, in kW. */
+  cooling?: number;
+  /** Gearboxes: the output they can carry before they wear, how short the gearing is (-1 tall .. 1 short), and their weight. */
+  gearbox?: GearboxSpec;
+  /** Springs: the weight they carry, how far they travel (1 is stock), and their weight. */
+  suspension?: SuspensionSpec;
+  /** Brakes: stopping power against the stock chassis (1 is stock) and the energy they can shed in one stop, in kJ. */
+  brakes?: BrakeSpec;
+  /** Exhausts: extra power as a share, and noise against the stock pipe. */
+  exhaust?: ExhaustSpec;
+  /** A factory fitting. It can be pulled out and carried, but never turns up as random loot or on the fabricate list. */
+  stock?: boolean;
+  /** The "nothing there" placeholder for a bay that has been stripped. Not a real part. */
+  empty?: boolean;
 }
 
 export type ZombieKind = 'walker' | 'runner' | 'screamer' | 'bloater' | 'brute' | 'stalker';
@@ -456,7 +544,38 @@ export function validateData(): string[] {
   for (const p of PARTS.parts) {
     need(PARTS.slots.includes(p.slot), `part ${p.id}: unknown slot ${p.slot}`);
     need(p.mk >= 1 && p.mk <= 3, `part ${p.id}: mk range`);
-    need(p.weight > 0, `part ${p.id}: weight`);
+    // Factory fittings are never random loot, so they carry no weight.
+    need(p.stock ? p.weight === 0 : p.weight > 0, `part ${p.id}: weight`);
+    if (p.slot === 'engine') {
+      const e = p.engine;
+      need(!!e, `part ${p.id}: an engine needs an engine spec`);
+      if (e) {
+        need(p.empty ? e.kw === 0 : e.kw > 0 && e.litres > 0 && e.mass > 0, `part ${p.id}: engine numbers`);
+        need(e.size >= (p.empty ? 0 : 1) && e.size <= 5, `part ${p.id}: engine size class`);
+        need(FUEL_TYPES.includes(e.fuel), `part ${p.id}: engine fuel`);
+      }
+    } else need(!p.engine, `part ${p.id}: only engines have an engine spec`);
+    const specOk = (slot: PartSlot, key: 'gearbox' | 'suspension' | 'brakes' | 'exhaust') => (p.slot === slot ? need(!!p[key], `part ${p.id}: a ${slot} part needs a ${key} spec`) : need(p[key] === undefined, `part ${p.id}: only ${slot} parts have a ${key} spec`));
+    specOk('gearbox', 'gearbox');
+    specOk('suspension', 'suspension');
+    specOk('brakes', 'brakes');
+    specOk('exhaust', 'exhaust');
+    if (p.gearbox) need(p.gearbox.rating >= 0 && p.gearbox.gearing >= -1 && p.gearbox.gearing <= 1 && (p.empty || p.gearbox.rating > 0), `part ${p.id}: gearbox numbers`);
+    if (p.suspension) need(p.suspension.load >= 0 && p.suspension.travel > 0 && (p.empty || p.suspension.load > 0), `part ${p.id}: suspension numbers`);
+    if (p.brakes) need(p.brakes.power > 0 && p.brakes.energy >= 0 && (p.empty || p.brakes.energy > 0), `part ${p.id}: brake numbers`);
+    if (p.exhaust) need(p.exhaust.noise > 0, `part ${p.id}: exhaust numbers`);
+    if (p.slot === 'cooling') need(typeof p.cooling === 'number' && p.cooling >= 0 && (p.empty ? p.cooling === 0 : p.cooling > 0), `part ${p.id}: radiator needs a cooling rating`);
+    else need(p.cooling === undefined, `part ${p.id}: only radiators have a cooling rating`);
+  }
+  for (const v of [...VEHICLES.tiers, ...VEHICLES.cars]) {
+    need(!!v.stockEngine && PART_BY_ID.get(v.stockEngine)?.slot === 'engine' && !!PART_BY_ID.get(v.stockEngine)?.stock, `vehicle ${v.id}: needs a stock engine`);
+    need(!!v.stockRadiator && PART_BY_ID.get(v.stockRadiator)?.slot === 'cooling' && !!PART_BY_ID.get(v.stockRadiator)?.stock, `vehicle ${v.id}: needs a stock radiator`);
+    need((v.bay ?? 0) >= 1 && (v.bay ?? 9) <= 5, `vehicle ${v.id}: bay size class`);
+    need((v.slots ?? PART_SLOTS).includes('engine') && (v.slots ?? PART_SLOTS).includes('cooling'), `vehicle ${v.id}: engine and radiator slots`);
+    for (const pre of ['tyre', 'gbx', 'sus', 'brk', 'exh']) {
+      const f = PART_BY_ID.get(`${pre}_${v.id}`);
+      need(!!f?.stock, `vehicle ${v.id}: needs a factory ${pre} part (${pre}_${v.id})`);
+    }
   }
   need(new Set(PARTS.parts.map((p) => p.id)).size === PARTS.parts.length, 'parts: duplicate ids');
   for (const leg of LEGS.legs) {

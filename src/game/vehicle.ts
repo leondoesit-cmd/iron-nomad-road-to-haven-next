@@ -8,12 +8,16 @@ import { effectiveStats, terrainDrag, terrainGrip, type PartItem, type Stats } f
 import { fromHealth, toHealth, type VehicleBuild } from '../sim/garage';
 import { stormOilMult } from '../sim/weather';
 import { oilBurn, oilState, oilWear, type OilState } from '../sim/oil';
+import { gearboxPower, gearboxRatingNow, gearboxWear } from '../sim/drivetrain';
+import { COOLANT_LOW, COOLANT_CRITICAL, coolantLoss, coolantState, type CoolantState } from '../sim/fluids';
+import { fuelMismatch } from '../sim/fuel';
+import { T_CRITICAL, T_HOT, T_OVERHEAT, overheatPower, overheatWear, steamLevel, thermalStep } from '../sim/thermal';
 import { buildRaiderBuggy, buildVehicleVisual, buildWagon, defaultLook, lookOf, mountsOfChassis, type VehicleVisual } from '../render/vehicleModels';
 import { buildLoad, deckOf, deckRoom, layoutLoad, loadCount, loadKey, noLoad, type Load, type Placed } from '../render/cargoLoad';
 import { PLAYER_COLORS } from '../render/palette';
 import { shared, disposeTree } from '../render/dispose';
 import { clamp, damp, lerp } from '../core/math';
-import { chassisDef, type VehicleDef } from '../data';
+import { chassisDef, partDef, type FuelType, type VehicleDef } from '../data';
 import { Bodywork } from './bodywork';
 import { CarGlass } from './carGlass';
 import type { Ctx } from './ctx';
@@ -76,6 +80,14 @@ export class Vehicle {
   passenger: { index: number } | null = null;
   fuel: number;
   tankMax: number;
+  /** What the tank holds. The engine runs on `stats.fuel`; if they differ it will not start. */
+  fuelType: FuelType = 'petrol';
+  /** Engine temperature, normalised (see sim/thermal). 1 is the redline. */
+  temp = 0.2;
+  /** Seconds spent past the point where an engine blows. */
+  private blownT = 0;
+  private tempSeen = 0;
+  private steamT = 0;
   engineOn = false;
   lights = false;
   hornT = 0;
@@ -118,6 +130,8 @@ export class Vehicle {
   private loadT = 0;
   /** Last oil level the driver was warned about. */
   private oilSeen: OilState = 'ok';
+  private coolantSeen: CoolantState = 'ok';
+  private gearSeen = false;
   /** Water: engine drowned (wheeled vehicles), seconds spent out of the water since, and the spray timer. */
   flooded = false;
   dryT = 0;
@@ -134,7 +148,7 @@ export class Vehicle {
     this.faction = o.faction;
     this.kind = o.kind;
     this.ownerIndex = o.ownerIndex ?? -1;
-    this.stats = effectiveStats(def, o.build?.fit ?? {});
+    this.stats = effectiveStats(def, o.build?.fit ?? {}, o.build?.tyres);
     const base = def.physics;
     const gOff = base.suspension.rest + base.wheelRadius - base.hardY;
     const gy = o.y ?? ctx.groundAt(o.x, o.z);
@@ -154,6 +168,7 @@ export class Vehicle {
     }
     this.tankMax = isRaider ? 999 : this.stats.tank;
     this.fuel = o.fuel ?? (o.build ? this.tankMax * o.build.fuel : this.tankMax);
+    this.fuelType = o.build?.tank ?? this.stats.fuel;
     this.spin = this.body.wheelLocal.map(() => 0);
     ctx.vehicleByCollider.set(this.body.collider.handle, this);
     this.hideSeats();
@@ -198,7 +213,7 @@ export class Vehicle {
     if (!b) return;
     const hpFrac = this.health.hp / this.health.maxHp;
     const fuelFrac = this.fuel / Math.max(0.001, this.tankMax);
-    this.stats = effectiveStats(this.def, b.fit);
+    this.stats = effectiveStats(this.def, b.fit, b.tyres);
     const fresh = toHealth(b);
     if (!fromBuild) {
       fresh.comp = this.health.comp;
@@ -209,6 +224,7 @@ export class Vehicle {
     this.health = fresh;
     this.tankMax = this.stats.tank;
     this.fuel = fuelFrac * this.tankMax;
+    if (fromBuild) this.fuelType = b.tank;
     const old = this.visual;
     const wasSeated = { d: old.driver?.root.visible, p: old.passenger?.root.visible };
     this.bodywork.commit();
@@ -240,6 +256,7 @@ export class Vehicle {
     const b = this.build;
     if (!b) return;
     fromHealth(b, this.health, this.fuel / Math.max(0.001, this.tankMax));
+    b.tank = this.fuelType;
     if (this.wreck) b.hp = 0.02;
     this.bodywork.commit();
   }
@@ -305,7 +322,19 @@ export class Vehicle {
     if (this.flooded) return 'Engine flooded: get it out of the water';
     // Raiders limp on whatever state their engine is in; a convoy engine that is gone has to be rebuilt.
     if (this.faction !== 'raider' && this.health.comp.engine < SEIZED) return 'Engine seized: needs a rebuild';
+    if (this.convoyEngine) {
+      if (this.stats.noEngine) return 'No engine in the bay';
+      if (this.stats.noDrive) return 'No gearbox: nothing turns the wheels';
+      const wrong = fuelMismatch(this.stats.fuel, this.fuelType, this.fuel);
+      if (wrong) return `${wrong}: drain it with the jerrycan`;
+      if (this.temp > T_HOT) return 'Engine too hot: let it cool down';
+    }
     return '';
+  }
+
+  /** True for a vehicle whose engine is simulated in full: heat, fuel type and a bay that can be empty. */
+  get convoyEngine(): boolean {
+    return !!this.build && this.faction !== 'raider' && this.def.physics.kind !== 'boat';
   }
 
   setEngine(on: boolean) {
@@ -367,8 +396,9 @@ export class Vehicle {
     // Overflow heaps up in a crate or two on the first car.
     const crates = Math.min(2, Math.ceil(hidden / 6));
     if (mine === 0 && crates > 0 && loadCount(load) < room[0]) load.crates = Math.min(crates, room[0] - loadCount(load));
-    const cans: ('fuel' | 'oil')[] = [];
+    const cans: ('fuel' | 'diesel' | 'oil')[] = [];
     for (let i = 0; i < Math.min(3, Math.floor(camp.stocks.fuel / 5)); i++) cans.push('fuel');
+    for (let i = 0; i < Math.min(2, Math.floor(camp.items.diesel / 5)); i++) cans.push('diesel');
     for (let i = 0; i < (camp.items.oil > 0.05 ? Math.min(3, Math.ceil(camp.items.oil / 0.5 - 0.05)) : 0); i++) cans.push('oil');
     cans.forEach((kind, i) => {
       if (i % carriers.length === mine && loadCount(load) < room[mine]) load[kind]++;
@@ -400,7 +430,6 @@ export class Vehicle {
       this.loadMesh = mesh;
     }
   }
-
   /** Everything on the deck with its place in the world, for lifting it off and for flying things onto it. */
   deckSpots(): (Placed & { world: THREE.Vector3 })[] {
     const anchor = mountsOfChassis(this.def);
@@ -421,6 +450,82 @@ export class Vehicle {
     if (!at) return null;
     this.visual.inner.updateWorldMatrix(true, false);
     return this.visual.inner.localToWorld(new THREE.Vector3(at.x, at.y + 0.15, at.z));
+  }
+
+  /**
+   * Heat: the engine makes it, the radiator sheds it. Past the redline power drops and the engine wears, steam rolls out
+   * from under the bonnet, and left to cook it blows. A swap that leaves the wrong fuel in the tank stops the engine.
+   */
+  private engineHeat(dt: number) {
+    const st = this.stats;
+    const mismatch = this.engineOn && fuelMismatch(st.fuel, this.fuelType, this.fuel);
+    if (this.engineOn && (st.noEngine || mismatch)) {
+      this.engineOn = false;
+      if (this.driver?.isPlayer) this.ctx.notify(this.driver.index, st.noEngine ? 'No engine in the bay' : `${mismatch}: it will not run`, 'bad');
+    }
+    const speed = Math.abs(this.speed);
+    const top = Math.max(8, this.topSpeed);
+    const thr = Math.max(0, this.lastIntent.throttle);
+    const load = this.engineOn ? clamp(0.12 + 0.62 * thr + 0.26 * clamp(speed / top, 0, 1) * (thr > 0.1 ? 1 : 0.4), 0, 1) : 0;
+    const comp = this.health.comp;
+    this.temp = thermalStep(this.temp, { heat: st.heat, cooling: st.coolKw, radiator: comp.radiator ?? 1, airflow: st.airflow, load, speed, running: this.engineOn, coolant: comp.coolant ?? 1 }, dt);
+    const T = this.temp;
+    // Water: a little evaporates, a holed radiator leaks, a cooking engine boils it away.
+    comp.coolant = Math.max(0, (comp.coolant ?? 1) - coolantLoss({ T, radiator: comp.radiator ?? 1, coolantL: st.coolantL, running: this.engineOn, dt }));
+    this.coolantWatch();
+    // The gearbox wears when the engine makes more than it can carry, harder the harder you push.
+    if (this.engineOn && !st.noDrive) {
+      const rating = gearboxRatingNow(st.gearboxRating, comp.gearbox ?? 1);
+      const strain = rating > 0 ? (st.strain * st.gearboxRating) / rating : 9;
+      const w = gearboxWear(strain, load, dt);
+      if (w > 0) comp.gearbox = Math.max(0, (comp.gearbox ?? 1) - w);
+      const slipping = (comp.gearbox ?? 1) < 0.5;
+      if (slipping && !this.gearSeen && this.driver?.isPlayer) this.ctx.notify(this.driver.index, 'The gearbox is slipping: the engine is too much for it', 'warn');
+      this.gearSeen = slipping;
+    }
+    if (this.engineOn) {
+      const wear = overheatWear(T, dt);
+      if (wear > 0) this.health.comp.engine = Math.max(0, this.health.comp.engine - wear);
+    }
+    // Warnings: once going up through each line, again after it has cooled and climbed back.
+    const level = T >= T_OVERHEAT ? 2 : T >= T_HOT ? 1 : 0;
+    if (level > this.tempSeen && this.driver?.isPlayer && this.faction === 'convoy') {
+      this.ctx.notify(this.driver.index, level === 2 ? 'ENGINE OVERHEATING: ease off or stop!' : 'Engine running hot', level === 2 ? 'bad' : 'warn');
+    }
+    if (level < this.tempSeen && T < T_HOT - 0.12) this.tempSeen = 0;
+    else this.tempSeen = Math.max(this.tempSeen, level);
+    // Steam from under the bonnet.
+    const steam = steamLevel(T);
+    if (steam > 0 && !this.wreck && (this.steamT -= dt) <= 0) {
+      this.steamT = 0.14 - 0.1 * steam;
+      const [x, y, z] = this.body.toWorld((Math.random() - 0.5) * 0.4, 0.95, this.def.length * 0.36);
+      this.ctx.fx.puff(x, y, z, 0.9, 0.92, 0.95, 0.5 + steam * 0.9, 0.9);
+    }
+    // Left to cook, the engine blows: a hole in the block, power gone until it has cooled.
+    if (T >= T_CRITICAL && this.engineOn) {
+      this.blownT += dt;
+      if (this.blownT > 5) {
+        this.blownT = 0;
+        this.engineOn = false;
+        this.health.comp.engine = Math.max(0, this.health.comp.engine - 0.3);
+        this.health.comp.oil = Math.max(0, this.health.comp.oil - 0.3);
+        this.temp = T_OVERHEAT + 0.1;
+        if (this.driver?.isPlayer) this.ctx.notify(this.driver.index, 'The engine blew its gasket: let it cool, then rebuild it', 'bad');
+        this.ctx.audio.play('crash', this.position.x, this.position.z, 0.5);
+        this.ctx.fx.explosion(this.position.x, this.position.y + 0.9, this.position.z, 0.35);
+      }
+    } else this.blownT = Math.max(0, this.blownT - dt * 2);
+  }
+
+  /** Tell the driver as the cooling system runs dry. */
+  private coolantWatch() {
+    const st = coolantState(this.health.comp.coolant ?? 1);
+    if (st === this.coolantSeen) return;
+    const worse = st === 'critical' || (st === 'low' && this.coolantSeen === 'ok');
+    this.coolantSeen = st;
+    if (!worse || !this.driver?.isPlayer || this.faction !== 'convoy') return;
+    if (st === 'low') this.ctx.notify(this.driver.index, 'Coolant is low: top up with water', 'warn');
+    else this.ctx.notify(this.driver.index, 'The cooling system is dry: it will cook!', 'bad');
   }
 
   /** Tell the driver as the sump runs down, once per threshold, and again if it is topped up and falls back. */
@@ -487,11 +592,12 @@ export class Vehicle {
       const e = this.env;
       e.engineOn = this.engineOn && this.fuel > 0.001;
       if (!e.engineOn && this.engineOn) this.engineOn = false;
-      e.power = perf.power * this.tetherPower * (this.sinceHit < 0 ? 1 : 1);
+      e.power = perf.power * this.tetherPower * (this.convoyEngine ? overheatPower(this.temp) * gearboxPower(this.health.comp.gearbox ?? 1) : 1);
       e.grip = perf.grip * this.stats.gripMult;
       e.forceMult = this.stats.forceMult;
       e.topSpeedMult = this.stats.topSpeedMult * this.tetherTop;
       e.travelMult = this.stats.travelMult;
+      e.brakeMult = this.stats.brakeMult;
       e.flats = this.health.comp.tires.map((t) => t <= 0);
       const off = this.stats.offroad;
       e.surface = (x, z) => {
@@ -510,12 +616,13 @@ export class Vehicle {
       this.seizedWarned = true;
     }
     if (this.health.comp.engine >= SEIZED) this.seizedWarned = false;
+    if (this.convoyEngine && !this.wreck) this.engineHeat(dt);
 
     // Fuel burn per km driven, scaled by the Drain slider. Raiders never run dry.
     if (this.faction === 'convoy' && this.engineOn && !this.wreck) {
       const d = Math.abs(this.speed) * dt;
       this.distance += d;
-      this.fuel = Math.max(0, this.fuel - (this.def.burn / 1000) * this.stats.burnMult * d * ctx.campaign.difficulty.drain - 0.0006 * dt);
+      this.fuel = Math.max(0, this.fuel - (this.def.burn / 1000) * this.stats.burnMult * d * ctx.campaign.difficulty.drain - 0.0006 * this.stats.burnMult * dt);
       if (this.fuel <= 0.001) {
         this.engineOn = false;
         if (this.driver?.isPlayer) ctx.notify(this.driver.index, 'Out of fuel', 'bad');
@@ -525,7 +632,8 @@ export class Vehicle {
     // Oil: burnt by the miles. Short of it the engine labours; run dry and it grinds itself to pieces.
     if (this.faction === 'convoy' && this.engineOn && !this.wreck && this.def.physics.kind !== 'boat') {
       const c = this.health.comp;
-      c.oil = Math.max(0, c.oil - oilBurn(Math.abs(this.speed) * dt, dt, c.engine, ctx.campaign.difficulty.drain) * stormOilMult(ctx.storm));
+      const rate = (this.convoyEngine ? this.stats.oilRate : 1) * stormOilMult(ctx.storm);
+      c.oil = Math.max(0, c.oil - oilBurn(Math.abs(this.speed) * dt, dt, c.engine, ctx.campaign.difficulty.drain, rate));
       const wear = oilWear(c.oil, dt) * (Math.abs(this.speed) > 1 ? 1 : 0.4);
       if (wear > 0) c.engine = Math.max(0, c.engine - wear);
     }
@@ -779,8 +887,8 @@ export class Vehicle {
     for (let i = 0; i < v.wheels.length; i++) {
       const w = v.wheels[i];
       const susp = this.body.wheelSusp(i);
-      // A flat tyre sits squashed on its rim.
-      const flat = this.health.comp.tires[i] <= 0.001;
+      // A flat tyre sits squashed on its rim; a wheel with no tyre has nothing to squash.
+      const flat = !w.bare && this.health.comp.tires[i] <= 0.001;
       w.flatK = damp(w.flatK, flat ? 1 : 0, 10, dt);
       w.pivot.scale.y = 1 - 0.22 * w.flatK;
       w.pivot.position.y = this.def.physics.hardY - susp - w.radius * 0.22 * w.flatK;
@@ -847,3 +955,5 @@ export class Vehicle {
 
 const charMat = shared(new THREE.MeshStandardMaterial({ color: 0x15130f, roughness: 0.95, metalness: 0.2 }));
 void rotateByQuat;
+void COOLANT_LOW;
+void COOLANT_CRITICAL;

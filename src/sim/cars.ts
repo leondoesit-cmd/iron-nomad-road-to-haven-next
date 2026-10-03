@@ -1,4 +1,4 @@
-import { PARTS, VEHICLES } from '../data';
+import { PARTS, VEHICLES, partDef } from '../data';
 import { Rng } from '../core/rng';
 import { newBuild, type VehicleBuild } from './garage';
 import { rollPart } from './parts';
@@ -22,6 +22,9 @@ export function pickChassis(rng: Rng): string {
   }
   return cars[0].id;
 }
+
+/** Share of drivable world cars with a bigger engine than they were built with. */
+export const HOT_ROD = 0.08;
 
 const ODDS: Record<'wasteland' | 'city', [number, number]> = {
   // [hulk, rough] — the rest is intact
@@ -52,7 +55,7 @@ export function rollCar(seed: number, o: { biome: 'wasteland' | 'city'; chassis?
   const wheels = b.comp.tires.length;
   if (status === 'hulk') {
     b.hp = 0.05;
-    b.comp = { engine: 0, tires: b.comp.tires.map(() => 0), tank: 0, mount: 0, plates: 0.1, oil: 0, leaking: false };
+    b.comp = { engine: 0, tires: b.comp.tires.map(() => 0), tank: 0, mount: 0, plates: 0.1, oil: 0, radiator: 0.1, gearbox: 0.2, coolant: 0, leaking: false };
     b.fuel = 0;
     return { status, build: b };
   }
@@ -83,5 +86,13 @@ export function rollCar(seed: number, o: { biome: 'wasteland' | 'city'; chassis?
     const it = rollPart(rng, { minMk: 1, maxMk: 1, condLo: 0.5, condHi: 0.9 });
     b.fit[PARTS.parts.find((p) => p.id === it.id)!.slot] = it;
   }
+  // A hot rod: somebody dropped a bigger engine in and never upgraded the radiator. Drawn last so every other roll is unchanged.
+  if (rng.chance(HOT_ROD)) {
+    const e = rollPart(rng, { slots: ['engine'], minMk: 2, maxMk: 3, condLo: 0.5, condHi: 0.9 });
+    b.fit.engine = e;
+    b.comp.engine = Math.min(b.comp.engine, e.cond);
+  }
+  // Whoever swapped the engine ran it, so the tank holds what the engine in there burns.
+  if (b.fit.engine) b.tank = partDef(b.fit.engine.id).engine!.fuel;
   return { status, build: b };
 }

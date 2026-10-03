@@ -6,7 +6,7 @@ import { CHUNK, groundHeight, heightAt, roadX, surfaceAt, waterAt as terrainWate
 import type { Aabb, PickupSpawn, ScavContainer, ScavZone } from '../world/layout';
 import { chunkKey } from '../world/layout';
 import { ChunkView, disposeChunkMaterials, makeChunkMaterials, type ChunkMaterials } from '../render/chunkview';
-import { makePickup } from '../render/props';
+import { makeBeam, makePickup } from '../render/props';
 import { Landscape } from '../render/landscape';
 import { Destruction } from './destruction';
 import { clamp, smoothstep } from '../core/math';
@@ -20,7 +20,8 @@ import { gearDrop } from '../sim/gear';
 import { disposeTree } from '../render/dispose';
 import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { RARITY_NAMES, newPart, partName } from '../sim/parts';
-import { carriedName, type Carried, type Goods, type Loose } from '../sim/carry';
+import { carriedName, partModelKey, planStow, type Carried, type Goods, type Loose } from '../sim/carry';
+import { pickupFuel } from '../sim/fuel';
 import { lakeCurrent } from '../world/lakes';
 import { DRUGS, DRUG_IDS } from '../sim/drugs';
 import type { DelveSite } from '../world/delveSites';
@@ -943,13 +944,27 @@ export class LegScene extends Scene {
 
   /** Build the floating model for a pickup and register it. Nothing is picked up on touch: every item is taken by hand. */
   private spawnPickup(p: PickupSpawn) {
-    const m = makePickup(p.kind === 'part' ? (p.part ? `part:${p.part.id}` : `part${p.amount}`) : p.kind);
+    const fuelKind = p.kind === 'fuel' ? (p.fuel ?? pickupFuel(p.id)) : undefined;
+    const m = makePickup(p.kind === 'part' ? (p.part ? partModelKey(p.part.id) : `part${p.amount}`) : p.kind === 'paint' ? `paint:${(p.color ?? 0xffffff).toString(16)}` : fuelKind === 'diesel' ? 'diesel' : p.kind);
     m.group.position.set(p.x, p.y, p.z);
+    if (p.kind === 'part') {
+      // Good parts show from a distance, in their rarity colour.
+      if (p.amount >= 2) m.group.add(makeBeam(p.amount >= 3 ? 0xffb454 : 0x7ddc7a, p.amount >= 3 ? 14 : 8));
+    } else if (p.kind === 'fragment' || p.kind === 'chassis') {
+      const col = p.kind === 'fragment' ? 0x3ad0ff : 0x3aa0ff;
+      m.group.add(makeBeam(col, 22));
+    } else if (p.amount >= 14 && p.kind !== 'fuel' && p.kind !== 'oil') {
+      m.group.add(makeBeam(0xffe9a0, 9));
+    } else if (p.kind === 'fuel') m.group.add(makeBeam(fuelKind === 'diesel' ? 0xe8c020 : 0xff6a3a, 7));
+    else if (p.kind === 'oil') m.group.add(makeBeam(0xe0b030, 6));
+    else if (p.kind === 'water') m.group.add(makeBeam(0x6ab4ff, 6));
     this.root.add(m.group);
     let loose: Carried | undefined;
     if (p.kind === 'part' && p.part) loose = { kind: 'part', item: newPart(p.part.id, p.part.cond) };
-    else if (p.kind === 'fuel') loose = { kind: 'fuel', amount: p.amount };
+    else if (p.kind === 'fuel') loose = { kind: 'fuel', amount: p.amount, fuel: fuelKind };
     else if (p.kind === 'oil') loose = { kind: 'oil', amount: p.amount };
+    else if (p.kind === 'water') loose = { kind: 'water', amount: p.amount };
+    else if (p.kind === 'paint') loose = { kind: 'paint', color: p.color ?? 0xffffff, charges: p.amount };
     this.pickups.set(p.id, { spawn: p, group: m.group, baseY: p.y, phase: Math.random() * 6.28, loose });
   }
 
@@ -1018,8 +1033,8 @@ export class LegScene extends Scene {
     const id = `drop${this.dropSeq++}`;
     const y = this.groundAt(x, z);
     const kind = c.kind === 'part' ? 'part' : c.kind;
-    const amount = c.kind === 'part' ? (c.item.id ? partMk(c.item.id) : 1) : c.amount;
-    const spawn: PickupSpawn = { id, kind, amount, x, y, z, part: c.kind === 'part' ? { id: c.item.id, cond: c.item.cond } : undefined };
+    const amount = c.kind === 'part' ? (c.item.id ? partMk(c.item.id) : 1) : c.kind === 'paint' ? c.charges : c.amount;
+    const spawn: PickupSpawn = { id, kind, amount, x, y, z, part: c.kind === 'part' ? { id: c.item.id, cond: c.item.cond } : undefined, fuel: c.kind === 'fuel' ? (c.fuel ?? 'petrol') : undefined, color: c.kind === 'paint' ? c.color : undefined };
     this.spawnPickup(spawn);
     // Keep the very item that was dropped, so its wear survives being put down.
     const e = this.pickups.get(id);
@@ -1035,6 +1050,7 @@ export class LegScene extends Scene {
       e.group.position.y = e.baseY + 0.2 + Math.sin(time * 2 + e.phase) * 0.08;
       e.group.rotation.y += dt * 1.4;
     }
+
   }
 
   private collect(p: PickupSpawn, by: Player) {
@@ -1042,10 +1058,15 @@ export class LegScene extends Scene {
     this.audio.play('pickup', p.x, p.z, 0.8);
     this.fx.spark(p.x, p.y + 0.6, p.z, 4, 3);
     switch (p.kind) {
-      case 'fuel':
-        this.addLoot({ fuel: p.amount }, 'fuel');
+      case 'fuel': {
+        const kind = p.fuel ?? pickupFuel(p.id);
+        if (kind === 'diesel') {
+          camp.stowFuel(p.amount, 'diesel');
+          this.notify(-1, `+${p.amount.toFixed(0)} FU diesel`, 'good');
+        } else this.addLoot({ fuel: p.amount }, 'fuel');
         if (!this.fuelTip) this.fuelTip = true;
         break;
+      }
       case 'oil':
         break;
       case 'scrap':

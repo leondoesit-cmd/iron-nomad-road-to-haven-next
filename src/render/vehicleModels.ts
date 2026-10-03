@@ -4,12 +4,16 @@ import { C } from './palette';
 import { Humanoid } from './humanoid';
 import type { VehicleDef } from '../data';
 import type { VehicleBuild } from '../sim/garage';
-import type { Fit } from '../sim/parts';
+import type { Fit, PartItem } from '../sim/parts';
 import { partDef } from '../data';
 import { bedroll, crate, exhaust, heavyGun, jerryCan, plate, rivets, shock, signPlate, spareTyre, strap } from './parts';
-import { addKit, type KitLook, type Mounts } from './attachments';
+import { addKit, panelOff, type CoolingLook, type EngineLook, type KitLook, type Mounts } from './attachments';
 import { partMeta, partTag } from './bodyParts';
-import { addWheels, blank, bodyMat, finish, headlamp, liveRig, rider, taillight, wheelSpec, type VehicleVisual } from './vehicleKit';
+import { bayFit, engineDef, radiatorDef } from '../sim/engines';
+import { defOf } from '../sim/garage';
+import { paintPanels } from './paintJob';
+import type { PanelPaint } from '../sim/paint';
+import { addWheels, addWheelSet, blank, bodyMat, finish, headlamp, liveRig, rider, taillight, wheelSpec, wheelSpecs, type VehicleVisual } from './vehicleKit';
 import { buildCar, carMounts, prepareCarShell } from './carModels';
 
 export type { VehicleVisual, WheelVisual } from './vehicleKit';
@@ -23,10 +27,55 @@ export interface VehicleLook {
   fit: Fit;
   /** 0..1: grime and rust. */
   wear: number;
+  engine?: EngineLook;
+  cooling?: CoolingLook;
+  /** Panels sprayed another colour. */
+  panels?: PanelPaint;
+  /** The tyre on each wheel: its grade 1..3, 0 for the factory tyre, -1 for none. */
+  tyres?: number[];
+  /** Brake grade: 0 factory, 2 and 3 big discs with painted calipers, -1 stripped. */
+  brakeMk?: number;
 }
 
+/** What the engine and radiator look like from outside, for a build. */
+function powertrainLook(b: VehicleBuild): { engine?: EngineLook; cooling?: CoolingLook } {
+  const def = defOf(b);
+  const e = engineDef(def, b.fit);
+  const r = radiatorDef(def, b.fit);
+  if (!e?.engine) return {};
+  const bay = bayFit(def, e.engine);
+  return {
+    engine: { mk: e.stock ? 0 : e.mk, swapped: e.id !== def.stockEngine, blown: !!e.engine.blown, diesel: e.engine.fuel === 'diesel', oversize: bay.oversize, size: e.engine.size, empty: !!e.empty },
+    cooling: r ? { mk: r.stock ? 0 : r.mk, kw: r.cooling ?? 0, empty: !!r.empty } : undefined,
+  };
+}
+
+/** A tyre as the wheel model sees it: grade 1..3, 0 for a factory one, -1 for a bare rim. */
+const tyreGrade = (t: PartItem | null | undefined): number => {
+  if (!t) return 0;
+  const d = partDef(t.id);
+  return d.empty ? -1 : d.stock ? 0 : d.mk;
+};
+const brakeGrade = (def: VehicleDef, fit: Fit): number => {
+  const d = fit.brakes ? partDef(fit.brakes.id) : null;
+  return !d ? 0 : d.empty ? -1 : d.stock ? 0 : d.mk;
+};
+
 export function lookOf(b: VehicleBuild): VehicleLook {
-  return { paint: b.paint, stripe: b.stripe, stripeColor: b.stripeColor, seed: b.seed, fit: b.fit, wear: Math.min(0.95, 0.4 + (1 - b.hp) * 0.5) };
+  const def = defOf(b);
+  const tyres = b.tyres.map(tyreGrade);
+  return {
+    paint: b.paint,
+    stripe: b.stripe,
+    stripeColor: b.stripeColor,
+    seed: b.seed,
+    fit: b.fit,
+    wear: Math.min(0.95, 0.4 + (1 - b.hp) * 0.5),
+    panels: b.panels,
+    tyres: tyres.some((t) => t !== 0) ? tyres : undefined,
+    brakeMk: brakeGrade(def, b.fit),
+    ...powertrainLook(b),
+  };
 }
 export function defaultLook(color: number): VehicleLook {
   return { paint: color, stripe: 0, stripeColor: 0xe9dfc7, seed: 1, fit: {}, wear: 0.55 };
@@ -147,9 +196,9 @@ export function buildMoped(def: VehicleDef, wheelLocal: [number, number, number]
   taillight(v, 0.1, 0.02, -1.0, 0.04, 0.03, true);
   taillight(v, -0.1, 0.02, -1.0, 0.04, 0.03, true);
   addKit(b, liveRig(v, b), MOPED_MOUNTS, kitLook(look), { nativeGun: false });
+  paintPanels(b, look.paint, look.panels, MOPED_MOUNTS);
   const bodyGeo = b.build();
-  const ws = wheelSpec(def, mkOf(look.fit, 'wheels'));
-  addWheels(v, def, wheelLocal, steered, ws.width, ws.style);
+  addWheelSet(v, def, wheelLocal, steered, wheelSpecs(def, look.tyres, look.brakeMk ?? 0));
   const r = rider(color, color);
   r.root.position.set(0, -0.28, -0.32);
   v.inner.add(r.root);
@@ -254,9 +303,9 @@ export function buildQuad(def: VehicleDef, wheelLocal: [number, number, number][
   taillight(v, 0.2, 0.18, -1.1);
   taillight(v, -0.2, 0.18, -1.1);
   addKit(b, liveRig(v, b), QUAD_MOUNTS, kitLook(look), { nativeGun: true });
+  paintPanels(b, look.paint, look.panels, QUAD_MOUNTS);
   const bodyGeo = b.build();
-  const ws = wheelSpec(def, mkOf(look.fit, 'wheels'));
-  addWheels(v, def, wheelLocal, steered, ws.width, ws.style);
+  addWheelSet(v, def, wheelLocal, steered, wheelSpecs(def, look.tyres, look.brakeMk ?? 0));
   const r = rider(color, color);
   r.root.position.set(0, -0.15, -0.12);
   v.inner.add(r.root);
@@ -297,11 +346,17 @@ export function buildBuggy(def: VehicleDef, wheelLocal: [number, number, number]
       shock(b, [sx * (wx - 0.15), wy + 0.05, wz], [sx * 0.5, 0.25, wz + (wz > 0 ? -0.12 : 0.12)], 0xc9471f, 0.06);
     }
   }
-  // Hood and nose.
-  b.rbox(0, 0.05, 1.12, 1.46, 0.42, 1.25, 0.08, body);
-  b.rbox(0, 0.27, 1.1, 1.3, 0.04, 1.1, 0.02, paint);
-  b.rbox(0, 0.29, 1.15, 0.5, 0.08, 0.5, 0.03, S.metal(0x2a2a2a, 0.6));
-  for (let i = 0; i < 5; i++) b.box(0, 0.335, 0.96 + i * 0.09, 0.4, 0.015, 0.03, S.metal(0x1a1a1a, 0.5));
+  // Hood and nose. With the bonnet off it is a bare frame round the engine (drawn by the kit).
+  if (panelOff(look.fit, 'hood')) {
+    for (const sx of [1, -1]) b.rbox(sx * 0.7, 0.05, 1.12, 0.06, 0.42, 1.25, 0.02, body);
+    b.rbox(0, 0.05, 1.7, 1.4, 0.4, 0.06, 0.02, body);
+    b.rbox(0, 0.1, 0.52, 1.4, 0.5, 0.05, 0.02, S.steel(0x2a2c2e, 0.8));
+  } else {
+    b.rbox(0, 0.05, 1.12, 1.46, 0.42, 1.25, 0.08, body);
+    b.rbox(0, 0.27, 1.1, 1.3, 0.04, 1.1, 0.02, paint);
+    b.rbox(0, 0.29, 1.15, 0.5, 0.08, 0.5, 0.03, S.metal(0x2a2a2a, 0.6));
+    for (let i = 0; i < 5; i++) b.box(0, 0.335, 0.96 + i * 0.09, 0.4, 0.015, 0.03, S.metal(0x1a1a1a, 0.5));
+  }
   // Grille, bull bar and ram spikes.
   b.rbox(0, 0.02, 1.76, 1.2, 0.34, 0.06, 0.02, S.metal(0x1f2022, 0.5));
   for (let i = 0; i < 9; i++) b.box(-0.48 + i * 0.12, 0.02, 1.8, 0.03, 0.3, 0.03, S.chrome(0x9da2a6));
@@ -396,10 +451,10 @@ export function buildBuggy(def: VehicleDef, wheelLocal: [number, number, number]
   for (const sx of [1, -1]) exhaust(b, [[sx * 0.6, -0.1, 0.62], [sx * 0.8, 0.05, 0.4], [sx * 0.82, 0.6, 0.3], [sx * 0.82, 1.1, 0.32]], 0.04, 0.065);
   taillight(v, 0.55, 0.08, -2.08, 0.14, 0.08);
   taillight(v, -0.55, 0.08, -2.08, 0.14, 0.08);
-  addKit(b, liveRig(v, b), BUGGY_MOUNTS, kitLook(look), { nativeGun: false });
+  addKit(b, liveRig(v, b), BUGGY_MOUNTS, kitLook(look), { nativeGun: false, wheels: wheelLocal.map(([x, , z]) => [x, z] as [number, number]), bayFloor: -0.1 });
+  paintPanels(b, look.paint, look.panels, BUGGY_MOUNTS);
   const bodyGeo = b.build();
-  const ws = wheelSpec(def, mkOf(look.fit, 'wheels'));
-  addWheels(v, def, wheelLocal, steered, ws.width, ws.style);
+  addWheelSet(v, def, wheelLocal, steered, wheelSpecs(def, look.tyres, look.brakeMk ?? 0));
   const driver = rider(color, color);
   driver.root.position.set(0.38, -0.12, 0.05);
   v.inner.add(driver.root);

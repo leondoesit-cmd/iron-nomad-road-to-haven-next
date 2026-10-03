@@ -300,6 +300,18 @@ canvas.minimap {
 .bar.fuel.crit .fill {
   background: var(--red);
 }
+.bar.fuel.diesel .fill {
+  background: #d8c030;
+}
+.bar.temp .fill {
+  background: #6fc7e0;
+}
+.bar.temp.low .fill {
+  background: var(--amber);
+}
+.bar.temp.crit .fill {
+  background: var(--red);
+}
 .bar.oil .fill {
   background: #d8a824;
 }
@@ -307,6 +319,15 @@ canvas.minimap {
   background: var(--amber);
 }
 .bar.oil.crit .fill {
+  background: var(--red);
+}
+.bar.water .fill {
+  background: #5aa8e8;
+}
+.bar.water.low .fill {
+  background: var(--amber);
+}
+.bar.water.crit .fill {
   background: var(--red);
 }
 .speed {
@@ -954,6 +975,35 @@ button:disabled {
   color: #a8321f;
   font-weight: 700;
 }
+.card .sub2 .mid {
+  color: #9a5a10;
+  font-weight: 700;
+}
+.fcast {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.72em;
+  color: #4a3a26;
+  line-height: 1.35;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: normal;
+}
+.fcast b {
+  font-weight: 700;
+}
+.fcast .good {
+  color: #2b6b24;
+}
+.fcast .bad {
+  color: #a8321f;
+}
+.fcast .mid {
+  color: #9a5a10;
+}
+.slotbtn.emptymount {
+  background: rgba(168, 50, 31, 0.18);
+}
 .card .btns {
   display: flex;
   flex-wrap: wrap;
@@ -1296,6 +1346,21 @@ button:disabled {
   grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   margin-top: 5px;
+}
+.slotgroup {
+  margin-top: 6px;
+}
+.slotgroup > small.gh {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.68em;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #6a5a45;
+  border-bottom: 1px dotted rgba(38, 28, 16, 0.3);
+}
+.slotgrid.tyres {
+  grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
 }
 .slotbtn {
   display: flex !important;

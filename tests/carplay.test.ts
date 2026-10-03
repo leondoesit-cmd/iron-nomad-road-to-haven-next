@@ -187,7 +187,9 @@ describe('abandoned cars in a live leg', () => {
     hold(h, sc, 0, Btn.A, 6);
     expect(v.salvaged).toBe(2);
     expect(v.health.comp.engine).toBe(0);
-    expect(v.build!.fit.engine).toBeUndefined();
+    // The bay is empty now, not back to a factory motor that was never there.
+    expect(v.build!.fit.engine?.id).toBe('eng_none');
+    expect(v.stats.noEngine).toBe(true);
     // The engine it was running on came back out of the trunk of inventory.
     expect(c.inventory.some((it) => it.id === 'eng_v6')).toBe(true);
     hold(h, sc, 0, Btn.A, 5);
@@ -214,16 +216,32 @@ describe('abandoned cars in a live leg', () => {
     expect(c.inventory.length).toBe(inv0);
   });
 
-  it('jerrycan: siphons an abandoned tank into the convoy reserve', () => {
+  it('jerrycan: siphons an abandoned petrol tank into the convoy reserve', () => {
+    const { h, sc, c } = leg();
+    const v = carBeside(sc, 'sedan');
+    v.fuel = 6;
+    const p = sc.players[0];
+    p.equip = 'jerrycan';
+    const fuel0 = c.stocks.fuel;
+    const diesel0 = c.items.diesel;
+    hold(h, sc, 0, Btn.A, 5);
+    expect(v.fuel).toBeCloseTo(1, 1);
+    expect(c.stocks.fuel).toBeCloseTo(fuel0 + 5, 1);
+    expect(c.items.diesel).toBe(diesel0);
+  });
+
+  it('jerrycan: a diesel pickup\'s tank goes into the diesel reserve, not the petrol one', () => {
     const { h, sc, c } = leg();
     const v = carBeside(sc, 'pickup');
     v.fuel = 6;
     const p = sc.players[0];
     p.equip = 'jerrycan';
     const fuel0 = c.stocks.fuel;
+    const diesel0 = c.items.diesel;
     hold(h, sc, 0, Btn.A, 5);
     expect(v.fuel).toBeCloseTo(1, 1);
-    expect(c.stocks.fuel).toBeCloseTo(fuel0 + 5, 1);
+    expect(c.items.diesel).toBeCloseTo(diesel0 + 5, 1);
+    expect(c.stocks.fuel).toBe(fuel0);
   });
 
   it('a hulk cannot be driven or claimed but can be stripped, and it blocks the way', () => {

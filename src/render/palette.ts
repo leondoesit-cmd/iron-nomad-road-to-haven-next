@@ -37,6 +37,7 @@ export const C = {
   screamer: 0xa59ab8,
   stalker: 0x5c6b78,
   fuel: 0xc83a28,
+  diesel: 0xd2a818,
   gold: 0xffc14a,
   tech: 0x3adc9c,
   medicine: 0xf2f2f2,

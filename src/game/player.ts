@@ -25,12 +25,14 @@ import type { DriveInput } from '../physics/vehicle';
 import type { Ctx } from './ctx';
 import type { Pilot, Vehicle } from './vehicle';
 import type { Interactable } from './interact';
-import { carrySlow, type Carried } from '../sim/carry';
+import { carryModelKey, carrySlow, type Carried } from '../sim/carry';
 import { UTILITY_SLOT, damageTaken, effectiveGun, effectiveMelee, heldItem, statsOf, stepSel, type EffectiveGun, type GearItem, type HurtKind, type Loadout, type Resolved } from '../sim/gear';
 import type { MeleeStats } from '../data';
 import { OIL_LOW, pourOil } from '../sim/oil';
 import { wrenchCandidate } from './carwork';
-import { dropCarry, sitePos, haulCandidate, haulKey, haulPrompt, returnCarry, stashBeforeEntering } from './hauling';
+import { COOLANT_LOW, WATER_CAN, WATER_RESERVE_MAX, pourWater } from '../sim/fluids';
+import { TANK_DREGS, addReserve, planDrain, reserveOf, takeReserve } from '../sim/fuel';
+import { dropCarry, guide, sitePos, haulCandidate, haulKey, haulPrompt, pryCandidate, returnCarry, stashBeforeEntering } from './hauling';
 
 export interface Cand {
   kind: string;
@@ -592,7 +594,7 @@ export class Player implements Pilot {
       this.ownVehicle = v.ownerIndex === this.index ? v : this.ownVehicle;
       this.state = 'driving';
       v.setEngine(true);
-      if (v.startFail) this.note(v.startFail + (v.startFail.startsWith('Engine') ? ': equip the wrench' : ''), 'warn');
+      if (v.startFail) this.note(v.startFail + (v.startFail.startsWith('Engine seized') ? ': equip the wrench' : ''), 'warn');
       if (this.ctx.night > 0.45) v.lights = true;
     } else {
       v.passenger = { index: this.index };
@@ -1634,7 +1636,7 @@ export class Player implements Pilot {
     if (this.carry && wasPressed(it, Btn.X) && !this.action) haulKey(this);
     // 3. Tools on vehicles: the wrench repairs, the crowbar strips, the jerrycan fills and siphons.
     if (!cand && !this.carry && this.equip === 'wrench') cand = wrenchCandidate(this, () => this.repairCandidate()) ?? this.repairCandidate();
-    else if (!cand && !this.carry && this.equip === 'crowbar') cand = this.salvageCandidate();
+    else if (!cand && !this.carry && this.equip === 'crowbar') cand = this.salvageCandidate() ?? pryCandidate(this);
     else if (!cand && !this.carry && this.equip === 'jerrycan') cand = this.fuelCandidate();
     // X with the wrench: open the field workbench for a convoy vehicle.
     if (this.equip === 'wrench' && !this.carry && wasPressed(it, Btn.X) && !this.action) {
@@ -1699,6 +1701,7 @@ export class Player implements Pilot {
     }
     if (this.action) this.speedPenalty();
     if (this.carry) haulPrompt(this);
+    guide(this);
   }
 
   private speedPenalty() {
@@ -1796,57 +1799,141 @@ export class Player implements Pilot {
     };
   }
 
-  /** Jerrycan: top up a convoy vehicle from the reserve (fuel, or oil when the sump is low), or siphon an abandoned one. */
+  /**
+   * Jerrycan: top up a convoy vehicle from the reserve (the fuel its engine burns, or oil when the sump is low), drain a
+   * tank that holds the wrong fuel for its engine back into the reserve, or siphon an abandoned one.
+   */
   private fuelCandidate(): Cand | null {
     const ctx = this.ctx;
+    const camp = ctx.campaign;
     const own = this.nearestVehicle(3.8, (q) => q.faction === 'convoy' && !q.wreck && q.kind !== 'crew');
     if (own) {
-      const space = own.tankMax - own.fuel;
+      const engineFuel = own.stats.fuel;
+      // A tank holding the other fuel can't be topped up: it has to come out first.
+      if (own.convoyEngine && own.fuelType !== engineFuel && own.fuel >= TANK_DREGS) {
+        const drain = planDrain(own.fuelType, own.fuel, engineFuel);
+        return {
+          kind: 'drain',
+          prompt: drain.label,
+          dur: 4,
+          target: own,
+          ok: true,
+          label: 'drain',
+          run: () => {
+            const amt = own.fuel;
+            addReserve(camp, own.fuelType, amt);
+            this.note(`${amt.toFixed(1)} FU of ${own.fuelType} drained into the reserve; the tank is ready for ${engineFuel}`, 'good');
+            own.fuel = 0;
+            own.fuelType = engineFuel;
+            own.startFail = '';
+            own.commit();
+          },
+          tick: () => {
+            if (Math.random() < 0.2) ctx.work.pour(this.human.hand.getWorldPosition(new THREE.Vector3()), sitePos(own, 'rear'), own.fuelType === 'diesel' ? [0.85, 0.7, 0.15] : [0.9, 0.5, 0.2]);
+            return true;
+          },
+        };
+      }
+      const space = own.tankMax - (own.fuelType === engineFuel ? own.fuel : 0);
+      const stock = reserveOf(camp, engineFuel);
       const takesOil = own.build !== null && own.def.physics.kind !== 'boat';
       const oil = own.health.comp.oil;
-      const oilUrgent = takesOil && oil < OIL_LOW && ctx.campaign.items.oil > 0.02;
-      const oilWanted = takesOil && oil < 0.9 && ctx.campaign.items.oil > 0.02;
-      if (oilUrgent || (oilWanted && !(space > 0.4 && ctx.campaign.stocks.fuel > 0.4))) {
-        const r = pourOil(oil, ctx.campaign.items.oil);
+      const sump = own.stats.sumpL;
+      const cool = own.health.comp.coolant ?? 1;
+      const takesWater = own.convoyEngine;
+      const needsFuel = space > 0.4 && stock > 0.4;
+      const oilUrgent = takesOil && oil < OIL_LOW && camp.items.oil > 0.02;
+      const oilWanted = takesOil && oil < 0.9 && camp.items.oil > 0.02;
+      const coolUrgent = takesWater && cool < COOLANT_LOW && camp.items.water > 0.2;
+      const coolWanted = takesWater && cool < 0.9 && camp.items.water > 0.2;
+      const topOil = (): Cand => {
+        const r = pourOil(oil, camp.items.oil, sump);
         return {
           kind: 'topoil',
-          prompt: `Top up the oil from the reserve (${Math.round(oil * 100)}% → ${Math.round((oil + r.used) * 100)}%)`,
+          prompt: `Top up the oil from the reserve (${Math.round(oil * 100)}% → ${Math.round((oil + (r.used * 3) / sump) * 100)}%)`,
           dur: 2.4,
           target: own,
           ok: true,
           label: 'topoil',
           run: () => {
-            const o = pourOil(own.health.comp.oil, ctx.campaign.items.oil);
+            const o = pourOil(own.health.comp.oil, camp.items.oil, sump);
             own.health.comp.oil = o.oil;
-            ctx.campaign.items.oil = Math.max(0, ctx.campaign.items.oil - o.used);
+            camp.items.oil = Math.max(0, camp.items.oil - o.used);
             own.commit();
             this.note(`Oil topped up to ${Math.round(o.oil * 100)}%`, 'good');
           },
         };
-      }
+      };
+      const topWater = (): Cand => {
+        const r = pourWater(cool, camp.items.water, own.stats.coolantL);
+        return {
+          kind: 'topwater',
+          prompt: `Top up the radiator from the reserve (${Math.round(cool * 100)}% → ${Math.round(r.coolant * 100)}%, ${r.used.toFixed(1)} L)`,
+          dur: 2.8,
+          target: own,
+          ok: true,
+          label: 'topwater',
+          run: () => {
+            const w = pourWater(own.health.comp.coolant ?? 1, camp.items.water, own.stats.coolantL);
+            own.health.comp.coolant = w.coolant;
+            camp.items.water = Math.max(0, camp.items.water - w.used);
+            own.commit();
+            this.note(`The radiator is at ${Math.round(w.coolant * 100)}% (${w.used.toFixed(1)} L of water)`, 'good');
+          },
+          tick: () => {
+            if (Math.random() < 0.2) ctx.work.pour(this.human.hand.getWorldPosition(new THREE.Vector3()), sitePos(own, 'hood'), [0.4, 0.65, 0.9]);
+            return true;
+          },
+        };
+      };
+      // What is running out comes first; then fuel; then the things that merely want a top-up.
+      if (oilUrgent) return topOil();
+      if (coolUrgent) return topWater();
+      if (!needsFuel && oilWanted) return topOil();
+      if (!needsFuel && coolWanted) return topWater();
       const c: Cand = {
         kind: 'refuel',
-        prompt: space > 0.4 ? t('prompt.refuel') : 'Tank is full',
+        prompt: space > 0.4 ? `${t('prompt.refuel')} (${engineFuel})` : 'Tank is full',
         dur: 4,
         target: own,
-        ok: space > 0.4 && ctx.campaign.stocks.fuel > 0.4,
+        ok: needsFuel,
         label: 'refuel',
         run: () => {
-          const amt = Math.min(5, space, ctx.campaign.stocks.fuel);
+          if (own.fuelType !== engineFuel) {
+            own.fuelType = engineFuel;
+            own.fuel = 0;
+          }
+          const amt = takeReserve(camp, engineFuel, Math.min(5, own.tankMax - own.fuel));
           own.fuel += amt;
-          ctx.campaign.stocks.fuel -= amt;
-          this.note(`+${amt.toFixed(1)} FU`, 'good');
+          this.note(`+${amt.toFixed(1)} FU of ${engineFuel}`, 'good');
         },
       };
-      if (space > 0.4 && ctx.campaign.stocks.fuel <= 0.4) c.prompt = 'Convoy reserve is empty';
+      if (space > 0.4 && stock <= 0.4) c.prompt = engineFuel === 'diesel' ? 'The convoy has no diesel: find some, or swap in a petrol engine' : 'Convoy reserve is empty';
       return c;
     }
     const donor = this.nearestVehicle(3.8, (q) => (q.faction === 'neutral' || q.wreck) && q.fuel > 0.4);
-    if (!donor) return null;
+    if (!donor) {
+      // Standing at a lake with the can out: scoop water for the radiators.
+      const w = ctx.waterAt(this.pos.x + Math.sin(this.aimYaw) * 1.5, this.pos.z + Math.cos(this.aimYaw) * 1.5) ?? ctx.waterAt(this.pos.x, this.pos.z);
+      if (!w || w.depth < 0.15) return null;
+      const room = WATER_RESERVE_MAX - camp.items.water;
+      return {
+        kind: 'scoop',
+        prompt: room > 0.5 ? `Fill the water can from the lake (+${Math.min(WATER_CAN, room).toFixed(0)} L)` : 'The water reserve is full',
+        dur: 3,
+        target: 'lake',
+        ok: room > 0.5,
+        label: 'scoop',
+        run: () => {
+          const took = camp.stowWater(WATER_CAN);
+          this.note(`+${took.toFixed(0)} L of water`, 'good');
+        },
+      };
+    }
     const hot = donor.wreck && donor.burnT > 0;
     return {
       kind: 'siphon',
-      prompt: hot ? 'Still burning: too hot to touch' : `Siphon the tank (${Math.min(5, donor.fuel).toFixed(1)} FU)`,
+      prompt: hot ? 'Still burning: too hot to touch' : `Siphon the ${donor.fuelType} tank (${Math.min(5, donor.fuel).toFixed(1)} FU)`,
       dur: 3,
       target: donor,
       ok: !hot,
@@ -1854,8 +1941,8 @@ export class Player implements Pilot {
       run: () => {
         const amt = Math.min(5, donor.fuel);
         donor.fuel -= amt;
-        ctx.campaign.stocks.fuel += amt;
-        this.note(`+${amt.toFixed(1)} FU siphoned`, 'good');
+        addReserve(camp, donor.fuelType, amt);
+        this.note(`+${amt.toFixed(1)} FU of ${donor.fuelType} siphoned`, 'good');
       },
     };
   }
@@ -2260,7 +2347,7 @@ export class Player implements Pilot {
   /** Show what is in the arms, rebuilding the model only when it changes kind. */
   private syncCarryModel() {
     const c = this.ctx.work.holding(this.index) ? null : this.carry;
-    const key = !c ? '' : c.kind === 'part' ? `part:${c.item.id}` : c.kind;
+    const key = !c ? '' : carryModelKey(c);
     if (key === this.carryKey) return;
     this.carryKey = key;
     this.human.setCarry(key ? makeCarryModel(key) : null);

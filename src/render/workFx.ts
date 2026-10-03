@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { partDef } from '../data';
 import type { PartItem } from '../sim/parts';
+import { partModelKey } from '../sim/carry';
 import { shared } from './dispose';
 import type { Particles } from './particles';
 import { glowTexture, makeCarryModel } from './props';
@@ -18,6 +19,14 @@ export type Site = 'hood' | 'wheel' | 'flank' | 'roof' | 'rear' | 'front' | 'gun
 /** Where each part slot is drawn. */
 export const SLOT_SITE: Record<string, Site> = {
   engine: 'hood',
+  cooling: 'front',
+  hood: 'hood',
+  doorL: 'flank',
+  doorR: 'flank',
+  gearbox: 'under',
+  exhaust: 'rear',
+  suspension: 'wheel',
+  brakes: 'wheel',
   wheels: 'wheel',
   armor: 'flank',
   weapon: 'gun',
@@ -95,6 +104,38 @@ export interface FocusTarget {
   ok: boolean;
 }
 
+/** A floating text block that stays while something keeps asking for it (an inspect tag, a socket prompt). */
+interface Tag {
+  sprite: THREE.Sprite;
+  text: string;
+  seen: number;
+  /** 0..1 fade in and out. */
+  a: number;
+}
+
+/** How a socket outline is drawn: waiting, aimed at and in reach, or aimed at but out of reach. */
+export type GhostState = 'idle' | 'aimed' | 'blocked';
+
+export interface GhostAnchor {
+  pos: THREE.Vector3;
+  quat: THREE.Quaternion;
+  /** Full size along the box's own x, y and z. */
+  size: [number, number, number];
+}
+
+interface Ghost {
+  group: THREE.Group;
+  boxes: { edges: THREE.LineSegments; fill: THREE.Mesh }[];
+  edgeMat: THREE.LineBasicMaterial;
+  fillMat: THREE.MeshBasicMaterial;
+  state: GhostState;
+  seen: number;
+  a: number;
+}
+
+const GHOST_RGB: Record<GhostState, number> = { idle: 0xf2f1e8, aimed: 0x8cf08c, blocked: 0xff8a6a };
+const edgeGeo = shared(new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)));
+const fillGeo = shared(new THREE.BoxGeometry(1, 1, 1));
 const ease = (k: number) => 1 - (1 - k) * (1 - k);
 const GLOW_MATS = new Map<number, THREE.SpriteMaterial>();
 
@@ -163,6 +204,8 @@ export class WorkFx {
   private hovers = new Map<number, Hover>();
   private labels: Label[] = [];
   private focuses = new Map<number, Focus>();
+  private tags = new Map<string, Tag>();
+  private ghosts = new Map<string, Ghost>();
   private clock = 0;
 
   constructor(private fx: Particles) {}
@@ -393,10 +436,138 @@ export class WorkFx {
     this.labels.push({ sprite, t: 0, life: 2, y0: at.y, rise: 0.9 });
   }
 
+  // ------------------------------------------------------------------ tags and ghosts
+
+  /** Socket outlines currently showing (for tests and the debug readout). */
+  get ghostCount(): number {
+    return this.ghosts.size;
+  }
+
+  /** The state of one player's outline, or null if none is showing. */
+  ghostState(id: string): GhostState | null {
+    return this.ghosts.get(id)?.state ?? null;
+  }
+
+  /**
+   * A block of text hanging in the world at `at`, kept alive by calling this every tick: the part you are looking at,
+   * the socket you are about to fill. Each line is white caps; `hot` lines are tinted. Stops showing when the calls stop.
+   */
+  tag(id: string, lines: { text: string; css?: string }[], at: THREE.Vector3) {
+    if (typeof document === 'undefined') return;
+    const text = lines.map((l) => `${l.css ?? ''}|${l.text}`).join('\n');
+    let t = this.tags.get(id);
+    if (!t || t.text !== text) {
+      if (t) this.dropTag(id);
+      const c = document.createElement('canvas');
+      const lh = 46;
+      c.width = 640;
+      c.height = lh * lines.length + 16;
+      const g = c.getContext('2d');
+      if (!g) return;
+      g.font = '700 38px "Barlow Condensed", "Arial Narrow", sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.lineJoin = 'round';
+      lines.forEach((l, i) => {
+        const y = 8 + lh * i + lh / 2;
+        g.lineWidth = 7;
+        g.strokeStyle = 'rgba(10,8,6,0.92)';
+        g.strokeText(l.text.toUpperCase(), 320, y);
+        g.fillStyle = l.css ?? '#f4f1e6';
+        g.fillText(l.text.toUpperCase(), 320, y);
+      });
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false, opacity: 0 });
+      const sprite = new THREE.Sprite(mat);
+      sprite.scale.set(3.2, (3.2 * c.height) / c.width, 1);
+      sprite.renderOrder = 60;
+      this.root.add(sprite);
+      t = { sprite, text, seen: 0, a: 0 };
+      this.tags.set(id, t);
+    }
+    t.sprite.position.copy(at);
+    t.seen = 0;
+  }
+
+  private dropTag(id: string) {
+    const t = this.tags.get(id);
+    if (!t) return;
+    const m = t.sprite.material as THREE.SpriteMaterial;
+    m.map?.dispose();
+    m.dispose();
+    t.sprite.removeFromParent();
+    this.tags.delete(id);
+  }
+
+  /**
+   * Outlines at the attach points of a socket, kept alive by calling this every tick. White while waiting, green and
+   * filled when it is the one in reach, red when it is the right place but too far to reach.
+   */
+  ghost(id: string, anchors: GhostAnchor[], state: GhostState) {
+    let g = this.ghosts.get(id);
+    if (!g || g.boxes.length !== anchors.length) {
+      if (g) this.dropGhost(id);
+      const group = new THREE.Group();
+      const edgeMat = new THREE.LineBasicMaterial({ color: GHOST_RGB[state], transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false });
+      const fillMat = new THREE.MeshBasicMaterial({ color: GHOST_RGB[state], transparent: true, opacity: 0, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
+      const boxes = anchors.map(() => {
+        const edges = new THREE.LineSegments(edgeGeo, edgeMat);
+        const fill = new THREE.Mesh(fillGeo, fillMat);
+        edges.renderOrder = 55;
+        fill.renderOrder = 54;
+        group.add(edges, fill);
+        return { edges, fill };
+      });
+      this.root.add(group);
+      g = { group, boxes, edgeMat, fillMat, state, seen: 0, a: 0 };
+      this.ghosts.set(id, g);
+    }
+    if (g.state !== state) {
+      g.state = state;
+      g.edgeMat.color.setHex(GHOST_RGB[state]);
+      g.fillMat.color.setHex(GHOST_RGB[state]);
+    }
+    anchors.forEach((a, i) => {
+      const b = g!.boxes[i];
+      for (const o of [b.edges, b.fill]) {
+        o.position.copy(a.pos);
+        o.quaternion.copy(a.quat);
+        o.scale.set(a.size[0], a.size[1], a.size[2]);
+      }
+      b.fill.visible = state !== 'idle';
+    });
+    g.seen = 0;
+  }
+
+  private dropGhost(id: string) {
+    const g = this.ghosts.get(id);
+    if (!g) return;
+    g.edgeMat.dispose();
+    g.fillMat.dispose();
+    g.group.removeFromParent();
+    this.ghosts.delete(id);
+  }
+
   // ------------------------------------------------------------------ frame
 
   update(dt: number) {
     this.clock += dt;
+    for (const [id, t] of this.tags) {
+      t.seen += dt;
+      t.a = t.seen > 0.12 ? Math.max(0, t.a - dt * 6) : Math.min(1, t.a + dt * 8);
+      (t.sprite.material as THREE.SpriteMaterial).opacity = t.a;
+      if (t.a <= 0 && t.seen > 0.12) this.dropTag(id);
+    }
+    for (const [id, g] of this.ghosts) {
+      g.seen += dt;
+      g.a = g.seen > 0.12 ? Math.max(0, g.a - dt * 6) : Math.min(1, g.a + dt * 8);
+      g.group.visible = g.a > 0.02;
+      const pulse = 0.75 + 0.25 * Math.sin(this.clock * 6);
+      g.edgeMat.opacity = 0.85 * g.a * (g.state === 'idle' ? 1 : pulse);
+      g.fillMat.opacity = 0.24 * g.a * pulse;
+      if (g.a <= 0 && g.seen > 0.12) this.dropGhost(id);
+    }
     for (const [key, h] of this.hovers) {
       h.seen += dt;
       h.age += dt;
@@ -474,6 +645,8 @@ export class WorkFx {
   }
 
   dispose() {
+    for (const id of [...this.tags.keys()]) this.dropTag(id);
+    for (const id of [...this.ghosts.keys()]) this.dropGhost(id);
     for (const l of this.labels) {
       const m = l.sprite.material as THREE.SpriteMaterial;
       m.map?.dispose();

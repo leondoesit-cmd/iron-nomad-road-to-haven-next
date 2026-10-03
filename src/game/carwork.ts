@@ -3,7 +3,7 @@ import { PARTS, partDef, type PartSlot } from '../data';
 import { MK_CSS, modelKey } from '../render/workFx';
 import { mountsOfChassis } from '../render/vehicleModels';
 import { FUEL_CAN, carriedName, type Carried } from '../sim/carry';
-import { removePart } from '../sim/garage';
+import { removePart, removeTyre, tyreAt } from '../sim/garage';
 import { OIL_CAN } from '../sim/oil';
 import { partName, slotsOf } from '../sim/parts';
 import { planRepair, type RepairKind } from '../sim/repair';
@@ -99,7 +99,7 @@ export function pickMount(p: Player, v: Vehicle, only?: PartSlot): Pick | null {
 }
 
 /** The repair a job needs maps to the slot it is done at. */
-const REPAIR_SLOT: Record<RepairKind, PartSlot> = { fire: 'engine', leak: 'utility', tire: 'wheels', engine: 'engine', mount: 'weapon', body: 'armor' };
+const REPAIR_SLOT: Record<RepairKind, PartSlot> = { fire: 'engine', leak: 'utility', tire: 'wheels', engine: 'engine', radiator: 'cooling', gearbox: 'gearbox', mount: 'weapon', body: 'armor' };
 
 const handPos = (p: Player) => p.human.hand.getWorldPosition(new THREE.Vector3());
 
@@ -122,7 +122,8 @@ export function wrenchCandidate(p: Player, repair: () => Cand | null): Cand | nu
     return null;
   }
   const { slot, index, pos } = pick.mount;
-  const fitted = v.build.fit[slot];
+  const wheelTyre = slot === 'wheels' ? (v.build.tyres[index] && !partDef(v.build.tyres[index]!.id).empty ? tyreAt(v.build, index) : null) : null;
+  const fitted = slot === 'wheels' ? wheelTyre : (v.build.fit[slot] && !partDef(v.build.fit[slot]!.id).empty ? v.build.fit[slot] : undefined);
   const moving = Math.abs(v.speed) > 2;
   const head = `${SLOT_LABEL(slot)}`;
   const job = planRepair(v.health, ctx.campaign.stocks, { spare: v.stats.spare, weapon: !!v.weapon, dents: v.bodywork.dentLevel(), missing: v.bodywork.missing() });
@@ -163,7 +164,13 @@ function unbolt(p: Player, v: Vehicle, slot: PartSlot, mounts: Mount[]) {
   const ctx = p.ctx;
   if (p.carry || !v.build) return;
   v.commit();
-  const out = removePart(v.build, slot);
+  let out: ReturnType<typeof removePart> = null;
+  if (slot === 'wheels') {
+    out = removeTyre(v.build, 0);
+    for (let i = 1; i < v.build.tyres.length; i++) removeTyre(v.build, i);
+  } else {
+    out = removePart(v.build, slot);
+  }
   if (!out) return;
   v.syncFromBuild();
   const mine = mounts.filter((m) => m.slot === slot);

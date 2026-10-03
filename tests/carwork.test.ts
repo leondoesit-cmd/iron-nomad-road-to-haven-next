@@ -140,7 +140,7 @@ describe('the wrench takes parts off by hand', () => {
     hold(h, sc, 0, Btn.A, 1);
     expect(v.build!.fit.engine).toBeDefined();
     hold(h, sc, 0, Btn.A, 4);
-    expect(v.build!.fit.engine).toBeUndefined();
+    expect(v.build!.fit.engine?.id).toBe('eng_none');
     expect(p.carry).toMatchObject({ kind: 'part' });
     expect(p.carry && p.carry.kind === 'part' && p.carry.item.id).toBe('eng_v6');
   });
@@ -175,7 +175,7 @@ describe('the wrench takes parts off by hand', () => {
     p.carry = { kind: 'part', item: newPart('rr_box') };
     standAt(sc, v, 'front');
     run(sc, 0.1);
-    expect(p.prompt?.text).toMatch(/Carry it to the rear/);
+    expect(p.prompt?.text).toMatch(/to the rear/i);
     hold(h, sc, 0, Btn.A, 4);
     expect(p.carry).not.toBeNull();
     expect(v.build!.fit.rear).toBeUndefined();
