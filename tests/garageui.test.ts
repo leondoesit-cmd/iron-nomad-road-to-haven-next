@@ -213,3 +213,112 @@ describe('painting from the garage', () => {
     expect(host('ledger', [newBuild('sedan', { seed: 1 })]).view.html()).not.toMatch(/Take a spray can/);
   });
 });
+
+describe('the whole machine in the garage', () => {
+  it('groups the mounts, and a sedan shows every one it has', () => {
+    const { view } = host('ledger', [newBuild('sedan', { seed: 1 })]);
+    const html = view.html();
+    for (const g of ['Powertrain', 'Running gear', 'Body', 'Fittings']) expect(html).toContain(g);
+    for (const id of ['gearbox', 'exhaust', 'suspension', 'brakes', 'hood', 'doorL', 'doorR']) expect(html).toContain(`data-fid="slot0-${id}"`);
+    // A moped has no doors or bonnet to list.
+    const moped = host('ledger', [newBuild('moped', { seed: 1 })]).view.html();
+    expect(moped).not.toContain('data-fid="slot0-hood"');
+    expect(moped).not.toContain('data-fid="slot0-doorL"');
+    expect(moped).toContain('data-fid="slot0-gearbox"');
+  });
+
+  it('shows one button per wheel, and a spare tyre goes on the wheel picked, not all four', () => {
+    const b = newBuild('sedan', { seed: 1 });
+    const { view, press, c } = host('ledger', [b]);
+    c.inventory.push(newPart('whl_bl', 0.8));
+    const html = view.html();
+    for (let n = 0; n < 4; n++) expect(html).toContain(`data-fid="slot0-wheels${n}"`);
+    press('slot0-wheels2');
+    expect(view.sel).toEqual({ i: 0, slot: 'wheels', wheel: 2 });
+    view.html();
+    const uid = c.inventory.find((p) => p.id === 'whl_bl')!.uid;
+    press(`fit0-${uid}`);
+    expect(b.tyres[2]?.id).toBe('whl_bl');
+    expect(b.tyres[0]).toBeNull();
+    expect(b.tyres[1]).toBeNull();
+    expect(b.tyres[3]).toBeNull();
+    // The sedan's own tyre came off that wheel as a real part.
+    expect(c.inventory.some((p) => p.id === 'tyre_sedan')).toBe(true);
+    // Taking it off leaves a bare rim that is shown as one.
+    view.html();
+    press('rm0');
+    expect(b.tyres[2]?.id).toBe('tyre_none');
+    expect(view.html()).toMatch(/Bare rim/);
+  });
+
+  it('pulling the bonnet and a door leaves empty mounts, and a door fitted to the other side stays there', () => {
+    const b = newBuild('sedan', { seed: 1 });
+    const { view, press, c } = host('ledger', [b]);
+    view.sel = { i: 0, slot: 'hood' };
+    view.html();
+    press('rm0');
+    expect(b.fit.hood?.id).toBe('hood_none');
+    view.sel = { i: 0, slot: 'doorR' };
+    view.html();
+    press('rm0');
+    expect(b.fit.doorR?.id).toBe('door_none');
+    expect(view.html()).toMatch(/NO BONNET/);
+    expect(view.html()).toMatch(/1 DOOR OFF/);
+    c.inventory.push(newPart('door_armor', 1));
+    view.html();
+    const uid = c.inventory.find((p) => p.id === 'door_armor')!.uid;
+    press(`fit0-${uid}`);
+    expect(b.fit.doorR?.id).toBe('door_armor');
+    expect(b.fit.doorL?.id).toBeUndefined();
+  });
+
+  it('warns about a V8 on a moped gearbox and springs, and the gearbox picker shows the fix', () => {
+    const b = newBuild('moped', { seed: 1 });
+    installPart(b, newPart('eng_v8', 1));
+    const { view } = host('ledger', [b]);
+    const html = view.html();
+    expect(html).toMatch(/OVERSTRAINED/);
+    expect(html).toMatch(/SAGGING/);
+    const f = forecastSwap(b, 'engine', newPart('eng_v8', 1));
+    void f;
+    const g = forecastSwap(newBuild('moped', { seed: 1 }), 'engine', newPart('eng_v8', 1));
+    expect(g.notes.join(' ')).toMatch(/gearbox is overstrained/);
+    expect(g.notes.join(' ')).toMatch(/springs are overloaded/);
+    expect(g.sumpL).toBeGreaterThan(g.sumpBefore);
+    expect(g.coolantL).toBeGreaterThan(g.coolantBefore);
+    const fix = forecastSwap(b, 'gearbox', newPart('gbx_transfer', 1));
+    expect(fix.strain).toBeLessThan(fix.strainBefore);
+    view.sel = { i: 0, slot: 'gearbox' };
+    expect(view.html()).toMatch(/strain/);
+  });
+
+  it('tops up the radiator in litres from the water reserve', () => {
+    const b = newBuild('hatch', { seed: 1 });
+    b.comp.coolant = 0.2;
+    const { view, press, c } = host('ledger', [b]);
+    c.items.water = 12;
+    expect(view.html()).toMatch(/data-fid="water0"/);
+    press('water0');
+    expect(b.comp.coolant).toBeGreaterThan(0.9);
+    expect(c.items.water).toBeLessThan(12);
+    // A water level bar is on the card.
+    expect(view.html()).toMatch(/WATER/);
+  });
+
+  it('oil from the reserve fills a big sump slower than a small one', () => {
+    const small = newBuild('moped', { seed: 1 });
+    const big = newBuild('moped', { seed: 1 });
+    installPart(big, newPart('eng_v8', 1));
+    small.comp.oil = 0.2;
+    big.comp.oil = 0.2;
+    const a = host('ledger', [small]);
+    a.c.items.oil = 0.5;
+    a.view.html();
+    a.press('oil0');
+    const z = host('ledger', [big]);
+    z.c.items.oil = 0.5;
+    z.view.html();
+    z.press('oil0');
+    expect(small.comp.oil).toBeGreaterThan(big.comp.oil);
+  });
+});

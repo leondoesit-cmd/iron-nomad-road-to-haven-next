@@ -4,6 +4,7 @@ import { LABEL, whole } from '../sim/resources';
 import { loyaltyBand } from '../sim/loyalty';
 import { SALVAGE_STAGES } from '../sim/salvage';
 import { OIL_CRITICAL, OIL_LOW } from '../sim/oil';
+import { COOLANT_CRITICAL, COOLANT_LOW } from '../sim/fluids';
 import { T_HOT, T_MAX, T_OVERHEAT } from '../sim/thermal';
 import { fuelMismatch } from '../sim/fuel';
 import { carriedName } from '../sim/carry';
@@ -59,6 +60,7 @@ class PlayerHud {
         <div class="bar" data-k="hpbar"><div class="fill" data-k="hpfill"></div></div>
         <div class="row" data-k="fuelrow"><div class="bar fuel" data-k="fuelbar"><div class="fill" data-k="fuelfill"></div></div><span class="val" data-k="fuelval"></span></div>
         <div class="row" data-k="oilrow"><div class="bar oil" data-k="oilbar"><div class="fill" data-k="oilfill"></div></div><span class="val" data-k="oilval">OIL</span></div>
+        <div class="row" data-k="waterrow"><div class="bar water" data-k="waterbar"><div class="fill" data-k="waterfill"></div></div><span class="val" data-k="waterval">WATER</span></div>
         <div class="row" data-k="temprow"><div class="bar temp" data-k="tempbar"><div class="fill" data-k="tempfill"></div></div><span class="val" data-k="tempval">TEMP</span></div>
         <div class="row"><div class="speed" data-k="speed">0<small>km/h</small></div><div class="comp" data-k="comp"></div></div>
       </div>
@@ -424,6 +426,7 @@ export class Hud {
       h.setClass('fuelbar', ff < 0.15 || this.wrongFuel(v) ? 'fuel crit' : v.fuelType === 'diesel' ? 'fuel diesel' : 'fuel');
       h.setText('fuelval', this.fuelText(v));
       this.oilGauge(h, v);
+      this.waterGauge(h, v);
       this.tempGauge(h, v);
       h.setText('speed', `${Math.round(Math.abs(v.speed) * 3.6)}`);
       h.el('speed').innerHTML = `${Math.round(Math.abs(v.speed) * 3.6)}<small>km/h</small>`;
@@ -431,7 +434,7 @@ export class Hud {
       const cls = (x: number) => (x <= 0.001 ? 'bad' : x < 0.99 ? 'mid' : '');
       h.setHtml(
         'comp',
-        `<i class="${cls(c.engine)}" title="engine">E</i><i class="${c.tires.some((x) => x <= 0) ? 'bad' : ''}">T</i><i class="${v.health.leaking ? 'bad' : ''}">F</i><i class="${cls(c.mount)}">W</i><i class="${c.oil < OIL_CRITICAL ? 'bad' : c.oil < OIL_LOW ? 'mid' : ''}" title="oil">O</i>${v.health.burning ? '<i class="bad">🔥</i>' : ''}`,
+        `<i class="${cls(c.engine)}" title="engine">E</i><i class="${c.tires.some((x) => x <= 0) ? 'bad' : ''}">T</i><i class="${v.health.leaking ? 'bad' : ''}">F</i><i class="${cls(c.mount)}">W</i><i class="${c.oil < OIL_CRITICAL ? 'bad' : c.oil < OIL_LOW ? 'mid' : ''}" title="oil">O</i><i class="${(c.coolant ?? 1) < COOLANT_CRITICAL ? 'bad' : (c.coolant ?? 1) < COOLANT_LOW ? 'mid' : ''}" title="water">C</i><i class="${v.stats.noDrive || (c.gearbox ?? 1) < 0.25 ? 'bad' : (c.gearbox ?? 1) < 0.5 ? 'mid' : ''}" title="gearbox">G</i>${v.health.burning ? '<i class="bad">🔥</i>' : ''}`,
       );
     } else if (p.state === 'foot' || p.state === 'entering' || p.state === 'downed' || p.state === 'dead') {
       h.setText('vname', p.state === 'dead' ? 'DOWN FOR GOOD' : 'ON FOOT');
@@ -445,11 +448,13 @@ export class Hud {
         h.setText('fuelval', this.fuelText(cur));
       }
       this.oilGauge(h, cur && !cur.wreck ? cur : null);
+      this.waterGauge(h, cur && !cur.wreck ? cur : null);
       this.tempGauge(h, cur && !cur.wreck ? cur : null);
       h.el('speed').innerHTML = `${Math.round(p.moveSpeed * 3.6)}<small>km/h</small>`;
       h.setHtml('comp', '');
     } else {
       this.oilGauge(h, null);
+      this.waterGauge(h, null);
       this.tempGauge(h, null);
     }
 
@@ -483,7 +488,7 @@ export class Hud {
       else if (eq === 'melee') h.el('ammo').innerHTML = `<small>${Math.round(p.meleeDamage())} DMG</small>`;
       else if (eq === 'wrench') h.el('ammo').innerHTML = `<small>${whole(camp.stocks.scrap)} SCRAP · ${whole(camp.stocks.parts)} PARTS</small>`;
       else if (eq === 'crowbar') h.el('ammo').innerHTML = `<small>${camp.inventory.length}/${camp.inventoryCap} PARTS</small>`;
-      else if (eq === 'jerrycan') h.el('ammo').innerHTML = `<small>${camp.stocks.fuel.toFixed(1)} FU PETROL · ${camp.items.diesel.toFixed(1)} DIESEL · ${Math.round(camp.items.oil * 100)}% OIL</small>`;
+      else if (eq === 'jerrycan') h.el('ammo').innerHTML = `<small>${camp.stocks.fuel.toFixed(1)} FU PETROL · ${camp.items.diesel.toFixed(1)} DIESEL · ${(camp.items.oil * 3).toFixed(1)} L OIL · ${camp.items.water.toFixed(0)} L WATER</small>`;
       else h.el('ammo').innerHTML = `<small>${p.utility === 'horn' ? '∞' : camp.items[p.utility as 'flare']}</small>`;
       // The belt: what is in each hand slot, with the one in hand lit, then the throwable.
       const belt = p.gear.belt.map((it, i) => (it ? `<span class="${eq !== 'utility' && p.gear.sel === i ? 'on' : ''}">${gearDef(it.id).short}</span>` : '')).join('');
@@ -491,7 +496,7 @@ export class Hud {
     }
     h.setText(
       'stocks',
-      `FUEL ${camp.stocks.fuel.toFixed(0)}${camp.items.diesel > 0.05 ? ` · DIESEL ${camp.items.diesel.toFixed(0)}` : ''} · OIL ${Math.round(camp.items.oil * 100)}% · RATIONS ${whole(camp.stocks.rations)} · SCRAP ${whole(camp.stocks.scrap)} · PARTS ${whole(camp.stocks.parts)}`,
+      `FUEL ${camp.stocks.fuel.toFixed(0)}${camp.items.diesel > 0.05 ? ` · DIESEL ${camp.items.diesel.toFixed(0)}` : ''} · OIL ${(camp.items.oil * 3).toFixed(1)} L · WATER ${camp.items.water.toFixed(0)} L · RATIONS ${whole(camp.stocks.rations)} · SCRAP ${whole(camp.stocks.scrap)} · PARTS ${whole(camp.stocks.parts)}`,
     );
 
     // The vehicle you are standing next to: what it is and what is wrong with it.
@@ -587,6 +592,17 @@ export class Hud {
     h.setText('oilval', `OIL ${Math.round(o * 100)}`);
   }
 
+  /** The cooling-system bar: shown with the oil bar, for a convoy vehicle with a radiator to fill. */
+  private waterGauge(h: PlayerHud, v: Vehicle | null) {
+    const show = !!v && !v.wreck && v.convoyEngine && v.def.physics.kind !== 'boat';
+    h.setStyle('waterrow', 'display', show ? 'flex' : 'none');
+    if (!show || !v) return;
+    const w = v.health.comp.coolant ?? 1;
+    h.setStyle('waterfill', 'width', `${clamp(w, 0, 1) * 100}%`);
+    h.setClass('waterbar', w < COOLANT_CRITICAL ? 'water crit' : w < COOLANT_LOW ? 'water low' : 'water');
+    h.setText('waterval', `WATER ${Math.round(w * 100)}`);
+  }
+
   /** A card for the nearest vehicle when on foot: name, owner, and condition chips so it is clear what needs doing. */
   private vehicleReadout(p: Player, scene: Scene): string {
     if (p.state !== 'foot' || p.buildMode || p.action) return '';
@@ -609,6 +625,14 @@ export class Hud {
       if (v.convoyEngine && v.temp >= T_HOT) parts.push(chip(v.temp >= T_OVERHEAT ? 'OVERHEATED' : 'HOT', v.temp >= T_OVERHEAT ? 'bad' : 'warn'));
       if (c.oil < OIL_LOW) parts.push(chip(c.oil < OIL_CRITICAL ? 'OIL DRY' : 'OIL LOW', c.oil < OIL_CRITICAL ? 'bad' : 'warn'));
       else parts.push(chip(`OIL ${Math.round(c.oil * 100)}%`));
+      const water = c.coolant ?? 1;
+      if (v.convoyEngine) parts.push(water < COOLANT_LOW ? chip(water < COOLANT_CRITICAL ? 'WATER DRY' : 'WATER LOW', water < COOLANT_CRITICAL ? 'bad' : 'warn') : chip(`WATER ${Math.round(water * 100)}%`));
+      if (v.convoyEngine && v.stats.noDrive) parts.push(chip('NO GEARBOX', 'bad'));
+      else if (v.convoyEngine && (c.gearbox ?? 1) < 0.5) parts.push(chip(`GEARBOX ${Math.round((c.gearbox ?? 1) * 100)}%`, (c.gearbox ?? 1) < 0.25 ? 'bad' : 'warn'));
+      if (v.stats.overload > 1.08) parts.push(chip('SAGGING', 'warn'));
+      if (v.stats.tyresGone) parts.push(chip(`${v.stats.tyresGone} BARE WHEEL${v.stats.tyresGone > 1 ? 'S' : ''}`, 'bad'));
+      if (v.stats.hoodOff) parts.push(chip('NO BONNET', 'warn'));
+      if (v.stats.doorsOff) parts.push(chip(`${v.stats.doorsOff} DOOR${v.stats.doorsOff > 1 ? 'S' : ''} OFF`, 'warn'));
       parts.push(chip(`BODY ${Math.round(v.hpFrac * 100)}%`, v.hpFrac < 0.35 ? 'bad' : v.hpFrac < 0.65 ? 'warn' : ''));
       if (v.health.leaking) parts.push(chip('LEAKING', 'bad'));
       if (v.health.burning) parts.push(chip('ON FIRE', 'bad'));

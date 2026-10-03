@@ -180,7 +180,8 @@ export function effectiveStats(def: VehicleDef, fit: Fit, tyres?: Tyres): Stats 
     topSpeedMult: topMult,
     armor: clamp(def.armor + sum(fit, 'armor'), 0, 0.9),
     armorF: sum(fit, 'armorF'),
-    armorS: sum(fit, 'armorS'),
+    // A door that is not there stops nothing on that side.
+    armorS: sum(fit, 'armorS') - 0.06 * off.doors,
     armorR: sum(fit, 'armorR'),
     gripMult: (1 + sum(fit, 'grip') + tyreMean(tyres, wheels, 'grip')) * ef.grip * dt.grip * goneK,
     travelMult: (1 + sum(fit, 'travel') + tyreMean(tyres, wheels, 'travel')) * ef.travel * dt.travel,

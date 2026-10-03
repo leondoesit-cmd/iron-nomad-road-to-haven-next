@@ -8,7 +8,8 @@ import type { Campaign } from '../game/campaign';
 import { PLAYER_CSS } from '../render/palette';
 import { canAfford, costText, spend } from '../sim/resources';
 import { OIL_CAN, OIL_LOW, pourOil } from '../sim/oil';
-import { type VehicleBuild, buildName, currentCond, defOf, idInSlot, installPart, maxHpOf, needsService, partInSlot, removePart, serviceBuild, serviceCost, statsOf, conditionSummary, dismantleYield, GARAGE_MAX } from '../sim/garage';
+import { COOLANT_LOW, WATER_CAN, pourWater } from '../sim/fluids';
+import { type VehicleBuild, buildName, currentCond, defOf, idInSlot, installPart, maxHpOf, needsService, partInSlot, removePart, removeTyre, serviceBuild, serviceCost, statsOf, conditionSummary, dismantleYield, tyreAt, tyreIdAt, EMPTY_ID, GARAGE_MAX } from '../sim/garage';
 import { RARITY_CSS, RARITY_NAMES, conditionLabel, describePart, isWorn, newPart, partName, scrapValue, slotsOf, type PartItem } from '../sim/parts';
 import { escapeHtml } from './hud';
 import type { FocusItem } from './focus';
@@ -16,6 +17,23 @@ import type { Game } from '../game/game';
 import type { Vehicle } from '../game/vehicle';
 
 type Act = (player: number) => void;
+
+/** The garage groups mounts by what they are part of. Tyres are drawn as a row of wheels, not one button. */
+const SLOT_GROUPS: { name: string; slots: PartSlot[] }[] = [
+  { name: 'Powertrain', slots: ['engine', 'cooling', 'gearbox', 'exhaust'] },
+  { name: 'Running gear', slots: ['suspension', 'brakes', 'wheels'] },
+  { name: 'Body', slots: ['hood', 'doorL', 'doorR', 'armor', 'side', 'front', 'rear', 'roof'] },
+  { name: 'Fittings', slots: ['weapon', 'utility'] },
+];
+
+/** What a wheel is called, by its place on the chassis: front or rear, left or right. */
+function wheelName(n: number, count: number): string {
+  if (count <= 2) return n === 0 ? 'Front' : 'Rear';
+  const axle = Math.floor(n / 2);
+  const axles = Math.ceil(count / 2);
+  const end = axle === 0 ? 'Front' : axle === axles - 1 ? 'Rear' : `Axle ${axle + 1}`;
+  return `${end} ${n % 2 === 0 ? 'left' : 'right'}`;
+}
 
 /** What a garage page needs from whatever hosts it: the Dawn Ledger tab, or the field workbench. */
 export interface GarageHost {
@@ -41,7 +59,8 @@ export interface GarageHost {
  * The garage: fit parts, paint, fabricate, manage the yard. Pure HTML plus actions; the host owns rendering and focus.
  */
 export class GarageView {
-  sel: { i: number; slot: PartSlot } | null = null;
+  /** The mount being worked on. For tyres `wheel` is the wheel number, or -1 for the whole set. */
+  sel: { i: number; slot: PartSlot; wheel?: number } | null = null;
   /** A vehicle uid waiting for a second press to confirm breaking it down. */
   private armed: string | null = null;
   /** What the swatches paint, per column: the whole vehicle or one panel. */
@@ -82,30 +101,32 @@ export class GarageView {
       `<div class="sub2">${escapeHtml(conditionSummary(b)).toUpperCase()}${st.weapon ? ' · ARMED' : ''}</div>`,
     );
     lines.push(...this.powertrainLines(i, b));
-    const slotBtns = PART_SLOTS.map((slot) => {
-      const ok = allowed.includes(slot);
+    const slotBtn = (slot: PartSlot) => {
       const it = b.fit[slot];
       const sel = this.sel?.i === i && this.sel.slot === slot;
       // What is actually in the mount: a fitted part, the factory one, or nothing at all.
       const id = idInSlot(b, slot);
-      const factory = !it && ok && !!id;
-      const empty = ok && !id && (slot === 'engine' || slot === 'cooling');
-      const main = !ok ? '—' : empty ? 'Empty' : id ? escapeHtml(partDef(id).name) : 'Stock';
+      const factory = !it && !!id;
+      const empty = !id && !!EMPTY_ID[slot];
+      const main = empty ? 'Empty' : id ? escapeHtml(partDef(id).name) : 'Stock';
       let note = '';
-      if (ok && id && isWorn(slot)) {
+      if (id && isWorn(slot)) {
         const cond = currentCond(b, slot);
         if (it || cond < 0.999) note = ` <em class="${cond < 0.35 ? 'bad' : cond < 0.7 ? 'mid' : ''}">${Math.round(cond * 100)}%</em>`;
       }
       const mk = it && !partDef(it.id).stock ? partDef(it.id).mk : 0;
-      return this.h.btn(
-        `slot${i}-${slot}`,
-        `<small>${PARTS.labels[slot]}${mk ? this.pips(mk) : ''}</small><b>${main}</b>${note}`,
-        () => this.pick(i, slot),
-        ok,
-        ok ? '' : `A ${def.name} has no ${PARTS.labels[slot].toLowerCase()} mount`,
-      ).replace('<button', `<button class="slotbtn${sel ? ' sel' : ''}${it && !factory && !empty ? ' fitted' : ''}${empty ? ' emptymount' : ''}"`);
-    });
-    lines.push(`<div class="slotgrid">${slotBtns.join('')}</div>`);
+      return this.h
+        .btn(`slot${i}-${slot}`, `<small>${PARTS.labels[slot]}${mk ? this.pips(mk) : ''}</small><b>${main}</b>${note}`, () => this.pick(i, slot), true)
+        .replace('<button', `<button class="slotbtn${sel ? ' sel' : ''}${it && !factory && !empty ? ' fitted' : ''}${empty ? ' emptymount' : ''}"`);
+    };
+    // Slots in groups, so an engine is not lost among forty buttons. A chassis only shows the mounts it has.
+    for (const grp of SLOT_GROUPS) {
+      const here = grp.slots.filter((s) => allowed.includes(s));
+      if (!here.length) continue;
+      const cells = here.filter((s) => s !== 'wheels').map(slotBtn);
+      lines.push(`<div class="slotgroup"><small class="gh">${grp.name}</small><div class="slotgrid">${cells.join('')}</div></div>`);
+      if (here.includes('wheels')) lines.push(this.tyreRow(i, b));
+    }
     // Paint: the whole vehicle or one panel, then a swatch.
     const panels = panelsOf(def);
     const tgt = this.targetOf(i, panels);
@@ -137,8 +158,9 @@ export class GarageView {
     }
     if (def.physics.kind !== 'boat') {
       const need = b.comp.oil < 0.95;
+      const wet = (b.comp.coolant ?? 1) < 0.95;
       lines.push(
-        `<div class="btns">${this.h.btn(`oil${i}`, `Top up oil <span class="cost">${need ? `${Math.round(c.items.oil * 100)}% in reserve` : 'full'}</span>`, () => this.topUpOil(i), need && c.items.oil > 0.02, need ? (c.items.oil > 0.02 ? '' : 'No oil in reserve: find cans along the road') : '')}</div>`,
+        `<div class="btns">${this.h.btn(`oil${i}`, `Top up oil <span class="cost">${need ? `${(c.items.oil * 3).toFixed(1)} L in reserve` : 'full'}</span>`, () => this.topUpOil(i), need && c.items.oil > 0.02, need ? (c.items.oil > 0.02 ? '' : 'No oil in reserve: find cans along the road') : '')}${this.h.btn(`water${i}`, `Top up water <span class="cost">${wet ? `${c.items.water.toFixed(0)} L in reserve` : 'full'}</span>`, () => this.topUpWater(i), wet && c.items.water > 0.2, wet ? (c.items.water > 0.2 ? `A can is ${WATER_CAN} L` : 'No water in reserve: fill cans at a lake or a well') : '')}</div>`,
       );
     }
     if (!this.field) {
@@ -148,6 +170,26 @@ export class GarageView {
       );
     }
     return `<div class="card gcard p${i + 1}">${lines.join('')}</div>`;
+  }
+
+  /** One button per wheel, each with the tyre on it: a mixed set is a real thing. */
+  private tyreRow(i: number, b: VehicleBuild): string {
+    const count = b.tyres.length;
+    const cells = b.tyres.map((_, n) => {
+      const id = tyreIdAt(b, n);
+      const cond = b.comp.tires[n] ?? 1;
+      const sel = this.sel?.i === i && this.sel.slot === 'wheels' && this.sel.wheel === n;
+      const fitted = !!b.tyres[n] && !!id && !partDef(id).stock;
+      const mk = fitted ? partDef(id!).mk : 0;
+      const main = id ? escapeHtml(partDef(id).name) : 'Bare rim';
+      const note = id ? ` <em class="${cond < 0.35 ? 'bad' : cond < 0.7 ? 'mid' : ''}">${Math.round(cond * 100)}%</em>` : '';
+      return this.h
+        .btn(`slot${i}-wheels${n}`, `<small>${wheelName(n, count)}${mk ? this.pips(mk) : ''}</small><b>${main}</b>${note}`, () => this.pickWheel(i, n), true)
+        .replace('<button', `<button class="slotbtn${sel ? ' sel' : ''}${fitted ? ' fitted' : ''}${id ? '' : ' emptymount'}"`);
+    });
+    const all = this.sel?.i === i && this.sel.slot === 'wheels' && this.sel.wheel === -1;
+    const set = this.h.btn(`slot${i}-wheelsall`, '<small>Tyres</small><b>Whole set</b>', () => this.pickWheel(i, -1), true).replace('<button', `<button class="slotbtn${all ? ' sel' : ''}"`);
+    return `<div class="slotgroup"><small class="gh">Tyres, one per wheel</small><div class="slotgrid tyres">${cells.join('')}${set}</div></div>`;
   }
 
   // ------------------------------------------------------------------ powertrain
@@ -167,6 +209,15 @@ export class GarageView {
       `<div class="sub2">COOLING ${Math.round(st.coolKw)} kW · <span class="${hot}">${escapeHtml(VERDICT_TEXT[fig.heat.verdict].toUpperCase())}</span> · RANGE ${fig.rangeKm.toFixed(0)} km</div>`,
       `<div class="sub2">TANK ${tankFU.toFixed(1)}/${st.tank.toFixed(0)} FU ${b.tank.toUpperCase()}${wrong ? ` · <span class="bad">ENGINE BURNS ${st.fuel.toUpperCase()}</span>` : ''}</div>`,
     ];
+    // The rest of the machine, judged against the engine: a gearbox that must carry it, springs under it, brakes to stop it.
+    const strain = st.noDrive ? 'bad' : st.strain > 1.05 ? 'bad' : st.strain > 0.85 ? 'mid' : '';
+    const gbx = st.noDrive ? 'NO GEARBOX' : `${Math.round(st.gearboxRating)} kW BOX · ${st.strain > 1.05 ? `OVERSTRAINED ${st.strain.toFixed(1)}x` : st.strain > 0.85 ? 'AT ITS LIMIT' : 'COPES'}`;
+    const load = st.overload > 1.08 ? 'bad' : st.overload > 0.95 ? 'mid' : '';
+    const stop = st.brakeMult < 0.75 ? 'bad' : st.brakeMult < 0.95 ? 'mid' : '';
+    out.push(
+      `<div class="sub2">GEARBOX <span class="${strain}">${gbx}</span> · SPRINGS <span class="${load}">${st.overload > 1.08 ? `SAGGING ${st.overload.toFixed(1)}x` : st.overload > 0.95 ? 'FULL LOAD' : 'OK'}</span> · BRAKES <span class="${stop}">${st.brakeMult < 0.95 ? `${Math.round(st.brakeMult * 100)}% OF STOCK` : 'OK'}</span></div>`,
+      `<div class="sub2">WEIGHT ${Math.round(st.mass)} KG · OIL ${st.sumpL.toFixed(1)} L ${Math.round(b.comp.oil * 100)}% · WATER ${st.coolantL.toFixed(1)} L <span class="${(b.comp.coolant ?? 1) < COOLANT_LOW ? 'bad' : ''}">${Math.round((b.comp.coolant ?? 1) * 100)}%</span>${st.hoodOff ? ' · <span class="mid">NO BONNET</span>' : ''}${st.doorsOff ? ` · <span class="mid">${st.doorsOff} DOOR${st.doorsOff > 1 ? 'S' : ''} OFF</span>` : ''}${st.tyresGone ? ` · <span class="bad">${st.tyresGone} BARE WHEEL${st.tyresGone > 1 ? 'S' : ''}</span>` : ''}</div>`,
+    );
     if (wrong) {
       const plan = planDrain(b.tank, tankFU, st.fuel);
       out.push(`<div class="btns">${this.h.btn(`drain${i}`, `Drain tank <span class="cost">${tankFU.toFixed(1)} FU → ${b.tank} reserve</span>`, () => this.drain(i), plan.ok, plan.ok ? 'Empty the tank into the convoy reserve' : plan.label)}</div>`);
@@ -184,9 +235,9 @@ export class GarageView {
 
   /** The forecast under a candidate part: power, speed, range, and everything that will bite. */
   private forecastHtml(f: Forecast): string {
-    const d = (now: number, was: number, unit: string, digits = 0) => {
-      const delta = now - was;
-      const cls = Math.abs(delta) < 0.5 * Math.pow(10, -digits) ? '' : delta > 0 ? 'good' : 'bad';
+    const d = (now: number, was: number, unit: string, digits = 0, lowerIsBetter = false) => {
+      const delta = (now - was) * (lowerIsBetter ? -1 : 1);
+      const cls = Math.abs(now - was) < 0.5 * Math.pow(10, -digits) ? '' : delta > 0 ? 'good' : 'bad';
       return `<b class="${cls}">${now.toFixed(digits)}${unit}</b>`;
     };
     const bits: string[] = [];
@@ -195,10 +246,31 @@ export class GarageView {
       bits.push(`top ${d(f.topKmh, f.topBefore, ' km/h')}`);
       bits.push(`range ${d(f.rangeKm, f.rangeBefore, ' km')}`);
       if (Math.abs(f.massDelta) > 20) bits.push(`${f.massDelta > 0 ? '+' : ''}${Math.round(f.massDelta)} kg`);
+      bits.push(`oil ${d(f.sumpL, f.sumpBefore, ' L', 1, true)} · water ${d(f.coolantL, f.coolantBefore, ' L', 1, true)}`);
+      if (f.strain > 0.85 || f.strainBefore > 0.85) bits.push(`gearbox ${d(f.strain, f.strainBefore, 'x', 1, true)}`);
     } else if (f.slot === 'cooling') {
       bits.push(`runs ${f.heatBefore.verdict} → <b class="${f.heat.verdict === 'overheats' ? 'bad' : f.heat.verdict === 'cool' ? 'good' : 'mid'}">${f.heat.verdict}</b>`);
+      bits.push(`water ${d(f.coolantL, f.coolantBefore, ' L', 1, true)}`);
+    } else if (f.slot === 'gearbox') {
+      bits.push(`strain ${d(f.strain, f.strainBefore, 'x', 1, true)}`);
+      bits.push(`top ${d(f.topKmh, f.topBefore, ' km/h')}`);
+      bits.push(`power ${d(f.powerKw, f.powerBefore, ' kW')}`);
+    } else if (f.slot === 'suspension') {
+      bits.push(`load ${d(f.overload, f.overloadBefore, 'x', 2, true)}`);
+      bits.push(`grip ${d(f.grip * 100, f.gripBefore * 100, '%')}`);
+    } else if (f.slot === 'brakes') {
+      bits.push(`braking ${d(f.brake * 100, f.brakeBefore * 100, '%')}`);
+    } else if (f.slot === 'exhaust') {
+      bits.push(`power ${d(f.powerKw, f.powerBefore, ' kW')}`);
+      bits.push(`top ${d(f.topKmh, f.topBefore, ' km/h')}`);
+    } else if (f.slot === 'wheels') {
+      bits.push(`grip ${d(f.grip * 100, f.gripBefore * 100, '%')}`);
+      bits.push(`top ${d(f.topKmh, f.topBefore, ' km/h')}`);
+    } else if (f.slot === 'hood' || f.slot === 'doorL' || f.slot === 'doorR') {
+      bits.push(`armour ${d(f.armor * 100, f.armorBefore * 100, '%')}`);
+      bits.push(`top ${d(f.topKmh, f.topBefore, ' km/h')}`);
     } else bits.push(`top ${d(f.topKmh, f.topBefore, ' km/h')}`);
-    const notes = f.notes.map((n) => `<span class="${/overheat|wrong|drain|No engine/i.test(n) ? 'bad' : 'mid'}">${escapeHtml(n)}</span>`).join(' · ');
+    const notes = f.notes.map((n) => `<span class="${/overheat|wrong|drain|No engine|No gearbox|overstrained|overloaded|not up to it|bare wheel/i.test(n) ? 'bad' : 'mid'}">${escapeHtml(n)}</span>`).join(' · ');
     return `<div class="fcast">${bits.join(' · ')}${notes ? `<br>${notes}` : ''}</div>`;
   }
 
@@ -209,32 +281,43 @@ export class GarageView {
 
   private pickerHtml(): string {
     if (!this.sel) {
-      return `<div class="gpanel"><h3>Fit a part</h3><div class="mutedtxt">Choose a slot on a vehicle to fit, replace or fabricate a part. Any engine goes in any vehicle, petrol or diesel, big or small: the forecast shows what it will cost you. Paint is free.</div></div>`;
+      return `<div class="gpanel"><h3>Fit a part</h3><div class="mutedtxt">Choose a mount on a vehicle to fit, replace or fabricate a part. Any engine goes in any vehicle, petrol or diesel, big or small, and the gearbox, springs, brakes and exhaust are judged against it: the forecast shows what it will cost you. Doors, bonnet and every tyre come off. Paint is free.</div></div>`;
     }
-    const { i, slot } = this.sel;
+    const { i, slot, wheel } = this.sel;
     const c = this.c;
     const b = this.h.build(i);
     const def = defOf(b);
-    const cur = partInSlot(b, slot);
+    const tyre = slot === 'wheels' && wheel !== undefined && wheel >= 0;
+    const set = slot === 'wheels' && wheel === -1;
+    const cur = tyre ? tyreAt(b, wheel!) : set ? null : partInSlot(b, slot);
     const rows: string[] = [];
-    rows.push(`<h3>${escapeHtml(PARTS.labels[slot])} · ${escapeHtml(c.players[i].name)}'s ${escapeHtml(def.name)}</h3>`);
+    const where = tyre ? ` · ${wheelName(wheel!, b.tyres.length).toLowerCase()} wheel` : set ? ' · whole set' : '';
+    rows.push(`<h3>${escapeHtml(PARTS.labels[slot])}${escapeHtml(where)} · ${escapeHtml(c.players[i].name)}'s ${escapeHtml(def.name)}</h3>`);
     if (cur) {
       const d = partDef(cur.id);
       rows.push(
-        `<div class="partrow now">${this.partLine(cur)}<div class="mutedtxt">${escapeHtml(describePart(d).join(' · '))}</div>${this.h.btn(`rm${i}`, 'Take it off', () => this.remove(i, slot), true)}</div>`,
+        `<div class="partrow now">${this.partLine(cur)}<div class="mutedtxt">${escapeHtml(describePart(d).join(' · '))}</div>${this.h.btn(`rm${i}`, 'Take it off', () => this.remove(i, slot, wheel), true)}</div>`,
       );
-    } else rows.push(`<div class="mutedtxt">${slot === 'engine' || slot === 'cooling' ? 'Empty mount.' : 'Stock fittings.'}</div>`);
-    const stock = c.inventory.filter((it) => partDef(it.id).slot === slot).sort((a, z) => Number(!!partDef(a.id).stock) - Number(!!partDef(z.id).stock) || partDef(z.id).mk - partDef(a.id).mk || z.cond - a.cond);
+    } else if (set) {
+      rows.push(`<div class="partrow now"><div class="mutedtxt">Every wheel at once.</div>${this.h.btn(`rm${i}`, 'Take all the tyres off', () => this.remove(i, slot, wheel), true)}</div>`);
+    } else rows.push(`<div class="mutedtxt">${EMPTY_ID[slot] ? 'Empty mount.' : 'Stock fittings.'}</div>`);
+    // Spare tyres go on one wheel at a time; a spare in the trucks is one tyre, not a set.
+    const stock = set
+      ? []
+      : c.inventory.filter((it) => partDef(it.id).slot === slot || ((slot === 'doorL' || slot === 'doorR') && (partDef(it.id).slot === 'doorL' || partDef(it.id).slot === 'doorR'))).sort((a, z) => Number(!!partDef(a.id).stock) - Number(!!partDef(z.id).stock) || partDef(z.id).mk - partDef(a.id).mk || z.cond - a.cond);
     rows.push(`<div class="mutedtxt gh">In the trucks</div>`);
-    if (!stock.length) rows.push(`<div class="mutedtxt">Nothing for this slot.</div>`);
+    if (set) rows.push(`<div class="mutedtxt">Pick a single wheel to fit a spare. A tyre built here fits all of them.</div>`);
+    else if (!stock.length) rows.push(`<div class="mutedtxt">Nothing for this slot.</div>`);
+    const wheelArg = tyre ? wheel : undefined;
     for (const it of stock) {
       const d = partDef(it.id);
-      const fc = forecastWorthy(it) ? this.forecastHtml(forecastSwap(b, slot, it)) : `<small>${escapeHtml(describePart(d).join(' · '))}</small>`;
+      const fc = forecastWorthy(it) ? this.forecastHtml(forecastSwap(b, slot, it, wheelArg)) : `<small>${escapeHtml(describePart(d).join(' · '))}</small>`;
       rows.push(`<div class="partrow">${this.h.btn(`fit${i}-${it.uid}`, `${this.partLine(it)}<br><small>${escapeHtml(describePart(d).join(' · '))}</small>${forecastWorthy(it) ? fc : ''}`, () => this.fit(i, it), true).replace('<button', '<button class="wide"')}</div>`);
     }
     if (!this.field) {
-      rows.push(`<div class="mutedtxt gh">Fabricate (needs the workshop)</div>`);
-      for (const d of PARTS.parts.filter((p) => p.slot === slot && !p.stock).sort((a, z) => a.mk - z.mk)) {
+      rows.push(`<div class="mutedtxt gh">Fabricate (needs the workshop)${slot === 'wheels' ? ' · a full set' : ''}</div>`);
+      const ofSlot = (d: { slot: PartSlot }) => d.slot === slot || ((slot === 'doorL' || slot === 'doorR') && (d.slot === 'doorL' || d.slot === 'doorR'));
+      for (const d of PARTS.parts.filter((p) => ofSlot(p) && !p.stock && !p.empty).sort((a, z) => a.mk - z.mk)) {
         const ok = canAfford(c.stocks, d.cost);
         const fc = forecastWorthy({ uid: 'f', id: d.id, cond: 1 }) ? this.forecastHtml(forecastSwap(b, slot, { uid: 'f', id: d.id, cond: 1 })) : '';
         rows.push(
@@ -257,10 +340,10 @@ export class GarageView {
       .map((it) => {
         const d = partDef(it.id);
         const scrap = scrapValue(it);
-        const spec = d.engine ? ` · ${engineLine(d.engine)}` : d.cooling !== undefined ? ` · ${Math.round(d.cooling)} kW` : '';
+        const spec = d.engine ? ` · ${engineLine(d.engine)}` : d.cooling !== undefined ? ` · ${Math.round(d.cooling)} kW` : describePart(d).length && !d.empty && (d.gearbox || d.suspension || d.brakes || d.exhaust) ? ` · ${describePart(d)[0]}` : '';
         return `<div class="stockline"><span><b style="color:${RARITY_CSS[d.stock ? 1 : d.mk]}">${escapeHtml(d.name)}</b> <small>${PARTS.labels[d.slot]}${isWorn(d.slot) ? ` · ${Math.round(it.cond * 100)}%` : ''}${escapeHtml(spec)}</small></span>${this.field ? '' : this.h.btn(`brk${it.uid}`, `Scrap <span class="cost">+${scrap}</span>`, () => this.breakDown(it, scrap), true)}</div>`;
       });
-    return `<div class="gpanel"><h3>Spare parts <small>${c.inventory.length}/${cap}</small></h3>${rows.length ? `<div class="stocklist">${rows.join('')}</div>` : '<div class="mutedtxt">No spare parts. Strip wrecks with the crowbar, or pick them up along the road.</div>'}<div class="mutedtxt">Reserve cans: ${reserveOf(c, 'petrol').toFixed(1)} FU petrol · ${reserveOf(c, 'diesel').toFixed(1)} FU diesel · ${Math.round(c.items.oil * 100)}% oil (${(c.items.oil / OIL_CAN).toFixed(1)} cans). Cargo space on your vehicles sets how much the convoy can carry.</div></div>`;
+    return `<div class="gpanel"><h3>Spare parts <small>${c.inventory.length}/${cap}</small></h3>${rows.length ? `<div class="stocklist">${rows.join('')}</div>` : '<div class="mutedtxt">No spare parts. Strip wrecks with the crowbar, or pick them up along the road.</div>'}<div class="mutedtxt">Reserve cans: ${reserveOf(c, 'petrol').toFixed(1)} FU petrol · ${reserveOf(c, 'diesel').toFixed(1)} FU diesel · ${(c.items.oil * 3).toFixed(1)} L oil (${(c.items.oil / OIL_CAN).toFixed(1)} cans) · ${c.items.water.toFixed(0)} L water. Cargo space on your vehicles sets how much the convoy can carry.</div></div>`;
   }
 
   // ------------------------------------------------------------------ yard
@@ -287,6 +370,12 @@ export class GarageView {
     this.h.rerender();
   }
 
+  private pickWheel(i: number, wheel: number) {
+    const same = this.sel?.i === i && this.sel.slot === 'wheels' && this.sel.wheel === wheel;
+    this.sel = same ? null : { i, slot: 'wheels', wheel };
+    this.h.rerender();
+  }
+
   close() {
     this.sel = null;
     this.h.rerender();
@@ -297,7 +386,9 @@ export class GarageView {
     const b = this.h.build(i);
     const taken = c.takePart(it.uid);
     if (!taken) return;
-    const res = installPart(b, taken);
+    // A tyre goes on the wheel being worked on; a door on the side that was picked.
+    const at = this.sel?.slot === 'wheels' && (this.sel.wheel ?? -1) >= 0 ? this.sel.wheel : this.sel && (this.sel.slot === 'doorL' || this.sel.slot === 'doorR') ? this.sel.slot : undefined;
+    const res = installPart(b, taken, at);
     if (!res.ok) {
       c.inventory.push(taken);
       return this.h.say(res.reason ?? 'It does not fit', false);
@@ -307,9 +398,17 @@ export class GarageView {
     this.h.say(`${partName(taken)} fitted${res.removed ? `; ${partName(res.removed)} goes back in the trucks` : ''}.${res.note ? ' ' + res.note : ''}`, !res.note);
   }
 
-  private remove(i: number, slot: PartSlot) {
+  private remove(i: number, slot: PartSlot, wheel?: number) {
     const c = this.c;
-    const out = removePart(this.h.build(i), slot);
+    const b = this.h.build(i);
+    let out: PartItem | null;
+    if (slot === 'wheels') {
+      // One wheel, or every wheel for the whole set.
+      const list = wheel !== undefined && wheel >= 0 ? [wheel] : b.tyres.map((_, n) => n);
+      const pulled = list.map((n) => removeTyre(b, n)).filter((t): t is PartItem => !!t);
+      for (const t of pulled.slice(1)) c.addPart(t);
+      out = pulled[0] ?? null;
+    } else out = removePart(b, slot);
     if (!out) return;
     const r = c.addPart(out);
     this.h.refresh();
@@ -320,7 +419,9 @@ export class GarageView {
     const c = this.c;
     const b = this.h.build(i);
     if (!spend(c.stocks, cost)) return this.h.say('Not enough stock', false);
-    const res = installPart(b, newPart(id, 1));
+    // Fabricated tyres come as a full set; a door goes on the side that was picked.
+    const at = this.sel && (this.sel.slot === 'doorL' || this.sel.slot === 'doorR') ? this.sel.slot : undefined;
+    const res = installPart(b, newPart(id, 1), at);
     if (!res.ok) {
       this.h.say(res.reason ?? 'It does not fit', false);
       return;
@@ -364,12 +465,23 @@ export class GarageView {
   private topUpOil(i: number) {
     const c = this.c;
     const b = this.h.build(i);
-    const r = pourOil(b.comp.oil, c.items.oil);
+    const r = pourOil(b.comp.oil, c.items.oil, statsOf(b).sumpL);
     if (r.used <= 0) return;
     b.comp.oil = r.oil;
     c.items.oil = Math.max(0, c.items.oil - r.used);
     this.h.refresh();
     this.h.say(`Oil topped up to ${Math.round(r.oil * 100)}%.`, true);
+  }
+
+  private topUpWater(i: number) {
+    const c = this.c;
+    const b = this.h.build(i);
+    const r = pourWater(b.comp.coolant ?? 1, c.items.water, statsOf(b).coolantL);
+    if (r.used <= 0) return;
+    b.comp.coolant = r.coolant;
+    c.items.water = Math.max(0, c.items.water - r.used);
+    this.h.refresh();
+    this.h.say(`The cooling system is topped up to ${Math.round(r.coolant * 100)}% (${r.used.toFixed(1)} L).`, true);
   }
 
   private targetOf(i: number, panels: PanelId[]): PanelId | 'all' {

@@ -294,6 +294,15 @@ canvas.minimap {
 .bar.oil.crit .fill {
   background: var(--red);
 }
+.bar.water .fill {
+  background: #5aa8e8;
+}
+.bar.water.low .fill {
+  background: var(--amber);
+}
+.bar.water.crit .fill {
+  background: var(--red);
+}
 .speed {
   font-family: var(--mono);
   font-size: 1.9em;
@@ -1302,6 +1311,21 @@ button:disabled {
   grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   margin-top: 5px;
+}
+.slotgroup {
+  margin-top: 6px;
+}
+.slotgroup > small.gh {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.68em;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #6a5a45;
+  border-bottom: 1px dotted rgba(38, 28, 16, 0.3);
+}
+.slotgrid.tyres {
+  grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
 }
 .slotbtn {
   display: flex !important;

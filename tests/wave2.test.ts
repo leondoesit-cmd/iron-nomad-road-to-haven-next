@@ -253,6 +253,15 @@ describe('doors and bonnet come off', () => {
     expect(statsOf(b).armor).toBeGreaterThan(statsOf(newBuild('sedan')).armor);
   });
 
+  it('a door that is not there stops nothing on that side', () => {
+    const b = newBuild('sedan');
+    const armS = statsOf(b).armorS;
+    removePart(b, 'doorL');
+    expect(statsOf(b).armorS).toBeLessThan(armS);
+    removePart(b, 'doorR');
+    expect(statsOf(b).armorS).toBeLessThan(armS - 0.1);
+  });
+
   it('a door fits either side', () => {
     const b = newBuild('sedan');
     removePart(b, 'doorR');
