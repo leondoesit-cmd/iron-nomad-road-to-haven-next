@@ -340,7 +340,7 @@ export class WorkFx {
     obj.add(this.model(modelKey(part)));
     const glow = new THREE.Sprite(glowMat(mkOf(part)));
     glow.position.y = 0.2;
-    glow.scale.setScalar(0.9);
+    glow.scale.setScalar(0.5);
     obj.add(glow);
     obj.position.copy(from);
     this.root.add(obj);
@@ -384,7 +384,7 @@ export class WorkFx {
       f.ok = target.ok;
       f.ring.material = ringMat(target.ok);
     }
-    f.label.position.set(target.pos.x, target.pos.y + 0.35, target.pos.z);
+    f.label.position.set(target.pos.x, target.pos.y + 0.22, target.pos.z);
     const text = `${target.css}|${target.text}`;
     if (text !== f.text && typeof document !== 'undefined') {
       f.text = text;
@@ -400,7 +400,7 @@ export class WorkFx {
       paintLabel(f.canvas, target.text, target.css);
       const m = (f.label.material as THREE.SpriteMaterial).map;
       if (m) m.needsUpdate = true;
-      f.label.scale.set(1.5, 0.28, 1);
+      f.label.scale.set(1.0, 0.19, 1);
     }
   }
 
@@ -427,7 +427,7 @@ export class WorkFx {
     tex.colorSpace = THREE.SRGBColorSpace;
     const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false });
     const sprite = new THREE.Sprite(mat);
-    sprite.scale.set(1.5, 0.28, 1);
+    sprite.scale.set(1.0, 0.19, 1);
     sprite.position.copy(at);
     sprite.renderOrder = 50;
     this.root.add(sprite);
@@ -478,7 +478,7 @@ export class WorkFx {
       tex.colorSpace = THREE.SRGBColorSpace;
       const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false, opacity: 0 });
       const sprite = new THREE.Sprite(mat);
-      sprite.scale.set(2.0, (2.0 * c.height) / c.width, 1);
+      sprite.scale.set(1.3, (1.3 * c.height) / c.width, 1);
       sprite.renderOrder = 60;
       this.root.add(sprite);
       t = { sprite, text, seen: 0, a: 0 };
@@ -589,7 +589,7 @@ export class WorkFx {
         h.obj.rotation.y += dt * (1.5 + h.p * 7);
         h.obj.scale.setScalar(1 + h.p * 0.12);
         const m = h.glow.material as THREE.SpriteMaterial;
-        h.glow.scale.setScalar(0.7 + h.p * 0.6);
+        h.glow.scale.setScalar(0.4 + h.p * 0.3);
         void m;
       }
       const shake = h.back ? 0 : Math.max(0, h.p - 0.75) * 0.05;
@@ -623,8 +623,8 @@ export class WorkFx {
       }
       f.on = Math.min(1, f.on + dt * 8);
       const pulse = 0.85 + Math.sin(this.clock * 6) * 0.1;
-      f.ring.scale.setScalar(0.3 * pulse * f.on);
-      for (const d of f.dots) d.scale.setScalar(0.12 * f.on);
+      f.ring.scale.setScalar(0.15 * pulse * f.on);
+      for (const d of f.dots) d.scale.setScalar(0.06 * f.on);
     }
     for (let i = this.labels.length - 1; i >= 0; i--) {
       const l = this.labels[i];

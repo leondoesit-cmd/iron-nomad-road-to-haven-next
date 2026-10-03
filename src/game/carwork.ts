@@ -17,8 +17,8 @@ import type { Vehicle } from './vehicle';
  * stowed on the car sit on its deck where you can see them, and you lift them off by hand.
  */
 
-/** Vehicles that count as "our ride": the convoy's own cars with a build. */
-export const isOwnRide = (v: Vehicle) => v.faction === 'convoy' && !!v.build && !v.wreck && v.kind !== 'crew';
+/** Vehicles you can work on from the ground: the convoy's own cars, and abandoned ones (which join the convoy at the first job). */
+export const isOwnRide = (v: Vehicle) => (v.faction === 'convoy' || v.faction === 'neutral') && !!v.build && !v.wreck && v.kind !== 'crew';
 
 export interface Mount {
   slot: PartSlot;

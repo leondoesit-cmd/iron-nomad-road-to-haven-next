@@ -34,6 +34,9 @@ import { COOLANT_LOW, WATER_CAN, WATER_RESERVE_MAX, pourWater } from '../sim/flu
 import { TANK_DREGS, addReserve, planDrain, reserveOf, takeReserve } from '../sim/fuel';
 import { dropCarry, guide, sitePos, haulCandidate, haulKey, haulPrompt, pryCandidate, returnCarry, stashBeforeEntering } from './hauling';
 
+/** Jobs done by hand on a car's own parts: doing one to an abandoned car makes it the convoy's. */
+const HANDS_ON = new Set(['unbolt', 'fit', 'lift', 'liftdeck', 'oil', 'fuel', 'pry', 'water', 'spray']);
+
 export interface Cand {
   kind: string;
   prompt: string;
@@ -1640,8 +1643,11 @@ export class Player implements Pilot {
     else if (!cand && !this.carry && this.equip === 'jerrycan') cand = this.fuelCandidate();
     // X with the wrench: open the field workbench for a convoy vehicle.
     if (this.equip === 'wrench' && !this.carry && wasPressed(it, Btn.X) && !this.action) {
-      const bv = this.nearestVehicle(3.8, (q) => q.faction === 'convoy' && !!q.build && !q.wreck);
-      if (bv) ctx.openWorkbench?.(this, bv);
+      const bv = this.nearestVehicle(3.8, (q) => (q.faction === 'convoy' || q.faction === 'neutral') && !!q.build && !q.wreck && q.kind !== 'crew');
+      if (bv) {
+        ctx.cars.claim(bv, this);
+        ctx.openWorkbench?.(this, bv);
+      }
       else this.note('Stand next to one of your vehicles to use the workbench', 'info');
     }
     // 4. Registry items (loot containers, camp posts).
@@ -1681,6 +1687,11 @@ export class Player implements Pilot {
           else if (this.action.t >= this.action.dur) {
             const run = cand.run;
             this.action = null;
+            // Working on an abandoned car from the ground claims it, as sitting in it would.
+            if (HANDS_ON.has(cand.kind)) {
+              const ab = this.nearestVehicle(5, (q) => q.faction === 'neutral' && !!q.build && !q.wreck && q.kind !== 'crew');
+              if (ab) ctx.cars.claim(ab, this);
+            }
             run();
             ctx.sig.emit(this.pos.x, this.pos.z, cand.noise ?? (cand.kind === 'repair' ? 22 : 12), 'noise');
           }

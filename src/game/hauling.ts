@@ -21,8 +21,8 @@ import type { Vehicle } from './vehicle';
  * X anywhere else sets it down.
  */
 
-/** Vehicles that count as "our ride": the convoy's own cars with a build, standing still. */
-const isOwnRide = (v: Vehicle) => v.faction === 'convoy' && !!v.build && !v.wreck && v.kind !== 'crew';
+/** Vehicles that count as "our ride": the convoy's own cars with a build, and abandoned ones (claimed at the first job). */
+const isOwnRide = (v: Vehicle) => (v.faction === 'convoy' || v.faction === 'neutral') && !!v.build && !v.wreck && v.kind !== 'crew';
 
 /** Where on a vehicle a job at `site` happens, in the world. */
 export function sitePos(v: Vehicle, site: Site): THREE.Vector3 {
