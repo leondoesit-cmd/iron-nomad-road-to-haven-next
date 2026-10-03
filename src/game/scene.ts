@@ -912,7 +912,7 @@ export abstract class Scene implements Ctx {
       this.players.map((p) => ({
         x: p.vehicle?.position.x ?? p.pos.x,
         z: p.vehicle?.position.z ?? p.pos.z,
-        yaw: p.vehicle ? p.vehicle.yaw : p.yaw,
+        yaw: p.vehicle ? p.vehicle.yaw : p.aimYaw,
       })),
     );
     // Indoor means a player is physically inside a building (or the scene is an interior), never the biome label:
