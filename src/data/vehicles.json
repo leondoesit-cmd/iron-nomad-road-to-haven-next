@@ -37,7 +37,10 @@
       "upgrade": { "parts": 25, "scrap": 40, "tech": 0, "chassis": 0 },
       "offroad": 0.45,
       "weaponMount": "none",
-      "slots": ["engine", "wheels", "armor", "utility", "rear"]
+      "slots": ["engine", "cooling", "wheels", "armor", "utility", "rear"],
+      "stockEngine": "eng_50cc",
+      "stockRadiator": "rad_moped",
+      "bay": 1
     },
     {
       "tier": 2,
@@ -75,7 +78,10 @@
       "upgrade": { "parts": 60, "scrap": 80, "tech": 10, "chassis": 1 },
       "offroad": 0.45,
       "weaponMount": "front",
-      "slots": ["engine", "wheels", "armor", "weapon", "utility", "front", "rear"]
+      "slots": ["engine", "cooling", "wheels", "armor", "weapon", "utility", "front", "rear"],
+      "stockEngine": "eng_250",
+      "stockRadiator": "rad_quad",
+      "bay": 2
     },
     {
       "tier": 3,
@@ -113,7 +119,10 @@
       "upgrade": { "parts": 140, "scrap": 200, "tech": 40, "chassis": 0, "needsGarage": true },
       "offroad": 0.45,
       "weaponMount": "bed",
-      "slots": ["engine", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"]
+      "slots": ["engine", "cooling", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"],
+      "stockEngine": "eng_buggy",
+      "stockRadiator": "rad_buggy",
+      "bay": 3
     },
     {
       "tier": 4,
@@ -152,7 +161,10 @@
       "upgrade": { "parts": 300, "scrap": 400, "tech": 100, "chassis": 0, "needsGarage": true },
       "offroad": 0.5,
       "weaponMount": "front",
-      "slots": ["engine", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"]
+      "slots": ["engine", "cooling", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"],
+      "stockEngine": "eng_d66",
+      "stockRadiator": "rad_truck",
+      "bay": 5
     },
     {
       "tier": 5,
@@ -191,7 +203,10 @@
       "upgrade": { "parts": 0, "scrap": 0, "tech": 0, "chassis": 0 },
       "offroad": 0.5,
       "weaponMount": "front",
-      "slots": ["engine", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"]
+      "slots": ["engine", "cooling", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"],
+      "stockEngine": "eng_d145",
+      "stockRadiator": "rad_rig",
+      "bay": 5
     }
   ],
   "surfaces": {
@@ -239,7 +254,10 @@
       "lootWeight": 4,
       "offroad": 0.2,
       "weaponMount": "front",
-      "slots": ["engine", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"],
+      "slots": ["engine", "cooling", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"],
+      "stockEngine": "eng_i3",
+      "stockRadiator": "rad_hatch",
+      "bay": 2,
       "seat": { "driver": [0.36, 0.02, -0.05], "passenger": [-0.36, 0.02, -0.05] }
     },
     {
@@ -280,7 +298,10 @@
       "lootWeight": 4,
       "offroad": 0.15,
       "weaponMount": "front",
-      "slots": ["engine", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"],
+      "slots": ["engine", "cooling", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"],
+      "stockEngine": "eng_i4_18",
+      "stockRadiator": "rad_sedan",
+      "bay": 3,
       "seat": { "driver": [0.38, 0.02, 0.0], "passenger": [-0.38, 0.02, 0.0] }
     },
     {
@@ -321,7 +342,10 @@
       "lootWeight": 3,
       "offroad": 0.4,
       "weaponMount": "bed",
-      "slots": ["engine", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"],
+      "slots": ["engine", "cooling", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"],
+      "stockEngine": "eng_d25",
+      "stockRadiator": "rad_pickup",
+      "bay": 4,
       "seat": { "driver": [0.4, 0.04, 0.25], "passenger": [-0.4, 0.04, 0.25] },
       "gunner": [0, 0.35, -1.55]
     },
@@ -363,7 +387,10 @@
       "lootWeight": 2,
       "offroad": 0.2,
       "weaponMount": "front",
-      "slots": ["engine", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"],
+      "slots": ["engine", "cooling", "wheels", "armor", "weapon", "utility", "front", "roof", "rear", "side"],
+      "stockEngine": "eng_d30",
+      "stockRadiator": "rad_van",
+      "bay": 4,
       "seat": { "driver": [0.42, 0.05, 0.9], "passenger": [-0.42, 0.05, 0.9] }
     }
   ]

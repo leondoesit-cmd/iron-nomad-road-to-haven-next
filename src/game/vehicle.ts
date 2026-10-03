@@ -7,12 +7,14 @@ import { applyHit, collisionDamage, facingOf, newHealth, performance, repairStep
 import { effectiveStats, terrainDrag, terrainGrip, type Stats } from '../sim/parts';
 import { fromHealth, toHealth, type VehicleBuild } from '../sim/garage';
 import { oilBurn, oilState, oilWear, type OilState } from '../sim/oil';
+import { fuelMismatch } from '../sim/fuel';
+import { T_CRITICAL, T_HOT, T_OVERHEAT, overheatPower, overheatWear, steamLevel, thermalStep } from '../sim/thermal';
 import { buildRaiderBuggy, buildVehicleVisual, buildWagon, defaultLook, lookOf, mountsOfChassis, type VehicleVisual } from '../render/vehicleModels';
 import { buildLoad, deckOf, deckRoom, loadCount, loadKey, noLoad, type Load } from '../render/cargoLoad';
 import { PLAYER_COLORS } from '../render/palette';
 import { shared, disposeTree } from '../render/dispose';
 import { clamp, damp, lerp } from '../core/math';
-import { chassisDef, type VehicleDef } from '../data';
+import { chassisDef, type FuelType, type VehicleDef } from '../data';
 import type { Ctx } from './ctx';
 
 /** Neutral vehicles are abandoned cars nobody has claimed: raiders ignore them, and driving one makes it the convoy's. */
@@ -69,6 +71,14 @@ export class Vehicle {
   passenger: { index: number } | null = null;
   fuel: number;
   tankMax: number;
+  /** What the tank holds. The engine runs on `stats.fuel`; if they differ it will not start. */
+  fuelType: FuelType = 'petrol';
+  /** Engine temperature, normalised (see sim/thermal). 1 is the redline. */
+  temp = 0.2;
+  /** Seconds spent past the point where an engine blows. */
+  private blownT = 0;
+  private tempSeen = 0;
+  private steamT = 0;
   engineOn = false;
   lights = false;
   hornT = 0;
@@ -147,6 +157,7 @@ export class Vehicle {
     }
     this.tankMax = isRaider ? 999 : this.stats.tank;
     this.fuel = o.fuel ?? (o.build ? this.tankMax * o.build.fuel : this.tankMax);
+    this.fuelType = o.build?.tank ?? this.stats.fuel;
     this.spin = this.body.wheelLocal.map(() => 0);
     ctx.vehicleByCollider.set(this.body.collider.handle, this);
     this.hideSeats();
@@ -200,6 +211,7 @@ export class Vehicle {
     this.health = fresh;
     this.tankMax = this.stats.tank;
     this.fuel = fuelFrac * this.tankMax;
+    if (fromBuild) this.fuelType = b.tank;
     const old = this.visual;
     const wasSeated = { d: old.driver?.root.visible, p: old.passenger?.root.visible };
     this.group.remove(old.root);
@@ -227,6 +239,7 @@ export class Vehicle {
     const b = this.build;
     if (!b) return;
     fromHealth(b, this.health, this.fuel / Math.max(0.001, this.tankMax));
+    b.tank = this.fuelType;
     if (this.wreck) b.hp = 0.02;
   }
 
@@ -276,7 +289,18 @@ export class Vehicle {
     if (this.flooded) return 'Engine flooded: get it out of the water';
     // Raiders limp on whatever state their engine is in; a convoy engine that is gone has to be rebuilt.
     if (this.faction !== 'raider' && this.health.comp.engine < SEIZED) return 'Engine seized: needs a rebuild';
+    if (this.convoyEngine) {
+      if (this.stats.noEngine) return 'No engine in the bay';
+      const wrong = fuelMismatch(this.stats.fuel, this.fuelType, this.fuel);
+      if (wrong) return `${wrong}: drain it with the jerrycan`;
+      if (this.temp > T_HOT) return 'Engine too hot: let it cool down';
+    }
     return '';
+  }
+
+  /** True for a vehicle whose engine is simulated in full: heat, fuel type and a bay that can be empty. */
+  get convoyEngine(): boolean {
+    return !!this.build && this.faction !== 'raider' && this.def.physics.kind !== 'boat';
   }
 
   setEngine(on: boolean) {
@@ -303,6 +327,7 @@ export class Vehicle {
     };
     add('crates', Math.min(2, Math.ceil(camp.inventory.length / 6)));
     add('fuel', Math.min(3, Math.floor(camp.stocks.fuel / 5)));
+    add('diesel', Math.min(2, Math.floor(camp.items.diesel / 5)));
     add('oil', camp.items.oil > 0.05 ? Math.min(3, Math.ceil(camp.items.oil / 0.5 - 0.05)) : 0);
     const anchor = mountsOfChassis(this.def)!;
     const room = deckRoom(deckOf(anchor.m, anchor.g0));
@@ -328,6 +353,57 @@ export class Vehicle {
       this.visual.inner.add(mesh);
       this.loadMesh = mesh;
     }
+  }
+
+  /**
+   * Heat: the engine makes it, the radiator sheds it. Past the redline power drops and the engine wears, steam rolls out
+   * from under the bonnet, and left to cook it blows. A swap that leaves the wrong fuel in the tank stops the engine.
+   */
+  private engineHeat(dt: number) {
+    const st = this.stats;
+    const mismatch = this.engineOn && fuelMismatch(st.fuel, this.fuelType, this.fuel);
+    if (this.engineOn && (st.noEngine || mismatch)) {
+      this.engineOn = false;
+      if (this.driver?.isPlayer) this.ctx.notify(this.driver.index, st.noEngine ? 'No engine in the bay' : `${mismatch}: it will not run`, 'bad');
+    }
+    const speed = Math.abs(this.speed);
+    const top = Math.max(8, this.topSpeed);
+    const thr = Math.max(0, this.lastIntent.throttle);
+    const load = this.engineOn ? clamp(0.12 + 0.62 * thr + 0.26 * clamp(speed / top, 0, 1) * (thr > 0.1 ? 1 : 0.4), 0, 1) : 0;
+    this.temp = thermalStep(this.temp, { heat: st.heat, cooling: st.coolKw, radiator: this.health.comp.radiator ?? 1, airflow: st.airflow, load, speed, running: this.engineOn }, dt);
+    const T = this.temp;
+    if (this.engineOn) {
+      const wear = overheatWear(T, dt);
+      if (wear > 0) this.health.comp.engine = Math.max(0, this.health.comp.engine - wear);
+    }
+    // Warnings: once going up through each line, again after it has cooled and climbed back.
+    const level = T >= T_OVERHEAT ? 2 : T >= T_HOT ? 1 : 0;
+    if (level > this.tempSeen && this.driver?.isPlayer && this.faction === 'convoy') {
+      this.ctx.notify(this.driver.index, level === 2 ? 'ENGINE OVERHEATING: ease off or stop!' : 'Engine running hot', level === 2 ? 'bad' : 'warn');
+    }
+    if (level < this.tempSeen && T < T_HOT - 0.12) this.tempSeen = 0;
+    else this.tempSeen = Math.max(this.tempSeen, level);
+    // Steam from under the bonnet.
+    const steam = steamLevel(T);
+    if (steam > 0 && !this.wreck && (this.steamT -= dt) <= 0) {
+      this.steamT = 0.14 - 0.1 * steam;
+      const [x, y, z] = this.body.toWorld((Math.random() - 0.5) * 0.4, 0.95, this.def.length * 0.36);
+      this.ctx.fx.puff(x, y, z, 0.9, 0.92, 0.95, 0.5 + steam * 0.9, 0.9);
+    }
+    // Left to cook, the engine blows: a hole in the block, power gone until it has cooled.
+    if (T >= T_CRITICAL && this.engineOn) {
+      this.blownT += dt;
+      if (this.blownT > 5) {
+        this.blownT = 0;
+        this.engineOn = false;
+        this.health.comp.engine = Math.max(0, this.health.comp.engine - 0.3);
+        this.health.comp.oil = Math.max(0, this.health.comp.oil - 0.3);
+        this.temp = T_OVERHEAT + 0.1;
+        if (this.driver?.isPlayer) this.ctx.notify(this.driver.index, 'The engine blew its gasket: let it cool, then rebuild it', 'bad');
+        this.ctx.audio.play('crash', this.position.x, this.position.z, 0.5);
+        this.ctx.fx.explosion(this.position.x, this.position.y + 0.9, this.position.z, 0.35);
+      }
+    } else this.blownT = Math.max(0, this.blownT - dt * 2);
   }
 
   /** Tell the driver as the sump runs down, once per threshold, and again if it is topped up and falls back. */
@@ -391,7 +467,7 @@ export class Vehicle {
       const e = this.env;
       e.engineOn = this.engineOn && this.fuel > 0.001;
       if (!e.engineOn && this.engineOn) this.engineOn = false;
-      e.power = perf.power * this.tetherPower * (this.sinceHit < 0 ? 1 : 1);
+      e.power = perf.power * this.tetherPower * (this.convoyEngine ? overheatPower(this.temp) : 1);
       e.grip = perf.grip * this.stats.gripMult;
       e.forceMult = this.stats.forceMult;
       e.topSpeedMult = this.stats.topSpeedMult * this.tetherTop;
@@ -414,6 +490,7 @@ export class Vehicle {
       this.seizedWarned = true;
     }
     if (this.health.comp.engine >= SEIZED) this.seizedWarned = false;
+    if (this.convoyEngine && !this.wreck) this.engineHeat(dt);
 
     // Fuel burn per km driven, scaled by the Drain slider. Raiders never run dry.
     if (this.faction === 'convoy' && this.engineOn && !this.wreck) {

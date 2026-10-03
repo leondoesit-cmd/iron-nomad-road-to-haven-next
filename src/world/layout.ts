@@ -105,6 +105,8 @@ export interface PickupSpawn {
   amount: number;
   /** For kind 'part': which part, and how worn. `amount` holds its quality. */
   part?: { id: string; cond: number };
+  /** For kind 'fuel': set when a can is put down; world cans get theirs from their id (see sim/fuel `pickupFuel`). */
+  fuel?: 'petrol' | 'diesel';
   x: number;
   y: number;
   z: number;

@@ -1,4 +1,4 @@
-import { LEGS, MERCS, PARTS, VEHICLES, hasChassis, hasPart, partDef, type MercRole, type PartSlot, type Stocks } from '../data';
+import { FUEL_TYPES, LEGS, MERCS, PARTS, VEHICLES, hasChassis, hasPart, partDef, type FuelType, type MercRole, type PartSlot, type Stocks } from '../data';
 import { newAxes, type Axes } from '../sim/endings';
 import { newStocks } from '../sim/resources';
 import { newMerc, type Merc } from '../sim/loyalty';
@@ -6,6 +6,8 @@ import { GARAGE_MAX, PLAYER_PAINT, buildName, buildValue, dismantleYield, freshC
 import { newPart, scrapValue, seedUids, type PartItem } from '../sim/parts';
 import { addToBag, allItems, sanitizeLoadout, scrapOf, starterLoadout, type GearItem, type Loadout } from '../sim/gear';
 import { DrugState, type DrugId, type DrugSave } from '../sim/drugs';
+import { fuelOf } from '../sim/engines';
+import { addReserve } from '../sim/fuel';
 
 export interface PlayerSave {
   name: string;
@@ -26,6 +28,8 @@ export interface Items extends Record<DrugId, number> {
   charge: number;
   /** Engine oil in the trucks, in sumps: one can is half a sump. */
   oil: number;
+  /** Diesel in the reserve cans, in FU. Petrol is `stocks.fuel`. */
+  diesel: number;
 }
 
 /** The most spare oil the convoy can stow. */
@@ -51,7 +55,7 @@ export class Campaign {
   hub: string | null = null;
   stocks: Stocks = newStocks(LEGS.start.stocks);
   ammo = LEGS.start.ammo;
-  items: Items = { medkit: 1, molotov: 1, flare: 2, charge: 0, painkiller: 1, stim: 1, adrenaline: 0, alcohol: 1, weed: 0, haze: 0, mushrooms: 0, lsd: 0, ayahuasca: 0, oil: 1 };
+  items: Items = { medkit: 1, molotov: 1, flare: 2, charge: 0, painkiller: 1, stim: 1, adrenaline: 0, alcohol: 1, weed: 0, haze: 0, mushrooms: 0, lsd: 0, ayahuasca: 0, oil: 1, diesel: 0 };
   /** What each player has in their blood. Saved, so a trip survives a camp and a reload. */
   drugs: [DrugState, DrugState] = [new DrugState(), new DrugState()];
   chassis = 0;
@@ -213,9 +217,9 @@ export class Campaign {
     return true;
   }
 
-  /** Pour spare fuel into the convoy's reserve cans. */
-  stowFuel(amount: number) {
-    this.stocks.fuel += amount;
+  /** Pour spare fuel into the convoy's reserve cans. Petrol and diesel are kept apart. */
+  stowFuel(amount: number, type: FuelType = 'petrol') {
+    addReserve(this, type, amount);
   }
 
   /** Stow loose oil cans. Returns how much fitted; the rest has nowhere to go. */
@@ -354,7 +358,7 @@ function migrateV1(c: Campaign, d: LegacySave) {
     for (const slot of ['engine', 'armor', 'wheels', 'weapon', 'utility'] as const) {
       const mk = p.mods?.[slot] ?? 0;
       if (mk <= 0) continue;
-      const def = PARTS.parts.find((x) => x.slot === slot && x.mk === Math.min(3, mk));
+      const def = PARTS.parts.find((x) => !x.stock && x.slot === slot && x.mk === Math.min(3, mk));
       if (def) installPart(b, newPart(def.id, 1));
     }
     c.garage.push(b);
@@ -373,6 +377,9 @@ function sanitizeBuild(b: VehicleBuild): VehicleBuild {
   const fresh = freshComp(def);
   const comp = { ...fresh, ...(b.comp ?? {}) };
   comp.oil = Number.isFinite(comp.oil) ? Math.min(1, Math.max(0, comp.oil)) : 1;
+  comp.radiator = Number.isFinite(comp.radiator) ? Math.min(1, Math.max(0, comp.radiator)) : 1;
   if (!Array.isArray(comp.tires) || comp.tires.length !== def.physics.wheelCount) comp.tires = fresh.tires;
-  return { ...b, fit, comp, stripe: b.stripe ?? 0, stripeColor: b.stripeColor ?? 0xe9dfc7, fuel: b.fuel ?? 1, hp: Math.max(0.01, b.hp ?? 1) };
+  // Saves from before engines had a fuel: the tank holds whatever the engine in the bay burns.
+  const tank: FuelType = FUEL_TYPES.includes(b.tank) ? b.tank : fuelOf(def, fit);
+  return { ...b, fit, comp, tank, stripe: b.stripe ?? 0, stripeColor: b.stripeColor ?? 0xe9dfc7, fuel: b.fuel ?? 1, hp: Math.max(0.01, b.hp ?? 1) };
 }

@@ -139,7 +139,9 @@ describe('carrying parts, fuel and oil by hand', () => {
     hold(h, sc, 0, Btn.A, 5);
     expect(p.carry).toBeNull();
     expect(v.build!.fit.engine?.id).toBe('eng_v6');
-    expect(v.stats.forceMult).toBeCloseTo(1 + partDef('eng_v6').stats.force!, 5);
+    // 150 kW against the hatchback's 50: the live vehicle drives with the swapped-in engine's numbers.
+    expect(v.stats.power).toBe(150);
+    expect(v.stats.forceMult).toBeGreaterThan(2);
     expect(c.inventory.map((it) => it.id)).toEqual(['eng_i4']);
     // The old engine kept the wear it had on the car.
     expect(c.inventory[0].cond).toBeCloseTo(0.6, 1);

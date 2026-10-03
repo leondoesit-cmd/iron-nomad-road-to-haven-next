@@ -788,6 +788,9 @@ function pickupGeometry(kind: string): THREE.BufferGeometry {
     case 'fuel':
       jerryCan(b, 0, 0, 0, C.fuel, 0.3);
       break;
+    case 'diesel':
+      jerryCan(b, 0, 0, 0, C.diesel, 0.3);
+      break;
     case 'oil':
       oilCan(b, 0, 0, 0);
       break;
@@ -879,6 +882,7 @@ export function makeCarryModel(kind: string): THREE.Group {
 
 const GLOW: Record<string, number> = {
   fuel: 0xff5a3a,
+  diesel: 0xe8c020,
   oil: 0xe0b030,
   scrap: 0xcfd6dc,
   parts: 0xffa030,

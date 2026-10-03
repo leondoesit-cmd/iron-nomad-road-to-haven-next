@@ -1,4 +1,4 @@
-import type { PartSlot, Stocks } from '../data';
+import { chassisDef, hasChassis, type PartSlot, type Stocks } from '../data';
 import { Rng } from '../core/rng';
 import type { BuildComp } from './garage';
 import { newPart, rollPart, type Fit, type PartItem } from './parts';
@@ -77,6 +77,17 @@ export function salvageLoot(stage: number, c: SalvageCtx): SalvageLoot {
     out.items.push({ ...it, cond: Math.min(it.cond, 0.45) });
     return true;
   };
+  /** The engine or radiator the car left the factory with, if the roll lets you have it. */
+  const factory = (slot: 'engine' | 'cooling', chance: number): boolean => {
+    if (!hasChassis(c.chassis) || !rng.chance(chance)) return false;
+    const def = chassisDef(c.chassis);
+    const id = slot === 'engine' ? def.stockEngine : def.stockRadiator;
+    if (!id) return false;
+    // A convoy vehicle gives back what it really had; a stranger's car is whatever the road did to it.
+    const live = c.comp ? (slot === 'engine' ? c.comp.engine : c.comp.radiator ?? 1) : undefined;
+    out.items.push(newPart(id, live !== undefined ? Math.min(live, 0.45) : rng.range(condLo, condHi)));
+    return true;
+  };
   const rollOne = (slots: PartSlot[]) => {
     const mk = rollMk(rng, mkProbs);
     out.items.push(rollPart(rng, { slots, minMk: mk, maxMk: mk, condLo, condHi }));
@@ -87,7 +98,8 @@ export function salvageLoot(stage: number, c: SalvageCtx): SalvageLoot {
       if (!c.burnt) out.stocks.scrap = rng.int(2, 4);
       break;
     case 1:
-      if (!own('engine')) rollOne(['engine']);
+      // Most cars give up their own engine, which is how a diesel van's motor ends up in a hatchback.
+      if (!own('engine') && !factory('engine', raid ? 0.2 : 0.7)) rollOne(['engine']);
       // Pulling an engine drains the sump: a burnt-out one has nothing left in it.
       if (!c.burnt) out.oil = Math.round(new Rng((Math.imul(c.seed | 0, 40503) + 7) >>> 0).range(0.2, 0.5) * 100) / 100;
       out.stocks.parts = Math.max(1, Math.round(rng.int(3, 6) * burn));
@@ -99,6 +111,10 @@ export function salvageLoot(stage: number, c: SalvageCtx): SalvageLoot {
       if (!hadArmor && rng.chance(0.5 * burn + (raid ? 0.3 : 0))) rollOne(['armor']);
       if (rng.chance(0.22 * burn + (raid ? 0.2 : 0))) rollOne(['front', 'roof', 'rear', 'side']);
       if (raid && rng.chance(0.4)) rollOne(['weapon']);
+      // Drawn last, so the finds above are what they always were. The radiator is behind the grille.
+      if (!own('cooling')) {
+        if (!factory('cooling', burn * 0.6) && !c.burnt && rng.chance(0.12)) rollOne(['cooling']);
+      }
       break;
     }
     default: {

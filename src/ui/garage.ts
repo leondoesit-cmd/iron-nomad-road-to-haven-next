@@ -1,10 +1,14 @@
 import { PARTS, PART_SLOTS, partDef, type Cost, type PartSlot } from '../data';
+import { BAY_TEXT, engineLine, engineSpec } from '../sim/engines';
+import { TANK_DREGS, addReserve, planDrain, reserveOf } from '../sim/fuel';
+import { forecastSwap, forecastWorthy, currentFigures, type Forecast } from '../sim/forecast';
+import { VERDICT_TEXT } from '../sim/thermal';
 import type { Campaign } from '../game/campaign';
 import { PLAYER_CSS } from '../render/palette';
 import { canAfford, costText, spend } from '../sim/resources';
 import { OIL_CAN, OIL_LOW, pourOil } from '../sim/oil';
-import { type VehicleBuild, buildName, currentCond, defOf, installPart, maxHpOf, needsService, removePart, serviceBuild, serviceCost, statsOf, conditionSummary, dismantleYield, GARAGE_MAX } from '../sim/garage';
-import { RARITY_CSS, RARITY_NAMES, conditionLabel, describeStats, newPart, partName, scrapValue, slotsOf, type PartItem } from '../sim/parts';
+import { type VehicleBuild, buildName, currentCond, defOf, idInSlot, installPart, maxHpOf, needsService, partInSlot, removePart, serviceBuild, serviceCost, statsOf, conditionSummary, dismantleYield, GARAGE_MAX } from '../sim/garage';
+import { RARITY_CSS, RARITY_NAMES, conditionLabel, describePart, isWorn, newPart, partName, scrapValue, slotsOf, type PartItem } from '../sim/parts';
 import { escapeHtml } from './hud';
 import type { FocusItem } from './focus';
 import type { Game } from '../game/game';
@@ -26,6 +30,8 @@ export interface GarageHost {
   mode: 'ledger' | 'field';
   /** Players whose vehicles are shown. */
   players: number[];
+  /** The live vehicle behind a column, when the garage is open mid-leg: its tank is what gets drained. */
+  vehicle?(i: number): Vehicle | null;
 }
 
 /**
@@ -68,27 +74,29 @@ export class GarageView {
       `<div class="sub2">HP ${Math.round(b.hp * maxHpOf(b))}/${Math.round(maxHpOf(b))} · ARMOUR ${Math.round(st.armor * 100)}% · TANK ${st.tank.toFixed(0)} FU · TOP ${Math.round(def.topSpeedKmh * st.topSpeedMult)} km/h · CARGO ${Math.round(st.cargo)} · <span class="${b.comp.oil < OIL_LOW ? 'bad' : ''}">OIL ${Math.round(b.comp.oil * 100)}%</span></div>`,
       `<div class="sub2">${escapeHtml(conditionSummary(b)).toUpperCase()}${st.weapon ? ' · ARMED' : ''}</div>`,
     );
+    lines.push(...this.powertrainLines(i, b));
     const slotBtns = PART_SLOTS.map((slot) => {
       const ok = allowed.includes(slot);
       const it = b.fit[slot];
       const sel = this.sel?.i === i && this.sel.slot === slot;
-      let main = it ? escapeHtml(partName(it)) : ok ? 'Stock' : '—';
+      // What is actually in the mount: a fitted part, the factory one, or nothing at all.
+      const id = idInSlot(b, slot);
+      const factory = !it && ok && !!id;
+      const empty = ok && !id && (slot === 'engine' || slot === 'cooling');
+      const main = !ok ? '—' : empty ? 'Empty' : id ? escapeHtml(partDef(id).name) : 'Stock';
       let note = '';
-      if (it && (slot === 'engine' || slot === 'wheels' || slot === 'armor')) {
+      if (ok && id && isWorn(slot)) {
         const cond = currentCond(b, slot);
-        note = ` <em class="${cond < 0.35 ? 'bad' : cond < 0.7 ? 'mid' : ''}">${Math.round(cond * 100)}%</em>`;
+        if (it || cond < 0.999) note = ` <em class="${cond < 0.35 ? 'bad' : cond < 0.7 ? 'mid' : ''}">${Math.round(cond * 100)}%</em>`;
       }
-      if (!it && ok && (slot === 'engine' || slot === 'wheels' || slot === 'armor')) {
-        const cond = currentCond(b, slot);
-        if (cond < 0.999) note = ` <em class="${cond < 0.35 ? 'bad' : 'mid'}">${Math.round(cond * 100)}%</em>`;
-      }
+      const mk = it && !partDef(it.id).stock ? partDef(it.id).mk : 0;
       return this.h.btn(
         `slot${i}-${slot}`,
-        `<small>${PARTS.labels[slot]}${it ? this.pips(partDef(it.id).mk) : ''}</small><b>${main}</b>${note}`,
+        `<small>${PARTS.labels[slot]}${mk ? this.pips(mk) : ''}</small><b>${main}</b>${note}`,
         () => this.pick(i, slot),
         ok,
         ok ? '' : `A ${def.name} has no ${PARTS.labels[slot].toLowerCase()} mount`,
-      ).replace('<button', `<button class="slotbtn${sel ? ' sel' : ''}${it ? ' fitted' : ''}"`);
+      ).replace('<button', `<button class="slotbtn${sel ? ' sel' : ''}${it && !factory && !empty ? ' fitted' : ''}${empty ? ' emptymount' : ''}"`);
     });
     lines.push(`<div class="slotgrid">${slotBtns.join('')}</div>`);
     // Paint and stripes.
@@ -121,42 +129,95 @@ export class GarageView {
     return `<div class="card gcard p${i + 1}">${lines.join('')}</div>`;
   }
 
+  // ------------------------------------------------------------------ powertrain
+
+  /** Engine, bay, cooling and tank at a glance, plus the one-tap fix when the tank holds the wrong fuel. */
+  private powertrainLines(i: number, b: VehicleBuild): string[] {
+    const def = defOf(b);
+    const st = statsOf(b);
+    if (!def.stockEngine) return [];
+    const fig = currentFigures(b);
+    const spec = engineSpec(def, b.fit);
+    const tankFU = this.tankFU(i, b);
+    const wrong = !st.noEngine && b.tank !== st.fuel && tankFU >= TANK_DREGS;
+    const hot = fig.heat.verdict === 'overheats' ? 'bad' : fig.heat.verdict === 'hot' ? 'mid' : '';
+    const out: string[] = [
+      `<div class="sub2">ENGINE ${escapeHtml(engineLine(spec).toUpperCase())} · ${st.noEngine ? '<span class="bad">NO ENGINE</span>' : escapeHtml(BAY_TEXT[st.bayLabel].toUpperCase())}</div>`,
+      `<div class="sub2">COOLING ${Math.round(st.coolKw)} kW · <span class="${hot}">${escapeHtml(VERDICT_TEXT[fig.heat.verdict].toUpperCase())}</span> · RANGE ${fig.rangeKm.toFixed(0)} km</div>`,
+      `<div class="sub2">TANK ${tankFU.toFixed(1)}/${st.tank.toFixed(0)} FU ${b.tank.toUpperCase()}${wrong ? ` · <span class="bad">ENGINE BURNS ${st.fuel.toUpperCase()}</span>` : ''}</div>`,
+    ];
+    if (wrong || tankFU >= TANK_DREGS) {
+      const plan = planDrain(b.tank, tankFU, st.fuel);
+      out.push(`<div class="btns">${this.h.btn(`drain${i}`, `Drain tank <span class="cost">${tankFU.toFixed(1)} FU → ${b.tank} reserve</span>`, () => this.drain(i), plan.ok, plan.ok ? 'Empty the tank into the convoy reserve' : plan.label)}</div>`);
+    }
+    return out;
+  }
+
+  /** Fuel in the tank, in FU: live when the vehicle is on the road, otherwise the build's fraction. */
+  private tankFU(i: number, b: VehicleBuild): number {
+    const live = this.h.vehicle?.(i);
+    return live ? live.fuel : b.fuel * statsOf(b).tank;
+  }
+
   // ------------------------------------------------------------------ picker
+
+  /** The forecast under a candidate part: power, speed, range, and everything that will bite. */
+  private forecastHtml(f: Forecast): string {
+    const d = (now: number, was: number, unit: string, digits = 0) => {
+      const delta = now - was;
+      const cls = Math.abs(delta) < 0.5 * Math.pow(10, -digits) ? '' : delta > 0 ? 'good' : 'bad';
+      return `<b class="${cls}">${now.toFixed(digits)}${unit}</b>`;
+    };
+    const bits: string[] = [];
+    if (f.slot === 'engine') {
+      bits.push(`${d(f.powerKw, f.powerBefore, ' kW')}`);
+      bits.push(`top ${d(f.topKmh, f.topBefore, ' km/h')}`);
+      bits.push(`range ${d(f.rangeKm, f.rangeBefore, ' km')}`);
+      if (Math.abs(f.massDelta) > 20) bits.push(`${f.massDelta > 0 ? '+' : ''}${Math.round(f.massDelta)} kg`);
+    } else if (f.slot === 'cooling') {
+      bits.push(`runs ${f.heatBefore.verdict} → <b class="${f.heat.verdict === 'overheats' ? 'bad' : f.heat.verdict === 'cool' ? 'good' : 'mid'}">${f.heat.verdict}</b>`);
+    } else bits.push(`top ${d(f.topKmh, f.topBefore, ' km/h')}`);
+    const notes = f.notes.map((n) => `<span class="${/overheat|wrong|drain|No engine/i.test(n) ? 'bad' : 'mid'}">${escapeHtml(n)}</span>`).join(' · ');
+    return `<div class="fcast">${bits.join(' · ')}${notes ? `<br>${notes}` : ''}</div>`;
+  }
+
+  private partLine(it: PartItem): string {
+    const d = partDef(it.id);
+    return `<b style="color:${RARITY_CSS[d.stock ? 1 : d.mk]}">${escapeHtml(d.name)}</b> <span class="cost">${d.stock ? 'Factory' : `Mk${d.mk}`}${isWorn(d.slot) ? ` · ${Math.round(it.cond * 100)}%` : ''}</span>`;
+  }
 
   private pickerHtml(): string {
     if (!this.sel) {
-      return `<div class="gpanel"><h3>Fit a part</h3><div class="mutedtxt">Choose a slot on a vehicle to fit, replace or fabricate a part. Paint is free.</div></div>`;
+      return `<div class="gpanel"><h3>Fit a part</h3><div class="mutedtxt">Choose a slot on a vehicle to fit, replace or fabricate a part. Any engine goes in any vehicle, petrol or diesel, big or small: the forecast shows what it will cost you. Paint is free.</div></div>`;
     }
     const { i, slot } = this.sel;
     const c = this.c;
     const b = this.h.build(i);
     const def = defOf(b);
-    const cur = b.fit[slot];
+    const cur = partInSlot(b, slot);
     const rows: string[] = [];
     rows.push(`<h3>${escapeHtml(PARTS.labels[slot])} · ${escapeHtml(c.players[i].name)}'s ${escapeHtml(def.name)}</h3>`);
     if (cur) {
       const d = partDef(cur.id);
-      const cond = currentCond(b, slot);
       rows.push(
-        `<div class="partrow now"><b style="color:${RARITY_CSS[d.mk]}">${escapeHtml(d.name)}</b> <span class="cost">${RARITY_NAMES[d.mk]}${slot === 'engine' || slot === 'wheels' || slot === 'armor' ? ` · ${conditionLabel(cond)} ${Math.round(cond * 100)}%` : ''}</span><div class="mutedtxt">${escapeHtml(describeStats(d.stats).join(' · '))}</div>${this.h.btn(`rm${i}`, 'Take it off', () => this.remove(i, slot), true)}</div>`,
+        `<div class="partrow now">${this.partLine(cur)}<div class="mutedtxt">${escapeHtml(describePart(d).join(' · '))}</div>${this.h.btn(`rm${i}`, 'Take it off', () => this.remove(i, slot), true)}</div>`,
       );
-    } else rows.push(`<div class="mutedtxt">Stock fittings.</div>`);
-    const stock = c.inventory.filter((it) => partDef(it.id).slot === slot).sort((a, z) => partDef(z.id).mk - partDef(a.id).mk || z.cond - a.cond);
+    } else rows.push(`<div class="mutedtxt">${slot === 'engine' || slot === 'cooling' ? 'Empty mount.' : 'Stock fittings.'}</div>`);
+    const stock = c.inventory.filter((it) => partDef(it.id).slot === slot).sort((a, z) => Number(!!partDef(a.id).stock) - Number(!!partDef(z.id).stock) || partDef(z.id).mk - partDef(a.id).mk || z.cond - a.cond);
     rows.push(`<div class="mutedtxt gh">In the trucks</div>`);
     if (!stock.length) rows.push(`<div class="mutedtxt">Nothing for this slot.</div>`);
     for (const it of stock) {
       const d = partDef(it.id);
-      const worn = slot === 'engine' || slot === 'wheels' || slot === 'armor';
-      rows.push(
-        `<div class="partrow">${this.h.btn(`fit${i}-${it.uid}`, `<b style="color:${RARITY_CSS[d.mk]}">${escapeHtml(d.name)}</b> <span class="cost">Mk${d.mk}${worn ? ` · ${Math.round(it.cond * 100)}%` : ''}</span><br><small>${escapeHtml(describeStats(d.stats).join(' · '))}</small>`, () => this.fit(i, it), true).replace('<button', '<button class="wide"')}</div>`,
-      );
+      const fc = forecastWorthy(it) ? this.forecastHtml(forecastSwap(b, slot, it)) : `<small>${escapeHtml(describePart(d).join(' · '))}</small>`;
+      rows.push(`<div class="partrow">${this.h.btn(`fit${i}-${it.uid}`, `${this.partLine(it)}<br><small>${escapeHtml(describePart(d).join(' · '))}</small>${forecastWorthy(it) ? fc : ''}`, () => this.fit(i, it), true).replace('<button', '<button class="wide"')}</div>`);
     }
     if (!this.field) {
       rows.push(`<div class="mutedtxt gh">Fabricate (needs the workshop)</div>`);
-      for (const d of PARTS.parts.filter((p) => p.slot === slot).sort((a, z) => a.mk - z.mk)) {
+      for (const d of PARTS.parts.filter((p) => p.slot === slot && !p.stock).sort((a, z) => a.mk - z.mk)) {
         const ok = canAfford(c.stocks, d.cost);
+        const fc = forecastWorthy({ uid: 'f', id: d.id, cond: 1 }) ? this.forecastHtml(forecastSwap(b, slot, { uid: 'f', id: d.id, cond: 1 })) : '';
         rows.push(
-          `<div class="partrow">${this.h.btn(`mk${i}-${d.id}`, `<b style="color:${RARITY_CSS[d.mk]}">${escapeHtml(d.name)}</b> <span class="cost">${costText(d.cost)}</span><br><small>${escapeHtml(describeStats(d.stats).join(' · '))}</small>`, () => this.fabricate(i, d.id, d.cost), ok).replace('<button', '<button class="wide"')}</div>`,
+          `<div class="partrow">${this.h.btn(`mk${i}-${d.id}`, `<b style="color:${RARITY_CSS[d.mk]}">${escapeHtml(d.name)}</b> <span class="cost">${costText(d.cost)}</span><br><small>${escapeHtml(describePart(d).join(' · '))}</small>${fc}`, () => this.fabricate(i, d.id, d.cost), ok).replace('<button', '<button class="wide"')}</div>`,
         );
       }
     }
@@ -174,11 +235,11 @@ export class GarageView {
       .sort((a, z) => partDef(a.id).slot.localeCompare(partDef(z.id).slot) || partDef(z.id).mk - partDef(a.id).mk)
       .map((it) => {
         const d = partDef(it.id);
-        const worn = d.slot === 'engine' || d.slot === 'wheels' || d.slot === 'armor';
         const scrap = scrapValue(it);
-        return `<div class="stockline"><span><b style="color:${RARITY_CSS[d.mk]}">${escapeHtml(d.name)}</b> <small>${PARTS.labels[d.slot]}${worn ? ` · ${Math.round(it.cond * 100)}%` : ''}</small></span>${this.field ? '' : this.h.btn(`brk${it.uid}`, `Scrap <span class="cost">+${scrap}</span>`, () => this.breakDown(it, scrap), true)}</div>`;
+        const spec = d.engine ? ` · ${engineLine(d.engine)}` : d.cooling !== undefined ? ` · ${Math.round(d.cooling)} kW` : '';
+        return `<div class="stockline"><span><b style="color:${RARITY_CSS[d.stock ? 1 : d.mk]}">${escapeHtml(d.name)}</b> <small>${PARTS.labels[d.slot]}${isWorn(d.slot) ? ` · ${Math.round(it.cond * 100)}%` : ''}${escapeHtml(spec)}</small></span>${this.field ? '' : this.h.btn(`brk${it.uid}`, `Scrap <span class="cost">+${scrap}</span>`, () => this.breakDown(it, scrap), true)}</div>`;
       });
-    return `<div class="gpanel"><h3>Spare parts <small>${c.inventory.length}/${cap}</small></h3>${rows.length ? `<div class="stocklist">${rows.join('')}</div>` : '<div class="mutedtxt">No spare parts. Strip wrecks with the crowbar, or pick them up along the road.</div>'}<div class="mutedtxt">Reserve cans: ${c.stocks.fuel.toFixed(1)} FU fuel · ${Math.round(c.items.oil * 100)}% oil (${(c.items.oil / OIL_CAN).toFixed(1)} cans). Cargo space on your vehicles sets how much the convoy can carry.</div></div>`;
+    return `<div class="gpanel"><h3>Spare parts <small>${c.inventory.length}/${cap}</small></h3>${rows.length ? `<div class="stocklist">${rows.join('')}</div>` : '<div class="mutedtxt">No spare parts. Strip wrecks with the crowbar, or pick them up along the road.</div>'}<div class="mutedtxt">Reserve cans: ${reserveOf(c, 'petrol').toFixed(1)} FU petrol · ${reserveOf(c, 'diesel').toFixed(1)} FU diesel · ${Math.round(c.items.oil * 100)}% oil (${(c.items.oil / OIL_CAN).toFixed(1)} cans). Cargo space on your vehicles sets how much the convoy can carry.</div></div>`;
   }
 
   // ------------------------------------------------------------------ yard
@@ -222,7 +283,7 @@ export class GarageView {
     }
     if (res.removed) c.addPart(res.removed);
     this.h.refresh();
-    this.h.say(`${partName(taken)} fitted${res.removed ? `; ${partName(res.removed)} goes back in the trucks` : ''}.`, true);
+    this.h.say(`${partName(taken)} fitted${res.removed ? `; ${partName(res.removed)} goes back in the trucks` : ''}.${res.note ? ' ' + res.note : ''}`, !res.note);
   }
 
   private remove(i: number, slot: PartSlot) {
@@ -245,7 +306,7 @@ export class GarageView {
     }
     if (res.removed) c.addPart(res.removed);
     this.h.refresh();
-    this.h.say(`${partDef(id).name} built and fitted.`, true);
+    this.h.say(`${partDef(id).name} built and fitted.${res.note ? ' ' + res.note : ''}`, !res.note);
   }
 
   private breakDown(it: PartItem, scrap: number) {
@@ -253,6 +314,30 @@ export class GarageView {
     if (!c.takePart(it.uid)) return;
     c.stocks.scrap += scrap;
     this.h.say(`${partName(it)} broken down for ${scrap} Scrap.`, true);
+  }
+
+  /** Empty a tank into the reserve, so the engine can be fed what it actually burns. */
+  private drain(i: number) {
+    const c = this.c;
+    const b = this.h.build(i);
+    const st = statsOf(b);
+    const live = this.h.vehicle?.(i) ?? null;
+    const fu = this.tankFU(i, b);
+    const plan = planDrain(b.tank, fu, st.fuel);
+    if (!plan.ok) return this.h.say(plan.label, false);
+    const type = live ? live.fuelType : b.tank;
+    addReserve(c, type, fu);
+    if (live) {
+      live.fuel = 0;
+      live.fuelType = st.fuel;
+      live.startFail = '';
+      live.commit();
+    } else {
+      b.fuel = 0;
+      b.tank = st.fuel;
+    }
+    this.h.refresh();
+    this.h.say(`${fu.toFixed(1)} FU of ${type} drained into the reserve. The tank will take ${st.fuel} now.`, true);
   }
 
   private topUpOil(i: number) {
@@ -337,6 +422,7 @@ export class Workbench {
         return [self.owner];
       },
       build: () => self.v!.build!,
+      vehicle: () => self.v,
       btn: (id, label, act, enabled = true, title = '') => {
         this.acts.set(id, act);
         return `<button data-fid="${id}" ${enabled ? '' : 'disabled'} title="${escapeHtml(title)}">${label}</button>`;

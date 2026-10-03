@@ -1,6 +1,8 @@
-import { PARTS, partDef, type VehicleDef } from '../data';
-import { slotsOf, type PartItem } from './parts';
+import { PARTS, partDef, type FuelType, type VehicleDef } from '../data';
+import { RARITY_CSS, describePart, isWorn, slotsOf, type PartItem } from './parts';
 import { OIL_CAN, pourOil } from './oil';
+import { engineLine } from './engines';
+import { fuelMismatch, planPour } from './fuel';
 
 /**
  * Things you lift off the ground and carry in your arms: a vehicle part, a can of fuel, a can of oil.
@@ -9,8 +11,8 @@ import { OIL_CAN, pourOil } from './oil';
  */
 export type Carried =
   | { kind: 'part'; item: PartItem }
-  /** Fuel in FU: a full can is 5. */
-  | { kind: 'fuel'; amount: number }
+  /** Fuel in FU: a full can is 5. A can with no type is petrol. */
+  | { kind: 'fuel'; amount: number; fuel?: FuelType }
   /** Oil in sumps: a full can is half of one. */
   | { kind: 'oil'; amount: number };
 
@@ -26,12 +28,51 @@ export interface Loose {
   z: number;
 }
 
+/** Which little model stands for a carried thing, in the arms and in flight. */
+export function carryModelKey(c: Carried): string {
+  if (c.kind === 'part') return `part${partDef(c.item.id).mk}`;
+  if (c.kind === 'fuel') return c.fuel === 'diesel' ? 'diesel' : 'fuel';
+  return c.kind;
+}
+
+export interface InspectLine {
+  text: string;
+  css?: string;
+}
+
+/** The tag over a part you are looking at: name, how worn it is, and the one number that matters. */
+export function partInspect(it: PartItem): InspectLine[] {
+  const d = partDef(it.id);
+  const lines: InspectLine[] = [{ text: d.name, css: RARITY_CSS[d.stock ? 1 : d.mk] }];
+  if (isWorn(d.slot)) {
+    const pct = Math.round(it.cond * 100);
+    lines.push({ text: `${pct} %`, css: pct < 35 ? '#ff8a6a' : pct < 70 ? '#ffcf6a' : '#c8f0b8' });
+  }
+  const info = describePart(d);
+  if (d.engine && !d.empty) lines.push({ text: `${engineLine(d.engine)}` });
+  else if (d.cooling !== undefined && !d.empty) lines.push({ text: `Cooling - ${Math.round(d.cooling)} kW` });
+  else if (info.length) lines.push({ text: info.slice(0, 2).join(' · ') });
+  return lines;
+}
+
+/** The same for anything you can lift. */
+export function inspectLines(c: Carried): InspectLine[] {
+  switch (c.kind) {
+    case 'part':
+      return partInspect(c.item);
+    case 'fuel':
+      return [{ text: `${c.fuel === 'diesel' ? 'Diesel' : 'Petrol'} can`, css: c.fuel === 'diesel' ? '#f0d050' : '#ff9a7a' }, { text: `${c.amount.toFixed(1)} FU` }, { text: c.fuel === 'diesel' ? 'For diesel engines' : 'For petrol engines' }];
+    case 'oil':
+      return [{ text: 'Oil can', css: '#e6dcc0' }, { text: `${Math.round(c.amount * 200)} % full` }];
+  }
+}
+
 export function carriedName(c: Carried): string {
   switch (c.kind) {
     case 'part':
       return partDef(c.item.id).name;
     case 'fuel':
-      return `Fuel can (${c.amount.toFixed(1)} FU)`;
+      return `${c.fuel === 'diesel' ? 'Diesel' : 'Petrol'} can (${c.amount.toFixed(1)} FU)`;
     case 'oil':
       return c.amount >= OIL_CAN - 0.01 ? 'Oil can' : `Oil can (${Math.round(c.amount * 200)}% full)`;
   }
@@ -58,10 +99,13 @@ export function liftSecs(c: Carried): number {
 export interface FitTarget {
   def: VehicleDef;
   /** The part now in the slot, if any (its name, for the prompt). */
-  fitted: (slot: string) => PartItem | undefined;
+  fitted: (slot: string) => { id: string } | undefined;
   fuel: number;
   tankMax: number;
   oil: number;
+  /** What the tank holds, and what the engine in the bay burns. Both default to petrol. */
+  tank?: FuelType;
+  engine?: FuelType;
 }
 
 export interface FitPlan {
@@ -79,13 +123,21 @@ export function planFit(c: Carried, t: FitTarget): FitPlan {
       if (!slotsOf(t.def).includes(d.slot)) return { ok: false, label: `A ${t.def.name} has no ${PARTS.labels[d.slot].toLowerCase()} mount`, secs: 1 };
       const old = t.fitted(d.slot);
       const mk = old ? partDef(old.id).mk : 0;
-      const verb = old ? (d.mk < mk ? 'Swap (downgrade) to' : 'Swap in') : 'Bolt on';
-      return { ok: true, label: `${verb} ${d.name}${old ? ` (replaces ${partDef(old.id).name})` : ''}`, secs: d.slot === 'engine' ? 4 : d.slot === 'wheels' ? 3.4 : 2.4 };
+      const verb = old ? (d.stock || old && partDef(old.id).stock ? 'Swap in' : d.mk < mk ? 'Swap (downgrade) to' : 'Swap in') : 'Bolt on';
+      const spec = d.engine && !d.empty ? `  ·  ${engineLine(d.engine)}` : '';
+      return { ok: true, label: `${verb} ${d.name}${old ? ` (replaces ${partDef(old.id).name})` : ''}${spec}`, secs: d.slot === 'engine' ? 4 : d.slot === 'wheels' ? 3.4 : d.slot === 'cooling' ? 3 : 2.4 };
     }
     case 'fuel': {
-      const space = t.tankMax - t.fuel;
+      const kind = c.fuel ?? 'petrol';
+      const tank = t.tank ?? 'petrol';
+      const plan = planPour(tank, t.fuel, kind);
+      if (!plan.ok) return { ok: false, label: plan.note, secs: 1 };
+      // A dry tank switches to the can's fuel, so the space is the whole tank.
+      const space = t.tankMax - (plan.tank === tank ? t.fuel : 0);
       if (space < 0.3) return { ok: false, label: 'Tank is full', secs: 1 };
-      return { ok: true, label: `Pour into the tank (+${Math.min(space, c.amount).toFixed(1)} FU)`, secs: 3 };
+      const wrong = fuelMismatch(t.engine ?? 'petrol', plan.tank, 1);
+      const warn = wrong ? `  ·  the engine runs ${t.engine ?? 'petrol'}: it will not start` : plan.note ? `  ·  ${plan.note}` : '';
+      return { ok: true, label: `Pour ${kind} into the tank (+${Math.min(space, c.amount).toFixed(1)} FU)${warn}`, secs: 3 };
     }
     case 'oil': {
       if (t.oil > 0.97) return { ok: false, label: 'Oil is already full', secs: 1 };

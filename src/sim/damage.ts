@@ -25,6 +25,8 @@ export interface Components {
   plates: number; // armor plates 0..1 (loses protection as it falls)
   /** Engine oil in the sump, 0..1. */
   oil: number;
+  /** Radiator condition, 0..1: a holed core sheds less heat. */
+  radiator: number;
 }
 
 export interface VehicleHealth {
@@ -44,7 +46,7 @@ export function newHealth(maxHp: number, armor: number, wheels: number): Vehicle
     hp: maxHp,
     maxHp,
     armor,
-    comp: { engine: 1, tires: new Array(wheels).fill(1), tank: 1, mount: 1, plates: 1, oil: 1 },
+    comp: { engine: 1, tires: new Array(wheels).fill(1), tank: 1, mount: 1, plates: 1, oil: 1, radiator: 1 },
     leaking: false,
     burning: false,
     destroyed: false,
@@ -91,8 +93,9 @@ export function applyHit(h: VehicleHealth, raw: number, o: HitOpts): { dealt: nu
       events.push({ kind: 'tire', wheel: o.wheel });
     } else if (r < 0.3) {
       h.comp.engine = Math.max(0, h.comp.engine - 0.35);
-      // A holed block bleeds its oil.
+      // A holed block bleeds its oil, and the shrapnel finds the radiator too.
       h.comp.oil = Math.max(0, h.comp.oil - 0.2);
+      h.comp.radiator = Math.max(0, (h.comp.radiator ?? 1) - 0.25);
       events.push({ kind: 'engine' });
     } else if (r < 0.6) {
       const w = Math.floor(o.roll() * h.comp.tires.length);

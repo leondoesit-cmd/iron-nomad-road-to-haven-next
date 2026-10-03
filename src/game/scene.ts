@@ -7,6 +7,7 @@ import { AnimalRenderer } from '../render/animalRender';
 import { QUALITY, type GameRenderer } from '../render/renderer';
 import { SignatureGrid } from '../sim/signature';
 import { splitLoot, whole } from '../sim/resources';
+import { TANK_DREGS, takeReserve } from '../sim/fuel';
 import { DayClock, lightAt } from '../sim/dayclock';
 import { Rng } from '../core/rng';
 import { clamp } from '../core/math';
@@ -395,10 +396,14 @@ export abstract class Scene implements Ctx {
   fillTanksFromReserve() {
     const own = this.vehicles.filter((v) => v.faction === 'convoy' && v.kind === 'player');
     for (const v of own) {
-      const need = v.tankMax - v.fuel;
-      const take = Math.min(need, this.campaign.stocks.fuel);
-      v.fuel += take;
-      this.campaign.stocks.fuel -= take;
+      // The pump gives an engine what it burns. A tank still holding the other fuel is left alone: it has to be drained.
+      const want = v.stats.fuel;
+      if (v.fuelType !== want) {
+        if (v.fuel >= TANK_DREGS) continue;
+        v.fuelType = want;
+        v.fuel = 0;
+      }
+      v.fuel += takeReserve(this.campaign, want, v.tankMax - v.fuel);
     }
   }
 

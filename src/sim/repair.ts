@@ -2,7 +2,7 @@ import type { Cost, Stocks } from '../data';
 import { canAfford, costText } from './resources';
 import type { VehicleHealth } from './damage';
 
-export type RepairKind = 'fire' | 'leak' | 'tire' | 'engine' | 'mount' | 'body';
+export type RepairKind = 'fire' | 'leak' | 'tire' | 'engine' | 'radiator' | 'mount' | 'body';
 
 export interface RepairJob {
   kind: RepairKind;
@@ -44,6 +44,7 @@ export function planRepair(h: VehicleHealth, stocks: Stocks, o: RepairOpts = {})
   const flat = h.comp.tires.findIndex((t) => t <= 0.001);
   if (flat >= 0) return job('tire', o.spare ? 'Swap on the spare' : 'Patch a tyre', o.spare ? 3 : 4.5, o.spare ? {} : { scrap: 2 }, flat);
   if (h.comp.engine < 0.999) return job('engine', 'Rebuild the engine', 7, { parts: 3 }, undefined, { scrap: 9 });
+  if ((h.comp.radiator ?? 1) < 0.7) return job('radiator', 'Re-core the radiator', 5, { parts: 1, scrap: 2 }, undefined, { scrap: 6 });
   if (o.weapon && h.comp.mount < 0.999) return job('mount', 'Fix the weapon mount', 4, { parts: 2 }, undefined, { scrap: 6 });
   if (h.hp < h.maxHp - 0.5 || h.comp.plates < 0.999) return job('body', 'Hammer out the bodywork', 5, { scrap: 2 });
   return null;
@@ -69,6 +70,9 @@ export function applyRepair(h: VehicleHealth, job: RepairJob): string {
       // A rebuilt engine goes back together with fresh oil in it, or it would seize again at once.
       h.comp.oil = Math.max(h.comp.oil, 0.6);
       return h.comp.engine >= 0.999 ? 'Engine rebuilt' : 'Engine running better';
+    case 'radiator':
+      h.comp.radiator = Math.min(1, (h.comp.radiator ?? 1) + 0.6);
+      return 'Radiator patched';
     case 'mount':
       h.comp.mount = 1;
       return 'Mount fixed';
@@ -88,6 +92,7 @@ export function listFaults(h: VehicleHealth): string[] {
   if (flats) out.push(flats === 1 ? '1 flat tyre' : `${flats} flat tyres`);
   if (h.comp.engine < 0.15) out.push('engine dead');
   else if (h.comp.engine < 0.999) out.push('engine worn');
+  if ((h.comp.radiator ?? 1) < 0.4) out.push('radiator holed');
   if (h.hp < h.maxHp * 0.5) out.push('badly dented');
   return out;
 }

@@ -12,13 +12,14 @@ import type { Mounts } from './attachments';
  */
 export interface Load {
   fuel: number;
+  diesel: number;
   oil: number;
   crates: number;
 }
 
-export const noLoad = (): Load => ({ fuel: 0, oil: 0, crates: 0 });
-export const loadKey = (l: Load) => `${l.fuel}.${l.oil}.${l.crates}`;
-export const loadCount = (l: Load) => l.fuel + l.oil + l.crates;
+export const noLoad = (): Load => ({ fuel: 0, diesel: 0, oil: 0, crates: 0 });
+export const loadKey = (l: Load) => `${l.fuel}.${l.diesel}.${l.oil}.${l.crates}`;
+export const loadCount = (l: Load) => l.fuel + l.diesel + l.oil + l.crates;
 
 /** A flat area cargo can sit on, in the chassis frame. */
 export interface Deck {
@@ -54,9 +55,10 @@ export function buildLoad(deck: Deck, load: Load, key: string): THREE.Mesh | nul
   if (!geo) {
     const b = new MeshBuilder();
     b.jitter = 0.02;
-    const things: ('crate' | 'fuel' | 'oil')[] = [];
+    const things: ('crate' | 'fuel' | 'diesel' | 'oil')[] = [];
     for (let i = 0; i < load.crates; i++) things.push('crate');
     for (let i = 0; i < load.fuel; i++) things.push('fuel');
+    for (let i = 0; i < load.diesel; i++) things.push('diesel');
     for (let i = 0; i < load.oil; i++) things.push('oil');
     const cols = deck.stack ? 1 : Math.max(1, Math.floor((deck.hw * 2) / 0.34));
     const zc = (deck.z0 + deck.z1) / 2;
@@ -66,7 +68,7 @@ export function buildLoad(deck: Deck, load: Load, key: string): THREE.Mesh | nul
       if (deck.stack) {
         // On a carrier: one thing on the rack, the next on top of it.
         if (kind === 'crate') crate(b, 0, deck.y + stackY + 0.1, zc, 0.34, 0.22, 0.3, yaw);
-        else if (kind === 'fuel') jerryCan(b, 0, deck.y + stackY, zc, C.fuel, yaw);
+        else if (kind === 'fuel' || kind === 'diesel') jerryCan(b, 0, deck.y + stackY, zc, kind === 'diesel' ? C.diesel : C.fuel, yaw);
         else oilCan(b, 0, deck.y + stackY, zc, yaw);
         stackY += kind === 'crate' ? 0.22 : 0.34;
         return;
@@ -77,7 +79,7 @@ export function buildLoad(deck: Deck, load: Load, key: string): THREE.Mesh | nul
       const z = deck.z1 - 0.18 - row * 0.36;
       if (z < deck.z0 - 0.05) return;
       if (kind === 'crate') crate(b, x, deck.y + 0.11, z, 0.32, 0.22, 0.3, yaw);
-      else if (kind === 'fuel') jerryCan(b, x, deck.y, z, C.fuel, yaw);
+      else if (kind === 'fuel' || kind === 'diesel') jerryCan(b, x, deck.y, z, kind === 'diesel' ? C.diesel : C.fuel, yaw);
       else oilCan(b, x, deck.y, z, yaw);
     });
     geo = shared(b.build());

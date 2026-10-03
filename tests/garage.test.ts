@@ -41,10 +41,15 @@ describe('catalogue', () => {
     for (const d of Object.values(CHASSIS)) for (const s of d.slots ?? PARTS.slots) expect(PARTS.slots).toContain(s);
     for (const p of PARTS.parts) expect(Object.values(CHASSIS).some((d) => (d.slots ?? PARTS.slots).includes(p.slot))).toBe(true);
   });
-  it('quality never lowers cost: a Mk3 costs more than a Mk1 in its slot', () => {
-    for (const slot of ['engine', 'wheels', 'armor', 'weapon', 'utility'] as const) {
-      const ps = PARTS.parts.filter((p) => p.slot === slot).sort((a, b) => a.mk - b.mk);
-      for (let i = 1; i < ps.length; i++) expect(ps[i].cost.scrap ?? 0).toBeGreaterThan(ps[i - 1].cost.scrap ?? 0);
+  it('quality never lowers cost: every Mk n costs more than every Mk n-1 in its slot', () => {
+    for (const slot of ['engine', 'cooling', 'wheels', 'armor', 'weapon', 'utility'] as const) {
+      // Factory fittings are not for sale, so they sit outside the ladder.
+      const ps = PARTS.parts.filter((p) => p.slot === slot && !p.stock);
+      for (const mk of [2, 3]) {
+        const lower = Math.max(...ps.filter((p) => p.mk === mk - 1).map((p) => p.cost.scrap ?? 0));
+        const here = Math.min(...ps.filter((p) => p.mk === mk).map((p) => p.cost.scrap ?? 0));
+        expect(here).toBeGreaterThan(lower);
+      }
     }
   });
   it('has four found-car chassis and they are distinct from the tiers', () => {
@@ -64,7 +69,9 @@ describe('stats from parts', () => {
   });
   it('parts add up', () => {
     const s = effectiveStats(sedan, { engine: part('eng_v8'), armor: part('arm_weld'), front: part('fr_bull') });
-    expect(s.forceMult).toBeCloseTo(1.28);
+    // 260 kW against the sedan's 78 kW: a lot more shove, but with diminishing returns.
+    expect(s.forceMult).toBeGreaterThan(2);
+    expect(s.forceMult).toBeLessThanOrEqual(2.8);
     expect(s.armor).toBeCloseTo(sedan.armor + 0.1);
     expect(s.armorF).toBeCloseTo(0.08);
     expect(s.burnMult).toBeGreaterThan(1.2);
@@ -265,13 +272,13 @@ describe('servicing and dismantling', () => {
     serviceBuild(b);
     expect(needsService(b)).toBe(false);
   });
-  it('dismantling returns fitted parts with their wear plus raw materials', () => {
+  it('dismantling returns fitted parts with their wear, the factory radiator, plus raw materials', () => {
     const b = newBuild('sedan', { seed: 1 });
     installPart(b, part('eng_v6', 1));
     b.comp.engine = 0.5;
     const y = dismantleYield(b);
-    expect(y.items).toHaveLength(1);
-    expect(y.items[0].cond).toBeCloseTo(0.5);
+    expect(y.items.map((i) => i.id).sort()).toEqual(['eng_v6', 'rad_sedan']);
+    expect(y.items.find((i) => i.id === 'eng_v6')!.cond).toBeCloseTo(0.5);
     expect((y.stocks.scrap ?? 0) + (y.stocks.parts ?? 0)).toBeGreaterThan(5);
   });
   it('currentCond reads the live component for worn slots and 1 for the rest', () => {

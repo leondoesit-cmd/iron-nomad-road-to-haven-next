@@ -19,6 +19,7 @@ import { disposeTree } from '../render/dispose';
 import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { RARITY_NAMES, newPart, partName } from '../sim/parts';
 import { carriedName, planStow, type Carried, type Loose } from '../sim/carry';
+import { pickupFuel } from '../sim/fuel';
 import { lakeCurrent } from '../world/lakes';
 import { DRUGS, DRUG_IDS } from '../sim/drugs';
 import type { DelveSite } from '../world/delveSites';
@@ -662,7 +663,8 @@ export class LegScene extends Scene {
 
   /** Build the floating model for a pickup and register it. Parts, fuel and oil are carried by hand. */
   private spawnPickup(p: PickupSpawn) {
-    const m = makePickup(p.kind === 'part' ? `part${p.amount}` : p.kind);
+    const fuelKind = p.kind === 'fuel' ? (p.fuel ?? pickupFuel(p.id)) : undefined;
+    const m = makePickup(p.kind === 'part' ? `part${p.amount}` : fuelKind === 'diesel' ? 'diesel' : p.kind);
     m.group.position.set(p.x, p.y, p.z);
     if (p.kind === 'part') {
       // Good parts show from a distance, in their rarity colour.
@@ -672,12 +674,12 @@ export class LegScene extends Scene {
       m.group.add(makeBeam(col, 22));
     } else if (p.amount >= 14 && p.kind !== 'fuel' && p.kind !== 'oil') {
       m.group.add(makeBeam(0xffe9a0, 9));
-    } else if (p.kind === 'fuel') m.group.add(makeBeam(0xff6a3a, 7));
+    } else if (p.kind === 'fuel') m.group.add(makeBeam(fuelKind === 'diesel' ? 0xe8c020 : 0xff6a3a, 7));
     else if (p.kind === 'oil') m.group.add(makeBeam(0xe0b030, 6));
     this.root.add(m.group);
     let loose: Carried | undefined;
     if (p.kind === 'part' && p.part) loose = { kind: 'part', item: newPart(p.part.id, p.part.cond) };
-    else if (p.kind === 'fuel') loose = { kind: 'fuel', amount: p.amount };
+    else if (p.kind === 'fuel') loose = { kind: 'fuel', amount: p.amount, fuel: fuelKind };
     else if (p.kind === 'oil') loose = { kind: 'oil', amount: p.amount };
     this.pickups.set(p.id, { spawn: p, group: m.group, baseY: p.y, phase: Math.random() * 6.28, loose });
   }
@@ -722,7 +724,7 @@ export class LegScene extends Scene {
     const y = this.groundAt(x, z);
     const kind = c.kind === 'part' ? 'part' : c.kind;
     const amount = c.kind === 'part' ? (c.item.id ? partMk(c.item.id) : 1) : c.amount;
-    const spawn: PickupSpawn = { id, kind, amount, x, y, z, part: c.kind === 'part' ? { id: c.item.id, cond: c.item.cond } : undefined };
+    const spawn: PickupSpawn = { id, kind, amount, x, y, z, part: c.kind === 'part' ? { id: c.item.id, cond: c.item.cond } : undefined, fuel: c.kind === 'fuel' ? (c.fuel ?? 'petrol') : undefined };
     this.spawnPickup(spawn);
     // Keep the very item that was dropped, so its wear survives being put down.
     const e = this.pickups.get(id);
@@ -793,10 +795,15 @@ export class LegScene extends Scene {
     this.audio.play('pickup', p.x, p.z, 0.8);
     this.fx.spark(p.x, p.y + 0.6, p.z, 4, 3);
     switch (p.kind) {
-      case 'fuel':
-        this.addLoot({ fuel: p.amount }, 'fuel');
+      case 'fuel': {
+        const kind = p.fuel ?? pickupFuel(p.id);
+        if (kind === 'diesel') {
+          camp.stowFuel(p.amount, 'diesel');
+          this.notify(-1, `+${p.amount.toFixed(0)} FU diesel`, 'good');
+        } else this.addLoot({ fuel: p.amount }, 'fuel');
         if (!this.fuelTip) this.fuelTip = true;
         break;
+      }
       case 'oil':
         break;
       case 'scrap':
