@@ -143,7 +143,7 @@ function glowMat(mk: number) {
   let m = GLOW_MATS.get(mk);
   if (!m) {
     const [r, g, b] = MK_RGB[mk];
-    m = shared(new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(r, g, b), transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
+    m = shared(new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(r, g, b), transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false }));
     GLOW_MATS.set(mk, m);
   }
   return m;
@@ -340,7 +340,7 @@ export class WorkFx {
     obj.add(this.model(modelKey(part)));
     const glow = new THREE.Sprite(glowMat(mkOf(part)));
     glow.position.y = 0.2;
-    glow.scale.setScalar(1.6);
+    glow.scale.setScalar(0.9);
     obj.add(glow);
     obj.position.copy(from);
     this.root.add(obj);
@@ -589,7 +589,7 @@ export class WorkFx {
         h.obj.rotation.y += dt * (1.5 + h.p * 7);
         h.obj.scale.setScalar(1 + h.p * 0.12);
         const m = h.glow.material as THREE.SpriteMaterial;
-        h.glow.scale.setScalar(1.2 + h.p * 1.4);
+        h.glow.scale.setScalar(0.7 + h.p * 0.6);
         void m;
       }
       const shake = h.back ? 0 : Math.max(0, h.p - 0.75) * 0.05;
