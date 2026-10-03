@@ -191,7 +191,9 @@ vec3 radial( vec2 l, float jit ) {
   // uRad: x strength, y glow tightness, z on-screen-ness of the sun, w unused
   vec2 delta = uSunUv - l;
   float dist = length( delta * vec2( uAspect, 1.0 ) );
-  float radWeight = smoothstep( 2.0, 0.05, dist );
+  // Shafts fan out of the sun's glow only; further than about a screen's height away they must vanish, or the whole frame washes out.
+  float radWeight = smoothstep( 1.0, 0.0, dist );
+  radWeight *= radWeight;
   if ( radWeight <= 0.001 ) return vec3( 0.0 );
 
   vec2 stepv = delta / float( RAD_STEPS );
@@ -206,7 +208,7 @@ vec3 radial( vec2 l, float jit ) {
     acc += step( 0.99999, dd ) * glow * illum;
     illum *= 0.94;
   }
-  return uSunLight * ( ( acc / float( RAD_STEPS ) ) * uRad.x * radWeight );
+  return uSunLight * ( ( acc / float( RAD_STEPS ) ) * uRad.x * radWeight * 0.4 );
 }
 
 void main() {
