@@ -33,6 +33,13 @@ export interface Socket {
 export const SOCKET_LABEL: Record<PartSlot, string> = {
   engine: 'Engine bay',
   cooling: 'Radiator',
+  gearbox: 'Gearbox',
+  exhaust: 'Exhaust',
+  suspension: 'Suspension',
+  brakes: 'Brakes',
+  hood: 'Bonnet',
+  doorL: 'Left door',
+  doorR: 'Right door',
   wheels: 'Wheels',
   armor: 'Door plating',
   weapon: 'Gun mount',
@@ -71,6 +78,10 @@ export function socketFor(def: VehicleDef, slot: PartSlot): Socket | undefined {
   let anchors: Anchor[] = [];
   if (slot === 'wheels') {
     anchors = wheelCentres(def).map(([x, y, z]) => box(x + Math.sign(x) * 0.04, y, z, Math.max(0.2, wr * 0.55), wr * 2.1, wr * 2.1));
+  } else if (slot === 'suspension' || slot === 'brakes') {
+    anchors = wheelCentres(def).map(([x, y, z]) =>
+      slot === 'suspension' ? box(x * 0.82, y + wr * 0.95, z, 0.28, 0.5, 0.3) : box(x * 0.86, y, z, 0.2, wr * 1.1, wr * 1.1),
+    );
   } else if (!m) {
     // A chassis with no model data (not one the garage builds): spread the sockets sensibly along the body.
     const z = slot === 'front' ? len / 2 : slot === 'rear' ? -len / 2 : 0;
@@ -85,6 +96,32 @@ export function socketFor(def: VehicleDef, slot: PartSlot): Socket | undefined {
         break;
       case 'cooling':
         anchors = [box(0, low(m.front.y), m.front.z - 0.08, Math.max(0.3, m.front.hw * 1.5), 0.3, 0.2)];
+        break;
+      case 'hood':
+        anchors = m.hood
+          ? [box(0, low(m.hood.y) + 0.04, (m.hood.z0 + m.hood.z1) / 2, m.hood.hw * 1.8, 0.14, Math.max(0.5, m.hood.z1 - m.hood.z0))]
+          : [box(0, low(m.front.y) + 0.4, m.front.z - 0.3, Math.max(0.35, m.front.hw * 1.6), 0.2, 0.5)];
+        break;
+      case 'doorL':
+      case 'doorR': {
+        const sx = slot === 'doorL' ? 1 : -1;
+        anchors = [
+          box(
+            m.narrow ? sx * m.hw * 0.7 : sx * (m.hw + 0.03),
+            low((m.side.y0 + m.side.y1) / 2),
+            (m.side.z0 + m.side.z1) / 2,
+            0.12,
+            Math.max(0.3, m.side.y1 - m.side.y0),
+            Math.max(0.4, m.side.z1 - m.side.z0),
+          ),
+        ];
+        break;
+      }
+      case 'gearbox':
+        anchors = [box(0, low(m.sill) + 0.1, (m.side.z0 + m.side.z1) / 2 + 0.15, Math.max(0.3, m.hw * 0.9), 0.28, 0.6)];
+        break;
+      case 'exhaust':
+        anchors = [box(m.hw * 0.45, low(m.sill) + 0.06, m.rear.z + 0.55, 0.22, 0.2, 1.2)];
         break;
       case 'armor': {
         const y = low((m.side.y0 + m.side.y1) / 2);

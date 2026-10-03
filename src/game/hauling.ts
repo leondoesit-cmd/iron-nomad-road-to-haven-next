@@ -8,6 +8,7 @@ import { carriedName, carryModelKey, inspectLines, liftSecs, partInspect, planFi
 import { currentCond, idInSlot, installPart } from '../sim/garage';
 import { planPour } from '../sim/fuel';
 import { pourOil } from '../sim/oil';
+import { WATER_RESERVE_MAX, pourWater } from '../sim/fluids';
 import { partName } from '../sim/parts';
 import type { Cand, Player } from './player';
 import type { Vehicle } from './vehicle';
@@ -325,6 +326,9 @@ export function haulCandidate(p: Player): Cand | null {
     oil: v.health.comp.oil,
     tank: v.fuelType,
     engine: v.stats.fuel,
+    coolant: v.health.comp.coolant ?? 1,
+    coolantL: v.stats.coolantL,
+    sumpL: v.stats.sumpL,
   });
   const moving = Math.abs(v.speed) > 2;
   return {
@@ -405,8 +409,19 @@ function fit(p: Player, v: Vehicle, c: Carried) {
       ctx.audio.play('pickup', v.position.x, v.position.z, 0.5);
       break;
     }
+    case 'water': {
+      const r = pourWater(v.health.comp.coolant ?? 1, c.amount, v.stats.coolantL);
+      v.health.comp.coolant = r.coolant;
+      v.commit();
+      ctx.work.pour(handPos(p), sitePos(v, 'hood'), [0.4, 0.65, 0.9]);
+      ctx.work.label(`WATER ${Math.round(r.coolant * 100)}%`, '#8ecbff', sitePos(v, 'hood').add(new THREE.Vector3(0, 0.8, 0)));
+      p.carry = r.left > 0.2 ? { kind: 'water', amount: r.left } : null;
+      p.note(`The radiator is at ${Math.round(r.coolant * 100)}% (${r.used.toFixed(1)} L in)`, 'good');
+      ctx.audio.play('pickup', v.position.x, v.position.z, 0.5);
+      break;
+    }
     case 'oil': {
-      const r = pourOil(v.health.comp.oil, c.amount);
+      const r = pourOil(v.health.comp.oil, c.amount, v.stats.sumpL);
       v.health.comp.oil = r.oil;
       v.commit();
       ctx.work.pour(handPos(p), sitePos(v, 'hood'), [0.12, 0.1, 0.08]);
@@ -424,7 +439,7 @@ export function stowCarry(p: Player, quiet = false): boolean {
   const c = p.carry;
   if (!c) return true;
   const camp = p.ctx.campaign;
-  const plan = planStow(c, { parts: camp.inventoryRoom, oil: OIL_RESERVE_MAX - camp.items.oil });
+  const plan = planStow(c, { parts: camp.inventoryRoom, oil: OIL_RESERVE_MAX - camp.items.oil, water: WATER_RESERVE_MAX - camp.items.water });
   if (!plan.ok) {
     if (!quiet) p.note(plan.label, 'warn');
     return false;
@@ -442,6 +457,12 @@ export function stowCarry(p: Player, quiet = false): boolean {
       p.carry = null;
       if (!quiet) p.note(`+${c.amount.toFixed(1)} FU of ${c.fuel ?? 'petrol'} in the reserve cans`, 'good');
       break;
+    case 'water': {
+      const took = camp.stowWater(c.amount);
+      p.carry = c.amount - took > 0.2 ? { kind: 'water', amount: c.amount - took } : null;
+      if (!quiet) p.note(p.carry ? 'The water reserve is full: some is left in the can' : `+${took.toFixed(0)} L of water in the reserve`, p.carry ? 'warn' : 'good');
+      break;
+    }
     case 'oil': {
       const took = camp.stowOil(c.amount);
       p.carry = c.amount - took > 0.02 ? { kind: 'oil', amount: c.amount - took } : null;
@@ -475,7 +496,7 @@ export function returnCarry(p: Player) {
   else if (c.kind === 'fuel') camp.stowFuel(c.amount, c.fuel ?? 'petrol');
   else if (c.kind === 'oil') {
     if (camp.stowOil(c.amount) < c.amount - 0.02) camp.stocks.scrap += 1;
-  }
+  } else if (c.kind === 'water') camp.stowWater(c.amount);
   // A spray can has no place in the trucks: it is simply left behind.
 }
 
@@ -500,7 +521,7 @@ export function haulPrompt(p: Player) {
   const camp = p.ctx.campaign;
   const near = ownRideNear(p);
   const x = near
-    ? planStow(c, { parts: camp.inventoryRoom, oil: OIL_RESERVE_MAX - camp.items.oil })
+    ? planStow(c, { parts: camp.inventoryRoom, oil: OIL_RESERVE_MAX - camp.items.oil, water: WATER_RESERVE_MAX - camp.items.water })
     : { ok: true, label: `Put down ${carriedName(c)}  ·  walk it to your car to fit or stow it` };
   // Another prompt (a fit in progress, "enter the car") keeps the main slot; X rides underneath it.
   if (p.prompt) p.promptAlt = { text: x.label, button: 'X', ok: x.ok };

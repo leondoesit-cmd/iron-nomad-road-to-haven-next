@@ -2,7 +2,7 @@ import type { Cost, Stocks } from '../data';
 import { canAfford, costText } from './resources';
 import type { VehicleHealth } from './damage';
 
-export type RepairKind = 'fire' | 'leak' | 'tire' | 'engine' | 'radiator' | 'mount' | 'body';
+export type RepairKind = 'fire' | 'leak' | 'tire' | 'engine' | 'radiator' | 'gearbox' | 'mount' | 'body';
 
 export interface RepairJob {
   kind: RepairKind;
@@ -45,6 +45,7 @@ export function planRepair(h: VehicleHealth, stocks: Stocks, o: RepairOpts = {})
   if (flat >= 0) return job('tire', o.spare ? 'Swap on the spare' : 'Patch a tyre', o.spare ? 3 : 4.5, o.spare ? {} : { scrap: 2 }, flat);
   if (h.comp.engine < 0.999) return job('engine', 'Rebuild the engine', 7, { parts: 3 }, undefined, { scrap: 9 });
   if ((h.comp.radiator ?? 1) < 0.7) return job('radiator', 'Re-core the radiator', 5, { parts: 1, scrap: 2 }, undefined, { scrap: 6 });
+  if ((h.comp.gearbox ?? 1) < 0.7) return job('gearbox', 'Strip and rebuild the gearbox', 7, { parts: 3 }, undefined, { scrap: 9 });
   if (o.weapon && h.comp.mount < 0.999) return job('mount', 'Fix the weapon mount', 4, { parts: 2 }, undefined, { scrap: 6 });
   if (h.hp < h.maxHp - 0.5 || h.comp.plates < 0.999) return job('body', 'Hammer out the bodywork', 5, { scrap: 2 });
   return null;
@@ -73,6 +74,9 @@ export function applyRepair(h: VehicleHealth, job: RepairJob): string {
     case 'radiator':
       h.comp.radiator = Math.min(1, (h.comp.radiator ?? 1) + 0.6);
       return 'Radiator patched';
+    case 'gearbox':
+      h.comp.gearbox = Math.min(1, (h.comp.gearbox ?? 1) + 0.6);
+      return 'Gearbox rebuilt';
     case 'mount':
       h.comp.mount = 1;
       return 'Mount fixed';
@@ -93,6 +97,7 @@ export function listFaults(h: VehicleHealth): string[] {
   if (h.comp.engine < 0.15) out.push('engine dead');
   else if (h.comp.engine < 0.999) out.push('engine worn');
   if ((h.comp.radiator ?? 1) < 0.4) out.push('radiator holed');
+  if ((h.comp.gearbox ?? 1) < 0.4) out.push('gearbox slipping');
   if (h.hp < h.maxHp * 0.5) out.push('badly dented');
   return out;
 }

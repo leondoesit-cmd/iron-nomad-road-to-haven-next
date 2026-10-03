@@ -18,10 +18,13 @@ export const OIL_CRITICAL = 0.1;
 /** Engine condition lost per second of running dry. */
 export const OIL_WEAR = 0.01;
 
-/** Oil burnt over `metres` of driving and `dt` seconds with the engine on. A worn engine burns it faster. */
-export function oilBurn(metres: number, dt: number, engine: number, drain = 1): number {
+/**
+ * Oil burnt over `metres` of driving and `dt` seconds with the engine on, as a fraction of the sump. A worn engine burns
+ * it faster. `rate` is the engine's own appetite against the baseline, from `fluids.oilRate`: a big engine burns more.
+ */
+export function oilBurn(metres: number, dt: number, engine: number, drain = 1, rate = 1): number {
   const worn = 1 + clamp((0.6 - engine) / 0.6, 0, 1) * 1.5;
-  return (OIL_PER_KM * (metres / 1000) + OIL_IDLE * dt) * worn * drain;
+  return (OIL_PER_KM * (metres / 1000) + OIL_IDLE * dt) * worn * drain * rate;
 }
 
 /** Power left to an engine short of oil: untouched down to LOW, then up to 30% lost when bone dry. */
@@ -41,10 +44,14 @@ export function oilState(oil: number): OilState {
   return oil < OIL_CRITICAL ? 'critical' : oil < OIL_LOW ? 'low' : 'ok';
 }
 
-/** How much of `amount` a sump at `oil` will take, and what is left over. */
-export function pourOil(oil: number, amount: number): { used: number; oil: number; left: number } {
-  const used = clamp(Math.min(amount, 1 - oil), 0, 1);
-  return { used, oil: clamp(oil + used, 0, 1), left: amount - used };
+/**
+ * How much of `amount` a sump at `oil` will take, and what is left over. Amounts are in standard sumps (three litres); a
+ * bigger sump takes more of them to fill, a scooter's takes a sip.
+ */
+export function pourOil(oil: number, amount: number, sumpL = 3): { used: number; oil: number; left: number } {
+  const std = Math.max(0.1, sumpL) / 3;
+  const used = clamp(Math.min(amount, (1 - oil) * std), 0, amount);
+  return { used, oil: clamp(oil + used / std, 0, 1), left: amount - used };
 }
 
 export function oilLabel(oil: number): string {

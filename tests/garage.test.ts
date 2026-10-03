@@ -88,7 +88,8 @@ describe('stats from parts', () => {
   it('off-road tyres shrink the sand penalty and a road car suffers more than a buggy', () => {
     const sedanSand = terrainGrip(0.6, effectiveStats(sedan, {}).offroad);
     const buggySand = terrainGrip(0.6, effectiveStats(chassisDef('buggy'), {}).offroad);
-    const sedanMud = terrainGrip(0.6, effectiveStats(sedan, { wheels: part('whl_bl') }).offroad);
+    // Tyres are one per wheel: crawlers on all four.
+    const sedanMud = terrainGrip(0.6, effectiveStats(sedan, {}, [part('whl_bl'), part('whl_bl'), part('whl_bl'), part('whl_bl')]).offroad);
     expect(sedanSand).toBeLessThan(buggySand);
     expect(sedanMud).toBeGreaterThan(sedanSand);
     // The baseline chassis is unchanged by the model, so existing handling holds.
@@ -277,7 +278,8 @@ describe('servicing and dismantling', () => {
     installPart(b, part('eng_v6', 1));
     b.comp.engine = 0.5;
     const y = dismantleYield(b);
-    expect(y.items.map((i) => i.id).sort()).toEqual(['eng_v6', 'rad_sedan']);
+    // Everything on it comes apart: engine, radiator, gearbox, exhaust, springs, brakes, bonnet, both doors and four tyres.
+    expect(y.items.map((i) => i.id).sort()).toEqual(['brk_sedan', 'door_std', 'door_std', 'eng_v6', 'exh_sedan', 'gbx_sedan', 'hood_std', 'rad_sedan', 'sus_sedan', 'tyre_sedan', 'tyre_sedan', 'tyre_sedan', 'tyre_sedan']);
     expect(y.items.find((i) => i.id === 'eng_v6')!.cond).toBeCloseTo(0.5);
     expect((y.stocks.scrap ?? 0) + (y.stocks.parts ?? 0)).toBeGreaterThan(5);
   });
@@ -323,7 +325,8 @@ describe('salvage', () => {
   it('raiders carry better kit than family cars', () => {
     const avg = (kind: 'car' | 'raider') => {
       let t = 0;
-      for (let s = 1; s <= 300; s++) t += salvageLoot(1, { ...ctx, kind, seed: s * 13 }).items.reduce((a, p) => a + partDef(p.id).mk, 0);
+      // The quality of what was found, not of the factory fittings that come out of any car.
+      for (let s = 1; s <= 300; s++) t += salvageLoot(1, { ...ctx, kind, seed: s * 13 }).items.filter((p) => !partDef(p.id).stock).reduce((a, p) => a + partDef(p.id).mk, 0);
       return t / 300;
     };
     expect(avg('raider')).toBeGreaterThan(avg('car') + 0.3);

@@ -18,6 +18,8 @@ export interface DriveEnv {
   topSpeedMult: number;
   forceMult: number;
   travelMult: number;
+  /** Braking strength against the chassis' own (1 is stock): bigger brakes, or an engine that outruns small ones. */
+  brakeMult: number;
   /** Per-wheel flat flags. */
   flats?: boolean[];
   engineOn: boolean;
@@ -25,7 +27,7 @@ export interface DriveEnv {
   surface?: (x: number, z: number) => { grip: number; drag: number };
 }
 
-export const defaultEnv = (): DriveEnv => ({ power: 1, grip: 1, topSpeedMult: 1, forceMult: 1, travelMult: 1, engineOn: true });
+export const defaultEnv = (): DriveEnv => ({ power: 1, grip: 1, topSpeedMult: 1, forceMult: 1, travelMult: 1, brakeMult: 1, engineOn: true });
 
 export function rotateByQuat(q: { x: number; y: number; z: number; w: number }, vx: number, vy: number, vz: number): [number, number, number] {
   const { x, y, z, w } = q;
@@ -181,10 +183,10 @@ export class VehicleBody {
     const baseForce = p.engineForce * env.forceMult * env.power * (on ? 1 : 0);
     const taper = (s: number, m: number) => clamp(1 - Math.pow(s / m, 2.2), 0, 1);
     if (input.throttle > 0.01) {
-      if (v < -1.2) decel = p.brake * input.throttle;
+      if (v < -1.2) decel = p.brake * env.brakeMult * input.throttle;
       else force = baseForce * input.throttle * taper(Math.max(0, v), vmax);
     } else if (input.brake > 0.01) {
-      if (v > 1.2) decel = p.brake * input.brake;
+      if (v > 1.2) decel = p.brake * env.brakeMult * input.brake;
       else force = -baseForce * 0.55 * input.brake * taper(Math.max(0, -v), Math.max(4, vmax * 0.3));
     } else {
       decel = on ? 0.8 : 2.2; // engine braking and rolling resistance

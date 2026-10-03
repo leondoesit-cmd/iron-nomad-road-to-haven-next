@@ -91,7 +91,7 @@ export function bayFit(def: VehicleDef, spec: EngineSpec): BayFit {
 
 // ---------------------------------------------------------------- what an engine does to a chassis
 
-const burnRate = (e: EngineSpec) => Math.pow(Math.max(e.kw, 0.01), 0.6) * (e.fuel === 'diesel' ? 0.78 : 1);
+const burnRate = (e: EngineSpec) => Math.pow(Math.max(e.kw, 0.01), 0.85) * (e.fuel === 'diesel' ? 0.78 : 1);
 const noiseRate = (e: EngineSpec) => Math.pow(Math.max(e.kw, 0.01), 0.22) * (e.fuel === 'diesel' ? 1.04 : 1) * (e.blown ? 1.04 : 1);
 
 export interface EngineEffects {
@@ -134,8 +134,8 @@ export function engineEffects(def: VehicleDef, fit: Fit): EngineEffects {
     force = 0;
     top = 0.5;
   } else {
-    force = clamp(Math.pow(ratio, 0.75), 0.22, 2.5);
-    top = ratio >= 1 ? clamp(1 + 0.32 * Math.log(ratio), 1, 1.45) : clamp(0.3 + 0.7 * Math.sqrt(ratio), 0.3, 1);
+    force = clamp(Math.pow(ratio, 0.8), 0.2, 4);
+    top = ratio >= 1 ? clamp(1 + 0.34 * Math.log(ratio), 1, 1.7) : clamp(0.3 + 0.7 * Math.sqrt(ratio), 0.3, 1);
   }
   const grip = clamp((1 - 0.28 * heavy) * (1 - 0.04 * Math.max(0, bay.oversize)) * (1 - 0.06 * clamp(Math.log(Math.max(1, ratio)), 0, 1.5)), 0.55, 1.05);
   const travel = clamp(1 - 0.4 * heavy + 0.1 * Math.max(0, -f), 0.55, 1.08);
@@ -150,7 +150,7 @@ export function engineEffects(def: VehicleDef, fit: Fit): EngineEffects {
     top,
     grip,
     travel,
-    burn: empty ? 0 : clamp(burnRate(spec) / burnRate(stock), 0.4, 3),
+    burn: empty ? 0 : clamp(burnRate(spec) / burnRate(stock), 0.35, 9),
     sig: empty ? 0.5 : clamp(noiseRate(spec) / noiseRate(stock), 0.7, 1.7),
     heat: empty ? 0 : spec.kw * HEAT_PER_KW,
     fuel: spec.fuel,

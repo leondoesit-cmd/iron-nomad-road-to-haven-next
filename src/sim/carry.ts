@@ -4,6 +4,7 @@ import { OIL_CAN, pourOil } from './oil';
 import { engineLine } from './engines';
 import { fuelMismatch, planPour } from './fuel';
 import { colorName } from './paint';
+import { pourWater, WATER_CAN } from './fluids';
 
 /**
  * Things you lift off the ground and carry in your arms: a vehicle part, a can of fuel, a can of oil.
@@ -17,7 +18,9 @@ export type Carried =
   /** Oil in sumps: a full can is half of one. */
   | { kind: 'oil'; amount: number }
   /** A spray can: a colour and how many panels it has left in it. */
-  | { kind: 'paint'; color: number; charges: number };
+  | { kind: 'paint'; color: number; charges: number }
+  /** Water in litres: a full can is ten. For the radiator. */
+  | { kind: 'water'; amount: number };
 
 /** What a full fuel can holds. */
 export const FUEL_CAN = 5;
@@ -75,6 +78,8 @@ export function inspectLines(c: Carried): InspectLine[] {
       return [{ text: `${c.fuel === 'diesel' ? 'Diesel' : 'Petrol'} can`, css: c.fuel === 'diesel' ? '#f0d050' : '#ff9a7a' }, { text: `${c.amount.toFixed(1)} FU` }, { text: c.fuel === 'diesel' ? 'For diesel engines' : 'For petrol engines' }];
     case 'oil':
       return [{ text: 'Oil can', css: '#e6dcc0' }, { text: `${Math.round(c.amount * 200)} % full` }];
+    case 'water':
+      return [{ text: 'Water can', css: '#8ecbff' }, { text: `${c.amount.toFixed(1)} L` }, { text: 'For the radiator' }];
     case 'paint':
       return [{ text: 'Spray can', css: `#${c.color.toString(16).padStart(6, '0')}` }, { text: colorName(c.color) }, { text: `${c.charges} panel${c.charges === 1 ? '' : 's'} left` }];
   }
@@ -90,6 +95,8 @@ export function carriedName(c: Carried): string {
       return c.amount >= OIL_CAN - 0.01 ? 'Oil can' : `Oil can (${Math.round(c.amount * 200)}% full)`;
     case 'paint':
       return `Spray can (${colorName(c.color)}, ${c.charges} left)`;
+    case 'water':
+      return c.amount >= WATER_CAN - 0.05 ? 'Water can' : `Water can (${c.amount.toFixed(1)} L)`;
   }
 }
 
@@ -104,6 +111,8 @@ export function carrySlow(c: Carried): number {
       return 0.9;
     case 'paint':
       return 0.96;
+    case 'water':
+      return 0.8;
   }
 }
 
@@ -123,6 +132,10 @@ export interface FitTarget {
   /** What the tank holds, and what the engine in the bay burns. Both default to petrol. */
   tank?: FuelType;
   engine?: FuelType;
+  /** The cooling system: water in it (0..1) and its size in litres, and the sump size in litres. */
+  coolant?: number;
+  coolantL?: number;
+  sumpL?: number;
 }
 
 export interface FitPlan {
@@ -158,8 +171,15 @@ export function planFit(c: Carried, t: FitTarget): FitPlan {
     }
     case 'oil': {
       if (t.oil > 0.97) return { ok: false, label: 'Oil is already full', secs: 1 };
-      const used = pourOil(t.oil, c.amount).used;
-      return { ok: true, label: `Top up the oil (${Math.round((t.oil + used) * 100)}%)`, secs: 2.2 };
+      const std = (t.sumpL ?? 3) / 3;
+      const used = pourOil(t.oil, c.amount, t.sumpL).used;
+      return { ok: true, label: `Top up the oil (${Math.round((t.oil + used / std) * 100)}%)`, secs: 2.2 };
+    }
+    case 'water': {
+      const have = t.coolant ?? 1;
+      if (have > 0.97) return { ok: false, label: 'The cooling system is full', secs: 1 };
+      const r = pourWater(have, c.amount, t.coolantL ?? 6);
+      return { ok: true, label: `Top up the radiator (${Math.round(have * 100)}% → ${Math.round(r.coolant * 100)}%)`, secs: 2.6 };
     }
     case 'paint':
       return { ok: true, label: 'Spray the panel', secs: 2 };
@@ -171,6 +191,8 @@ export interface StowRoom {
   parts: number;
   /** Reserve oil room, in sumps. */
   oil: number;
+  /** Reserve water room, in litres. */
+  water?: number;
 }
 
 export interface StowPlan {
@@ -187,6 +209,8 @@ export function planStow(c: Carried, room: StowRoom): StowPlan {
       return { ok: true, label: 'Add to the reserve cans' };
     case 'oil':
       return room.oil > 0.02 ? { ok: true, label: 'Stow the oil' } : { ok: false, label: 'No room for more oil' };
+    case 'water':
+      return (room.water ?? 0) > 0.5 ? { ok: true, label: 'Stow the water' } : { ok: false, label: 'No room for more water' };
     case 'paint':
       return { ok: false, label: 'Spray cans stay on the road' };
   }

@@ -92,11 +92,11 @@ describe('any engine goes in any chassis', () => {
       for (const e of ENGINES) {
         const st = effectiveStats(chassisDef(id), { engine: part(e.id) });
         for (const v of [st.forceMult, st.topSpeedMult, st.gripMult, st.travelMult, st.burnMult, st.sigMult, st.heat]) expect(Number.isFinite(v)).toBe(true);
-        expect(st.forceMult).toBeGreaterThanOrEqual(0.22 * 0.4);
-        expect(st.forceMult).toBeLessThanOrEqual(2.5 * 1.8);
-        expect(st.topSpeedMult).toBeGreaterThan(0.25);
-        expect(st.topSpeedMult).toBeLessThanOrEqual(1.6);
-        expect(st.gripMult).toBeGreaterThan(0.4);
+        expect(st.forceMult).toBeGreaterThanOrEqual(0.2 * 0.4);
+        expect(st.forceMult).toBeLessThanOrEqual(4 * 1.8);
+        expect(st.topSpeedMult).toBeGreaterThan(0.2);
+        expect(st.topSpeedMult).toBeLessThanOrEqual(2);
+        expect(st.gripMult).toBeGreaterThan(0.2);
         expect(st.fuel).toBe(e.engine!.fuel);
       }
     }
@@ -191,10 +191,13 @@ describe('swapping an engine on a build', () => {
   });
   it('dismantling a vehicle returns its factory engine and radiator too', () => {
     const b = newBuild('van', { seed: 1 });
-    const ids = dismantleYield(b).items.map((i) => i.id).sort();
-    expect(ids).toEqual(['eng_d30', 'rad_van']);
+    const ids = dismantleYield(b).items.map((i) => i.id);
+    expect(ids).toContain('eng_d30');
+    expect(ids).toContain('rad_van');
     removePart(b, 'engine');
-    expect(dismantleYield(b).items.map((i) => i.id)).toEqual(['rad_van']);
+    const after = dismantleYield(b).items.map((i) => i.id);
+    expect(after).not.toContain('eng_d30');
+    expect(after).toContain('rad_van');
   });
   it('rebuilding onto another chassis takes that chassis its own factory engine and fuel', () => {
     const b = newBuild('hatch', { seed: 1 });

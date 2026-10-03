@@ -1,7 +1,9 @@
-import { PARTS, PART_SLOTS, partDef, type FuelType, type ModuleSlot, type PartDef, type PartSlot, type PartStats, type VehicleDef } from '../data';
+import { FIT_SLOTS, PARTS, PART_SLOTS, mountsFor, partDef, type FuelType, type ModuleSlot, type PartDef, type PartSlot, type PartStats, type VehicleDef } from '../data';
 import { clamp } from '../core/math';
 import type { Rng } from '../core/rng';
 import { coolingKw, engineEffects, engineLine, type BayLabel } from './engines';
+import { bodyOff, drivetrainEffects, gearTop } from './drivetrain';
+import { coolantLitres, oilRate, sumpLitres } from './fluids';
 
 /**
  * A part you can carry: a catalogue entry plus how worn it is. Condition only matters for the parts that replace a
@@ -13,8 +15,11 @@ export interface PartItem {
   cond: number;
 }
 
-/** What is bolted onto a vehicle, by slot. */
+/** What is bolted onto a vehicle, by slot. Tyres are not here: they are one per wheel (see `Tyres`). */
 export type Fit = Partial<Record<PartSlot, PartItem>>;
+
+/** The tyre on each wheel, in wheel order. `null` is the one the chassis was built with. */
+export type Tyres = (PartItem | null)[];
 
 let uidCounter = 1;
 /** Unique within a save. Saves reseed the counter on load so new ids never collide with stored ones. */
@@ -37,12 +42,17 @@ export function newPart(id: string, cond = 1): PartItem {
 export const CORE_SLOTS: PartSlot[] = ['engine', 'wheels', 'armor', 'weapon', 'utility'];
 
 /** Slots whose part wears out with use: its condition is the vehicle's own component condition. */
-export const WORN_SLOTS: PartSlot[] = ['engine', 'cooling', 'wheels', 'armor'];
+export const WORN_SLOTS: PartSlot[] = ['engine', 'cooling', 'gearbox', 'wheels', 'armor'];
 export const isWorn = (slot: PartSlot): boolean => WORN_SLOTS.includes(slot);
 
 /** Slots a chassis accepts parts in. */
 export function slotsOf(def: VehicleDef): PartSlot[] {
   return def.slots ?? PART_SLOTS;
+}
+
+/** Can a part of this category be bolted to this mount on this chassis? */
+export function canMount(def: VehicleDef, category: PartSlot, mount: PartSlot): boolean {
+  return mountsFor(category).includes(mount) && slotsOf(def).includes(mount) && (category === 'wheels' ? mount === 'wheels' : true);
 }
 
 /** Quality of the aftermarket part in a slot. A factory fitting (even one carried over from another car) counts as none. */
@@ -104,37 +114,84 @@ export interface Stats {
   /** Kilograms heavier than the factory engine. */
   massDelta: number;
   noEngine: boolean;
+  /** Total weight with the engine and gearbox it carries, kg. */
+  mass: number;
+  /** Braking against the stock chassis (1 is stock), and the energy to shed in a stop from top speed against what the brakes take, kJ. */
+  brakeMult: number;
+  stopDemand: number;
+  stopRating: number;
+  /** Weight over what the springs carry. Above 1 the vehicle sags. */
+  overload: number;
+  /** Engine output over what the gearbox carries at full throttle. Above 1 the gearbox wears. */
+  strain: number;
+  gearboxRating: number;
+  /** The gearbox is gone: nothing reaches the wheels. */
+  noDrive: boolean;
+  /** Doors off (0 to 2), bonnet off, and wheels with no tyre at all. */
+  doorsOff: number;
+  hoodOff: boolean;
+  tyresGone: number;
+  /** Litres of oil the engine holds, how fast it burns it against the baseline, and litres of water in the cooling system. */
+  sumpL: number;
+  oilRate: number;
+  coolantL: number;
 }
 
 const sum = (fit: Fit, k: keyof PartStats): number => {
   let t = 0;
-  for (const slot of PART_SLOTS) {
+  for (const slot of FIT_SLOTS) {
     const it = fit[slot];
     if (it) t += partDef(it.id).stats[k] ?? 0;
   }
   return t;
 };
 
+/** A stat summed over the tyres and averaged across the wheels, so a mixed set counts as the mix it is. */
+function tyreMean(tyres: Tyres | undefined, wheels: number, k: keyof PartStats): number {
+  if (!tyres || wheels <= 0) return 0;
+  let t = 0;
+  for (let i = 0; i < wheels; i++) {
+    const it = tyres[i];
+    if (it) t += partDef(it.id).stats[k] ?? 0;
+  }
+  return t / wheels;
+}
+
+/** Wheels with no tyre on them at all. */
+export function tyresGone(tyres: Tyres | undefined, wheels: number): number {
+  let n = 0;
+  for (let i = 0; i < wheels; i++) if (tyres?.[i] && partDef(tyres[i]!.id).empty) n++;
+  return n;
+}
+
 /** Stats a chassis gets from its fitted parts. Pure, so it can be tested. */
-export function effectiveStats(def: VehicleDef, fit: Fit): Stats {
+export function effectiveStats(def: VehicleDef, fit: Fit, tyres?: Tyres): Stats {
   const ef = engineEffects(def, fit);
+  const wheels = def.physics.wheelCount;
+  const gone = tyresGone(tyres, wheels);
+  const goneK = 1 - 0.18 * gone;
+  const topMult = clamp(Math.max(0.5, 1 + sum(fit, 'top')) * ef.top * gearTop(def, fit) * goneK, 0.2, 2);
+  const dt = drivetrainEffects(def, fit, ef, topMult);
+  const off = bodyOff(def, fit);
+  const spec = ef.spec;
+  const sump = sumpLitres(spec.litres);
   return {
-    forceMult: Math.max(0.4, 1 + sum(fit, 'force')) * ef.force,
-    topSpeedMult: clamp(Math.max(0.5, 1 + sum(fit, 'top')) * ef.top, 0.25, 1.6),
+    forceMult: Math.max(0.4, 1 + sum(fit, 'force')) * ef.force * dt.force * goneK,
+    topSpeedMult: topMult,
     armor: clamp(def.armor + sum(fit, 'armor'), 0, 0.9),
     armorF: sum(fit, 'armorF'),
     armorS: sum(fit, 'armorS'),
     armorR: sum(fit, 'armorR'),
-    gripMult: (1 + sum(fit, 'grip')) * ef.grip,
-    travelMult: (1 + sum(fit, 'travel')) * ef.travel,
-    offroad: clamp((def.offroad ?? BASE_OFFROAD) + sum(fit, 'offroad'), 0, 1),
+    gripMult: (1 + sum(fit, 'grip') + tyreMean(tyres, wheels, 'grip')) * ef.grip * dt.grip * goneK,
+    travelMult: (1 + sum(fit, 'travel') + tyreMean(tyres, wheels, 'travel')) * ef.travel * dt.travel,
+    offroad: clamp((def.offroad ?? BASE_OFFROAD) + sum(fit, 'offroad') + tyreMean(tyres, wheels, 'offroad'), 0, 1),
     damageMult: 1 + sum(fit, 'dmg'),
     rateMult: 1 + sum(fit, 'rate'),
     tank: def.tank * (1 + sum(fit, 'tank')),
     cargo: def.cargo + sum(fit, 'cargo'),
     hpMult: 1 + sum(fit, 'hp'),
     burnMult: Math.max(0.5, 1 + sum(fit, 'burn')) * ef.burn,
-    sigMult: Math.max(0.5, 1 + sum(fit, 'sig')) * ef.sig,
+    sigMult: Math.max(0.5, 1 + sum(fit, 'sig')) * ef.sig * dt.sig,
     plow: sum(fit, 'plow'),
     ram: sum(fit, 'ram'),
     light: sum(fit, 'light'),
@@ -144,10 +201,24 @@ export function effectiveStats(def: VehicleDef, fit: Fit): Stats {
     fuel: ef.fuel,
     heat: ef.heat,
     coolKw: coolingKw(def, fit),
-    airflow: ef.bay.airflow,
+    airflow: clamp(ef.bay.airflow + sum(fit, 'airflow'), 0.3, 1.5),
     bayLabel: ef.bay.label,
     massDelta: ef.massDelta,
     noEngine: ef.empty,
+    mass: dt.mass,
+    brakeMult: dt.brake,
+    stopDemand: dt.stopDemand,
+    stopRating: dt.stopRating,
+    overload: dt.overload,
+    strain: dt.strain,
+    gearboxRating: dt.gearboxRating,
+    noDrive: dt.noDrive,
+    doorsOff: off.doors,
+    hoodOff: off.hood,
+    tyresGone: gone,
+    sumpL: sump,
+    oilRate: oilRate(spec.litres, !!spec.blown, spec.fuel === 'diesel', sump),
+    coolantL: coolantLitres(coolingKw(def, fit), spec.litres),
   };
 }
 
@@ -173,9 +244,9 @@ export function conditionLabel(cond: number): string {
   return cond >= 0.9 ? 'Like new' : cond >= 0.65 ? 'Good' : cond >= 0.4 ? 'Worn' : cond > 0.05 ? 'Barely holding' : 'Dead';
 }
 
-/** True if the part is built for a slot this chassis has. */
+/** True if the part is built for a mount this chassis has. */
 export function fitsChassis(def: VehicleDef, it: PartItem): boolean {
-  return slotsOf(def).includes(partDef(it.id).slot);
+  return mountsFor(partDef(it.id).slot).some((m) => slotsOf(def).includes(m));
 }
 
 // ---------------------------------------------------------------- loot

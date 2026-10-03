@@ -23,6 +23,7 @@ import { carryModelKey, carrySlow, type Carried } from '../sim/carry';
 import { UTILITY_SLOT, damageTaken, effectiveGun, effectiveMelee, heldItem, statsOf, stepSel, type EffectiveGun, type GearItem, type HurtKind, type Loadout, type Resolved } from '../sim/gear';
 import type { MeleeStats } from '../data';
 import { OIL_LOW, pourOil } from '../sim/oil';
+import { COOLANT_LOW, WATER_CAN, WATER_RESERVE_MAX, pourWater } from '../sim/fluids';
 import { TANK_DREGS, addReserve, planDrain, reserveOf, takeReserve } from '../sim/fuel';
 import { dropCarry, guide, sitePos, haulCandidate, haulKey, haulPrompt, returnCarry, stashBeforeEntering } from './hauling';
 
@@ -1566,32 +1567,65 @@ export class Player implements Pilot {
       const stock = reserveOf(camp, engineFuel);
       const takesOil = own.build !== null && own.def.physics.kind !== 'boat';
       const oil = own.health.comp.oil;
+      const sump = own.stats.sumpL;
+      const cool = own.health.comp.coolant ?? 1;
+      const takesWater = own.convoyEngine;
+      const needsFuel = space > 0.4 && stock > 0.4;
       const oilUrgent = takesOil && oil < OIL_LOW && camp.items.oil > 0.02;
       const oilWanted = takesOil && oil < 0.9 && camp.items.oil > 0.02;
-      if (oilUrgent || (oilWanted && !(space > 0.4 && stock > 0.4))) {
-        const r = pourOil(oil, camp.items.oil);
+      const coolUrgent = takesWater && cool < COOLANT_LOW && camp.items.water > 0.2;
+      const coolWanted = takesWater && cool < 0.9 && camp.items.water > 0.2;
+      const topOil = (): Cand => {
+        const r = pourOil(oil, camp.items.oil, sump);
         return {
           kind: 'topoil',
-          prompt: `Top up the oil from the reserve (${Math.round(oil * 100)}% → ${Math.round((oil + r.used) * 100)}%)`,
+          prompt: `Top up the oil from the reserve (${Math.round(oil * 100)}% → ${Math.round((oil + (r.used * 3) / sump) * 100)}%)`,
           dur: 2.4,
           target: own,
           ok: true,
           label: 'topoil',
           run: () => {
-            const o = pourOil(own.health.comp.oil, camp.items.oil);
+            const o = pourOil(own.health.comp.oil, camp.items.oil, sump);
             own.health.comp.oil = o.oil;
             camp.items.oil = Math.max(0, camp.items.oil - o.used);
             own.commit();
             this.note(`Oil topped up to ${Math.round(o.oil * 100)}%`, 'good');
           },
         };
-      }
+      };
+      const topWater = (): Cand => {
+        const r = pourWater(cool, camp.items.water, own.stats.coolantL);
+        return {
+          kind: 'topwater',
+          prompt: `Top up the radiator from the reserve (${Math.round(cool * 100)}% → ${Math.round(r.coolant * 100)}%, ${r.used.toFixed(1)} L)`,
+          dur: 2.8,
+          target: own,
+          ok: true,
+          label: 'topwater',
+          run: () => {
+            const w = pourWater(own.health.comp.coolant ?? 1, camp.items.water, own.stats.coolantL);
+            own.health.comp.coolant = w.coolant;
+            camp.items.water = Math.max(0, camp.items.water - w.used);
+            own.commit();
+            this.note(`The radiator is at ${Math.round(w.coolant * 100)}% (${w.used.toFixed(1)} L of water)`, 'good');
+          },
+          tick: () => {
+            if (Math.random() < 0.2) ctx.work.pour(this.human.hand.getWorldPosition(new THREE.Vector3()), sitePos(own, 'hood'), [0.4, 0.65, 0.9]);
+            return true;
+          },
+        };
+      };
+      // What is running out comes first; then fuel; then the things that merely want a top-up.
+      if (oilUrgent) return topOil();
+      if (coolUrgent) return topWater();
+      if (!needsFuel && oilWanted) return topOil();
+      if (!needsFuel && coolWanted) return topWater();
       const c: Cand = {
         kind: 'refuel',
         prompt: space > 0.4 ? `${t('prompt.refuel')} (${engineFuel})` : 'Tank is full',
         dur: 4,
         target: own,
-        ok: space > 0.4 && stock > 0.4,
+        ok: needsFuel,
         label: 'refuel',
         run: () => {
           if (own.fuelType !== engineFuel) {
@@ -1607,7 +1641,24 @@ export class Player implements Pilot {
       return c;
     }
     const donor = this.nearestVehicle(3.8, (q) => (q.faction === 'neutral' || q.wreck) && q.fuel > 0.4);
-    if (!donor) return null;
+    if (!donor) {
+      // Standing at a lake with the can out: scoop water for the radiators.
+      const w = ctx.waterAt(this.pos.x + Math.sin(this.aimYaw) * 1.5, this.pos.z + Math.cos(this.aimYaw) * 1.5) ?? ctx.waterAt(this.pos.x, this.pos.z);
+      if (!w || w.depth < 0.15) return null;
+      const room = WATER_RESERVE_MAX - camp.items.water;
+      return {
+        kind: 'scoop',
+        prompt: room > 0.5 ? `Fill the water can from the lake (+${Math.min(WATER_CAN, room).toFixed(0)} L)` : 'The water reserve is full',
+        dur: 3,
+        target: 'lake',
+        ok: room > 0.5,
+        label: 'scoop',
+        run: () => {
+          const took = camp.stowWater(WATER_CAN);
+          this.note(`+${took.toFixed(0)} L of water`, 'good');
+        },
+      };
+    }
     const hot = donor.wreck && donor.burnT > 0;
     return {
       kind: 'siphon',

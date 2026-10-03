@@ -98,7 +98,7 @@ export interface PropSpawn {
   dy?: number;
 }
 
-export type PickupKind = 'fuel' | 'oil' | 'scrap' | 'parts' | 'tech' | 'rations' | 'medicine' | 'ammo' | 'fragment' | 'chassis' | 'part' | 'paint';
+export type PickupKind = 'fuel' | 'oil' | 'scrap' | 'parts' | 'tech' | 'rations' | 'medicine' | 'ammo' | 'fragment' | 'chassis' | 'part' | 'paint' | 'water';
 export interface PickupSpawn {
   id: string;
   kind: PickupKind;

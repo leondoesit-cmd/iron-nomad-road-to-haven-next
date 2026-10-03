@@ -676,11 +676,13 @@ export class LegScene extends Scene {
       m.group.add(makeBeam(0xffe9a0, 9));
     } else if (p.kind === 'fuel') m.group.add(makeBeam(fuelKind === 'diesel' ? 0xe8c020 : 0xff6a3a, 7));
     else if (p.kind === 'oil') m.group.add(makeBeam(0xe0b030, 6));
+    else if (p.kind === 'water') m.group.add(makeBeam(0x6ab4ff, 6));
     this.root.add(m.group);
     let loose: Carried | undefined;
     if (p.kind === 'part' && p.part) loose = { kind: 'part', item: newPart(p.part.id, p.part.cond) };
     else if (p.kind === 'fuel') loose = { kind: 'fuel', amount: p.amount, fuel: fuelKind };
     else if (p.kind === 'oil') loose = { kind: 'oil', amount: p.amount };
+    else if (p.kind === 'water') loose = { kind: 'water', amount: p.amount };
     else if (p.kind === 'paint') loose = { kind: 'paint', color: p.color ?? 0xffffff, charges: p.amount };
     this.pickups.set(p.id, { spawn: p, group: m.group, baseY: p.y, phase: Math.random() * 6.28, loose });
   }
@@ -773,7 +775,7 @@ export class LegScene extends Scene {
   private stowSwept(e: PickupEntity, by: Player): boolean {
     const c = e.loose!;
     const camp = this.campaign;
-    const plan = planStow(c, { parts: camp.inventoryRoom, oil: 4 - camp.items.oil });
+    const plan = planStow(c, { parts: camp.inventoryRoom, oil: 4 - camp.items.oil, water: 80 - camp.items.water });
     if (!plan.ok) {
       if (!e.noteT) {
         by.note(`${plan.label}: ${carriedName(c)} left behind`, 'warn');
@@ -789,6 +791,9 @@ export class LegScene extends Scene {
     } else if (c.kind === 'oil') {
       const took = camp.stowOil(c.amount);
       by.note(`+ oil (${Math.round(took * 200)}% of a can)`, 'good');
+    } else if (c.kind === 'water') {
+      const took = camp.stowWater(c.amount);
+      by.note(`+ ${took.toFixed(0)} L of water`, 'good');
     }
     return true;
   }

@@ -27,6 +27,10 @@ export interface Components {
   oil: number;
   /** Radiator condition, 0..1: a holed core sheds less heat. */
   radiator: number;
+  /** Gearbox condition, 0..1. */
+  gearbox: number;
+  /** Water in the cooling system, 0..1. */
+  coolant: number;
 }
 
 export interface VehicleHealth {
@@ -39,6 +43,8 @@ export interface VehicleHealth {
   destroyed: boolean;
   /** Extra armour from bolt-on parts, by the side the hit lands on (bull bar, side plates). */
   armorBonus?: { front: number; side: number; rear: number };
+  /** The bonnet is off: the engine is out in the open and takes more of what lands on the front. */
+  engineExposed?: boolean;
 }
 
 export function newHealth(maxHp: number, armor: number, wheels: number): VehicleHealth {
@@ -46,7 +52,7 @@ export function newHealth(maxHp: number, armor: number, wheels: number): Vehicle
     hp: maxHp,
     maxHp,
     armor,
-    comp: { engine: 1, tires: new Array(wheels).fill(1), tank: 1, mount: 1, plates: 1, oil: 1, radiator: 1 },
+    comp: { engine: 1, tires: new Array(wheels).fill(1), tank: 1, mount: 1, plates: 1, oil: 1, radiator: 1, gearbox: 1, coolant: 1 },
     leaking: false,
     burning: false,
     destroyed: false,
@@ -88,22 +94,24 @@ export function applyHit(h: VehicleHealth, raw: number, o: HitOpts): { dealt: nu
   const chance = clamp(dealt / (h.maxHp * 0.25), 0, 0.5);
   if (o.roll() < chance) {
     const r = o.roll();
+    // With the bonnet off the engine sits right behind whatever hits the front.
+    const eT = h.engineExposed && o.facing === 'front' ? 0.5 : 0.3;
     if (o.wheel !== undefined && h.comp.tires[o.wheel] > 0) {
       h.comp.tires[o.wheel] = 0;
       events.push({ kind: 'tire', wheel: o.wheel });
-    } else if (r < 0.3) {
+    } else if (r < eT) {
       h.comp.engine = Math.max(0, h.comp.engine - 0.35);
       // A holed block bleeds its oil, and the shrapnel finds the radiator too.
       h.comp.oil = Math.max(0, h.comp.oil - 0.2);
       h.comp.radiator = Math.max(0, (h.comp.radiator ?? 1) - 0.25);
       events.push({ kind: 'engine' });
-    } else if (r < 0.6) {
+    } else if (r < eT + 0.3) {
       const w = Math.floor(o.roll() * h.comp.tires.length);
       if (h.comp.tires[w] > 0) {
         h.comp.tires[w] = 0;
         events.push({ kind: 'tire', wheel: w });
       }
-    } else if (r < 0.8) {
+    } else if (r < eT + 0.5) {
       if (!h.leaking) events.push({ kind: 'leak' });
       h.leaking = true;
       h.comp.tank = Math.max(0, h.comp.tank - 0.3);
@@ -171,6 +179,10 @@ export function repairStep(h: VehicleHealth): string {
     h.comp.radiator = Math.min(1, (h.comp.radiator ?? 1) + 0.6);
     return 'radiator';
   }
+  if ((h.comp.gearbox ?? 1) < 1) {
+    h.comp.gearbox = Math.min(1, (h.comp.gearbox ?? 1) + 0.6);
+    return 'gearbox';
+  }
   if (h.comp.mount < 1) {
     h.comp.mount = 1;
     return 'mount';
@@ -203,6 +215,10 @@ export function fixOneComponent(h: VehicleHealth): string {
     h.comp.radiator = Math.min(1, (h.comp.radiator ?? 1) + 0.6);
     return 'radiator';
   }
+  if ((h.comp.gearbox ?? 1) < 1) {
+    h.comp.gearbox = Math.min(1, (h.comp.gearbox ?? 1) + 0.6);
+    return 'gearbox';
+  }
   if (h.comp.mount < 1) {
     h.comp.mount = 1;
     return 'mount';
@@ -217,6 +233,7 @@ export function needsRepair(h: VehicleHealth) {
     h.leaking ||
     h.comp.engine < 1 ||
     (h.comp.radiator ?? 1) < 0.7 ||
+    (h.comp.gearbox ?? 1) < 0.7 ||
     h.comp.mount < 1 ||
     h.comp.tires.some((t) => t <= 0)
   );

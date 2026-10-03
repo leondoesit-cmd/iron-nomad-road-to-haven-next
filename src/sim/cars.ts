@@ -55,7 +55,7 @@ export function rollCar(seed: number, o: { biome: 'wasteland' | 'city'; chassis?
   const wheels = b.comp.tires.length;
   if (status === 'hulk') {
     b.hp = 0.05;
-    b.comp = { engine: 0, tires: b.comp.tires.map(() => 0), tank: 0, mount: 0, plates: 0.1, oil: 0, radiator: 0.1, leaking: false };
+    b.comp = { engine: 0, tires: b.comp.tires.map(() => 0), tank: 0, mount: 0, plates: 0.1, oil: 0, radiator: 0.1, gearbox: 0.2, coolant: 0, leaking: false };
     b.fuel = 0;
     return { status, build: b };
   }
