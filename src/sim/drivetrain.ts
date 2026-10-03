@@ -56,6 +56,7 @@ export function exhaustSpec(def: VehicleDef, fit: Fit): ExhaustSpec {
 }
 
 const stockGearbox = (def: VehicleDef) => (hasPart(factoryId(def, 'gbx')) ? partDef(factoryId(def, 'gbx')).gearbox! : NEUTRAL_GEARBOX);
+const stockBrakes = (def: VehicleDef) => (hasPart(factoryId(def, 'brk')) ? partDef(factoryId(def, 'brk')).brakes! : NEUTRAL_BRAKES);
 
 /** Bonnet and doors that are off the vehicle. */
 export function bodyOff(def: VehicleDef, fit: Fit): { hood: boolean; doors: number } {
@@ -112,9 +113,12 @@ export function drivetrainEffects(def: VehicleDef, fit: Fit, ef: EngineEffects, 
   const grip = overload > 1 ? clamp(1 - 0.3 * over, 0.45, 1) : 1;
   const v = (def.topSpeedKmh * topMult) / 3.6;
   const stopDemand = (0.5 * mass * v * v) / 1000;
-  const ratio = stopDemand > 0 ? brk.energy / stopDemand : 9;
+  // How well the brakes cope with this stop, against how well the factory ones cope with the factory stop: stock is 1.
+  const stockDemand = (0.5 * def.physics.mass * Math.pow(def.topSpeedKmh / 3.6, 2)) / 1000;
+  const stockCope = stockDemand > 0 ? stockBrakes(def).energy / stockDemand : 1;
+  const ratio = stopDemand > 0 && stockCope > 0 ? brk.energy / stopDemand / stockCope : 9;
   // A chassis with no brake data (a raider's buggy, a boat) just brakes as the table says.
-  const brake = brk.energy >= 1e8 ? 1 : clamp(brk.power * (Math.abs(ratio - 1) < 0.01 ? 1 : Math.min(1.6, ratio)), 0.2, 2.4);
+  const brake = brk.energy >= 1e8 ? 1 : clamp(brk.power * Math.min(1.6, ratio), 0.2, 2.4);
   return {
     force,
     top,

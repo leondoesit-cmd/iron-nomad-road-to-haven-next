@@ -25,7 +25,7 @@ import type { MeleeStats } from '../data';
 import { OIL_LOW, pourOil } from '../sim/oil';
 import { COOLANT_LOW, WATER_CAN, WATER_RESERVE_MAX, pourWater } from '../sim/fluids';
 import { TANK_DREGS, addReserve, planDrain, reserveOf, takeReserve } from '../sim/fuel';
-import { dropCarry, guide, sitePos, haulCandidate, haulKey, haulPrompt, returnCarry, stashBeforeEntering } from './hauling';
+import { dropCarry, guide, sitePos, haulCandidate, haulKey, haulPrompt, pryCandidate, returnCarry, stashBeforeEntering } from './hauling';
 
 export interface Cand {
   kind: string;
@@ -1380,7 +1380,7 @@ export class Player implements Pilot {
     if (this.carry && wasPressed(it, Btn.X) && !this.action) haulKey(this);
     // 3. Tools on vehicles: the wrench repairs, the crowbar strips, the jerrycan fills and siphons.
     if (!cand && !this.carry && this.equip === 'wrench') cand = this.repairCandidate();
-    else if (!cand && !this.carry && this.equip === 'crowbar') cand = this.salvageCandidate();
+    else if (!cand && !this.carry && this.equip === 'crowbar') cand = this.salvageCandidate() ?? pryCandidate(this);
     else if (!cand && !this.carry && this.equip === 'jerrycan') cand = this.fuelCandidate();
     // X with the wrench: open the field workbench for a convoy vehicle.
     if (this.equip === 'wrench' && !this.carry && wasPressed(it, Btn.X) && !this.action) {

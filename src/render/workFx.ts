@@ -19,6 +19,14 @@ export type Site = 'hood' | 'wheel' | 'flank' | 'roof' | 'rear' | 'front' | 'gun
 /** Where each part slot is drawn. */
 export const SLOT_SITE: Record<string, Site> = {
   engine: 'hood',
+  cooling: 'front',
+  hood: 'hood',
+  doorL: 'flank',
+  doorR: 'flank',
+  gearbox: 'under',
+  exhaust: 'rear',
+  suspension: 'wheel',
+  brakes: 'wheel',
   wheels: 'wheel',
   armor: 'flank',
   weapon: 'gun',

@@ -911,6 +911,105 @@ function pickupGeometry(kind: string): THREE.BufferGeometry {
       if (mk >= 2) b.box(-0.06, 0.37, -0.18, 0.18, 0.02, 0.05, S.glow(mk >= 3 ? 0xffb454 : 0x7ddc7a, 2));
       break;
     }
+    case 'gear1':
+    case 'gear2':
+    case 'gear3': {
+      // A gearbox on a stand: bell housing, cast case with ribs, an output shaft and a mounting plate. Better ones are alloy.
+      const mk = Number(kind.slice(4));
+      const casing = mk >= 3 ? S.metal(0xb4b8bc, 0.4) : mk === 2 ? S.metal(0x8a8e92, 0.5) : S.steel(0x4a4d50, 0.7);
+      b.rbox(0, 0.05, 0, 0.62, 0.07, 0.34, 0.015, S.steel(0x2e3134, 0.7));
+      b.cyl(-0.2, 0.26, 0, 0.36, 0.34, 0.36, casing, 0, 0, Math.PI / 2, 16);
+      b.rbox(0.1, 0.25, 0, 0.36, 0.3, 0.3, 0.04, casing);
+      for (let i = 0; i < 4; i++) b.box(0.02 + i * 0.09, 0.42, 0, 0.025, 0.05, 0.28, S.steel(0x3a3d40, 0.7));
+      b.cyl(0.38, 0.25, 0, 0.09, 0.2, 0.09, S.chrome(0xb8bcc0), 0, 0, Math.PI / 2, 10);
+      b.cyl(0.46, 0.25, 0, 0.14, 0.03, 0.14, S.steel(0x2a2c2e), 0, 0, Math.PI / 2, 10);
+      b.rod(0.1, 0.4, 0.05, 0.1, 0.62, -0.02, 0.018, S.metal(0x2a2c2e), 6);
+      b.sphereAt(0.1, 0.64, -0.02, 0.04, S.plastic(0x1c1c1c, 0.5));
+      if (mk >= 2) b.box(0.1, 0.3, 0.155, 0.2, 0.05, 0.01, S.glow(mk >= 3 ? 0xffb454 : 0x7ddc7a, 2));
+      break;
+    }
+    case 'spring1':
+    case 'spring2':
+    case 'spring3': {
+      // A coil-over: damper tube, a coil spring round it, mounting eyes. The best have a reservoir.
+      const mk = Number(kind.slice(6));
+      const col = mk >= 3 ? 0xe07a1a : mk === 2 ? 0x2a7a3a : 0x3a6ab8;
+      for (const dx of [-0.16, 0.16]) {
+        b.cyl(dx, 0.34, 0, 0.07, 0.62, 0.07, S.metal(0x8a8e92, 0.4), 0, 0, 0, 10);
+        for (let i = 0; i < 9; i++) b.torus(dx, 0.14 + i * 0.058, 0, 0.1, 0.014, S.paint(col, 0.4), Math.PI / 2, 0, 0, 5, 14);
+        for (const y of [0.04, 0.66]) b.torus(dx, y, 0, 0.045, 0.018, S.steel(0x2a2c2e), 0, Math.PI / 2, 0, 6, 10);
+        if (mk >= 2) b.cyl(dx + 0.1, 0.4, 0, 0.06, 0.26, 0.06, S.paint(col, 0.4), 0, 0, 0, 10);
+      }
+      break;
+    }
+    case 'brake1':
+    case 'brake2':
+    case 'brake3': {
+      // A disc with a caliper: drilled and bigger at the better grades, red calipers on the best.
+      const mk = Number(kind.slice(5));
+      const R = 0.17 + mk * 0.03;
+      b.cyl(0, 0.3, 0, R * 2, 0.035, R * 2, S.metal(0x8a8e92, 0.45), Math.PI / 2, 0, 0, 24);
+      b.cyl(0, 0.3, 0, R * 0.7, 0.07, R * 0.7, S.steel(0x3a3d40, 0.7), Math.PI / 2, 0, 0, 14);
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2;
+        b.cyl(Math.cos(a) * R * 0.38, 0.3 + Math.sin(a) * R * 0.38, 0, 0.022, 0.08, 0.022, S.chrome(), Math.PI / 2, 0, 0, 6);
+      }
+      if (mk >= 2) for (let i = 0; i < 14; i++) {
+        const a = (i / 14) * Math.PI * 2;
+        b.cyl(Math.cos(a) * R * 0.82, 0.3 + Math.sin(a) * R * 0.82, 0, 0.018, 0.045, 0.018, S.plastic(0x101010), Math.PI / 2, 0, 0, 6);
+      }
+      b.rbox(R * 0.78, 0.3 + R * 0.32, 0, 0.1, 0.18, 0.16, 0.02, S.paint(mk >= 3 ? 0xd62a1a : mk === 2 ? 0xe0a01a : 0x5a5d60, 0.35), 0, 0, 0.5);
+      break;
+    }
+    case 'pipe1':
+    case 'pipe2':
+    case 'pipe3': {
+      // An exhaust run: header collector, a muffler and a tip. The quiet ones have a fat can, the race ones bare tubes.
+      const mk = Number(kind.slice(4));
+      const tube = mk >= 2 ? S.chrome(0xc4c8cc) : S.steel(0x5a4a3a, 0.8);
+      b.pipe([[-0.3, 0.34, 0], [-0.12, 0.14, 0.02], [0.1, 0.14, 0.02]], 0.035, tube, 8);
+      if (mk >= 2) {
+        b.pipe([[-0.3, 0.46, 0.06], [-0.14, 0.2, -0.02], [0.1, 0.14, 0]], 0.035, tube, 8);
+        b.pipe([[-0.3, 0.4, -0.06], [-0.12, 0.17, 0.04], [0.1, 0.14, 0.04]], 0.035, tube, 8);
+      }
+      b.cyl(0.18, 0.14, 0.02, mk === 1 ? 0.2 : 0.13, 0.4, mk === 1 ? 0.2 : 0.13, S.steel(0x6a6c70, 0.6), 0, 0, Math.PI / 2, 16);
+      b.pipe([[0.36, 0.14, 0.02], [0.46, 0.16, 0.02]], 0.04, S.chrome(0xdadee2), 10);
+      b.cyl(-0.3, 0.4, 0, 0.12, 0.05, 0.12, S.steel(0x3a3d40, 0.7), 0, 0, 0, 10);
+      break;
+    }
+    case 'hood1':
+    case 'hood2':
+    case 'hood3': {
+      // A bonnet lying face up: hinge tabs, a pressed crease, and a vent or scoop at the better grades.
+      const mk = Number(kind.slice(4));
+      const pan = mk >= 3 ? S.steel(0x4a4d50, 0.8) : S.paint(0x7a8a98, 0.6);
+      b.rbox(0, 0.14, 0, 0.8, 0.05, 0.56, 0.02, pan, 0, 0, 0);
+      b.rbox(0, 0.17, 0, 0.5, 0.02, 0.38, 0.01, pan);
+      for (const sx of [1, -1]) b.box(sx * 0.3, 0.14, -0.3, 0.1, 0.06, 0.06, S.steel(0x2a2c2e));
+      if (mk === 2) {
+        b.rbox(0, 0.23, 0.05, 0.26, 0.1, 0.22, 0.03, pan);
+        b.box(0, 0.23, 0.17, 0.2, 0.07, 0.02, S.plastic(0x0c0c0c));
+      } else {
+        for (let i = 0; i < 4; i++) b.box(0, 0.18, -0.02 + i * 0.07, 0.3, 0.012, 0.03, S.plastic(0x0c0c0c));
+      }
+      if (mk >= 3) for (let i = 0; i < 8; i++) b.cyl(-0.34 + (i % 4) * 0.22, 0.175, i < 4 ? 0.2 : -0.16, 0.025, 0.012, 0.025, S.steel(0x2a2c2e), 0, 0, 0, 6);
+      break;
+    }
+    case 'door1':
+    case 'door2':
+    case 'door3': {
+      // A door leaning on its hinge edge: frame, glass or canvas, handle, plated at the better grades.
+      const mk = Number(kind.slice(4));
+      const pan = mk === 1 ? S.cloth(0x8a7a52, 0.8) : S.paint(0x7a8a98, 0.6);
+      b.rbox(0, 0.36, 0, 0.1, 0.62, 0.78, 0.02, pan);
+      b.box(0.03, 0.64, 0.02, 0.06, 0.2, 0.62, S.glass(0x1a262e));
+      b.box(0.06, 0.4, 0.28, 0.04, 0.03, 0.14, S.chrome(0xb4b8bc));
+      if (mk >= 2) {
+        b.rbox(0.05, 0.28, 0, 0.04, 0.42, 0.7, 0.012, S.steel(mk >= 3 ? 0x3a3d40 : 0x5a5d60, 0.75));
+        for (let i = 0; i < 6; i++) b.cyl(0.075, 0.12 + (i % 2) * 0.32, -0.28 + Math.floor(i / 2) * 0.28, 0.025, 0.012, 0.025, S.steel(0x2a2c2e), 0, 0, Math.PI / 2, 6);
+      }
+      break;
+    }
     case 'fragment':
       b.rbox(0, 0.22, 0, 0.5, 0.36, 0.3, 0.03, S.paint(0x2a2e33, 0.5));
       b.rbox(-0.05, 0.25, 0.155, 0.26, 0.16, 0.01, 0.01, S.glow(C.fragment, 2.5));
@@ -940,7 +1039,7 @@ export function makeCarryModel(kind: string): THREE.Group {
   const g = new THREE.Group();
   const m = new THREE.Mesh(pickupGeometry(kind), pickupMat);
   m.castShadow = true;
-  m.scale.setScalar(/^(part|engine|radiator|tyre)\d$/.test(kind) ? 0.9 : 1.1);
+  m.scale.setScalar(/^(part|engine|radiator|tyre|gear|spring|brake|pipe|hood|door)\d$/.test(kind) ? 0.9 : 1.1);
   g.add(m);
   return g;
 }
@@ -972,6 +1071,11 @@ const GLOW: Record<string, number> = {
   tyre2: 0x7ddc7a,
   tyre3: 0xffb454,
 };
+for (const k of ['gear', 'spring', 'brake', 'pipe', 'hood', 'door']) {
+  GLOW[`${k}1`] = 0xe6dcc0;
+  GLOW[`${k}2`] = 0x7ddc7a;
+  GLOW[`${k}3`] = 0xffb454;
+}
 
 export function makePickup(kind: string): PickupModel {
   const group = new THREE.Group();

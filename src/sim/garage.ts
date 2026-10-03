@@ -149,7 +149,7 @@ function stockPartId(def: VehicleDef, slot: PartSlot): string | undefined {
 }
 
 /** What the "empty" placeholder for a stripped mount is called in the catalogue. */
-const EMPTY_ID: Partial<Record<PartSlot, string>> = {
+export const EMPTY_ID: Partial<Record<PartSlot, string>> = {
   engine: 'eng_none',
   cooling: 'rad_none',
   gearbox: 'gbx_none',

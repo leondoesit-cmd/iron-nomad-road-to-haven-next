@@ -168,20 +168,26 @@ export function socketsOf(def: VehicleDef): Socket[] {
 }
 
 /**
- * How near a point (chassis frame) is to a socket: the distance to the closest anchor, with height counting half so
- * the engine bay is reachable from the ground.
+ * How near a point (chassis frame) is to a socket: the distance to the closest anchor box, with height counting half so
+ * the engine bay is reachable from the ground. A big panel (the bonnet, a door) is as near as its nearest edge.
  */
-export function socketDistance(sock: Socket, x: number, y: number, z: number): { dist: number; anchor: Anchor } {
+export function socketDistance(sock: Socket, x: number, y: number, z: number): { dist: number; anchor: Anchor; index: number } {
   let best = sock.anchors[0];
+  let bi = 0;
   let bd = Infinity;
-  for (const a of sock.anchors) {
-    const d = Math.hypot(a.x - x, (a.y - y) * 0.5, a.z - z);
+  sock.anchors.forEach((a, i) => {
+    // Distance to the box, not its centre; small boxes (a wheel) behave as before, long ones are reachable along their length.
+    const dx = Math.max(0, Math.abs(a.x - x) - a.sx * 0.35);
+    const dy = Math.max(0, Math.abs(a.y - y) - a.sy * 0.35);
+    const dz = Math.max(0, Math.abs(a.z - z) - a.sz * 0.35);
+    const d = Math.hypot(dx, dy * 0.5, dz);
     if (d < bd) {
       bd = d;
       best = a;
+      bi = i;
     }
-  }
-  return { dist: bd, anchor: best };
+  });
+  return { dist: bd, anchor: best, index: bi };
 }
 
 /** Where a paintable panel is on the vehicle, as a box in the chassis frame: for aiming a spray can. */

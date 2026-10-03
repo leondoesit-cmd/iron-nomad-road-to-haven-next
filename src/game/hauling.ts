@@ -1,11 +1,12 @@
 import * as THREE from 'three';
-import { partDef, type PartSlot } from '../data';
+import { mountsFor, partDef, type PartSlot } from '../data';
 import { MK_CSS, SLOT_SITE, modelKey, type GhostAnchor, type Site } from '../render/workFx';
 import { panelAnchor, socketDistance, socketFor, type Anchor, type Socket } from '../render/sockets';
 import { PANEL_NAME, colorName, panelColor, paintPanel, panelsOf, type PanelId } from '../sim/paint';
 import { OIL_RESERVE_MAX } from './campaign';
 import { carriedName, carryModelKey, inspectLines, liftSecs, partInspect, planFit, planStow, pourFuel, type Carried } from '../sim/carry';
-import { currentCond, idInSlot, installPart } from '../sim/garage';
+import { idInSlot, installPart, removePart, removeTyre, tyreIdAt } from '../sim/garage';
+import { currentCond } from '../sim/garage';
 import { planPour } from '../sim/fuel';
 import { pourOil } from '../sim/oil';
 import { WATER_RESERVE_MAX, pourWater } from '../sim/fluids';
@@ -76,35 +77,77 @@ function anchorWorld(v: Vehicle, a: Anchor): THREE.Vector3 {
   return new THREE.Vector3(x, y, z);
 }
 
-function ghostAnchors(v: Vehicle, sock: Socket): GhostAnchor[] {
+function ghostAnchors(v: Vehicle, sock: Socket, only?: number): GhostAnchor[] {
   const r = v.body.body.rotation();
-  return sock.anchors.map((a) => ({ pos: anchorWorld(v, a), quat: new THREE.Quaternion(r.x, r.y, r.z, r.w), size: [a.sx + 0.04, a.sy + 0.04, a.sz + 0.04] as [number, number, number] }));
+  const list = only === undefined ? sock.anchors : [sock.anchors[only]];
+  return list.map((a) => ({ pos: anchorWorld(v, a), quat: new THREE.Quaternion(r.x, r.y, r.z, r.w), size: [a.sx + 0.04, a.sy + 0.04, a.sz + 0.04] as [number, number, number] }));
 }
 
 export interface SocketHit {
   v: Vehicle;
   sock: Socket;
   anchor: Anchor;
+  /** Which anchor of the socket: for wheels, brakes and springs this is the wheel number. */
+  index: number;
   /** Metres from the player's hands to the closest anchor. */
   dist: number;
 }
 
-/** The socket for a slot that is closest to the player, across the convoy's own vehicles. */
-export function nearestSocket(p: Player, slot: PartSlot, within = SHOW_REACH): SocketHit | null {
+/** Sockets that count as one place per wheel. */
+const PER_WHEEL: PartSlot[] = ['wheels', 'suspension', 'brakes'];
+
+/**
+ * The mount a hit means for `installPart`: the wheel number for a tyre, otherwise the slot. Springs and brakes are
+ * fitted to the whole vehicle, so they name the slot.
+ */
+export function mountOf(hit: SocketHit): PartSlot | number {
+  return hit.sock.slot === 'wheels' ? hit.index : hit.sock.slot;
+}
+
+/** The part fitted at a hit, with how worn it is: the tyre on that wheel, or whatever is in the slot. Null for an empty mount. */
+export function fittedAt(hit: SocketHit): { id: string; cond: number } | null {
+  const b = hit.v.build;
+  if (!b) return null;
+  if (hit.sock.slot === 'wheels') {
+    const id = tyreIdAt(b, hit.index);
+    return id ? { id, cond: b.comp.tires[hit.index] ?? 1 } : null;
+  }
+  const id = idInSlot(b, hit.sock.slot);
+  return id ? { id, cond: currentCond(b, hit.sock.slot) } : null;
+}
+
+/** The sockets a part of this category can go in on a chassis: a door fits either side, a tyre any wheel. */
+function socketsFor(v: Vehicle, category: PartSlot): Socket[] {
+  return mountsFor(category)
+    .filter((m) => (v.def.slots ?? []).includes(m))
+    .map((m) => socketFor(v.def, m))
+    .filter((s): s is Socket => !!s);
+}
+
+/** The socket for a part's category that is closest to the player, across the convoy's own vehicles. */
+export function nearestSocket(p: Player, category: PartSlot, within = SHOW_REACH): SocketHit | null {
   let best: SocketHit | null = null;
   for (const v of p.ctx.vehicles) {
     if (!isOwnRide(v)) continue;
-    const sock = socketFor(v.def, slot);
-    if (!sock) continue;
     const [lx, ly, lz] = toLocal(v, p.pos.x, p.pos.y + 1.0, p.pos.z);
-    const { dist, anchor } = socketDistance(sock, lx, ly, lz);
-    if (dist <= within && (!best || dist < best.dist)) best = { v, sock, anchor, dist };
+    for (const sock of socketsFor(v, category)) {
+      const { dist, anchor, index } = socketDistance(sock, lx, ly, lz);
+      if (dist <= within && (!best || dist < best.dist)) best = { v, sock, anchor, index, dist };
+    }
   }
   return best;
 }
 
-/** Of one vehicle's sockets, the one the player is facing and standing nearest to. */
-function aimedSocket(p: Player, v: Vehicle, within: number): SocketHit | null {
+/** Parts that sit under the body panels: a panel wins when both are in reach, until the panel is off. */
+const INTERNAL: PartSlot[] = ['engine', 'cooling', 'gearbox', 'exhaust', 'suspension', 'brakes'];
+/** Big panels: easy to mean when you are looking at them, so they win a close call against small parts beside them. */
+const PANELS: PartSlot[] = ['hood', 'roof', 'doorL', 'doorR'];
+
+/**
+ * Of one vehicle's sockets, the one the player is facing and standing nearest to. With `occupied`, a mount with nothing
+ * in it does not count, so a crowbar never stops at an empty mount with a part right behind it.
+ */
+function aimedSocket(p: Player, v: Vehicle, within: number, occupied = false): SocketHit | null {
   const [lx, ly, lz] = toLocal(v, p.pos.x, p.pos.y + 1.0, p.pos.z);
   const fx = Math.sin(p.aimYaw);
   const fz = Math.cos(p.aimYaw);
@@ -113,16 +156,18 @@ function aimedSocket(p: Player, v: Vehicle, within: number): SocketHit | null {
   for (const slot of v.def.slots ?? []) {
     const sock = socketFor(v.def, slot);
     if (!sock) continue;
-    const { dist, anchor } = socketDistance(sock, lx, ly, lz);
+    const { dist, anchor, index } = socketDistance(sock, lx, ly, lz);
     if (dist > within) continue;
+    const hit: SocketHit = { v, sock, anchor, index, dist };
+    if (occupied && !fittedAt(hit)) continue;
     const w = anchorWorld(v, anchor);
     const dx = w.x - p.pos.x;
     const dz = w.z - p.pos.z;
     const l = Math.hypot(dx, dz) || 1;
-    const score = dist - 1.4 * Math.max(0, (dx * fx + dz * fz) / l);
+    const score = dist - 1.4 * Math.max(0, (dx * fx + dz * fz) / l) + (INTERNAL.includes(slot) ? 0.35 : 0) - (PANELS.includes(slot) ? 0.3 : 0);
     if (score < bs) {
       bs = score;
-      best = { v, sock, anchor, dist };
+      best = hit;
     }
   }
   return best;
@@ -228,16 +273,17 @@ export function guide(p: Player) {
   if (p.state !== 'foot') return;
   if (p.carry?.kind === 'part') {
     const item = p.carry.item;
-    const slot = partDef(item.id).slot;
-    const hit = nearestSocket(p, slot);
+    const hit = nearestSocket(p, partDef(item.id).slot);
     if (!hit) return;
     const { v, sock, anchor } = hit;
     const inReach = hit.dist <= FIT_REACH;
     const moving = Math.abs(v.speed) > 2;
-    ctx.work.ghost(`g${p.index}`, ghostAnchors(v, sock), !inReach ? 'idle' : moving ? 'blocked' : 'aimed');
+    // From afar every place it could go shows; up close only the one you would fit it to (one wheel of four).
+    const focus = inReach && PER_WHEEL.includes(sock.slot) ? hit.index : undefined;
+    ctx.work.ghost(`g${p.index}`, ghostAnchors(v, sock, focus), !inReach ? 'idle' : moving ? 'blocked' : 'aimed');
     if (inReach && !ctx.work.holding(p.index)) {
-      const cur = v.build ? idInSlot(v.build, slot) : null;
-      const lines = [{ text: sock.label, css: '#cfc8b4' }, { text: cur ? `Now: ${partDef(cur).name}${v.build && cur ? ` ${Math.round(currentCond(v.build, slot) * 100)}%` : ''}` : 'Empty mount', css: '#e6dcc0' }, { text: moving ? 'Wait for it to stop' : `Attach ${partDef(item.id).name}`, css: moving ? '#ff8a6a' : '#8cf08c' }];
+      const cur = fittedAt(hit);
+      const lines = [{ text: sock.label, css: '#cfc8b4' }, { text: cur ? `Now: ${partDef(cur.id).name} ${Math.round(cur.cond * 100)}%` : 'Empty mount', css: '#e6dcc0' }, { text: moving ? 'Wait for it to stop' : `Attach ${partDef(item.id).name}`, css: moving ? '#ff8a6a' : '#8cf08c' }];
       ctx.work.tag(`t${p.index}`, lines, anchorWorld(v, anchor).add(new THREE.Vector3(0, 0.9, 0)));
     }
     return;
@@ -255,16 +301,15 @@ export function guide(p: Player) {
     ctx.work.tag(`i${p.index}`, inspectLines(near.carried), new THREE.Vector3(near.x, near.y + 1.15, near.z));
     return;
   }
-  // The wrench in hand next to your own car: look at what is bolted to it.
-  if (p.equip === 'wrench') {
+  // The wrench or crowbar in hand next to your own car: look at what is bolted to it.
+  if (p.equip === 'wrench' || p.equip === 'crowbar') {
     const v = ownRideNear(p);
     if (!v?.build) return;
     const hit = aimedSocket(p, v, FIT_REACH);
     if (!hit) return;
-    const b = v.build;
-    const id = idInSlot(b, hit.sock.slot);
-    ctx.work.ghost(`g${p.index}`, ghostAnchors(v, hit.sock), 'aimed');
-    const lines = id ? [{ text: hit.sock.label, css: '#cfc8b4' }, ...partInspect({ uid: '', id, cond: currentCond(b, hit.sock.slot) })] : [{ text: hit.sock.label, css: '#cfc8b4' }, { text: 'Empty mount', css: '#ff8a6a' }];
+    const cur = fittedAt(hit);
+    ctx.work.ghost(`g${p.index}`, ghostAnchors(v, hit.sock, PER_WHEEL.includes(hit.sock.slot) ? hit.index : undefined), 'aimed');
+    const lines = cur ? [{ text: hit.sock.label, css: '#cfc8b4' }, ...partInspect({ uid: '', id: cur.id, cond: cur.cond })] : [{ text: hit.sock.label, css: '#cfc8b4' }, { text: 'Empty mount', css: '#ff8a6a' }];
     ctx.work.tag(`t${p.index}`, lines, anchorWorld(v, hit.anchor).add(new THREE.Vector3(0, 0.9, 0)));
   }
 }
@@ -321,6 +366,7 @@ export function haulCandidate(p: Player): Cand | null {
       const id = v.build ? idInSlot(v.build, slot as PartSlot) : null;
       return id ? { id } : undefined;
     },
+    current: hit ? fittedAt(hit) ?? null : undefined,
     fuel: v.fuel,
     tankMax: v.tankMax,
     oil: v.health.comp.oil,
@@ -339,7 +385,7 @@ export function haulCandidate(p: Player): Cand | null {
     ok: plan.ok && !moving,
     label: 'fit',
     noise: c.kind === 'part' ? 22 : 14,
-    run: () => fit(p, v, c),
+    run: () => fit(p, v, c, hit),
     tick: () => {
       if (c.kind === 'part') ctx.work.hold(p.index, c.item, handPos(p), hit ? anchorWorld(v, hit.anchor) : sitePos(v, slotSite(c.item.id)), p.action ? p.action.t / p.action.dur : 0);
       if (c.kind === 'part' && Math.random() < 0.18) ctx.fx.spark(v.position.x + (Math.random() - 0.5), v.position.y + 0.8, v.position.z + (Math.random() - 0.5), 2, 3);
@@ -348,8 +394,61 @@ export function haulCandidate(p: Player): Cand | null {
   };
 }
 
+/**
+ * Crowbar at your own vehicle: pry the part you are facing off its mount and carry it away. A door, the bonnet, a tyre,
+ * the engine, the gearbox: anything bolted on comes off, and the mount shows bare until something else goes on.
+ */
+export function pryCandidate(p: Player): Cand | null {
+  const ctx = p.ctx;
+  const v = ownRideNear(p);
+  if (!v?.build) return null;
+  const hit = aimedSocket(p, v, FIT_REACH, true) ?? aimedSocket(p, v, FIT_REACH);
+  if (!hit) return null;
+  const cur = fittedAt(hit);
+  const label = hit.sock.label;
+  const moving = Math.abs(v.speed) > 2;
+  if (!cur) return { kind: 'pry', prompt: `${label}: nothing to pry off`, dur: 1, target: `${v.id}:${label}`, ok: false, label: 'pry', run: () => {} };
+  const name = partDef(cur.id).name;
+  const wheel = hit.sock.slot === 'wheels';
+  return {
+    kind: 'pry',
+    prompt: moving ? `${v.def.name} is moving` : `Pry off the ${name.toLowerCase()} (${label.toLowerCase()})`,
+    dur: wheel ? 2.2 : hit.sock.slot === 'engine' ? 4.5 : hit.sock.slot === 'gearbox' ? 3.6 : 2.4,
+    target: `${v.id}:${hit.sock.slot}:${hit.index}`,
+    ok: !moving,
+    label: 'pry',
+    noise: 20,
+    run: () => {
+      const b = v.build;
+      if (!b) return;
+      // Write the live wear into the build first, so the part comes off carrying the condition it really had.
+      v.commit();
+      const out = hit.sock.slot === 'wheels' ? removeTyre(b, hit.index) : removePart(b, hit.sock.slot);
+      if (!out) return p.note('It will not come off', 'warn');
+      v.syncFromBuild();
+      const at = anchorWorld(v, hit.anchor);
+      ctx.audio.play('wrench', v.position.x, v.position.z, 0.8);
+      ctx.work.burst(at, 2, 0.8);
+      ctx.work.label(`${label.toUpperCase()}  OFF`, '#ffb454', at.add(new THREE.Vector3(0, 0.8, 0)));
+      if (p.carry) {
+        // Hands are full: the part drops at your feet.
+        ctx.loose?.drop(p.pos.x + Math.sin(p.aimYaw) * 0.8, p.pos.z + Math.cos(p.aimYaw) * 0.8, { kind: 'part', item: out });
+        p.note(`${partName(out)} is off; it is on the ground`, 'info');
+      } else {
+        p.carry = { kind: 'part', item: out };
+        p.note(`${partName(out)} is off: carry it away, or X to stow it`, 'good');
+      }
+    },
+    tick: () => {
+      if (Math.random() < 0.2) ctx.fx.spark(v.position.x + (Math.random() - 0.5), v.position.y + 0.8, v.position.z + (Math.random() - 0.5), 2, 3);
+      ctx.work.ghost(`g${p.index}`, ghostAnchors(v, hit.sock, PER_WHEEL.includes(hit.sock.slot) ? hit.index : undefined), 'aimed');
+      return true;
+    },
+  };
+}
+
 /** Put what is in your hands onto the vehicle. */
-function fit(p: Player, v: Vehicle, c: Carried) {
+function fit(p: Player, v: Vehicle, c: Carried, hit: SocketHit | null) {
   const camp = p.ctx.campaign;
   const ctx = p.ctx;
   if (p.carry !== c) return;
@@ -358,14 +457,13 @@ function fit(p: Player, v: Vehicle, c: Carried) {
       const b = v.build!;
       // Write the live wear into the build first, so what comes off carries the condition it really had.
       v.commit();
-      const res = installPart(b, c.item);
+      const res = installPart(b, c.item, hit ? mountOf(hit) : undefined);
       if (!res.ok) return p.note(res.reason ?? 'It does not fit', 'warn');
       v.syncFromBuild();
       p.carry = null;
       ctx.audio.play('wrench', v.position.x, v.position.z, 0.8);
       const name = partName(c.item);
-      const sock = socketFor(v.def, partDef(c.item.id).slot);
-      const anchor = sock ? anchorWorld(v, socketDistance(sock, ...toLocal(v, p.pos.x, p.pos.y + 1.0, p.pos.z)).anchor) : sitePos(v, slotSite(c.item.id));
+      const anchor = hit ? anchorWorld(v, hit.anchor) : sitePos(v, slotSite(c.item.id));
       const mk = Math.min(3, Math.max(1, partDef(c.item.id).mk));
       ctx.work.swap({
         key: p.index,

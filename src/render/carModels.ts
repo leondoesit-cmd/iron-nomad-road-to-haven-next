@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
-import { addKit, fitSignature, type Mounts, type Rig } from './attachments';
-import { addWheels, blank, bodyMat, headlamp, lightMat as lampOn, lightOffMat as lampOff, rider, taillight, wheelSpec, type VehicleVisual } from './vehicleKit';
+import { addKit, bodyPart, doorSkipsSteel, fitSignature, panelOff, type Mounts, type Rig } from './attachments';
+import type { Fit } from '../sim/parts';
+import { addWheelSet, blank, bodyMat, headlamp, lightMat as lampOn, lightOffMat as lampOff, rider, taillight, wheelSpecs, type VehicleVisual } from './vehicleKit';
 import { acquireShell, releaseShell, type Shell } from './shellCache';
 import { heavyGun } from './parts';
 import { partDef, type VehicleDef } from '../data';
@@ -141,7 +142,12 @@ function lowerBody(b: MeshBuilder, sp: Spec, d: VehicleDef, paint: ReturnType<ty
   const archTop = R * 2 + 0.06;
   for (const sx of [1, -1]) {
     const x = sx * (hw - 0.07);
-    for (const [a, c] of zones) b.rbox(x, yc, (a + c) / 2, 0.14, h, Math.abs(a - c), 0.04, paint);
+    const doorSlot = sx > 0 ? 'doorL' : 'doorR';
+    zones.forEach(([a, c], zi) => {
+      // The middle panel is the door; if the door is off the mount shows through, and a canvas one is drawn by the kit.
+      if (zi === 1 && doorSkipsSteel(look.fit, doorSlot)) return;
+      b.rbox(x, yc, (a + c) / 2, 0.14, h, Math.abs(a - c), 0.04, paint);
+    });
     for (const wz of [wf, wr]) {
       // Fender above the arch, and the lip that rounds its opening.
       b.rbox(x, (archTop + sp.belt) / 2, wz, 0.14, Math.max(0.05, sp.belt - archTop), gap * 2, 0.04, paint);
@@ -214,11 +220,23 @@ function trim(b: MeshBuilder, sp: Spec, trimMat: ReturnType<typeof S.metal>) {
   void hw;
 }
 
+/** The bonnet: a pressed panel, or vented, scooped or armoured. With it off, `addKit` draws the bay. */
+function bonnet(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, look: VehicleLook, thick: number, tilt: number) {
+  const part = bodyPart(look.fit, 'hood');
+  if (part?.off) return;
+  const nose = sp.L / 2;
+  const armored = part?.id === 'hood_armor';
+  const pan = armored ? S.steel(0x5a5d60, 0.8) : paint;
+  b.rbox(0, sp.hood - 0.04, (nose + sp.wsBase) / 2 - 0.02, sp.W - 0.1, thick + (armored ? 0.03 : 0), nose - sp.wsBase - 0.04, 0.05, pan, tilt, 0, 0);
+}
+
 /** Doors: seam lines and handles, mirrors. */
-function doors(b: MeshBuilder, sp: Spec, zA: number, zB: number) {
+function doors(b: MeshBuilder, sp: Spec, zA: number, zB: number, fit: Fit) {
   const hw = sp.W / 2;
   const seam = S.plastic(0x0e0e0e, 0.3);
   for (const sx of [1, -1]) {
+    // No door, no seams, handles or mirror.
+    if (panelOff(fit, sx > 0 ? 'doorL' : 'doorR')) continue;
     const x = sx * (hw + 0.004);
     for (const z of [zA, (zA + zB) / 2, zB]) b.box(x, (sp.sill + sp.belt) / 2 + 0.04, z, 0.006, sp.belt - sp.sill - 0.12, 0.01, seam);
     b.box(x + sx * 0.012, sp.belt - 0.12, zA - 0.16, 0.02, 0.025, 0.16, S.chrome(0xb4b8bc));
@@ -252,11 +270,11 @@ function weather(b: MeshBuilder, sp: Spec, look: VehicleLook) {
 
 // ------------------------------------------------------------------ the four bodies
 
-function hatchBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, roofMat: ReturnType<typeof S.paint>, glass: ReturnType<typeof S.glass>, d: VehicleDef) {
+function hatchBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, roofMat: ReturnType<typeof S.paint>, glass: ReturnType<typeof S.glass>, d: VehicleDef, look: VehicleLook) {
   const hw = sp.W / 2;
   const nose = sp.L / 2;
   // Bonnet and cowl.
-  b.rbox(0, sp.hood - 0.04, (nose + sp.wsBase) / 2 - 0.02, sp.W - 0.1, 0.1, nose - sp.wsBase - 0.04, 0.05, paint, -0.02, 0, 0);
+  bonnet(b, sp, paint, look, 0.1, -0.02);
   // Windscreen and pillars.
   slab(b, [sp.belt + 0.02, sp.wsBase], [sp.roof, sp.wsTop], sp.W - 0.26, 0.016, glass);
   // Roof and tailgate.
@@ -271,13 +289,13 @@ function hatchBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, 
     b.rbox(sx * (hw - 0.07), sp.belt + 0.02, (sp.wsBase + sp.rwBase) / 2, 0.06, 0.06, sp.wsBase - sp.rwBase, 0.02, paint);
   }
   interior(b, sp, d, -0.2);
-  doors(b, sp, 0.55, -0.55);
+  doors(b, sp, 0.55, -0.55, look.fit);
 }
 
-function sedanBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, roofMat: ReturnType<typeof S.paint>, glass: ReturnType<typeof S.glass>, d: VehicleDef) {
+function sedanBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, roofMat: ReturnType<typeof S.paint>, glass: ReturnType<typeof S.glass>, d: VehicleDef, look: VehicleLook) {
   const hw = sp.W / 2;
   const nose = sp.L / 2;
-  b.rbox(0, sp.hood - 0.04, (nose + sp.wsBase) / 2 - 0.02, sp.W - 0.1, 0.1, nose - sp.wsBase - 0.04, 0.05, paint, -0.02, 0, 0);
+  bonnet(b, sp, paint, look, 0.1, -0.02);
   slab(b, [sp.belt + 0.02, sp.wsBase], [sp.roof, sp.wsTop], sp.W - 0.26, 0.016, glass);
   b.rbox(0, sp.roof + 0.015, (sp.wsTop + sp.rwTop) / 2, sp.W - 0.24, 0.07, sp.wsTop - sp.rwTop + 0.12, 0.04, roofMat);
   slab(b, [sp.belt + 0.06, sp.rwBase], [sp.roof, sp.rwTop], sp.W - 0.3, 0.016, glass);
@@ -291,13 +309,13 @@ function sedanBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, 
     b.rbox(sx * (hw - 0.07), sp.belt + 0.02, (sp.wsBase + sp.rwBase) / 2, 0.06, 0.06, sp.wsBase - sp.rwBase, 0.02, paint);
   }
   interior(b, sp, d, -0.15);
-  doors(b, sp, 0.62, -0.28);
+  doors(b, sp, 0.62, -0.28, look.fit);
 }
 
-function pickupBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, roofMat: ReturnType<typeof S.paint>, glass: ReturnType<typeof S.glass>, d: VehicleDef, rust: ReturnType<typeof S.rust>) {
+function pickupBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, roofMat: ReturnType<typeof S.paint>, glass: ReturnType<typeof S.glass>, d: VehicleDef, rust: ReturnType<typeof S.rust>, look: VehicleLook) {
   const hw = sp.W / 2;
   const nose = sp.L / 2;
-  b.rbox(0, sp.hood - 0.04, (nose + sp.wsBase) / 2 - 0.02, sp.W - 0.1, 0.12, nose - sp.wsBase - 0.04, 0.05, paint, -0.02, 0, 0);
+  bonnet(b, sp, paint, look, 0.12, -0.02);
   slab(b, [sp.belt + 0.02, sp.wsBase], [sp.roof, sp.wsTop], sp.W - 0.28, 0.016, glass);
   b.rbox(0, sp.roof + 0.015, (sp.wsTop + sp.rwTop) / 2 + 0.02, sp.W - 0.22, 0.08, sp.wsTop - sp.rwTop + 0.12, 0.04, roofMat);
   // Cab back wall with a small rear window.
@@ -321,14 +339,14 @@ function pickupBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>,
   b.rbox(0, (floor + 1.18) / 2, zr, sp.W - 0.12, 1.18 - floor, 0.08, 0.03, paint);
   b.rbox(0, (floor + 1.12) / 2, zf, sp.W - 0.12, 1.12 - floor + 0.1, 0.08, 0.03, paint);
   interior(b, sp, d, 0.2);
-  doors(b, sp, 0.9, 0.0);
+  doors(b, sp, 0.9, 0.0, look.fit);
 }
 
-function vanBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, roofMat: ReturnType<typeof S.paint>, glass: ReturnType<typeof S.glass>, d: VehicleDef, rust: ReturnType<typeof S.rust>) {
+function vanBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, roofMat: ReturnType<typeof S.paint>, glass: ReturnType<typeof S.glass>, d: VehicleDef, rust: ReturnType<typeof S.rust>, look: VehicleLook) {
   const hw = sp.W / 2;
   const nose = sp.L / 2;
   // Short bonnet and a tall box behind the cab.
-  b.rbox(0, sp.hood - 0.04, (nose + sp.wsBase) / 2 - 0.02, sp.W - 0.1, 0.12, nose - sp.wsBase - 0.04, 0.05, paint, -0.03, 0, 0);
+  bonnet(b, sp, paint, look, 0.12, -0.03);
   slab(b, [sp.belt + 0.02, sp.wsBase], [sp.roof - 0.1, sp.wsTop], sp.W - 0.24, 0.016, glass);
   // Cargo box: solid sides and roof from behind the cab to the tail.
   const zf = sp.rwBase;
@@ -347,7 +365,7 @@ function vanBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, ro
   }
   b.box(0, (sp.belt + sp.roof) / 2, zr - 0.005, 0.02, sp.roof - sp.belt - 0.2, 0.012, S.plastic(0x0e0e0e, 0.3));
   interior(b, sp, d, 0.95);
-  doors(b, sp, 1.05, 0.62);
+  doors(b, sp, 1.05, 0.62, look.fit);
 }
 
 // ------------------------------------------------------------------ assembly
@@ -383,10 +401,10 @@ function makeShell(def: VehicleDef, look: VehicleLook): Shell {
   const trimMat = look.seed % 3 === 0 ? rust : S.metal(0x6a6c6e, 0.9);
   lowerBody(b, sp, def, paint, look);
   trim(b, sp, trimMat);
-  if (sp.id === 'hatch') hatchBody(b, sp, paint, roofMat, glass, def);
-  else if (sp.id === 'sedan') sedanBody(b, sp, paint, roofMat, glass, def);
-  else if (sp.id === 'pickup') pickupBody(b, sp, paint, roofMat, glass, def, rust);
-  else vanBody(b, sp, paint, roofMat, glass, def, rust);
+  if (sp.id === 'hatch') hatchBody(b, sp, paint, roofMat, glass, def, look);
+  else if (sp.id === 'sedan') sedanBody(b, sp, paint, roofMat, glass, def, look);
+  else if (sp.id === 'pickup') pickupBody(b, sp, paint, roofMat, glass, def, rust, look);
+  else vanBody(b, sp, paint, roofMat, glass, def, rust, look);
   lights(b, rig, sp, sp.id === 'pickup' || sp.id === 'van');
   weather(b, sp, look);
   const nativeGun = false;
@@ -395,7 +413,8 @@ function makeShell(def: VehicleDef, look: VehicleLook): Shell {
   // A pickup's gun is the pivoting bed gun built on the visual, not a fixed one.
   const fixedGun = !!wpnPart && def.weaponMount === 'front';
   const kitLook = look;
-  addKit(b, rig, fixedGun ? m : { ...m, gun: undefined }, kitLook, { nativeGun });
+  const wheels = wheelXZ(def).map(([x, z]) => [x, z] as [number, number]);
+  addKit(b, rig, fixedGun ? m : { ...m, gun: undefined }, kitLook, { nativeGun, wheels, bayFloor: sp.belt - 0.03 });
   paintPanels(b, look.paint, look.panels, m);
   b.groundShade(0.0, 0.5, 0.35);
   const geo = b.build();
@@ -403,6 +422,15 @@ function makeShell(def: VehicleDef, look: VehicleLook): Shell {
   geo.computeBoundingSphere();
   geo.computeBoundingBox();
   return { geo, lamps, tails, muzzle };
+}
+
+/** Wheel centres (x, z) in the chassis frame, in wheel order. */
+function wheelXZ(def: VehicleDef): [number, number][] {
+  const p = def.physics;
+  const out: [number, number][] = [];
+  const xs = p.wheelsX[0] === 0 ? [0] : p.wheelsX;
+  for (const z of p.wheelsZ) for (const x of xs) if (out.length < p.wheelCount) out.push([x, z]);
+  return out;
 }
 
 function shellKey(def: VehicleDef, look: VehicleLook): string {
@@ -424,9 +452,7 @@ export function buildCar(def: VehicleDef, wheelLocal: [number, number, number][]
   v.setHeadlights = (on: boolean) => {
     for (const h of v.headlights) h.material = on ? lampOn : lampOff;
   };
-  const wm = look.fit.wheels ? partDef(look.fit.wheels.id).mk : 0;
-  const ws = wheelSpec(def, wm);
-  addWheels(v, def, wheelLocal, steered, ws.width, ws.style);
+  addWheelSet(v, def, wheelLocal, steered, wheelSpecs(def, look.tyres, look.brakeMk ?? 0));
   // Seats: occupants are built the first time someone sits down.
   const seat = def.seat!;
   const seatY = SPECS[def.id as Spec['id']].sill + 0.34 - g0 - 0.2;

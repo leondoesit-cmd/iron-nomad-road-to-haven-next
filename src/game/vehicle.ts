@@ -779,10 +779,8 @@ export class Vehicle {
     for (let i = 0; i < v.wheels.length; i++) {
       const w = v.wheels[i];
       const susp = this.body.wheelSusp(i);
-      // A flat tyre sits squashed on its rim.
-      const bare = !!this.build && !!this.build.tyres[i] && partDefEmpty(this.build.tyres[i]!.id);
-      w.pivot.visible = !bare;
-      const flat = this.health.comp.tires[i] <= 0.001;
+      // A flat tyre sits squashed on its rim; a wheel with no tyre has nothing to squash.
+      const flat = !w.bare && this.health.comp.tires[i] <= 0.001;
       w.flatK = damp(w.flatK, flat ? 1 : 0, 10, dt);
       w.pivot.scale.y = 1 - 0.22 * w.flatK;
       w.pivot.position.y = this.def.physics.hardY - susp - w.radius * 0.22 * w.flatK;
@@ -845,7 +843,6 @@ export class Vehicle {
   }
 }
 
-const partDefEmpty = (id: string) => !!partDef(id).empty;
 const charMat = shared(new THREE.MeshStandardMaterial({ color: 0x15130f, roughness: 0.95, metalness: 0.2 }));
 void rotateByQuat;
 void COOLANT_LOW;

@@ -1,4 +1,4 @@
-import { PARTS, partDef, type FuelType, type VehicleDef } from '../data';
+import { PARTS, mountsFor, partDef, type FuelType, type PartSlot, type VehicleDef } from '../data';
 import { RARITY_CSS, describePart, isWorn, slotsOf, type PartItem } from './parts';
 import { OIL_CAN, pourOil } from './oil';
 import { engineLine } from './engines';
@@ -38,7 +38,19 @@ export interface Loose {
 export function partModelKey(id: string): string {
   const d = partDef(id);
   const mk = Math.min(3, Math.max(1, d.stock ? 1 : d.mk));
-  return d.slot === 'engine' ? `engine${mk}` : d.slot === 'cooling' ? `radiator${mk}` : d.slot === 'wheels' ? `tyre${mk}` : `part${mk}`;
+  const KEY: Partial<Record<PartSlot, string>> = {
+    engine: 'engine',
+    cooling: 'radiator',
+    wheels: 'tyre',
+    gearbox: 'gear',
+    suspension: 'spring',
+    brakes: 'brake',
+    exhaust: 'pipe',
+    hood: 'hood',
+    doorL: 'door',
+    doorR: 'door',
+  };
+  return `${KEY[d.slot] ?? 'part'}${mk}`;
 }
 
 /** Which little model stands for a carried thing, in the arms and in flight. */
@@ -126,6 +138,8 @@ export interface FitTarget {
   def: VehicleDef;
   /** The part now in the slot, if any (its name, for the prompt). */
   fitted: (slot: string) => { id: string } | undefined;
+  /** The part at the very mount the player is standing at (one wheel, one door), when that is known: null for a bare mount. */
+  current?: { id: string } | null;
   fuel: number;
   tankMax: number;
   oil: number;
@@ -150,12 +164,12 @@ export function planFit(c: Carried, t: FitTarget): FitPlan {
   switch (c.kind) {
     case 'part': {
       const d = partDef(c.item.id);
-      if (!slotsOf(t.def).includes(d.slot)) return { ok: false, label: `A ${t.def.name} has no ${PARTS.labels[d.slot].toLowerCase()} mount`, secs: 1 };
-      const old = t.fitted(d.slot);
+      if (!mountsFor(d.slot).some((m) => slotsOf(t.def).includes(m))) return { ok: false, label: `A ${t.def.name} has no ${PARTS.labels[d.slot].toLowerCase()} mount`, secs: 1 };
+      const old = t.current === undefined ? t.fitted(d.slot) : t.current ?? undefined;
       const mk = old ? partDef(old.id).mk : 0;
       const verb = old ? (d.stock || old && partDef(old.id).stock ? 'Swap in' : d.mk < mk ? 'Swap (downgrade) to' : 'Swap in') : 'Bolt on';
       const spec = d.engine && !d.empty ? `  ·  ${engineLine(d.engine)}` : '';
-      return { ok: true, label: `${verb} ${d.name}${old ? ` (replaces ${partDef(old.id).name})` : ''}${spec}`, secs: d.slot === 'engine' ? 4 : d.slot === 'wheels' ? 3.4 : d.slot === 'cooling' ? 3 : 2.4 };
+      return { ok: true, label: `${verb} ${d.name}${old ? ` (replaces ${partDef(old.id).name})` : ''}${spec}`, secs: d.slot === 'engine' ? 4 : d.slot === 'wheels' ? 2.6 : d.slot === 'gearbox' ? 3.6 : d.slot === 'cooling' ? 3 : 2.4 };
     }
     case 'fuel': {
       const kind = c.fuel ?? 'petrol';

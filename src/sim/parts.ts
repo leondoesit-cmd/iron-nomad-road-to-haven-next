@@ -308,6 +308,26 @@ const pct = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
 export function describePart(d: PartDef): string[] {
   if (d.engine) return d.empty ? ['no engine: the vehicle will not run'] : [engineLine(d.engine), `${Math.round(d.engine.mass)} kg · size ${d.engine.size}`];
   if (d.cooling !== undefined) return d.empty ? ['no cooling: it will overheat fast'] : [`cooling ${Math.round(d.cooling)} kW`];
+  if (d.gearbox) {
+    if (d.empty) return ['no gearbox: nothing reaches the wheels'];
+    const g = d.gearbox.gearing;
+    return [`carries ${Math.round(d.gearbox.rating)} kW`, g > 0.05 ? 'short gears: quick off the line, lower top speed' : g < -0.05 ? 'tall gears: higher top speed, slower launch' : 'balanced gearing', `${Math.round(d.gearbox.mass)} kg`];
+  }
+  if (d.suspension) {
+    if (d.empty) return ['no springs: the body sits on the axles'];
+    return [`carries ${Math.round(d.suspension.load)} kg`, `${Math.round(d.suspension.travel * 100)}% travel`];
+  }
+  if (d.brakes) {
+    if (d.empty) return ['no brakes: it will barely stop'];
+    return [`stops ${Math.round(d.brakes.energy)} kJ`, `${d.brakes.power >= 1 ? '+' : ''}${Math.round((d.brakes.power - 1) * 100)}% bite`];
+  }
+  if (d.exhaust) {
+    if (d.empty) return ['no exhaust: loud, and it still burns'];
+    const f = d.exhaust.flow;
+    return [`${f >= 0 ? '+' : ''}${Math.round(f * 100)}% power`, d.exhaust.noise > 1.05 ? `louder x${d.exhaust.noise.toFixed(1)}: the dead hear it too` : d.exhaust.noise < 0.95 ? 'quieter: harder to hear on the road' : 'stock noise'];
+  }
+  if (d.empty && (d.slot === 'hood' || d.slot === 'doorL' || d.slot === 'doorR')) return [`no ${d.slot === 'hood' ? 'bonnet' : 'door'}: the mount is bare`];
+  if (d.empty && d.slot === 'wheels') return ['no tyre: a bare rim'];
   return describeStats(d.stats);
 }
 
