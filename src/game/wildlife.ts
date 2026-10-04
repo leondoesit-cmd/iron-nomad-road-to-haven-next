@@ -6,6 +6,7 @@ import type { AnimalRenderer } from '../render/animalRender';
 import type { Ctx } from './ctx';
 import type { Player } from './player';
 import type { Vehicle } from './vehicle';
+import { MELEE, knockFor, type MeleeFeel } from '../sim/weaponfx';
 
 export type AState = 'idle' | 'wander' | 'flee' | 'chase' | 'stalk' | 'windup' | 'charge' | 'rest' | 'fly';
 
@@ -399,7 +400,7 @@ export class WildlifeSystem {
     }
   }
 
-  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number) {
+  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number, feel: MeleeFeel = MELEE.fist): number {
     let hit = 0;
     for (const a of this.list) {
       if (a.dead || a.flying) continue;
@@ -409,16 +410,19 @@ export class WildlifeSystem {
       if (d > reach + a.def.radius * a.def.size) continue;
       if (Math.abs(wrapAngle(Math.atan2(dx, dz) - yaw)) > 1.0) continue;
       this.damage(a, dmg * (1 - a.def.armor), { fromX: p.pos.x, fromZ: p.pos.z, killer: p.index });
-      a.vx += (dx / (d || 1)) * 3;
-      a.vz += (dz / (d || 1)) * 3;
-      a.stun = Math.max(a.stun, 0.25);
+      // A beast is shoved by what it weighs: hp stands in for its mass.
+      const push = knockFor(feel, Math.max(20, a.def.hp * 0.8)) * 0.8;
+      a.vx += (dx / (d || 1)) * push;
+      a.vz += (dz / (d || 1)) * push;
+      a.stun = Math.max(a.stun, feel.stun * 0.8);
       hit++;
-      if (hit >= 2) break;
+      if (hit >= feel.cleave) break;
     }
     if (hit) {
       this.ctx.fx.blood(hx, p.pos.y + 0.8, hz, 3);
       this.ctx.audio.play('thud', hx, hz, 0.6);
     }
+    return hit;
   }
 
   // ------------------------------------------------------------------ vehicles

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { C } from './palette';
-import { lerp } from '../core/math';
+import { swingPose } from '../sim/weaponfx';
 import { shared } from './dispose';
 import { kitMaterial } from './materials';
 import {
@@ -476,9 +476,12 @@ export class Humanoid {
       if (this.swing > 0 && !this.carried) {
         // Wind up overhead, then chop down across the body.
         const e = 1 - this.swing;
-        this.armR.rotation.x = lerp(-2.7, -0.5, e * e);
-        this.elbowR.rotation.x = lerp(-0.2, -0.9, e);
-        this.torso.rotation.y = lerp(0.45, -0.4, e);
+        const sp = swingPose(e);
+        this.armR.rotation.x = sp.arm;
+        this.elbowR.rotation.x = sp.elbow;
+        this.torso.rotation.y = sp.yaw;
+        // The wrist leads: the weapon comes over the top and chops down in front, not held up behind the head.
+        this.hand.rotation.x = sp.blade - (sp.arm + sp.elbow);
       }
       if (air > 0) {
         // Off the ground: knees drawn up, one foot ahead of the other, arms out for balance.

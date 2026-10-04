@@ -6,6 +6,7 @@ import { C } from '../render/palette';
 import { angleDiff, clamp, damp, dampAngle, wrapAngle } from '../core/math';
 import type { DriveInput } from '../physics/vehicle';
 import { gearDrop } from '../sim/gear';
+import { MELEE, MUZZLE, knockFor, type MeleeFeel } from '../sim/weaponfx';
 import { stormSight } from '../sim/weather';
 import type { Ctx } from './ctx';
 import type { Player } from './player';
@@ -472,7 +473,8 @@ export class RaiderSystem {
     for (const u of this.units) if (!u.dead && Math.hypot(u.x - x, u.z - z) < r) this.damageInfantry(u, dps * dt, -1);
   }
 
-  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number) {
+  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number, feel: MeleeFeel = MELEE.fist): number {
+    let hit = 0;
     for (const u of this.units) {
       if (u.dead) continue;
       const dx = u.x - p.pos.x;
@@ -481,10 +483,13 @@ export class RaiderSystem {
       if (d > reach + 0.4) continue;
       if (Math.abs(wrapAngle(Math.atan2(dx, dz) - yaw)) > 1.0) continue;
       this.damageInfantry(u, dmg, p.index);
-      break;
+      hit++;
+      // A raider is a person, not a crowd: a wide weapon can catch two, never more.
+      if (hit >= Math.min(2, Math.max(1, feel.cleave - 1))) break;
     }
     void hx;
     void hz;
+    return hit;
   }
 
   clearAll() {
@@ -698,7 +703,9 @@ export class RaiderSystem {
       range: u.def.range + 10,
       tracer: true,
     });
-    ctx.fx.flash(ox, oy, oz, 0.8);
+    const m = MUZZLE[u.kind === 'sniper' ? 'rifle' : 'pistol'];
+    ctx.fx.muzzle(ox, oy, oz, dx, dy, dz, m);
+    ctx.combat.muzzleLight(ox, oy, oz, m.light * 0.8);
     ctx.audio.play(u.kind === 'sniper' ? 'sniper' : 'pistol', ox, oz, 0.5);
   }
 }

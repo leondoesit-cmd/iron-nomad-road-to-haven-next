@@ -548,7 +548,7 @@ export class Hud {
     // Reticle: on foot aiming or manning the bed gun.
     const showRet = (p.state === 'foot' && p.equip === 'gun' && !p.carry) || p.state === 'gunner';
     h.setStyle('reticle', 'display', showRet ? 'block' : 'none');
-    h.setStyle('reticle', 'transform', `scale(${1 + (1 - p.ads) * 0.4})`);
+    h.setStyle('reticle', 'transform', `scale(${((1 + (1 - p.ads) * 0.4) * (1 + p.bloom * 0.5)).toFixed(3)})`);
 
     // Damage / downed overlays
     const hurt = clamp(1 - p.hp / p.maxHp, 0, 1);
