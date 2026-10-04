@@ -74,28 +74,77 @@ export interface Pick {
   /** The player is close enough to work on it. */
   near: boolean;
   all: Mount[];
+  /** Mounts sitting on top of the picked one, in the order a tap cycles them. Just the pick when it stands alone. */
+  stack: Mount[];
+}
+
+/** Mounts closer together than this (metres) are one stack: the engine and a bonnet gun, say. */
+const STACK = 0.55;
+/** Within a stack the likelier job comes first: you reach for the engine before the gun sat on top of it. */
+const STACK_RANK: Partial<Record<PartSlot, number>> = { engine: 0, cooling: 1, gearbox: 2, wheels: 3, armor: 4, side: 5, utility: 6, front: 7, rear: 8, roof: 9, weapon: 10 };
+const rank = (m: Mount) => STACK_RANK[m.slot] ?? 5;
+
+/** Which member of a stack each player has tapped over to, and which stack it was. */
+const cycled = new WeakMap<Player, { key: string; n: number }>();
+
+/** The mounts stacked with the one nearest the hands, best guess first. Empty when nothing is in reach. */
+function stackAt(all: Mount[], reach: THREE.Vector3): { list: Mount[]; key: string; d: number } | null {
+  let first: Mount | null = null;
+  let bd = Infinity;
+  for (const mt of all) {
+    const d = reachDist(reach, mt.pos);
+    if (d < bd) {
+      bd = d;
+      first = mt;
+    }
+  }
+  if (!first) return null;
+  const anchor = first.pos;
+  const list = all.filter((m) => m === first || reachDist(anchor, m.pos) < STACK).sort((a, b) => rank(a) - rank(b) || a.index - b.index);
+  return { list, key: list.map((m) => `${m.slot}${m.index}`).join(','), d: bd };
 }
 
 /**
  * The mount a player is working at. With a slot given (they carry a part for it) that is the nearest mount of the
- * slot, and `near` says whether they have carried it close enough. Without one it is whatever their hands are over.
+ * slot, and `near` says whether they have carried it close enough. Without one it is whatever their hands are over;
+ * where several mounts sit on top of each other the engine-before-gun order picks one, and `cycleMount` moves along it.
  */
 export function pickMount(p: Player, v: Vehicle, only?: PartSlot): Pick | null {
   const reach = reachPoint(p);
   const all = mountsOf(v, reach);
   if (!all.length) return null;
-  let best: Mount | null = null;
-  let bd = Infinity;
-  for (const mt of all) {
-    if (only && mt.slot !== only) continue;
-    const d = only ? reachDist(new THREE.Vector3(p.pos.x, p.pos.y + 1.0, p.pos.z), mt.pos) : reachDist(reach, mt.pos);
-    if (d < bd) {
-      bd = d;
-      best = mt;
+  if (only) {
+    const body = new THREE.Vector3(p.pos.x, p.pos.y + 1.0, p.pos.z);
+    let best: Mount | null = null;
+    let bd = Infinity;
+    for (const mt of all) {
+      if (mt.slot !== only) continue;
+      const d = reachDist(body, mt.pos);
+      if (d < bd) {
+        bd = d;
+        best = mt;
+      }
     }
+    return best ? { mount: best, near: bd < 2.1, all, stack: [best] } : null;
   }
-  if (!best) return null;
-  return { mount: best, near: bd < (only ? 2.1 : 1.35), all: all };
+  const st = stackAt(all, reach);
+  if (!st) return null;
+  const c = cycled.get(p);
+  const n = c && c.key === st.key ? c.n % st.list.length : 0;
+  return { mount: st.list[n], near: st.d < 1.35, all, stack: st.list };
+}
+
+/** Tap to look at the next mount in the stack under your hands: the gun on the bonnet, then the engine beneath it. */
+export function cycleMount(p: Player): boolean {
+  const v = p.nearestVehicle(5, isOwnRide);
+  if (!v || !v.build) return false;
+  const all = mountsOf(v, reachPoint(p));
+  const st = stackAt(all, reachPoint(p));
+  if (!st || st.d >= 1.35 || st.list.length < 2) return false;
+  const c = cycled.get(p);
+  const n = c && c.key === st.key ? c.n : 0;
+  cycled.set(p, { key: st.key, n: (n + 1) % st.list.length });
+  return true;
 }
 
 /** The repair a job needs maps to the slot it is done at. */
@@ -126,21 +175,24 @@ export function wrenchCandidate(p: Player, repair: () => Cand | null): Cand | nu
   const fitted = slot === 'wheels' ? wheelTyre : (v.build.fit[slot] && !partDef(v.build.fit[slot]!.id).empty ? v.build.fit[slot] : undefined);
   const moving = Math.abs(v.speed) > 2;
   const head = `${SLOT_LABEL(slot)}`;
+  // Several mounts on one spot: say what a tap of A switches to.
+  const next = pick.stack.length > 1 ? pick.stack[(pick.stack.indexOf(pick.mount) + 1) % pick.stack.length] : null;
+  const more = next ? `  ·  tap A: ${SLOT_LABEL(next.slot)}` : '';
   const job = planRepair(v.health, ctx.campaign.stocks, { spare: v.stats.spare, weapon: !!v.weapon, dents: v.bodywork.dentLevel(), missing: v.bodywork.missing() });
   // What is fitted comes off first; a repair at a bare mount, or from anywhere else on the car, uses the wrench's other job.
   if (!fitted && job && REPAIR_SLOT[job.kind] === slot) {
     const rep = repair();
     if (rep) {
-      ctx.work.focus(p.index, dots, { pos, text: `${head}: ${rep.prompt.split('  ·')[0]}`, css: '#7ddc7a', ok: rep.ok });
+      ctx.work.focus(p.index, dots, { pos, text: `${head}: ${rep.prompt.split('  ·')[0]}${more}`, css: '#7ddc7a', ok: rep.ok });
       return rep;
     }
   }
   if (!fitted) {
-    ctx.work.focus(p.index, dots, { pos, text: `${head}: stock fitting`, css: '#bdb4a0', ok: true });
+    ctx.work.focus(p.index, dots, { pos, text: `${head}: stock fitting${more}`, css: '#bdb4a0', ok: true });
     return null;
   }
   const mk = Math.min(3, Math.max(1, partDef(fitted.id).mk));
-  ctx.work.focus(p.index, dots, { pos, text: `${head}: ${partName(fitted)}`, css: MK_CSS[mk], ok: !moving });
+  ctx.work.focus(p.index, dots, { pos, text: `${head}: ${partName(fitted)}${more}`, css: MK_CSS[mk], ok: !moving });
   return {
     kind: 'unbolt',
     prompt: moving ? `${v.def.name} is moving` : `Unbolt ${partName(fitted)}`,

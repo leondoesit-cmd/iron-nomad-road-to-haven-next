@@ -282,6 +282,8 @@ export function guide(p: Player) {
     // From afar every place it could go shows; up close only the one you would fit it to (one wheel of four).
     const focus = inReach && PER_WHEEL.includes(sock.slot) ? hit.index : undefined;
     ctx.work.ghost(`g${p.index}`, ghostAnchors(v, sock, focus), !inReach ? 'idle' : moving ? 'blocked' : 'aimed');
+    // The part itself snaps onto the mount as a see-through copy, so you see where it will sit before you bolt it.
+    if (inReach && !ctx.work.holding(p.index)) ctx.work.preview(p.index, item, handPos(p), [anchorWorld(v, anchor)], moving ? 'blocked' : 'aimed');
     if (inReach && !ctx.work.holding(p.index)) {
       const cur = fittedAt(hit);
       const lines = [{ text: sock.label, css: '#cfc8b4' }, { text: cur ? `Now: ${partDef(cur.id).name} ${Math.round(cur.cond * 100)}%` : 'Empty mount', css: '#e6dcc0' }, { text: moving ? 'Wait for it to stop' : `Attach ${partDef(item.id).name}`, css: moving ? '#ff8a6a' : '#8cf08c' }];
@@ -491,10 +493,11 @@ function fit(p: Player, v: Vehicle, c: Carried, hit: SocketHit | null) {
       ctx.audio.play('wrench', v.position.x, v.position.z, 0.8);
       const name = partName(c.item);
       const pick = pickMount(p, v, partDef(c.item.id).slot);
-      const anchor = pick?.mount.pos.clone() ?? (hit ? anchorWorld(v, hit.anchor) : sitePos(v, slotSite(c.item.id)));
+      // Where it lands is where the preview was showing: the socket you fitted it to.
+      const anchor = hit ? anchorWorld(v, hit.anchor) : (pick?.mount.pos.clone() ?? sitePos(v, slotSite(c.item.id)));
       const mk = Math.min(3, Math.max(1, partDef(c.item.id).mk));
       // A set of tyres goes on at every wheel.
-      if (pick && pick.mount.slot === 'wheels') for (const m of pick.all) if (m.slot === 'wheels' && m !== pick.mount) ctx.work.burst(m.pos, mk, 0.7);
+      if (!hit && pick && pick.mount.slot === 'wheels') for (const m of pick.all) if (m.slot === 'wheels' && m !== pick.mount) ctx.work.burst(m.pos, mk, 0.7);
       ctx.work.swap({
         key: p.index,
         anchor,
