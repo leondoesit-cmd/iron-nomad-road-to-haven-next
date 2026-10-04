@@ -303,7 +303,7 @@ export function artPad(labels: PadLabel[], caption: string): string {
       y += heights[i] + gap;
     });
   }
-  return svg(640, 400, `${defs}<rect width="640" height="400" fill="#17110c"/>${text(320, 386, caption, { anchor: 'middle', size: 12, fill: DIM, spacing: 2 })}${pad}${out}`, caption);
+  return svg(640, 400, `${defs}<rect width="640" height="400" fill="#17110c"/>${text(320, 386, caption, { anchor: 'middle', size: 12, fill: DIM, spacing: 2 })}${pad}${out}`, `A gamepad with each button named for the ${caption.toLowerCase()} controls.`);
 }
 
 export const PAD_FOOT: PadLabel[] = [
