@@ -48,6 +48,14 @@ export function stormLevel(t: number, w: StormWindow | null): number {
   return Math.min(rise, fall);
 }
 
+/** How far ahead of the first gust the sky gives the storm away, as a share of the day. */
+export const STORM_FORE_WARN = 0.035;
+
+/** True in the stretch just before a storm's first gust: the radio calls it so the convoy can top up oil and pick a plan. */
+export function stormImminent(t: number, w: StormWindow | null): boolean {
+  return !!w && t >= w.start - STORM_FORE_WARN && t < w.start;
+}
+
 /** Share of its normal sight range a raider keeps in the dust. */
 export function stormSight(level: number): number {
   return 1 - 0.58 * clamp01(level);
@@ -99,4 +107,39 @@ export function windAt(storm: number, time: number): [number, number] {
   const gust = 0.78 + 0.22 * Math.sin(time * 0.9) * Math.sin(time * 0.37 + 1.3) + 0.12 * Math.sin(time * 2.3);
   const breeze = 1.6;
   return [STORM_WIND[0] * s * gust + breeze * 0.8, STORM_WIND[1] * s * gust - breeze * 0.6];
+}
+
+/** The first day a heat wave can roll. */
+export const HEAT_FIRST_DAY = 3;
+/** Chance that a given later, storm-free day is a scorcher. */
+export const HEAT_CHANCE = 0.25;
+
+/**
+ * Heat waves. Like storms they are fixed by the seed and the day, and never share a day with one (the dust keeps the air
+ * cool enough). The heat builds from morning, peaks around noon and eases off toward the Dusk Bell. Returns 0 clear to 1 the
+ * full swelter. Engines shed heat badly in it, so a build that runs warm on a normal day can cook on a hot one.
+ */
+export function heatLevel(seed: number, day: number, t: number): number {
+  if (day < HEAT_FIRST_DAY) return 0;
+  if (stormWindow(seed, day)) return 0;
+  if (hash01(seed, day, 11) >= HEAT_CHANCE) return 0;
+  const rise = smoothstep(0.12, 0.34, t);
+  const fall = 1 - smoothstep(0.55, 0.78, t);
+  return clamp01(Math.min(rise, fall));
+}
+
+/** True when a day is a heat-wave day at all (the clock line and the dawn radio use this). */
+export function isHeatDay(seed: number, day: number): boolean {
+  return heatLevel(seed, day, 0.42) > 0;
+}
+
+/** Share of its normal cooling an engine keeps in the heat: the radiator has less air to dump heat into. */
+export function heatCoolingMult(level: number): number {
+  return 1 - 0.22 * clamp01(level);
+}
+
+/** The label for a level, for the clock line: nothing while the heat is mild. */
+export function heatLabel(level: number): string {
+  if (level < 0.15) return '';
+  return level < 0.6 ? 'HEAT BUILDING' : 'HEAT WAVE';
 }

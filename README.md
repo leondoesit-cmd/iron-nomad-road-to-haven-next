@@ -14,7 +14,7 @@ the blueprint puts in "Beta" and "Final" is listed under [What is not in the sli
 npm install
 npm run dev          # http://127.0.0.1:5174  (or $PORT)
 npm run build        # typecheck + production bundle in dist/
-npm test             # about 840 unit and simulation tests (Vitest)
+npm test             # about 1,200 unit and simulation tests (Vitest)
 ```
 
 `?leg=W` starts a fresh run in the open world (it is what New Convoy does). Any other leg id (`?leg=L3P`, `?leg=L2C`...) starts a fresh run
@@ -51,6 +51,7 @@ Dusk Bell turns each day into the same loop, and every decision is shared:
   the road). The meter in the top-left shows your current level. Horns, gunshots, sprinting and night headlights make it worse.
   Parking and walking is quiet.
 - **Dust storms**: from the second day, about half the days bring one, somewhere in the morning and midday (never past the Dusk Bell). The sky browns over, the fog closes to about a hundred metres, the minimap halves its reach and the wind rises. Raiders see about 40% as far, so a storm is cover for a run past them, but your engine's oil burns more than twice as fast in the grit and you cannot see them either. The clock line says `DUST WALL`, `DUST STORM` or `DUST CLEARING`, and the radio announces both ends. A storm is fixed by the campaign seed and the day (`sim/weather.ts`), so a reload gives the same weather.
+- **Heat waves and warnings**: from the third day, about one storm-free day in four is a scorcher. The clock line says `HEAT BUILDING` or `HEAT WAVE`, the heat peaks around noon and eases before the Dusk Bell, and every radiator sheds about a fifth less heat at the peak, so a build that runs warm can cook (`sim/weather.ts`, fixed by seed and day like the storms). The radio now calls a dust wall a few minutes before the first gust, gives a heads-up shortly before the Dusk Bell so you can pick a camp, and warns a driver whose tank is nearly dry. A night raid also carries whatever a wave could not spend into the next one, so the night's size tracks its threat.
 - **Hunting**: a kill leaves a carcass. Hold A on it to butcher: meat becomes Rations and big game also pays Scrap from the hide. Carcasses keep for a minute. Everyone eats one Ration per night; whoever goes unfed wakes at 65% health.
 - **Shared stocks**: Fuel, Rations, Scrap, Parts, Tech, Medicine. Fuel and Rations are one pool for both players.
 - **Tether**: stay within about 300 m of your partner. The trailing player gets a slipstream bonus; the leader slows when the
@@ -521,7 +522,7 @@ Per the blueprint's cut order and scope plan, these are Beta or Final work and a
 
 - Tier 4 and 5 vehicles (the data and physics parameters exist, the models, turret, plow, docking and flamethrowers do not). The Tier 3 buggy is still the top of the rebuild chain; found cars and fitted parts are how everything else grows
 - The Scout, Scavenger and Heavy Vanguard (their data and hiring rows exist and are disabled)
-- Legs 4 to 14, Waypoints beyond Rustgate, run modifiers, other weather than dust storms
+- Legs 4 to 14, Waypoints beyond Rustgate, run modifiers, other weather than dust storms and heat waves
 - Rebinding the analog sticks, and a per-pad (rather than shared) gamepad scheme
 - Localization beyond English, and WebGPU
 

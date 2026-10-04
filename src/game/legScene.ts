@@ -119,6 +119,7 @@ export class LegScene extends Scene {
   pings: { x: number; z: number; t: number; who: number }[] = [];
   private mineT = 0;
   private fuelTip = false;
+  private fuelWarned = new Set<Vehicle>();
   private repairTip = false;
   /** When the last car or parts tip was shown, so they never talk over each other. */
   private carTipAt = -99;
@@ -1296,6 +1297,15 @@ export class LegScene extends Scene {
       if (v && v.fuel < v.tankMax * 0.2 && !this.shownTips.has('tip-fuel')) {
         this.shownTips.add('tip-fuel');
         this.tip('fuel');
+      }
+      // Nearly dry: say so over the radio, once per tank (it re-arms once the tank is refilled past a quarter).
+      if (v) {
+        const frac = v.tankMax > 0 ? v.fuel / v.tankMax : 1;
+        if (frac > 0.25) this.fuelWarned.delete(v);
+        else if (frac < 0.07 && v.engineOn && !this.fuelWarned.has(v)) {
+          this.fuelWarned.add(v);
+          this.radio(t('radio.fuelCritical', { name: p.index === 0 ? 'Player 1' : 'Player 2' }));
+        }
       }
       if (v && v.hpFrac < 0.5 && !this.shownTips.has('tip-repair')) {
         this.shownTips.add('tip-repair');
