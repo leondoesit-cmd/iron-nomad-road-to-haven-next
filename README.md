@@ -260,6 +260,19 @@ Roadside places (`world/terrain.ts` plans the sites, `world/settlements.ts` fill
 
 Buildings and landmarks are drawn by the far landscape for the whole leg (`render/landscape.ts`, `render/ruralView.ts`, `render/landmarks.ts`), so a gas station or a wind farm shows on the horizon long before its chunk streams in. Only their colliders stream.
 
+### Gang camps
+
+Raiders are not just buggies that turn up out of the dust. Three gangs hold the open world, each a stretch of country (the map is cut into squares, `gangAt` in `world/gangCamps.ts`): the **Rust Jackals** (red), the **Ash Choir** (orange) and the **Salt Kings** (green and white), defined in `data/gangs.ts`. Each keeps camps, some beside the roadside places off the highway and some out on their own in the open country (never in a city, a lake or on a slope, and kept well apart).
+
+A camp is a ring of torn fence round a fire, with tents, tarped wrecks, barrels and tyres, the gang's banners on either side of the gate and over the stash, and a stash of loot on the far side from the gate: Scrap, Parts, ammo, Rations, fuel, and from the second tier medicine, Tech and a vehicle part. Hold A to take it, as with any pickup. Further from the start the camps are stronger: tier 1 has three gunmen, tier 2 four gunmen and a sniper, tier 3 five gunmen and two snipers (the gunmen scale a little with the Aggro slider), and the stash is richer.
+
+- **Sentries** stand on their posts once anyone comes within about 170 m (a far camp costs nothing), wander a few metres or scan the horizon, and notice by sight and sound: about 45 m on foot, 20 crouched, 55 m for a parked vehicle and 120 m for one under way, longer when your Signature is high or you have just fired, and shorter in a dust storm. Anyone within 14 m is noticed regardless of cover.
+- **The alarm** is shared. A hit raises it (a clean silent takedown with the blade does not), the whole camp turns on you, and the camp's buggies, and sometimes a battle-wagon, roll out ahead of you. A sentry gives up at 150 m from its post and walks back; with no one in sight for 14 s the camp stands down.
+- **A broken camp stays broken.** Sentries you kill stay dead across nights and reloads (`WorldMemory.gangKilled`, saved with the campaign; older saves load without it). When the last one falls the radio says so and the gang's pin leaves the map. The loot you did not take stays where it lies, as everywhere else.
+- **On the map.** A camp is drawn on the minimap, the whole-leg map and the compass (as a threat, labelled with the gang's name) once the convoy has come within about 420 m of it, and stays there until it is broken. The radio names a gang the first time you come near one of its camps.
+
+Code: placement and dressing in `world/gangCamps.ts` (called from `Layout.raiderCamps`), the `tent` and `campfire` props in `render/props.ts`, sentry behaviour in `game/raiders.ts` (`Infantry.post`, `guardNotices`, `guardStep`, `alertCamp`), and the runtime in `game/gangCamps.ts`. Tests: `tests/gangcamps.test.ts`.
+
 ### Interiors
 
 Every roadside building can be entered. `world/interiors.ts` generates a floor plan from the building's seed: exterior and interior walls with doorways, gates and windows, rooms with a role (living room, kitchen, bedrooms, bathroom, shop floor, back office, motel rooms, a barn's stalls, warehouse racking) and a floor, stairs and an upstairs for some houses, furniture, searchable containers and damage (breached walls, a collapsed or missing roof, rubble). Layouts differ with the seed, and every room is reachable from a door to the outside. Furniture placement is rejected if it would cut a doorway or the stairs off.

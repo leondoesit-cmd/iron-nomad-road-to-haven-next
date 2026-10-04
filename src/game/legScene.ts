@@ -27,6 +27,7 @@ import { DRUGS, DRUG_IDS } from '../sim/drugs';
 import type { DelveSite } from '../world/delveSites';
 import { newDelveRecord, type DelveRecord, type PlayerCarry } from './delveScene';
 import { districtMask } from '../world/openWorld';
+import { GangCamps } from './gangCamps';
 import type { WorldMemory, WorldPose } from './worldMemory';
 import { LegMapBaker, SITE_LABEL, minefieldOutline, newFrame, openRoadLines, roadLine, type MapFrame } from '../ui/mapdata';
 
@@ -95,6 +96,9 @@ export class LegScene extends Scene {
   landscape: Landscape;
   pickups = new Map<string, PickupEntity>();
   takenPickups = new Set<string>();
+  /** Gang camp sentries killed, by key; the world memory keeps them dead. */
+  private gangKilled = new Set<string>();
+  gangCamps!: GangCamps;
   spawnedChunks = new Set<number>();
   brokenAabbs = new Set<number>();
   mines: MineView[] = [];
@@ -197,6 +201,8 @@ export class LegScene extends Scene {
       drop: (x, z, c) => this.looseDrop(x, z, c),
     };
     this.src.layout.ambushes.forEach((spec) => this.ambushes.push({ spec, state: this.memory?.ambushDone.has(spec.id) ? 'done' : 'idle', tries: 0, waiting: [], t: 0 }));
+    this.gangCamps = new GangCamps(this, this.src.layout.gangCamps, this.gangKilled, this.mapSeen);
+    this.raiders.onAlarm = (camp) => this.campAlarm(camp);
     this.src.layout.zones.forEach((zone) => this.zones.push({ zone, noise: 0, horde: 0, fired: !!this.memory?.zoneFired.has(zone.id) }));
     this.buildMines();
     this.registerDelves();
@@ -252,6 +258,7 @@ export class LegScene extends Scene {
     this.brokenAabbs = m.brokenAabbs;
     this.spawnedChunks = m.spawnedChunks;
     this.mapSeen = m.mapSeen;
+    this.gangKilled = m.gangKilled;
     this.delveRecords = m.delveRecords;
     if (m.cars) this.cars.states = m.cars;
     // After a reload the layout is new: containers that were searched are marked on it again.
@@ -1142,6 +1149,18 @@ export class LegScene extends Scene {
     }
   }
 
+  /** A camp's sentries have seen someone: its buggies, which the layout parked as an ambush, roll out. */
+  private campAlarm(camp: string) {
+    this.radio(t('radio.ambush'));
+    for (const p of this.players) p.note('Gang sentries raised the alarm!', 'warn');
+    const a = this.ambushes.find((q) => q.spec.camp === camp);
+    if (!a || a.state !== 'idle') return;
+    a.state = 'pending';
+    a.tries = 0;
+    a.t = 0;
+    this.prepareAmbush(a);
+  }
+
   private prepareAmbush(a: AmbushState) {
     const T = this.terrain!;
     const lead = this.leadPlayerPos();
@@ -1510,6 +1529,7 @@ export class LegScene extends Scene {
     this.updateZones(dt);
     this.wildlife.ambient(dt, this.biome, this.leg.theme ?? 'dust', this.leg.index);
     this.updateAmbushes(dt);
+    this.gangCamps.update(dt);
     this.updateEncounters();
     this.updateTips();
     this.updateTether(dt);
@@ -1671,6 +1691,7 @@ export class LegScene extends Scene {
       pins.push({ x: roadX(this.terrain!, z), z, kind: 'threat', label: 'MINES' });
     }
     for (const v of this.vehicles) if (v.faction === 'raider' && !v.wreck) pins.push({ x: v.position.x, z: v.position.z, kind: 'ambush', label: '' });
+    for (const g of this.gangCamps.pins()) pins.push({ x: g.x, z: g.z, kind: 'threat', label: g.label });
     for (const p of this.pings) pins.push({ x: p.x, z: p.z, kind: 'ping', label: '' });
     // Lakes and ways down only show once you are within a few hundred metres.
     const nearAny = (x: number, z: number, r: number) => this.players.some((p) => Math.hypot((p.vehicle?.position.x ?? p.pos.x) - x, (p.vehicle?.position.z ?? p.pos.z) - z) < r);

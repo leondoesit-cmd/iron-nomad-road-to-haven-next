@@ -311,6 +311,23 @@ export class RaiderPilot implements Pilot {
 
 // ------------------------------------------------------------------------ infantry
 
+export interface InfantryLook {
+  jacket: number;
+  trim: number;
+  helmet: number;
+}
+
+/** Where a camp sentry stands, which camp it answers to, and how far it will wander and chase. */
+export interface GuardPost {
+  camp: string;
+  x: number;
+  z: number;
+  patrol: number;
+}
+
+/** A sentry gives up the chase this far from its post. */
+const LEASH = 150;
+
 export class Infantry {
   x: number;
   y = 0;
@@ -332,6 +349,14 @@ export class Infantry {
   sabotageVehicle: Vehicle | null = null;
   moveSpeed = 0;
   recent = 0;
+  /** A gang camp sentry: holds its post until it notices someone, then fights and goes back when it loses them. */
+  post: GuardPost | null = null;
+  alerted = false;
+  lostT = 0;
+  idleT = 0;
+  idleX = 0;
+  idleZ = 0;
+  scanPhase = Math.random() * 6.28;
 
   constructor(
     public kind: RaiderKind,
@@ -339,12 +364,13 @@ export class Infantry {
     x: number,
     z: number,
     ctx: Ctx,
+    look?: InfantryLook,
   ) {
     this.x = x;
     this.z = z;
     this.hp = def.hp;
     this.speed = def.speed;
-    this.human = new Humanoid({ jacket: C.raiderRed, trim: 0x151515, helmet: kind === 'sniper' ? 0x39422f : 0x111111, pants: 0x4a3a2c, mask: true });
+    this.human = new Humanoid({ jacket: look?.jacket ?? C.raiderRed, trim: look?.trim ?? 0x151515, helmet: look?.helmet ?? (kind === 'sniper' ? 0x39422f : 0x111111), pants: 0x4a3a2c, mask: true });
     this.human.setWeapon(kind === 'sniper' ? 'rifle' : kind === 'saboteur' ? 'jerrycan' : 'pistol');
     ctx.root.add(this.human.root);
     this.y = ctx.groundAt(x, z);
@@ -395,9 +421,17 @@ export class RaiderSystem {
     return v;
   }
 
-  spawnInfantry(kind: 'gunman' | 'sniper' | 'saboteur', x: number, z: number) {
-    const u = new Infantry(kind, ENEMIES.raiders[kind], x, z, this.ctx);
+  /** Called once when a camp's sentries first raise the alarm. */
+  onAlarm: ((camp: string) => void) | null = null;
+
+  spawnInfantry(kind: 'gunman' | 'sniper' | 'saboteur', x: number, z: number, opts?: { post?: GuardPost; look?: InfantryLook }) {
+    const u = new Infantry(kind, ENEMIES.raiders[kind], x, z, this.ctx, opts?.look);
     if (kind === 'sniper') u.state = 'snipe';
+    if (opts?.post) {
+      u.post = opts.post;
+      u.idleX = x;
+      u.idleZ = z;
+    }
     this.units.push(u);
     return u;
   }
@@ -439,10 +473,25 @@ export class RaiderSystem {
     if (find) ctx.dropGear(find, x, z);
   }
 
-  damageInfantry(u: Infantry, amount: number, killer: number): boolean {
+  /** The whole camp turns on whoever is there, and its reinforcements are called out. */
+  alertCamp(camp: string) {
+    let fresh = false;
+    for (const q of this.units) {
+      if (q.dead || q.post?.camp !== camp) continue;
+      if (!q.alerted) fresh = true;
+      q.alerted = true;
+      q.lostT = 0;
+      if (q.state === 'approach') q.state = q.kind === 'sniper' ? 'snipe' : 'fire';
+    }
+    if (fresh) this.onAlarm?.(camp);
+  }
+
+  damageInfantry(u: Infantry, amount: number, killer: number, silent = false): boolean {
     if (u.dead) return false;
     u.hp -= amount * (1 - u.def.armor);
     u.recent = 0.2;
+    // A hit raises the alarm; a clean takedown with the blade does not.
+    if (u.post && !(silent && u.hp <= 0)) this.alertCamp(u.post.camp);
     if (u.hp <= 0) {
       u.dead = true;
       u.deadT = 0;
@@ -480,7 +529,7 @@ export class RaiderSystem {
       const d = Math.hypot(dx, dz);
       if (d > reach + 0.4) continue;
       if (Math.abs(wrapAngle(Math.atan2(dx, dz) - yaw)) > 1.0) continue;
-      this.damageInfantry(u, dmg, p.index);
+      this.damageInfantry(u, dmg, p.index, true);
       break;
     }
     void hx;
@@ -560,9 +609,18 @@ export class RaiderSystem {
     if (u.recent > 0) u.recent -= dt;
     if (u.brainT <= 0) {
       u.brainT = 0.25;
-      u.target = acquire(ctx, u.x, u.z, 160);
+      if (u.post && !u.alerted) {
+        u.target = null;
+        if (this.guardNotices(u)) this.alertCamp(u.post.camp);
+      } else u.target = acquire(ctx, u.x, u.z, 160);
     }
-    const tgt = u.target;
+    let tgt = u.target;
+    if (u.post && u.alerted) {
+      // Past the leash a sentry lets go and walks home; with nobody in sight for a while it stands down.
+      if (tgt && Math.hypot(tgt.x - u.post.x, tgt.z - u.post.z) > LEASH) tgt = null;
+      u.lostT = tgt ? 0 : u.lostT + dt;
+      if (u.lostT > 14) u.alerted = false;
+    }
     let wantX = 0;
     let wantZ = 0;
     let spd = 0;
@@ -660,6 +718,11 @@ export class RaiderSystem {
           this.shootAt(u, tgt, d, u.def.dps * 0.7);
         }
       }
+    } else if (u.post) {
+      const g = this.guardStep(u, dt);
+      wantX = g.x;
+      wantZ = g.z;
+      spd = g.spd;
     }
     u.moveSpeed = damp(u.moveSpeed, spd, 10, dt);
     const p = { x: u.x + wantX * u.moveSpeed * dt, z: u.z + wantZ * u.moveSpeed * dt };
@@ -675,6 +738,51 @@ export class RaiderSystem {
     u.human.root.rotation.y = u.yaw;
     u.human.update(dt, 'stand', u.moveSpeed, u.kind === 'saboteur' ? 0 : u.fireCd < 0.2 ? 1 : 0.6, 0);
     u.human.muzzle(false);
+  }
+
+  /** Does a sentry see, hear or smell someone? Engines carry far, a crouched walker barely; shots and horns carry further. */
+  private guardNotices(u: Infantry): boolean {
+    const ctx = this.ctx;
+    const sight = stormSight(ctx.storm);
+    for (const p of ctx.players) {
+      if (!p.alive) continue;
+      const v = p.vehicle;
+      const px = v ? v.position.x : p.pos.x;
+      const pz = v ? v.position.z : p.pos.z;
+      const d = Math.hypot(px - u.x, pz - u.z);
+      let range = v ? (Math.abs(v.speed) > 2 ? 120 : 55) : p.crouch ? 20 : 45;
+      range *= 0.75 + clamp(p.signatureShown / 50, 0, 1) * 0.6;
+      if (p.signatureShown >= 55) range = Math.max(range, 100);
+      if (d > range * sight) continue;
+      if (d < 14 || !ctx.obs.segmentBlocked(u.x, u.z, px, pz, 1.4)) return true;
+    }
+    return false;
+  }
+
+  /** What a sentry does with no one to shoot at: wander near its post (or stand and scan), or walk back to it. */
+  private guardStep(u: Infantry, dt: number): { x: number; z: number; spd: number } {
+    const post = u.post!;
+    u.idleT -= dt;
+    if (u.alerted) {
+      u.idleX = post.x;
+      u.idleZ = post.z;
+    } else if (u.idleT <= 0) {
+      u.idleT = 3 + Math.random() * 5;
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.random() * post.patrol;
+      u.idleX = post.x + Math.sin(a) * r;
+      u.idleZ = post.z + Math.cos(a) * r;
+    }
+    const dx = u.idleX - u.x;
+    const dz = u.idleZ - u.z;
+    const d = Math.hypot(dx, dz);
+    if (d > 0.8) {
+      u.yaw = dampAngle(u.yaw, Math.atan2(dx, dz), 6, dt);
+      return { x: dx / d, z: dz / d, spd: u.alerted ? u.speed : u.speed * 0.3 };
+    }
+    // Standing: a slow sweep of the horizon.
+    u.yaw = wrapAngle(u.yaw + Math.sin(this.ctx.time * 0.5 + u.scanPhase) * 0.5 * dt);
+    return { x: 0, z: 0, spd: 0 };
   }
 
   private shootAt(u: Infantry, tgt: Target, d: number, dmg: number) {
