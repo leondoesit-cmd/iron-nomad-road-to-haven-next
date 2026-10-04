@@ -334,8 +334,10 @@ export class Combat {
       case 'animal': {
         const a = h.animal;
         const dmg = o.damage * frac * (1 - a.def.armor * (1 - (o.pierce ?? 0)));
-        ctx.wildlife.damage(a, dmg, { fromX: b.ox, fromZ: b.oz, killer: owner });
-        ctx.gore.flesh(x, y, z, dx, dy, dz, dmg / Math.max(1, a.def.hp));
+        const res = ctx.wildlife.bulletHit(a, { dmg, dx, dy, dz, x, y, z, spec, speed, fromX: b.ox, fromZ: b.oz, killer: owner });
+        const power = dmg / Math.max(1, a.def.hp);
+        ctx.gore.flesh(x, y, z, dx, dy, dz, power);
+        for (const part of res.off) ctx.gore.severAnimal(a, part, dx, dy, dz, power * Math.max(0.5, spec.gore));
         this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
         after = throughFlesh(spec, speed);
         thickRun = 0.6;

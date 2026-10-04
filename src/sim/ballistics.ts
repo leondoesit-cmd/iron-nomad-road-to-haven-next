@@ -20,7 +20,7 @@ export interface AmmoSpec {
   mass: number;
   /** Penetration rating. A surface with a lower `stop` than this (scaled by the energy left) lets the round through. */
   pen: number;
-  /** How well it takes limbs off, per point of damage: 0 never, 1 a shotgun pellet, above 1 a rifle. */
+  /** How well it takes limbs off, per point of damage: 0 never, about 0.3 a pistol or SMG round (a few on one limb), 1 a shotgun pellet, above 1 a rifle. */
   gore: number;
   /** Range the sights are zeroed for, m: inside it the round is aimed to land on the reticle despite the drop. */
   zero: number;
@@ -29,9 +29,9 @@ export interface AmmoSpec {
 }
 
 export const AMMO: Record<AmmoKind, AmmoSpec> = {
-  pistol: { speed: 250, drag: 0.0024, mass: 0.008, pen: 0.28, gore: 0, zero: 35, hole: 0.09 },
+  pistol: { speed: 250, drag: 0.0024, mass: 0.008, pen: 0.28, gore: 0.35, zero: 35, hole: 0.09 },
   magnum: { speed: 235, drag: 0.0019, mass: 0.0102, pen: 0.4, gore: 0.7, zero: 40, hole: 0.12 },
-  smg: { speed: 265, drag: 0.0026, mass: 0.0075, pen: 0.24, gore: 0, zero: 30, hole: 0.085 },
+  smg: { speed: 265, drag: 0.0026, mass: 0.0075, pen: 0.24, gore: 0.3, zero: 30, hole: 0.085 },
   pellet: { speed: 215, drag: 0.009, mass: 0.0035, pen: 0.09, gore: 1, zero: 18, hole: 0.055 },
   rifle: { speed: 520, drag: 0.0006, mass: 0.0097, pen: 1.15, gore: 1.6, zero: 100, hole: 0.16 },
   sniper: { speed: 540, drag: 0.0005, mass: 0.0097, pen: 0.95, gore: 1.1, zero: 90, hole: 0.18 },
@@ -201,6 +201,13 @@ export function throughFlesh(spec: AmmoSpec, speed: number): number {
 
 /** Momentum to speed: how many m/s a victim loses to one round, per kg of round times m/s. Tuned so a blast of pellets or one rifle round throws a walker back about a metre. */
 export const KNOCK = 90;
+
+/**
+ * How well a melee weapon takes limbs off, per point of damage, on the same scale as a round's `gore`. A bat breaks bone but
+ * does not cut; a knife needs a couple of strokes; a machete or an axe takes a limb off a walker in one.
+ */
+export const CUT: Record<string, number> = { bat: 0, knife: 0.3, machete: 0.9, axe: 1.5 };
+export const cutOf = (model: string) => CUT[model] ?? 0;
 
 /** Metres per second a body is shoved back by one round. */
 export function staggerSpeed(spec: AmmoSpec, speed: number, victimMass: number): number {
