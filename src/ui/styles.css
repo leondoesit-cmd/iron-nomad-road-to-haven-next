@@ -96,6 +96,9 @@ body {
 }
 
 /* ------------------------------------------------------------------ HUD */
+/* Layout: noise top-left, compass + day clock top-centre, minimap top-right,
+   vitals bottom-left, weapon and supplies bottom-right, prompts bottom-centre.
+   Every readout sits in a .pane with a plain-word label; colour only ever repeats what the words say. */
 .hud {
   position: absolute;
   inset: 0;
@@ -103,18 +106,32 @@ body {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   text-shadow: 0 1px 2px #000, 0 0 6px rgba(0, 0, 0, 0.7);
+  --hp-bg: rgba(14, 11, 8, 0.66);
+  --hp-line: rgba(255, 180, 84, 0.26);
+  --hp-label: #d4b98a;
 }
 .hud .corner {
   position: absolute;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 12px;
+  gap: 5px;
+  padding: 8px 10px;
+  max-width: 50%;
 }
 .hud .tl {
   top: 0;
   left: 0;
   align-items: flex-start;
+}
+.hud .tc {
+  top: 0;
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: fit-content;
+  align-items: stretch;
+  gap: 3px;
+  padding-inline: 0;
 }
 .hud .tr {
   top: 0;
@@ -140,30 +157,57 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  width: min(54%, 560px);
+  width: min(44%, 520px);
 }
-.tag {
-  font-size: 0.62em;
-  color: var(--amber-dim);
-  letter-spacing: 0.18em;
+.pane {
+  background: var(--hp-bg);
+  border: 1px solid var(--hp-line);
+  border-left: 3px solid var(--pc, var(--amber));
+  padding: 5px 9px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 .pcolor {
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   border-radius: 2px;
   margin-right: 6px;
   vertical-align: baseline;
 }
-.sigrow {
+.who {
+  font-size: 0.78em;
+  letter-spacing: 0.2em;
+  color: var(--paper);
+}
+.hud .ident {
+  width: calc(172px * var(--u));
+}
+.sighead,
+.vhead {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.66em;
+  letter-spacing: 0.2em;
+  color: var(--hp-label);
+}
+.sighead .val {
+  font-size: 1.25em;
+  color: var(--paper);
+  min-width: 0;
+}
+.sighint {
+  font-size: 0.56em;
+  letter-spacing: 0.08em;
+  color: var(--paper-dim);
+  opacity: 0.85;
+  text-transform: none;
 }
 .sig {
-  width: calc(150px * var(--u));
-  height: 14px;
-  background: rgba(0, 0, 0, 0.55);
+  height: 10px;
+  background: rgba(0, 0, 0, 0.6);
   border: 1px solid var(--panel-line);
   position: relative;
   overflow: hidden;
@@ -182,32 +226,25 @@ body {
   /* hatching and block width carry the level without relying on colour alone */
   background: repeating-linear-gradient(135deg, var(--red) 0 5px, #7a1f17 5px 8px);
 }
-.sig .reach {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: #fff;
-  opacity: 0.8;
-}
 .val {
   font-family: var(--mono);
-  font-size: 0.9em;
+  font-size: 0.7em;
   min-width: 2.2em;
   text-align: right;
+  letter-spacing: 0.04em;
 }
 .chips {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: wrap;
 }
 .chip {
-  font-size: 0.62em;
+  font-size: 0.6em;
   padding: 1px 6px;
   border: 1px solid var(--panel-line);
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.55);
   color: var(--paper);
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
 }
 .chip.warn {
   color: #1a1209;
@@ -224,14 +261,40 @@ body {
   background: var(--green);
   border-color: var(--green);
 }
+.hud .tl .chips {
+  max-width: calc(260px * var(--u));
+}
 canvas.compass {
   width: calc(320px * var(--u));
-  height: calc(46px * var(--u));
+  height: calc(42px * var(--u));
   display: block;
+}
+.hud .trip {
+  border-left-width: 1px;
+  padding: 3px 8px 5px;
+  gap: 4px;
+}
+.tline {
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+}
+.clock {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  color: var(--paper);
+}
+.daytag {
+  font-size: 0.58em;
+  letter-spacing: 0.18em;
+  color: var(--hp-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 canvas.minimap {
   display: none;
-  margin-top: 2px;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.7));
 }
 .mapfull {
@@ -246,9 +309,46 @@ canvas.minimap {
 .mapfull canvas {
   display: block;
 }
+.hud .vitals {
+  min-width: calc(250px * var(--u));
+}
+.vhead span {
+  color: var(--paper);
+  font-size: 1.05em;
+}
+.vhead .speed {
+  font-family: var(--mono);
+  font-size: 2.2em;
+  line-height: 0.9;
+  color: var(--paper);
+  letter-spacing: 0;
+}
+.speed small {
+  font-size: 0.34em;
+  color: var(--hp-label);
+  margin-left: 3px;
+  letter-spacing: 0.1em;
+}
+.gauge {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.gauge .gl {
+  width: 5.8em;
+  font-size: 0.56em;
+  letter-spacing: 0.16em;
+  color: var(--hp-label);
+}
+.gauge .val {
+  min-width: 5em;
+  text-align: left;
+  white-space: nowrap;
+}
 .bar {
-  width: calc(190px * var(--u));
-  height: 12px;
+  flex: 1;
+  min-width: calc(70px * var(--u));
+  height: 11px;
   background: rgba(0, 0, 0, 0.6);
   border: 1px solid var(--panel-line);
   position: relative;
@@ -276,10 +376,18 @@ canvas.minimap {
     opacity: 0.55;
   }
 }
-.bar.stam {
-  height: 6px;
-  margin-top: 3px;
+.gauge.hp {
+  margin-top: 1px;
+}
+.gauge.hp .val {
+  font-size: 0.8em;
+  color: var(--paper);
+}
+.gauge.stamina {
   display: none;
+}
+.bar.stam {
+  height: 7px;
 }
 .bar.stam .fill {
   background: #9fd0e8;
@@ -330,61 +438,50 @@ canvas.minimap {
 .bar.water.crit .fill {
   background: var(--red);
 }
-.speed {
-  font-family: var(--mono);
-  font-size: 1.9em;
-  line-height: 1;
-  color: var(--paper);
-}
-.speed small {
-  font-size: 0.45em;
-  color: var(--amber-dim);
-  margin-left: 4px;
-}
-.row {
+.faults {
   display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.comp {
-  display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
-.comp i {
-  width: 18px;
-  height: 14px;
-  font-style: normal;
-  font-size: 0.55em;
-  text-align: center;
-  line-height: 14px;
-  border: 1px solid var(--panel-line);
-  background: rgba(0, 0, 0, 0.55);
-  color: var(--green);
+.faults:empty {
+  display: none;
 }
-.comp i.bad {
-  color: #fff;
-  background: #b3281c;
+.hud .gunbox {
+  align-items: flex-end;
+  border-left-width: 1px;
+  border-right: 3px solid var(--pc, var(--amber));
+  min-width: calc(120px * var(--u));
 }
-.comp i.mid {
-  color: #1a1209;
-  background: var(--amber);
+.wname {
+  font-size: 0.66em;
+  letter-spacing: 0.2em;
+  color: var(--hp-label);
 }
 .ammo {
   font-family: var(--mono);
-  font-size: 1.5em;
+  font-size: 1.8em;
   line-height: 1;
+  color: var(--paper);
+}
+.ammo:empty {
+  display: none;
 }
 .ammo small {
-  font-size: 0.55em;
-  color: var(--amber-dim);
+  font-size: 0.5em;
+  color: var(--hp-label);
+  letter-spacing: 0.06em;
 }
 .equip {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 6px;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.equip:empty {
+  display: none;
 }
 .equip span {
-  font-size: 0.6em;
+  font-size: 0.58em;
   padding: 1px 6px;
   border: 1px solid var(--panel-line);
   color: var(--paper-dim);
@@ -395,28 +492,54 @@ canvas.minimap {
   background: var(--amber);
   border-color: var(--amber);
 }
+.supplies {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 10px;
+  padding: 2px 6px;
+  background: var(--hp-bg);
+  border: 1px solid var(--hp-line);
+  font-family: var(--mono);
+  font-size: 0.62em;
+  color: var(--paper);
+}
+.supplies i {
+  font-style: normal;
+  font-family: var(--font);
+  letter-spacing: 0.12em;
+  color: var(--hp-label);
+  margin-right: 4px;
+}
+.supplies .low {
+  color: var(--red);
+}
 .prompt {
   display: none;
   align-items: center;
   gap: 10px;
-  padding: 4px 12px;
+  padding: 5px 14px 5px 8px;
   background: var(--panel);
   border: 1px solid var(--panel-line);
-  font-size: 0.9em;
+  font-size: 1em;
+  letter-spacing: 0.08em;
   position: relative;
   overflow: hidden;
 }
 .prompt .btn {
   display: inline-grid;
   place-items: center;
-  width: 1.5em;
-  height: 1.5em;
-  border-radius: 50%;
+  min-width: 1.7em;
+  height: 1.7em;
+  padding: 0 0.3em;
+  border-radius: 4px;
   font-family: var(--mono);
   font-weight: 700;
   color: #1a1209;
   background: var(--amber);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.5);
   font-size: 0.9em;
+  text-shadow: none;
 }
 .prompt .btn.y {
   background: #f4d03f;
@@ -425,8 +548,8 @@ canvas.minimap {
   background: #5aa9ff;
 }
 .prompt.alt {
-  margin-top: 3px;
-  padding: 2px 12px;
+  margin-top: 0;
+  padding: 3px 12px 3px 8px;
   font-size: 0.8em;
 }
 .prompt.alt.off {
@@ -436,7 +559,7 @@ canvas.minimap {
   position: absolute;
   left: 0;
   bottom: 0;
-  height: 3px;
+  height: 4px;
   width: 0;
   background: var(--amber);
 }
@@ -559,7 +682,7 @@ canvas.minimap {
 }
 .msgs {
   position: absolute;
-  top: calc(84px * var(--u));
+  top: calc(112px * var(--u));
   left: 50%;
   transform: translateX(-50%);
   width: min(62%, 680px);
@@ -571,8 +694,8 @@ canvas.minimap {
 .half.v-left .msgs,
 .half.v-right .msgs {
   width: min(90%, 520px);
-  /* The narrow halves stack compass, clock and minimap down the right edge; start the radio lines below that stack. */
-  top: calc(212px * var(--u));
+  /* In the narrow halves the minimap hangs down the right edge; start the radio lines below it. */
+  top: calc(178px * var(--u));
 }
 .sub {
   max-width: 100%;
@@ -593,19 +716,39 @@ canvas.minimap {
   left: 50%;
   top: 32%;
   transform: translateX(-50%);
-  font-size: 1.5em;
-  letter-spacing: 0.3em;
+  font-size: 1.25em;
+  letter-spacing: 0.2em;
   color: var(--amber);
   display: none;
   text-align: center;
+  width: max-content;
+  max-width: 84%;
+  line-height: 1.15;
 }
 .half.v-left .banner,
 .half.v-right .banner {
   top: 42%;
 }
+.half.h-top .banner,
+.half.h-bottom .banner {
+  top: calc(150px * var(--u));
+}
+/* Side by side, the bottom corners leave no room between them: lift the prompts clear of the vitals and weapon panes. */
+.half.v-left .bc,
+.half.v-right .bc {
+  bottom: max(28%, calc(196px * var(--u)));
+  width: min(70%, 340px);
+}
+.half.v-left .gunbox,
+.half.v-right .gunbox,
+.half.v-left .supplies,
+.half.v-right .supplies {
+  max-width: calc(190px * var(--u));
+}
 .banner small {
   display: block;
-  font-size: 0.5em;
+  margin-top: 4px;
+  font-size: 0.55em;
   letter-spacing: 0.12em;
   color: var(--paper);
 }
@@ -1208,12 +1351,9 @@ button:disabled {
   background: var(--amber);
   border-color: var(--amber);
 }
-.clock {
-  font-family: var(--mono);
-}
 .legbar {
-  width: calc(190px * var(--u));
   height: 6px;
+  margin: 2px 6px 9px;
   background: rgba(0, 0, 0, 0.6);
   border: 1px solid var(--panel-line);
   position: relative;
@@ -1230,6 +1370,17 @@ button:disabled {
   bottom: -2px;
   width: 2px;
   background: #fff;
+}
+.legbar .dusk::after {
+  content: 'DUSK';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 1px;
+  font-size: 7px;
+  letter-spacing: 0.12em;
+  color: var(--paper-dim);
 }
 .legbar .me {
   position: absolute;
