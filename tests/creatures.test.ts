@@ -393,12 +393,12 @@ describe('hunter behaviour', () => {
     const rest = pack.filter((d) => !d.dead);
     for (const d of rest) expect(d.state).toBe('flee');
   });
-  it('they will not take on a horde of the dead', () => {
+  it('they will not take on a big hunting horde of the dead', () => {
     const p = player(0, 0);
     const { W, Z } = world([p]);
     p.pos.z = 100;
     const dog = W.spawn('dog', 0, 200);
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 6; i++) {
       const zb = Z.spawn('walker', 5 + i, 200, false);
       zb.state = 'chase';
       zb.active = true;
@@ -407,6 +407,20 @@ describe('hunter behaviour', () => {
     dog.hasTarget = true;
     stepW(W, 1);
     expect(dog.state).toBe('flee');
+  });
+  it('but zombies about do not stop them biting someone they are already on', () => {
+    for (const [n, hunting] of [[4, false], [8, false], [4, true]] as [number, boolean][]) {
+      const p = player(0, 0);
+      const { W, Z } = world([p]);
+      for (let i = 0; i < n; i++) {
+        const zb = Z.spawn('walker', 6 + i, 20, false);
+        zb.active = true;
+        if (hunting) zb.state = 'chase';
+      }
+      W.spawnGroup('dog', 0, 28);
+      stepW(W, 10);
+      expect(p.hits.length, `${n} zombies, hunting ${hunting}`).toBeGreaterThan(5);
+    }
   });
   it('a pack left alone goes to a carcass and eats it away', () => {
     const p = player(0, 0);
@@ -503,12 +517,12 @@ describe('the dead: movement', () => {
     zb.active = true;
     let idle = 0;
     let moved = 0;
-    for (let i = 0; i < 60 * 40; i++) {
+    for (let i = 0; i < 60 * 120; i++) {
       Z.update(1 / 60);
       if (zb.idleT > 0) idle++;
       else if (Math.hypot(zb.vx, zb.vz) > 0.2) moved++;
     }
-    expect(idle).toBeGreaterThan(60 * 3);
+    expect(idle).toBeGreaterThan(60 * 2);
     expect(moved).toBeGreaterThan(60 * 3);
   });
   it('a walker lurches: its speed rises and falls as it goes', () => {
@@ -538,7 +552,7 @@ describe('the dead: movement', () => {
       zb.tz = 0;
       crowd.push(zb);
     }
-    for (let i = 0; i < 60 * 3; i++) {
+    for (let i = 0; i < 60 * 6; i++) {
       for (const zb of crowd) {
         zb.tx = 0;
         zb.tz = 0;

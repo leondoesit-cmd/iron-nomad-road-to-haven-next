@@ -753,7 +753,7 @@ export class WildlifeSystem {
   }
 
   /** Where the dead are, if enough of them are moving within `r` to run from. Looked up a few times a second, not every think. */
-  private scanZombies(a: Animal, r: number, min: number) {
+  private scanZombies(a: Animal, r: number, min: number, huntingOnly = false) {
     a.scanT -= 0.08;
     if (a.scanT > 0) return a.zfear;
     a.scanT = 0.35 + Math.random() * 0.2;
@@ -770,7 +770,7 @@ export class WildlifeSystem {
       const dz = z.z - a.z;
       const d2 = dx * dx + dz * dz;
       // Ones that are only shuffling about must be close to matter; ones that are hunting, anywhere in range.
-      if (d2 > r2 || (!z.chasing && d2 > r2 * 0.25)) continue;
+      if (d2 > r2 || (!z.chasing && (huntingOnly || d2 > r2 * 0.25))) continue;
       n++;
       sx += z.x;
       sz += z.z;
@@ -1037,7 +1037,8 @@ export class WildlifeSystem {
     }
     const noise = this.heard(a, 60);
     const wolf = a.kind === 'wolf';
-    const horde = this.scanZombies(a, 20, 3);
+    // Only a big pack of the dead that is actually hunting is worth running from, and not with a target already in its teeth.
+    const horde = this.scanZombies(a, 16, 6, true);
     if (a.state === 'flee') {
       if (a.stateT > 6) {
         a.state = 'idle';
@@ -1049,7 +1050,7 @@ export class WildlifeSystem {
       return;
     }
     // Badly hurt, crippled, or faced with a horde: it is not worth it.
-    if ((a.chasing && (a.hp < def.hp * 0.25 || a.moveMult < 0.4)) || horde) {
+    if ((a.chasing && (a.hp < def.hp * 0.25 || a.moveMult < 0.4)) || (horde && !(th && th.d < 15))) {
       a.fearX = horde ? horde.x : a.tx;
       a.fearZ = horde ? horde.z : a.tz;
       a.state = 'flee';
