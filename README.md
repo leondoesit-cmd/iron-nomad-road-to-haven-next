@@ -17,7 +17,7 @@ npm run build        # typecheck + production bundle in dist/
 npm test             # about 840 unit and simulation tests (Vitest)
 ```
 
-`?leg=W` starts a fresh run in the open world (it is what New Convoy does). Any other leg id (`?leg=L3P`, `?leg=L2C`...) starts a fresh run
+`?training` starts the training lessons (see [Learning the game](#learning-the-game)). `?leg=W` starts a fresh run in the open world (it is what New Convoy does). Any other leg id (`?leg=L3P`, `?leg=L2C`...) starts a fresh run
 straight on one of the older single-road legs, which is how a map is checked without playing up to it.
 
 Chrome or Edge are the reference browsers. Gamepads are only exposed to secure contexts, so use `localhost`, `127.0.0.1`
@@ -74,6 +74,28 @@ What changes when you are alone: there is no partner, so no tether, no revives a
 Lead or Trust override. A downed player can hold `A` to use a convoy Medkit on themselves; without one, bleeding out ends
 the run (there is nobody to revive you, so the "you both went down" rule becomes "you went down and could not get up").
 The garage and Ledger show one vehicle, and Settings drops the Player 2 and split-screen rows.
+
+### Learning the game
+
+Two things on the title screen (and **How to play** also in the pause menu) teach the game without a manual:
+
+- **How to play** is an illustrated guide: ten pages, each a picture and a few lines. The road to Haven, the daily loop, a numbered
+  mock-up of your screen, the gamepad drawn with each button named (on foot, then driving), tap versus hold, noise and dust, the
+  wrench, crowbar and jerrycan, camp and the night raid, and health, wounds, the downed rule and the tether. The key caps on the
+  control pages are read from your bindings, so rebinding changes the guide. LB and RB turn pages; its last button, *Try it:
+  training*, goes straight into the lessons.
+- **Training** is a guided run in a quiet copy of the open world (`?training` in the URL goes straight there). You start on foot beside your moped at midday, with
+  no raiders, hordes, wildlife or Dusk Bell until the end. Each seat gets its own lesson card in its own half of the screen, in its
+  own key names, with a checklist; a lesson ends when everyone has done everything on it, and a world beam and compass pin point at
+  what to go to. The twelve lessons: walk and look; sprint, jump and crouch; aim, shoot and reload (two sleeping infected to wake);
+  take goods and search a crate; get into the moped; drive; noise and dust (the meter, and what a horn does to it); park and get
+  out; the wrench and a fuel can (the moped is hurt and nearly dry); the map and pings; the pack; and the Dusk Bell and making camp.
+  Nobody can bleed out in training (a downed player is back up after a couple of seconds), it never touches a save or the run's own
+  world, and it works solo or in split screen. Stuck on one? Pause and choose *Skip this lesson*.
+
+The lessons are `game/tutorial.ts` (one data table of steps, each with goals that read game state, and the director that runs
+them; the scene itself only gains a `training` flag that mutes the hostile systems), the cards are `ui/coach.ts`, and the guide is
+`ui/guide.ts` with its pictures in `ui/guideArt.ts`.
 
 ### Controls
 
@@ -203,8 +225,10 @@ src/
   world/     deterministic terrain, leg layout (city grid, set pieces) and per-chunk content; `plans/` has authored city layouts
   render/    renderer and HDR post chain, sky and atmosphere, materials and procedural textures, terrain and road shaders,
              facades, chunk meshes, far landscape, ground cover, models (vehicles, people and their outfits, zombies, props), particles, camera
-  game/      scene runtime, entities (player, vehicle, zombies, raiders, crew), combat, leg scene, camp scene, game loop
-  ui/        HUD, shared-cursor focus UI, overlays (title, votes, report), the Dawn Ledger, the inventory, styles
+  game/      scene runtime, entities (player, vehicle, zombies, raiders, crew), combat, leg scene, camp scene, game loop,
+             the training director (`tutorial.ts`)
+  ui/        HUD, shared-cursor focus UI, overlays (title, votes, report), the Dawn Ledger, the inventory, the illustrated guide
+             and training cards (`guide.ts`, `guideArt.ts`, `coach.ts`), styles
   input/     gamepad, keyboard and mouse sampling into per-player intents; `bindings.ts` holds the rebindable action table
   audio/     procedural Web Audio: engines, weapons, stems that crossfade by state
   save/      IndexedDB (with a localStorage mirror), written at every Dawn Ledger
@@ -536,6 +560,8 @@ planning, ending selection, day clock, damage model, vehicle handling (accelerat
 stability regression), world generation (determinism, seams, passages, barricades, set pieces), game logic (obstacle index,
 campaign save round trip, input helpers, camera FOV) and rendering helpers (visual terrain detail stays out of the drivable
 corridor, mesh builder attributes, procedural noise). Lakes, boats and delves have theirs (see their section above), and so does the authored city: `tests/petahtikva.test.ts` (the plan lays out and names its streets, Founders' Square, the Great Synagogue, City Hall and the shop stand where the plan says on the streets it says, the real south-to-north order, the Red Line's slab, platforms, trams and stations, the bus station and the stadium, shop signs, streets are paved and open, everything on the route is reachable by flood fill, places are announced once). The car system has its own suites: `tests/garage.test.ts` (parts, stats, fitting, repair, salvage, world-car rolls), `tests/engines.test.ts` (the engine catalogue, every engine in every chassis, bays, petrol and diesel, radiators, heat, hot rods, saves), `tests/engineplay.test.ts` (real leg scenes: attach points and reach, wrong-fuel starts and draining, overheating under load, diesel cans, spray cans, stripping a car), `tests/paint.test.ts` (panel paint rules and the recoloured geometry), `tests/garageui.test.ts` (the garage view, grouped mounts, per-wheel tyres, water and oil, and swap forecasts with a fake host), `tests/wave2.test.ts` (gearbox strain, brakes, springs, exhaust, per-wheel tyres, removable doors and bonnet, sump and water volumes), `tests/wave2play.test.ts` (real leg scenes: a tyre on one wheel, the crowbar prying a door or bonnet, a V8 drinking more fuel, oil and water, water cans), `tests/wave2render.test.ts` (bare rims, missing panels, exposed engine, exhaust and spring kits, carry models), `tests/cars.test.ts` (Rapier handling of each found chassis, and that the model sits on the ground) `tests/carplay.test.ts` (real leg scenes in Node: streaming, claiming, repairing with held buttons, stripping, siphoning, saving the fleet), `tests/oil.test.ts` (the oil model, planning a fit or stow, old saves) and `tests/haul.test.ts` (real leg scenes: lifting, bolting on, pouring, stowing, dropping, driving over loose items without taking them, taking goods by hand, running dry). Bodywork has `tests/bodywork.test.ts` (the crash, joint, dirt and mark rules, the part tags in every model, the lattice: where it folds, normals, caps, slicing, extracting and hiding a part, replaying saved dents, lamps carried along, the dirt shader hooks, the track buffer) and `tests/bodywork-scene.test.ts` (real leg scenes: a wall crash dents the nose where it hit, a gentle bump does not, a bull bar tears off and can be lifted, two-sided modules, doors, mirrors working loose first, wrecks, spare wheels that roll, bullet and blast dents, debris as an obstacle, parts stowed or kept as pickups, save round trips, hammering and welding, mud, blood, tyre marks, and the open world remembering the road overnight). Dust storms have `tests/weather.test.ts` (the day's window is fixed by seed and day, level shape, what a storm does to raiders' sight, oil burn and the map, and a real leg building and clearing a storm). Personal gear has `tests/gear.test.ts` and `tests/gearplay.test.ts` (see its section above).
+
+Training has `tests/tutorial.test.ts`: a real open-world scene in Node walked through all twelve lessons with real held buttons and sticks (walking, sprinting, a jump, aiming and firing, taking goods and searching a crate, climbing into the moped, driving, the horn, getting out, repairing with the wrench, lifting and pouring a fuel can, the map, the pack and making camp), plus solo play, skipping, the key names in lesson text, and that nobody can bleed out.
 
 The page also exposes `window.__game` with `advance(seconds)` for running the simulation deterministically from the console,
 which is how most of the in-browser checks were done.
