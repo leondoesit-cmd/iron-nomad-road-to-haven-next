@@ -3,7 +3,7 @@ import { clamp } from '../core/math';
 /**
  * The body's four chores: eat, drink, piss and shit. Food and water drain with time and effort and are topped up from the
  * convoy's rations and water reserve; what goes in comes out again, so the bladder and the bowels fill behind them and
- * have to be emptied. Ignore a full one and the body does it for you, in your trousers, and the dead can smell it.
+ * have to be emptied, and a full one wrecks your aim and your sprint until you do. Nothing ever happens to you on its own.
  * Pure numbers, no engine imports. One `Needs` lives on each player (on the campaign, like the drugs) and is saved.
  */
 
@@ -34,16 +34,12 @@ export const NEEDS = {
   /** Below this it is time to eat or drink, and below `critical` it is hurting. */
   low: 0.3,
   critical: 0.1,
-  /** Waste: past `urge` you want to go, past `desperate` you can think of nothing else, at 1 it comes out by itself. */
+  /** Waste: past `urge` you want to go, past `desperate` you can think of nothing else. */
   urge: 0.6,
   desperate: 0.85,
   /** How long the job takes from full, seconds. A squat is long and you are very much not watching your back. */
   pissSeconds: 3.4,
   shitSeconds: 7,
-  /** After an accident: what is left in you, and how long the smell hangs around. */
-  afterAccident: 0.2,
-  wetSeconds: 150,
-  soiledSeconds: 330,
   /** Over a night's sleep the body fills up a little behind you. */
   sleepBladder: 0.3,
   sleepBowel: 0.14,
@@ -63,13 +59,10 @@ export interface Needs {
   /** How full the bladder and the bowels are: 1 and it is coming out. */
   bladder: number;
   bowel: number;
-  /** Seconds the smell of a wet or soiled mess has left to run. */
-  wet: number;
-  soiled: number;
 }
 
 export function newNeeds(): Needs {
-  return { food: 0.92, water: 0.9, bladder: 0.12, bowel: 0.1, wet: 0, soiled: 0 };
+  return { food: 0.92, water: 0.9, bladder: 0.12, bowel: 0.1 };
 }
 
 export type NeedsSave = Partial<Needs>;
@@ -82,8 +75,6 @@ export function restoreNeeds(s: NeedsSave | undefined): Needs {
   n.water = clamp(f(s.water, n.water), 0, 1);
   n.bladder = clamp(f(s.bladder, n.bladder), 0, 1);
   n.bowel = clamp(f(s.bowel, n.bowel), 0, 1);
-  n.wet = Math.max(0, f(s.wet, 0));
-  n.soiled = Math.max(0, f(s.soiled, 0));
   return n;
 }
 
@@ -102,8 +93,7 @@ export function wasteLevel(v: number): WasteLevel {
 }
 
 export type NeedEvent =
-  | { type: 'warn'; need: NeedId; level: 'low' | 'critical' | 'urge' | 'desperate' }
-  | { type: 'accident'; kind: 'piss' | 'shit' };
+  | { type: 'warn'; need: NeedId; level: 'low' | 'critical' | 'urge' | 'desperate' };
 
 export interface NeedsTick {
   /** Drug appetite: weed makes you hungry faster. */
@@ -139,28 +129,13 @@ export function tickNeeds(n: Needs, dt: number, o: NeedsTick = {}): NeedEvent[] 
   n.water -= w;
   n.bowel = Math.min(1, n.bowel + NEEDS.bowelPerSec * dt * (n.food > 0.02 ? 1 : 0.2) + f * NEEDS.bowelPerFood * 0.5);
   n.bladder = Math.min(1, n.bladder + NEEDS.bladderPerSec * dt * (n.water > 0.02 ? 1 : 0.2) + w * NEEDS.bladderPerWater * 0.5);
-  n.wet = Math.max(0, n.wet - dt);
-  n.soiled = Math.max(0, n.soiled - dt);
 
   announce(n, 'food', intakeLevel(n.food), out);
   announce(n, 'water', intakeLevel(n.water), out);
-  // Asleep, the bladder and bowels simply hold: the night's fill is added by `rest`, and nothing is soiled in the bedroll.
+  // Asleep, the bladder and bowels simply hold: the night's fill is added by `rest`.
   if (!o.asleep) {
     announce(n, 'bladder', wasteLevel(n.bladder), out);
     announce(n, 'bowel', wasteLevel(n.bowel), out);
-    // The bowels give out first if both go in the same tick: they are the worse accident.
-    if (n.bowel >= 1) {
-      n.bowel = NEEDS.afterAccident * 0.5;
-      n.soiled = NEEDS.soiledSeconds;
-      seen.get(n)!.bowel = 0;
-      out.push({ type: 'accident', kind: 'shit' });
-    }
-    if (n.bladder >= 1) {
-      n.bladder = NEEDS.afterAccident;
-      n.wet = NEEDS.wetSeconds;
-      seen.get(n)!.bladder = 0;
-      out.push({ type: 'accident', kind: 'piss' });
-    }
   }
   return out;
 }
@@ -222,25 +197,15 @@ export function relieve(n: Needs, kind: 'piss' | 'shit', amount: number) {
   else n.bowel = Math.max(0, n.bowel - amount);
 }
 
-/** A lake washes it off. */
-export function wash(n: Needs): boolean {
-  const was = n.wet > 0 || n.soiled > 0;
-  n.wet = 0;
-  n.soiled = 0;
-  return was;
-}
-
 /**
  * A night's sleep at camp. Supper and a drink bring you back up; without them you wake hollow. Either way you wake
- * with a full bladder, and the smell is washed out of your clothes overnight.
+ * with a full bladder.
  */
 export function rest(n: Needs, o: { fed: boolean; watered: boolean }) {
   n.food = o.fed ? 1 : Math.max(0, n.food - 0.2);
   n.water = o.watered ? Math.min(1, Math.max(n.water, 0.85) + 0.1) : Math.max(0, n.water - 0.25);
   n.bladder = clamp(n.bladder + NEEDS.sleepBladder, 0, 0.95);
   n.bowel = clamp(n.bowel + NEEDS.sleepBowel, 0, 0.9);
-  n.wet = 0;
-  n.soiled = 0;
   seen.delete(n);
 }
 
@@ -254,8 +219,6 @@ export interface NeedMods {
   regen: number;
   /** Weapon spread. */
   spread: number;
-  /** How far away the dead notice you: the smell travels. */
-  aggro: number;
   /** Aim and body sway, and camera shake. */
   sway: number;
   shake: number;
@@ -263,7 +226,7 @@ export interface NeedMods {
   hurt: number;
 }
 
-export const NEUTRAL_NEEDS: NeedMods = { speed: 1, drain: 1, regen: 1, spread: 1, aggro: 1, sway: 0, shake: 0, hurt: 0 };
+export const NEUTRAL_NEEDS: NeedMods = { speed: 1, drain: 1, regen: 1, spread: 1, sway: 0, shake: 0, hurt: 0 };
 
 export function needMods(n: Needs): NeedMods {
   const m = { ...NEUTRAL_NEEDS };
@@ -299,10 +262,6 @@ export function needMods(n: Needs): NeedMods {
     m.spread *= 1.1;
     m.sway += 0.03;
   }
-  // The dead have good noses.
-  if (n.wet > 0) m.aggro *= 1 + 0.12 * Math.min(1, n.wet / 30);
-  if (n.soiled > 0) m.aggro *= 1 + 0.3 * Math.min(1, n.soiled / 60);
-  m.aggro = clamp(m.aggro, 1, 1.6);
   m.sway = clamp(m.sway, 0, 0.3);
   return m;
 }
@@ -323,8 +282,6 @@ export function needChips(n: Needs): NeedChip[] {
   if (bl !== 'ok') out.push({ text: bl === 'desperate' ? 'BURSTING' : 'NEED A PISS', kind: bl === 'desperate' ? 'bad' : 'warn' });
   const ol = wasteLevel(n.bowel);
   if (ol !== 'ok') out.push({ text: ol === 'desperate' ? 'CLENCHING' : 'NEED A SHIT', kind: ol === 'desperate' ? 'bad' : 'warn' });
-  if (n.soiled > 0) out.push({ text: 'SOILED: THE DEAD CAN SMELL YOU', kind: 'bad' });
-  else if (n.wet > 0) out.push({ text: 'WET TROUSERS', kind: 'warn' });
   return out;
 }
 
@@ -332,7 +289,7 @@ export function needChips(n: Needs): NeedChip[] {
 export function warnText(need: NeedId, level: 'low' | 'critical' | 'urge' | 'desperate'): string {
   if (need === 'food') return level === 'critical' ? 'You are starving: eat something' : 'Your stomach growls';
   if (need === 'water') return level === 'critical' ? 'Your mouth is dry and your head is pounding: drink' : 'You are thirsty';
-  if (need === 'bladder') return level === 'desperate' ? 'You are about to wet yourself: find a spot now' : 'You need a piss';
+  if (need === 'bladder') return level === 'desperate' ? 'You are about to burst: find a spot now' : 'You need a piss';
   return level === 'desperate' ? 'You cannot hold it much longer' : 'You need a shit';
 }
 

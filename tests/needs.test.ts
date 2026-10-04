@@ -21,11 +21,11 @@ import {
   restoreNeeds,
   serializeNeeds,
   tickNeeds,
-  wash,
   wasteLevel,
   type NeedEvent,
   type Needs,
 } from '../src/sim/needs';
+import { ACTION_BY_ID, defaultBindings } from '../src/input/bindings';
 import { fakeServices, run } from './helpers/sim';
 
 beforeAll(async () => {
@@ -96,7 +96,7 @@ describe('needs: draining and filling', () => {
   });
 });
 
-describe('needs: warnings and accidents', () => {
+describe('needs: warnings', () => {
   it('each warning fires once as the band is crossed, not every tick', () => {
     const n = newNeeds();
     const ev = tickFor(n, 3000);
@@ -120,47 +120,15 @@ describe('needs: warnings and accidents', () => {
     expect(warns).toHaveLength(1);
   });
 
-  it('a full bladder comes out on its own: wet, and most of it gone', () => {
-    const n = newNeeds();
-    n.bladder = 0.9995;
-    const ev = tickFor(n, 3);
-    expect(ev.some((e) => e.type === 'accident' && e.kind === 'piss')).toBe(true);
-    expect(n.bladder).toBeCloseTo(NEEDS.afterAccident, 1);
-    expect(n.wet).toBeGreaterThan(0);
-    expect(n.soiled).toBe(0);
-  });
-
-  it('full bowels are the worse accident: soiled for longer, and the dead smell it further', () => {
-    const wet = newNeeds();
-    const soiled = newNeeds();
-    wet.bladder = 0.9995;
-    soiled.bowel = 0.9995;
-    tickFor(wet, 3);
-    const ev = tickFor(soiled, 3);
-    expect(ev.some((e) => e.type === 'accident' && e.kind === 'shit')).toBe(true);
-    expect(soiled.soiled).toBeGreaterThan(wet.wet);
-    expect(needMods(soiled).aggro).toBeGreaterThan(needMods(wet).aggro);
-    expect(needMods(wet).aggro).toBeGreaterThan(1);
-  });
-
-  it('nothing is soiled in the bedroll', () => {
+  it('a full bladder or bowel just stays full and nagging: nothing ever happens on its own', () => {
     const n = newNeeds();
     n.bladder = 1;
     n.bowel = 1;
-    expect(tickFor(n, 3, { asleep: true }).filter((e) => e.type === 'accident')).toHaveLength(0);
-  });
-
-  it('the smell fades, and a lake washes it off at once', () => {
-    const n = newNeeds();
-    n.soiled = NEEDS.soiledSeconds;
-    n.wet = NEEDS.wetSeconds;
-    tickFor(n, NEEDS.wetSeconds + 5);
-    expect(n.wet).toBe(0);
-    expect(n.soiled).toBeGreaterThan(0);
-    expect(wash(n)).toBe(true);
-    expect(n.soiled).toBe(0);
-    expect(wash(n)).toBe(false);
-    expect(needMods(n).aggro).toBe(1);
+    const ev = tickFor(n, 600);
+    expect(ev.every((e) => e.type === 'warn')).toBe(true);
+    expect(n.bladder).toBe(1);
+    expect(n.bowel).toBe(1);
+    expect(wasteLevel(n.bladder)).toBe('desperate');
   });
 });
 
@@ -234,7 +202,6 @@ describe('needs: doing something about it', () => {
     fed.food = hollow.food = 0.4;
     fed.water = hollow.water = 0.4;
     fed.bladder = hollow.bladder = 0.3;
-    fed.soiled = 100;
     rest(fed, { fed: true, watered: true });
     rest(hollow, { fed: false, watered: false });
     expect(fed.food).toBe(1);
@@ -242,8 +209,7 @@ describe('needs: doing something about it', () => {
     expect(hollow.food).toBeLessThan(0.4);
     expect(hollow.water).toBeLessThan(0.4);
     expect(fed.bladder).toBeGreaterThan(0.5);
-    expect(fed.soiled).toBe(0);
-    // It never wakes you with an accident already on it.
+    // You wake needing the toilet, not already past it.
     const full = newNeeds();
     full.bladder = full.bowel = 1;
     rest(full, { fed: true, watered: true });
@@ -255,7 +221,7 @@ describe('needs: doing something about it', () => {
 describe('needs: what it does to you', () => {
   it('a comfortable body has no modifiers and no chips', () => {
     const n = newNeeds();
-    expect(needMods(n)).toEqual({ speed: 1, drain: 1, regen: 1, spread: 1, aggro: 1, sway: 0, shake: 0, hurt: 0 });
+    expect(needMods(n)).toEqual({ speed: 1, drain: 1, regen: 1, spread: 1, sway: 0, shake: 0, hurt: 0 });
     expect(needChips(n)).toEqual([]);
   });
 
@@ -303,9 +269,8 @@ describe('needs: what it does to you', () => {
     n.water = 0.05;
     n.bladder = 0.7;
     n.bowel = 0.9;
-    n.soiled = 50;
     const text = needChips(n).map((c) => c.text);
-    expect(text).toEqual(['HUNGRY', 'PARCHED', 'NEED A PISS', 'CLENCHING', 'SOILED: THE DEAD CAN SMELL YOU']);
+    expect(text).toEqual(['HUNGRY', 'PARCHED', 'NEED A PISS', 'CLENCHING']);
     expect(wasteLevel(0.6)).toBe('urge');
     expect(wasteLevel(0.85)).toBe('desperate');
   });
@@ -315,7 +280,6 @@ describe('needs: saving', () => {
   it('round-trips through a save, and a bad or missing one falls back to well fed', () => {
     const n = newNeeds();
     n.food = 0.33;
-    n.soiled = 12;
     const back = restoreNeeds(JSON.parse(JSON.stringify(serializeNeeds(n))));
     expect(back).toEqual(n);
     expect(restoreNeeds(undefined)).toEqual(newNeeds());
@@ -575,33 +539,6 @@ describe('piss and shit on foot', () => {
 });
 
 describe('what the body does to the player', () => {
-  it('a full bladder that is ignored comes out by itself: you are stunned, wet, and the dead notice more', () => {
-    const h = leg();
-    const p = h.sc.players[0];
-    h.campaign.needs[0].bladder = 0.9999;
-    run(h.sc, 1);
-    expect(h.campaign.needs[0].wet).toBeGreaterThan(0);
-    expect(p.nm.aggro).toBeGreaterThan(1);
-    expect(p.notes.some((n) => /wet yourself/i.test(n.text))).toBe(true);
-    expect(h.sounds).toContain('trickle');
-    // The partner is told.
-    expect(h.sc.players[1].notes.some((n) => /wet themselves/i.test(n.text))).toBe(true);
-    h.sc.dispose();
-  }, 60000);
-
-  it('soiling yourself stuns you for longer, and leaves a pile', () => {
-    const h = leg();
-    const p = h.sc.players[0];
-    const marks = h.sc.gore.decals.count;
-    h.campaign.needs[0].bowel = 0.9999;
-    run(h.sc, 0.2);
-    expect(p.stunT).toBeGreaterThan(0.6);
-    expect(h.campaign.needs[0].soiled).toBeGreaterThan(0);
-    expect(h.sc.gore.decals.count).toBeGreaterThan(marks);
-    expect(p.notes.some((n) => /shit yourself/i.test(n.text))).toBe(true);
-    h.sc.dispose();
-  }, 60000);
-
   it('starving takes health but never the last of it', () => {
     const h = leg();
     const p = h.sc.players[0];
@@ -702,13 +639,71 @@ describe('a night at camp', () => {
     dry.sc.dispose();
   }, 60000);
 
-  it('you wake with a fuller bladder and clean clothes', () => {
+  it('you wake with a fuller bladder', () => {
     const { h, sc } = dawn((c) => {
       c.needs[0].bladder = 0.2;
-      c.needs[0].soiled = 200;
     });
     expect(h.campaign.needs[0].bladder).toBeGreaterThan(0.45);
-    expect(h.campaign.needs[0].soiled).toBe(0);
     sc.dispose();
+  }, 60000);
+});
+
+describe('their own keys', () => {
+  it('each chore has a keyboard action, bound by default for both layouts without clashing', () => {
+    const b = defaultBindings();
+    for (const id of ['eat', 'drink', 'piss', 'shit'] as const) {
+      expect(ACTION_BY_ID[id].devices).toEqual(['kb']);
+      expect(b.kb[0][id]).toBeTruthy();
+      expect(b.kb[1][id]).toBeTruthy();
+    }
+    for (const set of b.kb) {
+      const keys = Object.values(set);
+      expect(new Set(keys).size).toBe(keys.length);
+    }
+  });
+
+  function press(h: H, btn: number) {
+    const it = h.intents[0];
+    it.pressed |= 1 << btn;
+    it.held |= 1 << btn;
+    h.sc.tick(DT);
+    it.pressed &= ~(1 << btn);
+    it.held &= ~(1 << btn);
+    h.sc.tick(DT);
+  }
+
+  it('the keys eat, drink, piss and shit without opening the belt, and the same key stops a piss', () => {
+    const h = leg();
+    const p = h.sc.players[0];
+    h.campaign.stocks.rations = 2;
+    h.campaign.items.water = 5;
+    h.campaign.needs[0].food = 0.2;
+    h.campaign.needs[0].water = 0.2;
+    press(h, Btn.Eat);
+    expect(h.campaign.stocks.rations).toBe(1);
+    press(h, Btn.Drink);
+    expect(h.campaign.items.water).toBeLessThan(5);
+    h.campaign.needs[0].bladder = 0.9;
+    press(h, Btn.Piss);
+    expect(p.relief?.kind).toBe('piss');
+    press(h, Btn.Piss);
+    expect(p.relief).toBeNull();
+    h.campaign.needs[0].bowel = 0.9;
+    press(h, Btn.Shit);
+    expect(p.relief?.kind).toBe('shit');
+    expect(p.beltOpen).toBe(false);
+    h.sc.dispose();
+  }, 60000);
+
+  it('a bursting bladder never goes off by itself', () => {
+    const h = leg();
+    const p = h.sc.players[0];
+    h.campaign.needs[0].bladder = 1;
+    h.campaign.needs[0].bowel = 1;
+    run(h.sc, 5);
+    expect(h.campaign.needs[0].bladder).toBe(1);
+    expect(p.stunT).toBe(0);
+    expect(p.nm.spread).toBeGreaterThan(1);
+    h.sc.dispose();
   }, 60000);
 });

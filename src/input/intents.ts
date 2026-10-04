@@ -24,9 +24,14 @@ export const Btn = {
   Map: 18,
   /** Not a physical button: the inventory, driven by whatever the player binds to it (D-pad left on a pad). */
   Inventory: 19,
+  /** Not physical buttons: the four chores, driven by keys. A pad reaches them through the quick belt. */
+  Eat: 20,
+  Drink: 21,
+  Piss: 22,
+  Shit: 23,
 } as const;
 /** Logical buttons, including View, Jump, Map and Inventory. */
-export const BTN_COUNT = 20;
+export const BTN_COUNT = 24;
 export type BtnName = keyof typeof Btn;
 
 export type DeviceKind = 'pad' | 'keyboard';

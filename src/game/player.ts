@@ -18,7 +18,7 @@ import { SALVAGE_STAGES } from '../sim/salvage';
 import { costText, spend, whole } from '../sim/resources';
 import { DRUGS, DRUG_IDS, type DrugEvent, type DrugId, type DrugState } from '../sim/drugs';
 import { BLEED, STAMINA, bind, bleedLabel, canSprint, jamChance, newBleed, newStamina, openWound, spendStamina, tickBleed, tickStamina, wearBy, WEAR, wearDamage, wearSpread, woundChance } from '../sim/vitals';
-import { NEEDS, NEUTRAL_NEEDS, NEED_ACTS, canRelieve, drink as drinkWater, eat as eatFood, needMods, reliefSeconds, relieve, tickNeeds, wash, warnText, type NeedAct, type NeedEvent, type NeedMods, type Needs } from '../sim/needs';
+import { NEEDS, NEUTRAL_NEEDS, NEED_ACTS, canRelieve, isNeedAct, drink as drinkWater, eat as eatFood, needMods, reliefSeconds, relieve, tickNeeds, warnText, type NeedAct, type NeedEvent, type NeedMods, type Needs } from '../sim/needs';
 import { ammoForGun } from '../sim/ballistics';
 import { HANDLING, kickVelocity, spring, stepSpring, swayAt, type Handling, type Spring } from '../sim/handling';
 import type { ShellKind } from '../render/brass';
@@ -226,8 +226,6 @@ export class Player implements Pilot {
   nm: NeedMods = { ...NEUTRAL_NEEDS };
   /** A piss or a shit in progress. It runs on its own clock and walking off, firing or being hit cuts it short. */
   relief: { kind: 'piss' | 'shit'; t: number; dur: number; from: number; stained: boolean; wasCrouch: boolean } | null = null;
-  /** Seconds spent standing in water while dirty: a long enough soak washes it off. */
-  private washT = 0;
   private needSeed = 0x2545f491;
   private sprintingNow = false;
   private woundSeed = 0x9e3779b9;
@@ -827,12 +825,17 @@ export class Player implements Pilot {
   /** Tap on the quick belt: take whatever it rests on. */
   private useQuick() {
     const sel = this.quickSel;
-    if (this.relief) return void this.endRelief('moved');
     if (sel === 'bandage' || sel === 'medkit') this.useDressing(sel);
-    else if (sel === 'eat') this.eatRation();
-    else if (sel === 'drink') this.drinkUp();
-    else if (sel === 'piss' || sel === 'shit') this.startRelief(sel);
+    else if (isNeedAct(sel)) this.doNeed(sel);
     else this.takeDrug(sel);
+  }
+
+  /** Eat, drink, piss or shit, from the belt or from its own key. Pressing piss or shit again stops one under way. */
+  private doNeed(act: NeedAct) {
+    if (this.relief) return void this.endRelief('moved');
+    if (act === 'eat') this.eatRation();
+    else if (act === 'drink') this.drinkUp();
+    else this.startRelief(act);
   }
 
   /**
@@ -844,6 +847,12 @@ export class Player implements Pilot {
     const items = this.ctx.campaign.items;
     const living = this.state === 'foot' || this.state === 'driving' || this.state === 'gunner';
     const can = living && !this.buildMode && !d.passedOut && this.stunT <= 0;
+    if (can) {
+      if (wasPressed(it, Btn.Eat)) this.doNeed('eat');
+      if (wasPressed(it, Btn.Drink)) this.doNeed('drink');
+      if (wasPressed(it, Btn.Piss)) this.doNeed('piss');
+      if (wasPressed(it, Btn.Shit)) this.doNeed('shit');
+    }
     const down = can && isHeld(it, Btn.Down);
     if (down) {
       const was = this.useHold;
@@ -920,36 +929,16 @@ export class Player implements Pilot {
       const floor = this.maxHp * NEEDS.hpFloor;
       if (this.hp > floor) this.hp = Math.max(floor, this.hp - nm.hurt * dt);
     }
-    // A long enough stand in the water washes the smell off.
-    if ((n.wet > 0 || n.soiled > 0) && this.waterDepth > 0.35 && this.state === 'foot') {
-      this.washT += dt;
-      if (this.washT > 2.5) {
-        this.washT = 0;
-        if (wash(n)) this.note('You rinse the stink off in the water', 'good');
-      }
-    } else this.washT = 0;
   }
 
   private onNeedEvent(e: NeedEvent) {
     const ctx = this.ctx;
-    if (e.type === 'warn') {
-      const urgent = e.level === 'critical' || e.level === 'desperate';
-      this.note(warnText(e.need, e.level) + (e.level === 'low' || e.level === 'urge' ? ' (hold use to open the belt)' : ''), urgent ? 'bad' : 'warn');
-      if (!ctx.campaign.flags['tip.needs']) {
-        ctx.campaign.flags['tip.needs'] = true;
-        ctx.tip('needs');
-      }
-      return;
+    const urgent = e.level === 'critical' || e.level === 'desperate';
+    this.note(warnText(e.need, e.level), urgent ? 'bad' : 'warn');
+    if (!ctx.campaign.flags['tip.needs']) {
+      ctx.campaign.flags['tip.needs'] = true;
+      ctx.tip('needs');
     }
-    // It came out by itself.
-    if (this.relief) this.endRelief('quiet');
-    this.action = null;
-    this.stunT = Math.max(this.stunT, e.kind === 'shit' ? 1.4 : 0.9);
-    ctx.audio.play(e.kind === 'shit' ? 'plop' : 'trickle', this.pos.x, this.pos.z, 0.5);
-    this.cam.addShake(0.15);
-    if (this.state === 'foot') ctx.gore.waste(this.pos.x, this.pos.z, e.kind);
-    this.note(e.kind === 'shit' ? 'You shit yourself. The dead will smell it' : 'You wet yourself', 'bad');
-    this.partner?.note(`${this.name} ${e.kind === 'shit' ? 'has shat themselves' : 'has wet themselves'}`, 'info');
   }
 
   /** Eat a ration from the convoy's stores. Your hands are busy for a moment, as with a dressing. */
