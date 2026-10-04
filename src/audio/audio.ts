@@ -44,6 +44,9 @@ export type SoundId =
   | 'gulp'
   | 'toke'
   | 'pill'
+  | 'munch'
+  | 'trickle'
+  | 'plop'
   | 'shell'
   | 'glass';
 
@@ -703,6 +706,23 @@ export class AudioEngine {
       case 'pill':
         this.tone(out, t0, 'square', 1500, 1100, 0.15, 0.001, 0.03);
         this.burst(out, t0 + 0.05, 'bandpass', 2200, 1, 0.1, 0.002, 0.06);
+        break;
+
+      case 'munch':
+        for (let k = 0; k < 4; k++) {
+          this.burst(out, t0 + k * 0.17, 'bandpass', 1100 + Math.random() * 500, 1.2, 0.2, 0.004, 0.08);
+          this.tone(out, t0 + k * 0.17, 'triangle', 160, 90, 0.08, 0.004, 0.06);
+        }
+        break;
+
+      case 'trickle':
+        this.burst(out, t0, 'bandpass', 2600, 0.7, 0.14, 0.15, 1.6);
+        this.burst(out, t0 + 0.2, 'highpass', 4200, 0.5, 0.07, 0.2, 1.3);
+        break;
+
+      case 'plop':
+        this.tone(out, t0, 'sine', 180, 60, 0.25, 0.004, 0.14);
+        this.burst(out, t0, 'lowpass', 400, 0.8, 0.14, 0.004, 0.12);
         break;
 
       case 'radio':

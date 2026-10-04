@@ -857,8 +857,8 @@ export class ZombieSystem {
         }
       }
     }
-    // The stoned are easy to miss; the drunk are easy to find.
-    const notice = tgt?.player ? tgt.player.drugs.mods().aggro : 1;
+    // The stoned are easy to miss; the drunk are easy to find; and the dead have good noses for a man who has soiled himself.
+    const notice = tgt?.player ? tgt.player.drugs.mods().aggro * tgt.player.nm.aggro : 1;
     const seesTarget = !!tgt && tgt.d < sight * notice * (tgt.vehicle ? 1.4 : tgt.player && tgt.player.crouch ? 0.5 : 1) && !ctx.obs.segmentBlocked(zb.x, zb.z, tgt.x, tgt.z, 1.1);
     switch (zb.state) {
       case 'dormant':

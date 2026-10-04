@@ -11,6 +11,7 @@ import { C } from '../render/palette';
 import { Btn, heldFor, isHeld, wasPressed, type PlayerIntent } from '../input/intents';
 import { campVerdict, nightlyUpkeep, type Merc } from '../sim/loyalty';
 import { canAfford, spend, whole } from '../sim/resources';
+import { NEEDS } from '../sim/needs';
 import { modsOf } from '../sim/parts';
 import { convoyPower, pickRaidKind, planRaid } from '../sim/threat';
 import { DayClock, lightAt } from '../sim/dayclock';
@@ -1007,18 +1008,50 @@ export class CampScene extends Scene {
     // Fatigue from watch duty.
     for (const w of this.watchers) if (w && w !== 'crew') w.fatigue = 0.12;
     for (const p of this.players) if (!this.watchers.includes(p)) p.fatigue = 0;
-    // Rations: one per person per night, and an extra one for anyone who has the munchies.
-    const munch = this.players.filter((p) => p.drugs.munchies).length;
-    const eaters = this.players.length + munch;
-    const eat = Math.min(c.stocks.rations, eaters);
-    c.stocks.rations -= eat;
+    // Supper: one ration per person who is not already full, and an extra one for anyone with the munchies. Someone who
+    // has been eating through the day skips it. Water is the same: a litre each from the reserve, for anyone who needs it.
+    const fed: boolean[] = [true, true];
+    const watered: boolean[] = [true, true];
+    let rations = c.stocks.rations;
+    const skipped: Player[] = [];
     const hungry = new Set<Player>();
-    this.players.forEach((p, i) => {
-      if (i >= eat) hungry.add(p);
-    });
+    let wanted = 0;
+    let munch = 0;
+    for (const p of this.players) {
+      if (c.needs[p.index].food >= NEEDS.supperBelow) {
+        skipped.push(p);
+        continue;
+      }
+      wanted++;
+      if (rations >= 1) {
+        rations--;
+        if (p.drugs.munchies && rations >= 1) {
+          rations--;
+          munch++;
+        }
+      } else {
+        hungry.add(p);
+        fed[p.index] = false;
+      }
+    }
+    c.stocks.rations = rations;
+    const names = (ps: Iterable<Player>) => [...ps].map((p) => p.name).join(' and ');
+    if (skipped.length) lines.push(`${names(skipped)} had already eaten and skipped supper.`);
     if (munch) lines.push(`The munchies cost ${munch} extra ration${munch > 1 ? 's' : ''}.`);
-    if (eat < eaters) lines.push(eaters > 1 && eat > 0 ? 'Only one of you ate. The other went hungry.' : 'No Rations. You went hungry.');
-    else if (c.stocks.rations < eaters) lines.push('That was nearly the last of the Rations: hunt or scavenge before the next camp.');
+    if (hungry.size === this.players.length) lines.push('No Rations. You went hungry.');
+    else if (hungry.size) lines.push(`Only one of you ate. ${names(hungry)} went hungry.`);
+    else if (wanted && rations < this.players.length) lines.push('That was nearly the last of the Rations: hunt or scavenge before the next camp.');
+    const dry: Player[] = [];
+    for (const p of this.players) {
+      if (c.needs[p.index].water >= 0.8) continue;
+      if (c.items.water >= 0.5) c.items.water = Math.max(0, c.items.water - 1);
+      else {
+        watered[p.index] = false;
+        dry.push(p);
+      }
+    }
+    if (dry.length) lines.push(`The water reserve is dry. ${names(dry)} woke up parched.`);
+    c.restNeeds(fed, watered);
     // A night's sleep takes whatever was in the blood.
     c.restDrugs();
     // Crew upkeep, loyalty bands, desertions and disputes.

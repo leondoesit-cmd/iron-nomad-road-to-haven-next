@@ -87,23 +87,29 @@ export class Gore {
 
   // ------------------------------------------------------------------ blood on surfaces
 
-  private place(x: number, y: number, z: number, nx: number, ny: number, nz: number, w: number, h: number, cell: number, opacity: number, dx?: number, dy?: number, dz?: number) {
+  private place(x: number, y: number, z: number, nx: number, ny: number, nz: number, w: number, h: number, cell: number, opacity: number, dx?: number, dy?: number, dz?: number, tint?: [number, number, number]) {
     const k = 0.75 + Math.random() * 0.4;
     // On level ground the mark lies on the road if there is one.
     if (ny > 0.7 && this.ctx.terrain) y += roadLift(this.ctx.terrain, x, z);
-    this.decals.add(x, y, z, { cell, w, h, nx, ny, nz, dx, dy, dz, r: 0.4 * k, g: 0.02, b: 0.022, opacity });
+    this.decals.add(x, y, z, tint ? { cell, w, h, nx, ny, nz, dx, dy, dz, r: tint[0] * k, g: tint[1] * k, b: tint[2] * k, opacity } : { cell, w, h, nx, ny, nz, dx, dy, dz, r: 0.4 * k, g: 0.02, b: 0.022, opacity });
     this.placed++;
   }
 
   /** A splat on the ground at a spot, dropped on whatever floor is there. */
-  groundSplat(x: number, z: number, size: number, cell: number, opacity = 0.85, dirX?: number, dirZ?: number, fromY?: number) {
+  groundSplat(x: number, z: number, size: number, cell: number, opacity = 0.85, dirX?: number, dirZ?: number, fromY?: number, tint?: [number, number, number]) {
     const ctx = this.ctx;
     const y0 = (fromY ?? ctx.groundAt(x, z)) + 1;
     const r = ctx.P.raycast(x, y0, z, 0, -1, 0, 4, RAY);
     const gy = r ? y0 - r.toi : ctx.groundAt(x, z);
     const n = r?.normal ?? { x: 0, y: 1, z: 0 };
     const stretch = dirX !== undefined && dirZ !== undefined && Math.hypot(dirX, dirZ) > 0.2 ? 1.5 : 1;
-    this.place(x, gy, z, n.x, n.y, n.z, size * stretch, size, cell, opacity, dirX, 0, dirZ);
+    this.place(x, gy, z, n.x, n.y, n.z, size * stretch, size, cell, opacity, dirX, 0, dirZ, tint);
+  }
+
+  /** What the body leaves on the ground: a dark yellow puddle, or a brown pile. */
+  waste(x: number, z: number, kind: 'piss' | 'shit') {
+    if (kind === 'piss') this.groundSplat(x, z, 0.5 + Math.random() * 0.25, CELL.pool, 0.6, undefined, undefined, undefined, [0.62, 0.52, 0.1]);
+    else this.groundSplat(x, z, 0.26 + Math.random() * 0.08, CELL.splat0 + Math.floor(Math.random() * 4), 0.95, undefined, undefined, undefined, [0.3, 0.19, 0.08]);
   }
 
   /**
