@@ -1,3 +1,5 @@
+import type { Panel } from '../sim/access';
+
 /**
  * Parts that can come off a vehicle. A model builder wraps the primitives of a bolt-on module, a door or a mirror in
  * `b.mark(tag, meta)` ... `b.end()`, and the merged body keeps the vertex range of each, so the part can later be
@@ -34,11 +36,14 @@ export interface PartRange {
   meta: PartMeta;
 }
 
-export type PartKind = 'door' | 'mirror' | 'bumper' | 'slot' | 'spare' | 'crate' | 'sign' | 'lightbar' | 'bullbar';
+export type PartKind = 'door' | 'mirror' | 'bumper' | 'slot' | 'spare' | 'crate' | 'sign' | 'lightbar' | 'bullbar' | 'hood' | 'trunk';
 
 export function partTag(kind: PartKind, qualifier: string | number = ''): string {
   return qualifier === '' ? kind : `${kind}:${qualifier}`;
 }
+
+/** The tag of each panel that swings open (see `sim/access.ts`): the bonnet, the doors and the boot lid are parts of the body like any other. */
+export const PANEL_TAG: Record<Panel, string> = { hood: 'hood', doorL: 'door:1', doorR: 'door:-1', trunk: 'trunk' };
 
 /** What each bolt-on module is made of, by id: its joint, weight and how hard a knock it takes. */
 const SLOT_PARTS: Record<string, { joint: JointKind; mass: number; tol: number; round?: boolean }> = {
@@ -47,6 +52,14 @@ const SLOT_PARTS: Record<string, { joint: JointKind; mass: number; tol: number; 
   fr_spike: { joint: 'weld', mass: 44, tol: 13 },
   rf_rack: { joint: 'bolt', mass: 20, tol: 10 },
   rf_light: { joint: 'bolt', mass: 6, tol: 6 },
+  rf_net: { joint: 'bolt', mass: 22, tol: 10.5 },
+  rf_basket: { joint: 'bolt', mass: 18, tol: 9.5 },
+  rf_basket2: { joint: 'bolt', mass: 30, tol: 11 },
+  rf_basket3: { joint: 'weld', mass: 42, tol: 13 },
+  rr_cage: { joint: 'bolt', mass: 16, tol: 9.5 },
+  rr_cage2: { joint: 'weld', mass: 34, tol: 12 },
+  utl_tie: { joint: 'strap', mass: 4, tol: 6 },
+  utl_net: { joint: 'strap', mass: 7, tol: 6.5 },
   rf_cage: { joint: 'weld', mass: 48, tol: 15 },
   rr_spare: { joint: 'bolt', mass: 26, tol: 9.5, round: true },
   rr_wing: { joint: 'bolt', mass: 7, tol: 5.5 },
@@ -59,6 +72,9 @@ const SLOT_PARTS: Record<string, { joint: JointKind; mass: number; tol: number; 
 /** Body work that is not a module: it is built into the car, but it is only bolted or clipped and it does come off. */
 const BODY_PARTS: Record<string, { joint: JointKind; mass: number; tol: number; round?: boolean }> = {
   door: { joint: 'hinge', mass: 22, tol: 10 },
+  // A bonnet or a boot lid is held by two hinges and a latch; it takes a harder knock than a door to tear off.
+  hood: { joint: 'bolt', mass: 20, tol: 15 },
+  trunk: { joint: 'bolt', mass: 18, tol: 15 },
   mirror: { joint: 'clip', mass: 1.2, tol: 3.6 },
   bumper: { joint: 'bolt', mass: 15, tol: 12 },
   armor: { joint: 'weld', mass: 20, tol: 14 },

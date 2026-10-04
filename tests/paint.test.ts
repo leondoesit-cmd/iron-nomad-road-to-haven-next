@@ -48,7 +48,7 @@ describe('panel paint rules', () => {
     expect(cleanPanels({})).toBeUndefined();
   });
   it('a painted vehicle survives a save, and a hand-edited one is repaired', () => {
-    const c = new Campaign(['A', 'B'], false);
+    const c = new Campaign(undefined, false);
     paintPanel(c.garage[0], 'doorR', 0x123456);
     const raw = JSON.parse(JSON.stringify(c.serialize()));
     expect(Campaign.deserialize(raw).garage[0].panels).toEqual({ doorR: 0x123456 });

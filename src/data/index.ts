@@ -11,6 +11,7 @@ import wildlifeJson from './wildlife.json';
 import { validateGear } from './gear';
 
 export * from './gear';
+export * from './heroes';
 
 export type StockId = 'fuel' | 'rations' | 'scrap' | 'parts' | 'tech' | 'medicine';
 export const STOCK_IDS: StockId[] = ['fuel', 'rations', 'scrap', 'parts', 'tech', 'medicine'];
@@ -38,17 +39,36 @@ export type PartSlot =
   | 'front'
   | 'roof'
   | 'rear'
-  | 'side';
+  | 'side'
+  // The cabin: seats, steering wheel and dashboard are real parts that can be missing.
+  | 'seatD'
+  | 'seatP'
+  | 'seatR'
+  | 'steer'
+  | 'dash';
 /**
  * Every part category. `wheels` is the category of a tyre: tyres are fitted one per wheel (see `VehicleBuild.tyres`), never
- * as a slot of their own, and `doorL` is the category of a door, which fits either side.
+ * as a slot of their own, `doorL` is the category of a door, which fits either side, and `seatD` is the category of a front
+ * seat, which fits the driver's or the passenger's mount.
  */
-export const PART_SLOTS: PartSlot[] = ['engine', 'cooling', 'gearbox', 'exhaust', 'wheels', 'suspension', 'brakes', 'hood', 'doorL', 'doorR', 'armor', 'weapon', 'utility', 'front', 'roof', 'rear', 'side'];
+export const PART_SLOTS: PartSlot[] = ['engine', 'cooling', 'gearbox', 'exhaust', 'wheels', 'suspension', 'brakes', 'hood', 'doorL', 'doorR', 'armor', 'weapon', 'utility', 'front', 'roof', 'rear', 'side', 'seatD', 'seatP', 'seatR', 'steer', 'dash'];
 /** Slots that hold one part directly in `Fit`. Everything but the tyres, which are one per wheel. */
 export const FIT_SLOTS: PartSlot[] = PART_SLOTS.filter((s) => s !== 'wheels');
-/** Which mounts a part of this category can be bolted to. A door fits either side; a tyre fits any wheel. */
+/**
+ * The cabin's mounts. A chassis lists the ones it has in `slots`; its factory seats, wheel and dash are `seat_std`,
+ * `bench_std`, `steer_std` and `dash_std`, and each empty mount holds a `*_none` part (`seat_none`, `bench_none`,
+ * `steer_none`, `dash_none`). The world and salvage code can strip or swap them like any other slot.
+ */
+export const INTERIOR_SLOTS: PartSlot[] = ['seatD', 'seatP', 'seatR', 'steer', 'dash'];
+export const isInteriorSlot = (s: PartSlot): boolean => INTERIOR_SLOTS.includes(s);
+/** The factory part of each cabin mount, and the placeholder that stands for a mount with nothing in it. */
+export const INTERIOR_STOCK: Record<string, string> = { seatD: 'seat_std', seatP: 'seat_std', seatR: 'bench_std', steer: 'steer_std', dash: 'dash_std' };
+export const INTERIOR_NONE: Record<string, string> = { seatD: 'seat_none', seatP: 'seat_none', seatR: 'bench_none', steer: 'steer_none', dash: 'dash_none' };
+/** Which mounts a part of this category can be bolted to. A door fits either side, a front seat either front place; a tyre fits any wheel. */
 export function mountsFor(category: PartSlot): PartSlot[] {
-  return category === 'doorL' || category === 'doorR' ? ['doorL', 'doorR'] : [category];
+  if (category === 'doorL' || category === 'doorR') return ['doorL', 'doorR'];
+  if (category === 'seatD' || category === 'seatP') return ['seatD', 'seatP'];
+  return [category];
 }
 export const MOUNT_SLOTS: PartSlot[] = ['front', 'roof', 'rear', 'side'];
 export type WeaponMount = 'none' | 'front' | 'bed';
@@ -188,6 +208,26 @@ export interface PartStats {
   spare?: number;
   /** Extra air through the engine bay, as a share (a vented or missing bonnet). */
   airflow?: number;
+  /** Steering lock, as a share (a quick wheel). */
+  steer?: number;
+}
+
+/** What a missing cabin part does to the vehicle, in one table (`parts.json` `interior`). */
+export interface InteriorRules {
+  /** Steering lock left with no wheel on the column. Still drivable in a straight line. */
+  noSteerLock: number;
+  /** Driver sitting on the floor: grip multiplier, gun spread multiplier, how far the hips and eyes drop (m). */
+  noSeatGrip: number;
+  noSeatSpread: number;
+  noSeatDrop: number;
+}
+
+/** Where a holder keeps things, how many footprint units it holds, the biggest single item it takes (1 small, 2 medium, 4 large) and any restriction. */
+export interface PartHold {
+  zone: 'roof' | 'bed' | 'carrier' | 'rack' | 'spare';
+  units: number;
+  max: 1 | 2 | 4;
+  only?: 'cans' | 'tyres';
 }
 
 export interface PartDef {
@@ -214,6 +254,8 @@ export interface PartDef {
   brakes?: BrakeSpec;
   /** Exhausts: extra power as a share, and noise against the stock pipe. */
   exhaust?: ExhaustSpec;
+  /** Cargo holders (baskets, racks, nets, cages, the jerrycan rack, the spare-wheel carrier): where loads on the outside stay put. See `sim/cargo.ts`. */
+  hold?: PartHold;
   /** A factory fitting. It can be pulled out and carried, but never turns up as random loot or on the fabricate list. */
   stock?: boolean;
   /** The "nothing there" placeholder for a bay that has been stripped. Not a real part. */
@@ -346,6 +388,8 @@ export interface CampSiteDef {
 
 export interface EncounterEffects {
   stocks?: Partial<Record<StockId, number>>;
+  /** Named finds handed over: `n` things from a loot context (see `sim/loot.ts`), never abstract Scrap, Parts or Tech. */
+  loot?: { from: string; n: number };
   axes?: Partial<Record<'mercy' | 'trust' | 'notoriety', number>>;
   loyalty?: number;
   ambush?: number;
@@ -372,6 +416,7 @@ export const PARTS = partsJson as unknown as {
   rarity: Record<string, string>;
   /** Condition a stock component drops to when its upgrade part is pulled out. */
   stockCondition: number;
+  interior: InteriorRules;
   parts: PartDef[];
   paints: { id: string; name: string; c: number }[];
   stripes: { id: string; name: string }[];
@@ -546,6 +591,7 @@ export function validateData(): string[] {
     need(p.mk >= 1 && p.mk <= 3, `part ${p.id}: mk range`);
     // Factory fittings are never random loot, so they carry no weight.
     need(p.stock ? p.weight === 0 : p.weight > 0, `part ${p.id}: weight`);
+    if (INTERIOR_SLOTS.includes(p.slot)) need(!p.empty || Object.values(INTERIOR_NONE).includes(p.id), `part ${p.id}: an empty cabin part must be ${Object.values(INTERIOR_NONE).join(' or ')}`);
     if (p.slot === 'engine') {
       const e = p.engine;
       need(!!e, `part ${p.id}: an engine needs an engine spec`);
@@ -575,6 +621,11 @@ export function validateData(): string[] {
     for (const pre of ['tyre', 'gbx', 'sus', 'brk', 'exh']) {
       const f = PART_BY_ID.get(`${pre}_${v.id}`);
       need(!!f?.stock, `vehicle ${v.id}: needs a factory ${pre} part (${pre}_${v.id})`);
+    }
+    for (const slot of INTERIOR_SLOTS) {
+      if (!(v.slots ?? []).includes(slot)) continue;
+      need(!!PART_BY_ID.get(INTERIOR_STOCK[slot])?.stock && !PART_BY_ID.get(INTERIOR_STOCK[slot])?.empty, `vehicle ${v.id}: ${slot} needs the factory part ${INTERIOR_STOCK[slot]}`);
+      need(!!PART_BY_ID.get(INTERIOR_NONE[slot])?.empty, `vehicle ${v.id}: ${slot} needs the placeholder ${INTERIOR_NONE[slot]}`);
     }
   }
   need(new Set(PARTS.parts.map((p) => p.id)).size === PARTS.parts.length, 'parts: duplicate ids');

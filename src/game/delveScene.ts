@@ -16,6 +16,9 @@ import { Rng, hashString } from '../core/rng';
 import { gearDrop } from '../sim/gear';
 import { delveBounds, known, newDelveBase, newFrame, revealDelve, type MapFrame } from '../ui/mapdata';
 import { DRUGS, DRUG_IDS } from '../sim/drugs';
+import { grantLoot } from './lootGrant';
+import { rollGunLoot } from '../sim/gunLoot';
+import { rollLoot } from '../sim/loot';
 
 /** What a delve remembers between visits, so cleared rooms stay cleared and opened chests stay open. */
 export interface DelveRecord {
@@ -250,8 +253,10 @@ export class DelveScene extends Scene {
     const k = m.keys[0];
     if (k && !this.record.keyTaken) {
       const g = new THREE.Group();
+      // The key lies flat on the floor at a fixed heading; the beam over it is what shows from afar.
       const mesh = new THREE.Mesh(keyGeometry(m.theme), kit);
-      mesh.position.y = 0.9;
+      mesh.position.y = 0.05;
+      mesh.rotation.set(-Math.PI / 2, ((k.x * 12.9898 + k.z * 78.233) % 6.28 + 6.28) % 6.28, 0);
       g.add(mesh);
       const beam = makeBeam(0x7dffb0, 5);
       g.add(beam);
@@ -288,9 +293,10 @@ export class DelveScene extends Scene {
       v.glint.visible = false;
       v.beam.visible = false;
     }
-    this.addLoot(c.loot.stocks, 'delve');
     const camp = this.campaign;
-    const bits: string[] = [];
+    if (c.loot.guns) rollGunLoot(c.loot.guns.context, c.loot.guns.seed, c.loot.guns.depth).forEach((g, i) => this.dropGear(g, c.x + Math.cos(i * 2.1) * 0.9, c.z + Math.sin(i * 2.1) * 0.9));
+    // What is in it: named parts, cans and tins, put where each goes.
+    const bits: string[] = grantLoot(this, c.loot.items, { x: c.x, z: c.z }, by.pos);
     if (c.loot.ammo) {
       camp.ammo += c.loot.ammo;
       bits.push(`+${c.loot.ammo} rounds`);
@@ -408,7 +414,10 @@ export class DelveScene extends Scene {
     r.cleared = true;
     this.radio(`${this.site.name} is cleared out. Nothing left but echoes.`);
     this.notify(-1, 'Cleared: every cache found, the guardian down', 'good');
-    this.addLoot({ parts: 8 + this.site.tier * 4, tech: 1 + (this.site.tier > 1 ? 1 : 0) }, 'delve');
+    // The last of it: whatever the guardian had been sitting on, handed over at the exit.
+    const ctx = ({ cave: 'delve_cave', mine: 'delve_mine', bunker: 'delve_bunker', metro: 'delve_metro' } as const)[this.map.theme];
+    const last = grantLoot(this, rollLoot(ctx, this.map.seed * 31 + 9, 2, { progress: Math.min(1, 0.4 + this.site.tier * 0.2) }), { x: this.map.exit.x, z: this.map.exit.z });
+    if (last.length) this.notify(-1, `Found: ${last.join(', ')}`, 'good');
   }
 
   // ------------------------------------------------------------------ lights
@@ -516,9 +525,6 @@ export class DelveScene extends Scene {
         this.audio.play('drip', p.pos.x + Math.cos(a) * r, p.pos.z + Math.sin(a) * r, 0.45 + Math.random() * 0.4);
       }
     }
-    // Spin the loose glints.
-    for (const v of this.chestViews.values()) if (v.glint.visible) v.glint.rotation.y += dt * 2.4;
-    if (this.keyMesh) this.keyMesh.rotation.y += dt * 1.8;
     // Prompts follow the state of the key.
     for (const ix of this.doorIx) ix.prompt = rec.keyTaken ? 'Hold to unlock the way ahead' : 'Locked: find the key';
     // Both down: carried out, a little poorer.

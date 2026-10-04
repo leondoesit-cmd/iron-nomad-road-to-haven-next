@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { PartMeta, PartRange } from './bodyParts';
+import { valueNoise3 } from '../core/noise';
+
+export { valueNoise3 };
 
 /**
  * A surface: albedo plus physically based parameters, written per vertex so one mesh can mix paint,
@@ -461,32 +464,5 @@ export class MeshBuilder {
 }
 
 type UvFn = (u: number, v: number, nx: number, ny: number, nz: number, vx: number, vy: number, vz: number) => [number, number];
-
-function h3(x: number, y: number, z: number, s: number) {
-  let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(z | 0, 1442695041) + Math.imul(s | 0, 2147483647)) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  h ^= h >>> 16;
-  return (h >>> 0) / 4294967296;
-}
-
-/** Smooth 3D value noise in [0, 1). */
-export function valueNoise3(x: number, y: number, z: number, seed: number) {
-  const ix = Math.floor(x);
-  const iy = Math.floor(y);
-  const iz = Math.floor(z);
-  const fx = x - ix;
-  const fy = y - iy;
-  const fz = z - iz;
-  const u = fx * fx * (3 - 2 * fx);
-  const v = fy * fy * (3 - 2 * fy);
-  const w = fz * fz * (3 - 2 * fz);
-  const l = (a: number, b: number, t: number) => a + (b - a) * t;
-  const c = (dx: number, dy: number, dz: number) => h3(ix + dx, iy + dy, iz + dz, seed);
-  return l(
-    l(l(c(0, 0, 0), c(1, 0, 0), u), l(c(0, 1, 0), c(1, 1, 0), u), v),
-    l(l(c(0, 0, 1), c(1, 0, 1), u), l(c(0, 1, 1), c(1, 1, 1), u), v),
-    w,
-  );
-}
 
 export const lin = (hex: number) => new THREE.Color(hex);

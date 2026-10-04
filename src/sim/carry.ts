@@ -1,10 +1,12 @@
-import { PARTS, mountsFor, partDef, type FuelType, type PartSlot, type VehicleDef } from '../data';
+import { PARTS, isInteriorSlot, mountsFor, partDef, type FuelType, type PartSlot, type VehicleDef } from '../data';
 import { RARITY_CSS, describePart, isWorn, slotsOf, type PartItem } from './parts';
 import { OIL_CAN, pourOil } from './oil';
-import { engineLine } from './engines';
+import { bayFit, bayText, engineLine, type HoodState } from './engines';
 import { fuelMismatch, planPour } from './fuel';
 import { colorName } from './paint';
 import { pourWater, WATER_CAN } from './fluids';
+import { insideRefusal, type InsideRoom } from './cargo';
+import { gate, needText, workFor, type Job, type Need, type PanelOpen, type Spot } from './access';
 
 /**
  * Things you lift off the ground and carry in your arms: a vehicle part, a can of fuel, a can of oil.
@@ -46,6 +48,10 @@ export interface Goods {
 /** Which little model stands for a part: an engine block, a radiator core, a tyre, or the general parts crate. */
 export function partModelKey(id: string): string {
   const d = partDef(id);
+  // Every cabin part has a model of its own (`render/partModels.ts`), not one per quality.
+  if (isInteriorSlot(d.slot)) return `part:${id}`;
+  // Every engine has a model of its own, drawn from its spec (`render/engineModels.ts`).
+  if (d.slot === 'engine') return `part:${id}`;
   const mk = Math.min(3, Math.max(1, d.stock ? 1 : d.mk));
   const KEY: Partial<Record<PartSlot, string>> = {
     engine: 'engine',
@@ -64,7 +70,7 @@ export function partModelKey(id: string): string {
 
 /** Which little model stands for a carried thing, in the arms and in flight. */
 export function carryModelKey(c: Carried): string {
-  if (c.kind === 'part') return partModelKey(c.item.id);
+  if (c.kind === 'part') return /^part\d$/.test(partModelKey(c.item.id)) ? `part:${c.item.id}` : partModelKey(c.item.id);
   if (c.kind === 'fuel') return c.fuel === 'diesel' ? 'diesel' : 'fuel';
   if (c.kind === 'paint') return `paint:${c.color.toString(16)}`;
   return c.kind;
@@ -159,6 +165,11 @@ export interface FitTarget {
   coolant?: number;
   coolantL?: number;
   sumpL?: number;
+  /**
+   * Where the player stands and what is open (see `sim/access.ts`). With it a job that has to be done somewhere else, or
+   * behind a panel that is shut, is refused with the reason in `need`. Left out, a job is allowed anywhere.
+   */
+  access?: { at: Spot | null; open: PanelOpen; /** The mount a part is going into (a door fits either side). */ mount?: PartSlot };
 }
 
 export interface FitPlan {
@@ -166,18 +177,58 @@ export interface FitPlan {
   /** The prompt for the hold. */
   label: string;
   secs: number;
+  /** Why it cannot be done yet: go somewhere, open something, take the old part off. */
+  need?: Need;
+}
+
+/** The job as a mechanic would say it, for "Go to the engine bay to ...". */
+function verbOf(c: Carried): string {
+  switch (c.kind) {
+    case 'part':
+      return `fit ${partDef(c.item.id).name}`;
+    case 'fuel':
+      return 'pour the fuel in';
+    case 'oil':
+      return 'top up the oil';
+    case 'water':
+      return 'top up the radiator';
+    case 'paint':
+      return 'spray it';
+  }
 }
 
 /** What holding A does with this in hand at that vehicle: bolt it on, pour it in, top the sump up. */
 export function planFit(c: Carried, t: FitTarget): FitPlan {
+  if (c.kind === 'part') {
+    const d = partDef(c.item.id);
+    if (!mountsFor(d.slot).some((m) => slotsOf(t.def).includes(m))) return { ok: false, label: `A ${t.def.name} has no ${PARTS.labels[d.slot].toLowerCase()} mount`, secs: 1 };
+  }
+  if (t.access && c.kind !== 'paint') {
+    const job: Job = c.kind === 'part' ? t.access.mount ?? partDef(c.item.id).slot : c.kind;
+    const g = gate(t.def, job, t.access.at, t.access.open);
+    if (!g.ok && g.need) return { ok: false, label: needText(t.def, g.need, verbOf(c)), secs: 1, need: g.need };
+  }
   switch (c.kind) {
     case 'part': {
       const d = partDef(c.item.id);
-      if (!mountsFor(d.slot).some((m) => slotsOf(t.def).includes(m))) return { ok: false, label: `A ${t.def.name} has no ${PARTS.labels[d.slot].toLowerCase()} mount`, secs: 1 };
       const old = t.current === undefined ? t.fitted(d.slot) : t.current ?? undefined;
+      // A panel (the bonnet, a door) is not swapped in place: the old one comes off first.
+      const mount = t.access?.mount ?? d.slot;
+      if (old && !partDef(old.id).empty && workFor(t.def, mount)?.swap === false && (mount === 'hood' || mount === 'doorL' || mount === 'doorR')) {
+        const need: Need = { kind: 'free', panel: mount };
+        return { ok: false, label: needText(t.def, need), secs: 1, need };
+      }
       const mk = old ? partDef(old.id).mk : 0;
       const verb = old ? (d.stock || old && partDef(old.id).stock ? 'Swap in' : d.mk < mk ? 'Swap (downgrade) to' : 'Swap in') : 'Bolt on';
-      const spec = d.engine && !d.empty ? `  ·  ${engineLine(d.engine)}` : '';
+      let spec = d.engine && !d.empty ? `  ·  ${engineLine(d.engine)}` : '';
+      if (d.engine && !d.empty) {
+        // Say honestly whether it goes under the bonnet.
+        const hid = t.fitted('hood')?.id;
+        const hood: HoodState = hid === 'hood_cut' ? 'cut' : hid && partDef(hid).empty ? 'off' : 'closed';
+        const bay = bayFit(t.def, d.engine, hood);
+        if (!bay.fitsClosed && slotsOf(t.def).includes('hood') && hood !== 'off') spec += `  ·  ${bayText(bay.label, hood)}`;
+        else if (!bay.fitsClosed && !slotsOf(t.def).includes('hood')) spec += '  ·  Too big for the frame: it hangs out in the open';
+      }
       return { ok: true, label: `${verb} ${d.name}${old ? ` (replaces ${partDef(old.id).name})` : ''}${spec}`, secs: d.slot === 'engine' ? 4 : d.slot === 'wheels' ? 2.6 : d.slot === 'gearbox' ? 3.6 : d.slot === 'cooling' ? 3 : 2.4 };
     }
     case 'fuel': {
@@ -216,18 +267,36 @@ export interface StowRoom {
   oil: number;
   /** Reserve water room, in litres. */
   water?: number;
+  /** Room inside the vehicle being stowed into (`sim/cargo.ts`): a part has to fit its footprint. Left out, only the convoy total counts. */
+  inside?: InsideRoom;
 }
 
 export interface StowPlan {
   ok: boolean;
   label: string;
+  /** Why it cannot be stowed here yet: the boot is shut, or you are not at it. */
+  need?: Need;
 }
 
-/** Whether the trucks will take it: parts need a free slot, fuel is always welcome, oil has a reserve limit. */
-export function planStow(c: Carried, room: StowRoom): StowPlan {
+/**
+ * Whether the trucks will take it: parts need a free slot, fuel is always welcome, oil has a reserve limit. With `access` it
+ * also has to be put in at the boot with the lid open, or through an open door at the back seat.
+ */
+export function planStow(c: Carried, room: StowRoom, access?: { def: VehicleDef; at: Spot | null; open: PanelOpen }): StowPlan {
+  if (access && c.kind !== 'paint') {
+    const g = gate(access.def, 'stow', access.at, access.open);
+    if (!g.ok && g.need) return { ok: false, label: needText(access.def, g.need, 'stow it'), need: g.need };
+  }
   switch (c.kind) {
-    case 'part':
-      return room.parts > 0 ? { ok: true, label: `Stow in the trunk (${room.parts} free)` } : { ok: false, label: 'Trunk is full' };
+    case 'part': {
+      if (room.inside && access) {
+        const why = insideRefusal(c, room.inside, access.def);
+        if (why) return { ok: false, label: why };
+      }
+      if (room.parts <= 0) return { ok: false, label: 'Trunk is full' };
+      const where = room.inside ? `in the ${room.inside.name}` : 'in the trunk';
+      return { ok: true, label: room.inside ? `Stow ${where}: secure at any speed (${room.inside.free} units free)` : `Stow in the trunk (${room.parts} free)` };
+    }
     case 'fuel':
       return { ok: true, label: 'Add to the reserve cans' };
     case 'oil':

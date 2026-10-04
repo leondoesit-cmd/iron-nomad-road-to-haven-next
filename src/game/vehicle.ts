@@ -6,6 +6,7 @@ import { boatFx, waterTick } from './waterfx';
 import { applyHit, collisionDamage, facingOf, newHealth, performance, repairStep, tickHazards, type DamageEvent, type VehicleHealth } from '../sim/damage';
 import { effectiveStats, terrainDrag, terrainGrip, type PartItem, type Stats } from '../sim/parts';
 import { fromHealth, toHealth, type VehicleBuild } from '../sim/garage';
+import { bayFit, engineSpec, hoodState } from '../sim/engines';
 import { stormOilMult } from '../sim/weather';
 import { oilBurn, oilState, oilWear, type OilState } from '../sim/oil';
 import { gearboxPower, gearboxRatingNow, gearboxWear } from '../sim/drivetrain';
@@ -13,12 +14,15 @@ import { COOLANT_LOW, COOLANT_CRITICAL, coolantLoss, coolantState, type CoolantS
 import { fuelMismatch } from '../sim/fuel';
 import { T_CRITICAL, T_HOT, T_OVERHEAT, overheatPower, overheatWear, steamLevel, thermalStep } from '../sim/thermal';
 import { buildRaiderBuggy, buildVehicleVisual, buildWagon, defaultLook, lookOf, mountsOfChassis, type VehicleVisual } from '../render/vehicleModels';
-import { buildLoad, deckOf, deckRoom, layoutLoad, loadCount, loadKey, noLoad, type Load, type Placed } from '../render/cargoLoad';
+import { CargoRig } from './cargo';
+import { insideMax, insideName, insideUnits, unitsUsed, type InsideRoom } from '../sim/cargo';
 import { PLAYER_COLORS } from '../render/palette';
+import type { Humanoid, Palette } from '../render/humanoid';
 import { shared, disposeTree } from '../render/dispose';
 import { clamp, damp, lerp } from '../core/math';
 import { chassisDef, partDef, type FuelType, type VehicleDef } from '../data';
 import { Bodywork } from './bodywork';
+import { PANELS, effectiveOpen, panelsOf, panelStripped, type Panel, type PanelOpen } from '../sim/access';
 import { CarGlass } from './carGlass';
 import type { Ctx } from './ctx';
 
@@ -30,6 +34,8 @@ export type VehicleKind = 'player' | 'crew' | 'raiderBuggy' | 'wagon' | 'boat';
 export interface Pilot {
   readonly isPlayer: boolean;
   readonly index: number;
+  /** How the pilot looks, for the figure drawn in the seat. Absent: the seat keeps the vehicle's own rider. */
+  readonly palette?: Palette;
   drive(v: Vehicle, dt: number): DriveInput;
 }
 
@@ -77,7 +83,7 @@ export class Vehicle {
   kind: VehicleKind;
   ownerIndex: number;
   driver: Pilot | null = null;
-  passenger: { index: number } | null = null;
+  passenger: { readonly index: number; readonly palette?: Palette } | null = null;
   fuel: number;
   tankMax: number;
   /** What the tank holds. The engine runs on `stats.fuel`; if they differ it will not start. */
@@ -125,13 +131,15 @@ export class Vehicle {
   /** Distance tracker for the seized-engine check. */
   private seizedWarned = false;
   /** The convoy's stowed spares as they ride on this vehicle: what is shown, and when it was last checked. */
-  private loadMesh: THREE.Mesh | null = null;
-  private loadSeen = '';
   private loadT = 0;
   /** Last oil level the driver was warned about. */
   private oilSeen: OilState = 'ok';
   private coolantSeen: CoolantState = 'ok';
   private gearSeen = false;
+  /** Panels someone has opened (bonnet, doors, boot lid). Closed by default; kept in the build's body save, so they survive streaming and saving. */
+  open: Partial<Record<Panel, boolean>> = {};
+  /** How far each panel is swung, 0 shut to 1 open. `Bodywork` eases it and poses the model. */
+  swing: Record<Panel, number> = { hood: 0, doorL: 0, doorR: 0, trunk: 0 };
   /** Water: engine drowned (wheeled vehicles), seconds spent out of the water since, and the spray timer. */
   flooded = false;
   dryT = 0;
@@ -175,6 +183,7 @@ export class Vehicle {
     this.snapshotPrev();
     this.bodywork = new Bodywork(this);
     this.glass = new CarGlass(this);
+    this.cargoRig = new CargoRig(this);
     if (o.hulk) this.makeHulk();
   }
 
@@ -235,15 +244,14 @@ export class Vehicle {
     this.visual = this.makeVisual(PLAYER_COLORS[Math.max(0, this.ownerIndex)]);
     this.bodywork.attach();
     this.glass.bind();
-    this.loadMesh = null;
-    this.loadSeen = '';
+    this.cargoRig.reset();
     this.group.add(this.visual.root);
     this.shadowCasters(this.visual.root);
     this.hideSeats();
     if (this.visual.driver && wasSeated.d !== undefined) this.visual.driver.root.visible = wasSeated.d;
     if (this.visual.passenger && wasSeated.p !== undefined) this.visual.passenger.root.visible = wasSeated.p;
     this.spin = this.body.wheelLocal.map(() => 0);
-    if (this.wreck) this.visual.body.material = charMat;
+    if (this.wreck) this.charVisual();
   }
 
   /** The build was edited directly (the workbench): pull its parts and condition into this live vehicle. */
@@ -259,6 +267,7 @@ export class Vehicle {
     b.tank = this.fuelType;
     if (this.wreck) b.hp = 0.02;
     this.bodywork.commit();
+    this.cargoRig.save();
   }
 
   /** A fitted part has come off in a crash: the stats follow it. The model is left alone, it has already lost the part. */
@@ -274,6 +283,53 @@ export class Vehicle {
     this.health.armorBonus = fresh.armorBonus;
     this.tankMax = this.stats.tank;
     this.fuel = Math.min(this.fuel, this.tankMax);
+  }
+
+  // ------------------------------------------------------------------ panels
+
+  /** What is open right now: a panel that was never there, that is stripped, or that has been torn off counts as open. */
+  panelOpen(): PanelOpen {
+    return effectiveOpen(this.def, this.build?.fit ?? {}, this.open, this.bodywork.gonePanels());
+  }
+
+  /**
+   * How far the bonnet sits open on its own (0..1 of a full swing) because the engine under it is too big to close it over:
+   * a tight engine props it a little, one that does not fit at all holds it well up until the bonnet is cut or taken off.
+   * `Bodywork` poses the panel from this, so the closed state is honestly "as shut as the engine lets it be".
+   */
+  hoodProp(): number {
+    const b = this.build;
+    if (!b || this.wreck || b.fit.engine === undefined) return 0;
+    if (hoodState(b.fit) !== 'closed' || !this.hasPanel('hood')) return 0;
+    const bonnet = bayFit(this.def, engineSpec(this.def, b.fit)).bonnet;
+    return bonnet === 'prop' ? 0.35 : bonnet === 'blocked' ? 0.6 : 0;
+  }
+
+  /** Can this panel be opened and shut: the chassis has it, and it is on the car. */
+  hasPanel(p: Panel): boolean {
+    return !!this.build && panelsOf(this.def).includes(p) && !panelStripped(this.def, this.build?.fit ?? {}, p) && !this.bodywork.gonePanels()[p];
+  }
+
+  /**
+   * Open or shut a panel. Returns false when there is nothing to swing. It is a little noisy, and a vehicle does not shut
+   * anything for you: see `update`, where a car at speed slams them.
+   */
+  setPanel(p: Panel, open: boolean): boolean {
+    if (!this.hasPanel(p)) return false;
+    if (!!this.open[p] === open) return true;
+    if (open) this.open[p] = true;
+    else delete this.open[p];
+    const at = this.position;
+    this.ctx.sig.emit(at.x, at.z, 4, 'noise');
+    this.ctx.audio.play(open ? 'wrench' : 'hit', at.x, at.z, open ? 0.35 : 0.3);
+    return true;
+  }
+
+  /** Slam everything shut (a door closing behind a driver, a car pulling away). */
+  closePanels(): boolean {
+    let any = false;
+    for (const p of PANELS) if (this.open[p]) any = this.setPanel(p, false) || any;
+    return any;
   }
 
   get neutral() {
@@ -346,110 +402,40 @@ export class Vehicle {
     this.engineOn = !this.startFail;
   }
 
-  /** What is on this vehicle's deck right now, as last drawn. */
-  load: Load = noLoad();
+  /** The load on the outside (roof, bed, racks): what rides there, what is secure, and what falls off when driven. See `game/cargo.ts`. */
+  cargoRig!: CargoRig;
 
-  /** The convoy's own cars that carry cargo, in a stable order. */
-  private carriers(): Vehicle[] {
-    const carriers = this.ctx.vehicles.filter((q) => q.faction === 'convoy' && q.build && !q.wreck && mountsOfChassis(q.def));
-    carriers.sort((a, b) => a.ownerIndex - b.ownerIndex || a.id - b.id);
-    return carriers;
-  }
-
-  /**
-   * The share of the convoy's spare parts, fuel and oil that rides on this vehicle. A part stowed on a particular car
-   * stays on it; the rest are dealt round the cars with room, one item at a time.
-   */
-  private wantedLoad(): Load {
-    const load = noLoad();
-    if (this.faction !== 'convoy' || !this.build || this.wreck) return load;
-    const camp = this.ctx.campaign;
-    const carriers = this.carriers();
-    const mine = carriers.indexOf(this);
-    if (mine < 0) return load;
-    const room = carriers.map((q) => deckRoom(deckOf(mountsOfChassis(q.def)!.m, mountsOfChassis(q.def)!.g0)));
-    const used = carriers.map(() => 0);
-    const mark = (ci: number, add: () => void) => {
-      if (ci === mine) add();
-      used[ci]++;
-    };
-    // Parts first: the ones put on a car stay there.
-    const loose: PartItem[] = [];
-    for (const it of camp.inventory) {
-      const ci = it.on ? carriers.findIndex((q) => q.build!.uid === it.on) : -1;
-      if (ci >= 0 && used[ci] < room[ci]) mark(ci, () => load.parts.push({ uid: it.uid, id: it.id }));
-      else loose.push(it);
-    }
-    let hidden = 0;
-    let turn = 0;
-    for (const it of loose) {
-      let placed = false;
-      for (let k = 0; k < carriers.length && !placed; k++) {
-        const ci = (turn + k) % carriers.length;
-        if (used[ci] >= room[ci]) continue;
-        mark(ci, () => load.parts.push({ uid: it.uid, id: it.id }));
-        turn = ci + 1;
-        placed = true;
-      }
-      if (!placed) hidden++;
-    }
-    // Overflow heaps up in a crate or two on the first car.
-    const crates = Math.min(2, Math.ceil(hidden / 6));
-    if (mine === 0 && crates > 0 && loadCount(load) < room[0]) load.crates = Math.min(crates, room[0] - loadCount(load));
-    const cans: ('fuel' | 'diesel' | 'oil')[] = [];
-    for (let i = 0; i < Math.min(3, Math.floor(camp.stocks.fuel / 5)); i++) cans.push('fuel');
-    for (let i = 0; i < Math.min(2, Math.floor(camp.items.diesel / 5)); i++) cans.push('diesel');
-    for (let i = 0; i < (camp.items.oil > 0.05 ? Math.min(3, Math.ceil(camp.items.oil / 0.5 - 0.05)) : 0); i++) cans.push('oil');
-    cans.forEach((kind, i) => {
-      if (i % carriers.length === mine && loadCount(load) < room[mine]) load[kind]++;
-    });
-    return load;
-  }
-
-  /** Redraw the deck now rather than at the next half-second tick: used when something was just taken off or put on. */
+  /** Redraw the outside load now rather than at the next half-second tick: used when something was just taken off or put on. */
   refreshLoadNow() {
-    this.loadSeen = '';
-    this.refreshLoad();
+    this.cargoRig.refreshNow();
   }
 
-  private refreshLoad() {
-    const want = this.wantedLoad();
-    const key = loadKey(want);
-    if (key === this.loadSeen) return;
-    this.loadSeen = key;
-    this.load = want;
-    if (this.loadMesh) {
-      this.visual.inner.remove(this.loadMesh);
-      this.loadMesh = null;
-    }
-    const anchor = mountsOfChassis(this.def);
-    if (!anchor) return;
-    const mesh = buildLoad(deckOf(anchor.m, anchor.g0), want, this.def.id);
-    if (mesh) {
-      this.visual.inner.add(mesh);
-      this.loadMesh = mesh;
-    }
-  }
-  /** Everything on the deck with its place in the world, for lifting it off and for flying things onto it. */
-  deckSpots(): (Placed & { world: THREE.Vector3 })[] {
-    const anchor = mountsOfChassis(this.def);
-    if (!anchor || this.faction !== 'convoy' || !this.build) return [];
-    const inner = this.visual.inner;
-    inner.updateWorldMatrix(true, false);
-    return layoutLoad(deckOf(anchor.m, anchor.g0), this.load).map((t) => ({ ...t, world: inner.localToWorld(new THREE.Vector3(t.x, t.y + 0.15, t.z)) }));
+  /** Spare parts the convoy has stowed inside this vehicle (secure at any speed). Parts with no vehicle of their own (old saves) count as being in every boot. */
+  stowedParts(): PartItem[] {
+    const b = this.build;
+    if (!b || this.faction !== 'convoy') return [];
+    const own = new Set(this.ctx.campaign.garage.map((g) => g.uid));
+    return this.ctx.campaign.inventory.filter((it) => it.on === b.uid || !it.on || !own.has(it.on));
   }
 
-  /** The world position the next thing put on the deck will land on. */
-  nextDeckSpot(extra: Partial<Load> & { part?: { uid: string; id: string } }): THREE.Vector3 | null {
-    const anchor = mountsOfChassis(this.def);
-    if (!anchor) return null;
-    const next: Load = { ...this.load, parts: [...this.load.parts], ...extra, part: undefined } as Load;
-    if (extra.part) next.parts.push(extra.part);
-    const placed = layoutLoad(deckOf(anchor.m, anchor.g0), next);
-    const at = extra.part ? placed.find((t) => t.uid === extra.part!.uid) : placed[placed.length - 1];
-    if (!at) return null;
-    this.visual.inner.updateWorldMatrix(true, false);
-    return this.visual.inner.localToWorld(new THREE.Vector3(at.x, at.y + 0.15, at.z));
+  /** Room inside: footprint units free, the biggest single item, and what the place is called. */
+  insideRoom(): InsideRoom {
+    const b = this.build;
+    const used = b ? unitsUsed(this.ctx.campaign.inventory.filter((it) => it.on === b.uid)) : 0;
+    const total = b ? insideUnits(this.def, this.stats.cargo, b.fit) : 0;
+    return { free: Math.max(0, total - used), max: insideMax(this.def), name: insideName(this.def) };
+  }
+
+  /** Everything inside that could be taken out by hand, with where it comes out of in the world. */
+  deckSpots(): { kind: 'part' | 'fuel' | 'oil' | 'crate'; uid?: string; id?: string; world: THREE.Vector3 }[] {
+    if (this.faction !== 'convoy' || !this.build) return [];
+    const [x, y, z] = this.body.toWorld(0, 0.8, -this.def.length * 0.42);
+    const at = () => new THREE.Vector3(x, y, z);
+    const camp = this.ctx.campaign;
+    const out: { kind: 'part' | 'fuel' | 'oil' | 'crate'; uid?: string; id?: string; world: THREE.Vector3 }[] = this.stowedParts().map((it) => ({ kind: 'part' as const, uid: it.uid, id: it.id, world: at() }));
+    if (camp.stocks.fuel >= 1) out.push({ kind: 'fuel', world: at() });
+    if (camp.items.oil > 0.05) out.push({ kind: 'oil', world: at() });
+    return out;
   }
 
   /**
@@ -598,6 +584,7 @@ export class Vehicle {
       e.topSpeedMult = this.stats.topSpeedMult * this.tetherTop;
       e.travelMult = this.stats.travelMult;
       e.brakeMult = this.stats.brakeMult;
+      e.steerMult = this.stats.steerMult;
       e.flats = this.health.comp.tires.map((t) => t <= 0);
       const off = this.stats.offroad;
       e.surface = (x, z) => {
@@ -640,8 +627,9 @@ export class Vehicle {
     this.oilWatch();
     if ((this.loadT -= dt) <= 0) {
       this.loadT = 0.5;
-      this.refreshLoad();
+      this.cargoRig.refresh();
     }
+    this.cargoRig.step(dt);
 
     const hz = tickHazards(this.health, dt);
     if (hz.fuelLeak > 0) this.fuel = Math.max(0, this.fuel - hz.fuelLeak);
@@ -665,6 +653,8 @@ export class Vehicle {
     }
 
     this.bodywork.tick(dt);
+    // Nobody drives with the bonnet up: a car at speed slams every panel it has open.
+    if (Math.abs(this.speed) > SLAM_SPEED && (this.open.hood || this.open.doorL || this.open.doorR || this.open.trunk)) this.closePanels();
 
     // Signature at 3 Hz.
     this.sigT -= dt;
@@ -815,6 +805,8 @@ export class Vehicle {
   }
 
   private destroyNow() {
+    // Whatever rode on the roof or in the bed is thrown clear of the blast.
+    this.cargoRig.spillAll(1.8);
     this.glass.shatterAll();
     this.bodywork.wreck();
     this.makeHulk();
@@ -824,6 +816,13 @@ export class Vehicle {
     this.ctx.audio.play('boom', p.x, p.z, 1);
     this.body.body.applyImpulse({ x: 0, y: this.mass * 3.2, z: 0 }, true);
     this.ctx.onVehicleDestroyed(this);
+  }
+
+  /** The body and the cabin under it go black. */
+  private charVisual() {
+    this.visual.body.material = charMat;
+    if (this.visual.interior) this.visual.interior.material = charMat;
+    if (this.visual.steerWheel instanceof THREE.Mesh) this.visual.steerWheel.material = charMat;
   }
 
   /** Burnt out: charred, dead, and good for nothing but parts. */
@@ -836,7 +835,7 @@ export class Vehicle {
     this.body.body.setLinearDamping(1.5);
     this.body.body.setAngularDamping(3);
     this.visual.setHeadlights(false);
-    this.visual.body.material = charMat;
+    this.charVisual();
     for (const w of this.visual.wheels) w.pivot.visible = true;
     if (this.visual.driver) this.visual.driver.root.visible = false;
     if (this.visual.passenger) this.visual.passenger.root.visible = false;
@@ -914,16 +913,33 @@ export class Vehicle {
     }
     if (v.driver && this.faction !== 'raider') v.driver.root.visible = !!this.driver && !this.wreck;
     if (v.passenger) v.passenger.root.visible = !!this.passenger && !this.wreck;
+    // A player in a seat is drawn as themselves: their face, their build, what they are wearing.
+    if (v.driver) seatAs(v.driver, this.driver);
+    if (v.passenger) seatAs(v.passenger, this.passenger);
     if (v.driver) v.driver.update(dt, this.def.tier === 1 ? 'ride' : 'seat', 0, 0, 0);
+    // Sit them in the seat the cabin really has (or on the floor where it has none).
+    if (v.driver && v.seat) v.seat('driver', v.driver, this.stats.seatDrop);
     if (v.passenger) {
       v.passenger.setWeapon('none');
       v.passenger.update(dt, 'gun', 0, 1, 0);
+      if (v.seat && !v.gun) v.seat('passenger', v.passenger, 0);
     }
+    // Past the reach of anyone's eyes the cabin is not worth drawing: a street of cars would draw a street of seats.
+    if (v.interior) {
+      const rp = v.root.position;
+      v.interior.visible = !!this.driver || !!this.passenger || this.ctx.players.some((pl) => pl.cam.pos.distanceToSquared(rp) < CABIN_LOD * CABIN_LOD);
+      if (v.steerWheel) v.steerWheel.visible = v.interior.visible;
+    }
+    // The wheel turns with the steering, a good deal more than the road wheels do.
+    if (v.steerWheel) v.steerWheel.rotation.z = clamp(this.body.steerAngle * -6, -3.2, 3.2);
     if (this.firing > 0) {
       this.fireFx += dt;
     }
     v.setHeadlights(this.lights && !this.wreck);
     this.bodywork.frame(dt);
+    this.glass.followPanels();
+    // Under a lifted bonnet (or one that has been torn off) the engine shows.
+    if (v.bay) v.bay.visible = !!v.bayAlways || this.swing.hood > 0.12 || (!!this.bodywork.gonePanels().hood && !this.wreck);
     (v as BoatVisual).animate?.(dt, this.engineOn ? this.lastIntent.throttle : 0, sp);
     // Gun pivot follows the aim point.
     if (v.gun && this.gunAim) {
@@ -952,6 +968,18 @@ export class Vehicle {
     this.visual.dispose();
   }
 }
+
+/** Dress a seat's figure as whoever sits in it, when they carry a look of their own; cheap when nothing changed. */
+function seatAs(h: Humanoid, who: { readonly palette?: Palette } | null) {
+  const pal = who?.palette;
+  if (pal && h.worn !== pal) h.dress(pal);
+}
+
+/** Above this speed (m/s) a panel that was left open slams shut. */
+export const SLAM_SPEED = 5;
+
+/** How near (m) a camera must be for a car's seats, wheel and dash to be drawn. */
+const CABIN_LOD = 48;
 
 const charMat = shared(new THREE.MeshStandardMaterial({ color: 0x15130f, roughness: 0.95, metalness: 0.2 }));
 void rotateByQuat;

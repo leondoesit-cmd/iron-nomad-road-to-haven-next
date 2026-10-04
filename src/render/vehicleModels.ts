@@ -8,13 +8,15 @@ import type { Fit, PartItem } from '../sim/parts';
 import { partDef } from '../data';
 import { bedroll, crate, exhaust, heavyGun, jerryCan, plate, rivets, shock, signPlate, spareTyre, strap } from './parts';
 import { addKit, panelOff, type CoolingLook, type EngineLook, type KitLook, type Mounts } from './attachments';
-import { partMeta, partTag } from './bodyParts';
-import { bayFit, engineDef, radiatorDef } from '../sim/engines';
+import { PANEL_TAG, partMeta, partTag } from './bodyParts';
+import { attachBay } from './bayMesh';
+import { bayFit, engineDef, hoodState, radiatorDef } from '../sim/engines';
 import { defOf } from '../sim/garage';
 import { paintPanels } from './paintJob';
 import type { PanelPaint } from '../sim/paint';
 import { addWheels, addWheelSet, blank, bodyMat, finish, headlamp, liveRig, rider, taillight, wheelSpec, wheelSpecs, type VehicleVisual } from './vehicleKit';
 import { buildCar, carMounts, prepareCarShell } from './carModels';
+import { attachCabin } from './interior';
 
 export type { VehicleVisual, WheelVisual } from './vehicleKit';
 
@@ -43,9 +45,12 @@ function powertrainLook(b: VehicleBuild): { engine?: EngineLook; cooling?: Cooli
   const e = engineDef(def, b.fit);
   const r = radiatorDef(def, b.fit);
   if (!e?.engine) return {};
-  const bay = bayFit(def, e.engine);
+  const hood = hoodState(b.fit);
+  const bay = bayFit(def, e.engine, hood);
+  // Condition in thirds, so cars with engines of about the same state share one cached bay mesh.
+  const wear = Math.round((1 - Math.max(0, Math.min(1, b.comp.engine))) * 3) / 3;
   return {
-    engine: { mk: e.stock ? 0 : e.mk, swapped: e.id !== def.stockEngine, blown: !!e.engine.blown, diesel: e.engine.fuel === 'diesel', oversize: bay.oversize, size: e.engine.size, empty: !!e.empty },
+    engine: { id: e.id, mk: e.stock ? 0 : e.mk, swapped: e.id !== def.stockEngine, blown: !!e.engine.blown, diesel: e.engine.fuel === 'diesel', oversize: bay.oversize, size: e.engine.size, empty: !!e.empty, wear, hood },
     cooling: r ? { mk: r.stock ? 0 : r.mk, kw: r.cooling ?? 0, empty: !!r.empty } : undefined,
   };
 }
@@ -105,6 +110,8 @@ const BUGGY_MOUNTS: Mounts = {
   side: { y0: -0.12, y1: 0.5, z0: -0.5, z1: 0.5 },
   sill: -0.2,
   wheelR: 0.42,
+  // The engine sits down between the ladder frame rails, below the floor plate.
+  bayFloor: -0.34,
 };
 
 // ----------------------------------------------------------------------------------------- tier 1
@@ -347,15 +354,17 @@ export function buildBuggy(def: VehicleDef, wheelLocal: [number, number, number]
     }
   }
   // Hood and nose. With the bonnet off it is a bare frame round the engine (drawn by the kit).
-  if (panelOff(look.fit, 'hood')) {
-    for (const sx of [1, -1]) b.rbox(sx * 0.7, 0.05, 1.12, 0.06, 0.42, 1.25, 0.02, body);
-    b.rbox(0, 0.05, 1.7, 1.4, 0.4, 0.06, 0.02, body);
-    b.rbox(0, 0.1, 0.52, 1.4, 0.5, 0.05, 0.02, S.steel(0x2a2c2e, 0.8));
-  } else {
-    b.rbox(0, 0.05, 1.12, 1.46, 0.42, 1.25, 0.08, body);
+  // The nose is a hollow frame (two wing walls, the grille panel and the firewall), not a solid block, so the engine has a real bay.
+  for (const sx of [1, -1]) b.rbox(sx * 0.7, 0.05, 1.12, 0.06, 0.42, 1.25, 0.02, body);
+  b.rbox(0, 0.05, 1.7, 1.4, 0.4, 0.06, 0.02, body);
+  b.rbox(0, 0.1, 0.52, 1.4, 0.5, 0.05, 0.02, S.steel(0x2a2c2e, 0.8));
+  if (!panelOff(look.fit, 'hood')) {
+    // The bonnet plate hinges at the cowl and swings up.
+    b.mark(PANEL_TAG.hood, partMeta({ kind: 'hood', pivot: [0, 0.27, 0.45] }));
     b.rbox(0, 0.27, 1.1, 1.3, 0.04, 1.1, 0.02, paint);
     b.rbox(0, 0.29, 1.15, 0.5, 0.08, 0.5, 0.03, S.metal(0x2a2a2a, 0.6));
     for (let i = 0; i < 5; i++) b.box(0, 0.335, 0.96 + i * 0.09, 0.4, 0.015, 0.03, S.metal(0x1a1a1a, 0.5));
+    b.end();
   }
   // Grille, bull bar and ram spikes.
   b.rbox(0, 0.02, 1.76, 1.2, 0.34, 0.06, 0.02, S.metal(0x1f2022, 0.5));
@@ -383,26 +392,17 @@ export function buildBuggy(def: VehicleDef, wheelLocal: [number, number, number]
   }
   // Cab: windscreen frame with a cracked screen, dash, seats, wheel.
   b.pipe([[0.7, 0.32, 0.52], [0.66, 0.92, 0.32], [-0.66, 0.92, 0.32], [-0.7, 0.32, 0.52]], 0.035, cage, 10);
-  // Windscreen: cracked glass behind a welded bar guard.
-  b.box(0, 0.62, 0.43, 1.28, 0.5, 0.012, S.glass(0x2a3a44), -0.35, 0, 0);
-  for (const [cx, cy, a, l] of [[0.25, 0.66, 0.5, 0.32], [0.3, 0.6, -0.9, 0.22], [0.18, 0.7, 2.1, 0.2], [-0.35, 0.55, 0.2, 0.25]] as const) {
-    b.box(cx, cy, 0.43 - (cy - 0.62) * 0.36 + 0.01, l, 0.006, 0.004, S.paint(0xd0d6da, 0.1), -0.35, 0, a);
-  }
+  // Windscreen: a welded bar guard in an open frame. (The glass that used to be painted in here was an opaque dark slab that filled
+  // the driver's first-person view; the frame and bars are all that stand between the eyes and the road.)
   for (let i = 0; i < 8; i++) {
     const x = -0.56 + i * 0.16;
     b.rod(x, 0.39, 0.55, x, 0.87, 0.38, 0.011, S.steel(0x2e3032, 0.8), 6);
   }
   b.rod(-0.62, 0.62, 0.48, 0.62, 0.62, 0.48, 0.012, S.steel(0x2e3032, 0.8), 6);
-  b.rbox(0, 0.28, 0.42, 1.36, 0.18, 0.3, 0.04, S.plastic(0x232323));
-  for (const sx of [1, -1]) {
-    b.rbox(sx * 0.38, 0.08, -0.1, 0.5, 0.14, 0.52, 0.06, S.leather(0x2a2522, 0.5));
-    b.rbox(sx * 0.38, 0.45, -0.37, 0.5, 0.62, 0.12, 0.06, S.leather(0x2a2522, 0.5), 0.12, 0, 0);
-    // Harness.
-    b.box(sx * 0.38 + 0.12, 0.45, -0.3, 0.05, 0.6, 0.01, S.cloth(0x8a1c1c, 0.4), 0.12, 0, 0);
-    b.box(sx * 0.38 - 0.12, 0.45, -0.3, 0.05, 0.6, 0.01, S.cloth(0x8a1c1c, 0.4), 0.12, 0, 0);
-  }
-  b.torus(0.38, 0.48, 0.3, 0.17, 0.018, S.leather(0x1a1a1a), -0.9, 0, 0, 8, 20);
-  b.rod(0.38, 0.48, 0.3, 0.38, 0.32, 0.46, 0.02, S.metal(0x2a2a2a), 8);
+  // The driver's seat, wheel and dash are parts (see `interior.ts`); the seat on the other side is just bolted in.
+  b.rbox(-0.38, 0.08, -0.1, 0.5, 0.14, 0.52, 0.06, S.leather(0x2a2522, 0.5));
+  b.rbox(-0.38, 0.45, -0.37, 0.5, 0.62, 0.12, 0.06, S.leather(0x2a2522, 0.5), -0.12, 0, 0);
+  for (const dx of [0.12, -0.12]) b.box(-0.38 + dx, 0.45, -0.3, 0.05, 0.6, 0.01, S.cloth(0x8a1c1c, 0.4), -0.12, 0, 0);
   // Roll cage over the cab.
   for (const sx of [1, -1]) {
     b.pipe([[sx * 0.72, -0.15, 0.48], [sx * 0.7, 1.32, 0.18], [sx * 0.7, 1.36, -0.5], [sx * 0.72, -0.15, -0.68]], 0.042, cage, 10);
@@ -456,7 +456,7 @@ export function buildBuggy(def: VehicleDef, wheelLocal: [number, number, number]
   const bodyGeo = b.build();
   addWheelSet(v, def, wheelLocal, steered, wheelSpecs(def, look.tyres, look.brakeMk ?? 0));
   const driver = rider(color, color);
-  driver.root.position.set(0.38, -0.12, 0.05);
+  attachCabin(v, def, look.fit, look.seed);
   v.inner.add(driver.root);
   v.driver = driver;
   // The partner rides in the bed behind the gun.
@@ -480,7 +480,10 @@ export function buildBuggy(def: VehicleDef, wheelLocal: [number, number, number]
   v.muzzle = muzzle;
   v.smoke.position.set(0.82, 1.1, 0.32);
   v.inner.add(v.smoke);
-  return finish(v, bodyGeo);
+  const out = finish(v, bodyGeo);
+  // The engine bay under the bonnet, for when someone lifts it (the engine stands on the body block).
+  attachBay(out, def.id, BUGGY_MOUNTS, look, 0.285, 0);
+  return out;
 }
 
 // ----------------------------------------------------------------------------------------- raiders

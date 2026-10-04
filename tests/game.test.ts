@@ -65,7 +65,7 @@ describe('obstacle index', () => {
 
 describe('campaign state', () => {
   it('serializes and restores everything that matters', () => {
-    const c = new Campaign(['Ash', 'Rook']);
+    const c = new Campaign();
     c.seed = 42;
     c.stocks.scrap = 123;
     c.fragments.add(2);
@@ -99,7 +99,7 @@ describe('campaign state', () => {
     expect(back.axes.mercy).toBe(5);
   });
   it('migrates a version 1 save: tier and module levels become a build with the matching parts', () => {
-    const c = new Campaign(['Ash', 'Rook']);
+    const c = new Campaign();
     const old = JSON.parse(JSON.stringify(c.serialize()));
     delete old.garage;
     delete old.inventory;

@@ -186,7 +186,7 @@ describe('bag sort and supplies', () => {
   it('bandages are cheap to craft and old saves gain a stock of them', () => {
     const r = RECIPES.find((x) => x.id === 'bandage')!;
     expect(r.yields.bandage).toBe(3);
-    const c = new Campaign(['A', 'B'], false);
+    const c = new Campaign(undefined, false);
     const save = JSON.parse(JSON.stringify(c.serialize()));
     delete save.items.bandage;
     const back = Campaign.deserialize(save);

@@ -1,28 +1,30 @@
 import * as THREE from 'three';
-import { PARTS, mountsFor, partDef, type PartSlot } from '../data';
-import { MK_CSS, SLOT_SITE, modelKey, type GhostAnchor, type Site } from '../render/workFx';
+import { mountsFor, partDef, t, type PartSlot } from '../data';
+import { loadSpots, planLoad, surfacesOf, type CargoEntry, type LoadPlan, type Zone } from '../sim/cargo';
+import { MK_CSS, SLOT_SITE, modelKey, type Site } from '../render/workFx';
 import { panelAnchor, socketDistance, socketFor, type Anchor, type Socket } from '../render/sockets';
+import { accessPointsOf } from '../render/accessPoints';
 import { PANEL_NAME, colorName, panelColor, paintPanel, panelsOf, type PanelId } from '../sim/paint';
 import { OIL_RESERVE_MAX } from './campaign';
-import { carriedName, carryModelKey, inspectLines, liftSecs, partInspect, planFit, planStow, pourFuel, type Carried } from '../sim/carry';
-import { idInSlot, installPart, removePart, removeTyre, tyreIdAt } from '../sim/garage';
-import { currentCond } from '../sim/garage';
+import { carriedName, carryModelKey, inspectLines, liftSecs, partInspect, planFit, planStow, pourFuel, type Carried, type FitPlan, type FitTarget } from '../sim/carry';
+import { idInSlot, installPart, removePart, removeTyre } from '../sim/garage';
 import { planPour } from '../sim/fuel';
 import { pourOil } from '../sim/oil';
 import { WATER_RESERVE_MAX, pourWater } from '../sim/fluids';
+import { needText, spotName, workFor, type Panel, type Spot } from '../sim/access';
 import { partName } from '../sim/parts';
-import { deckCandidate, pickMount } from './carwork';
+import { PER_WHEEL, anchorWorld, carryTarget, fittedAt, ghostAnchors, isOwnRide, panelCand, placeFor, pointPos, reached, toLocal, toolHit, type Place, type Reach, type SocketHit } from './access';
 import type { Cand, Player } from './player';
 import type { Vehicle } from './vehicle';
 
-/**
- * Carrying things by hand. Lift a part, a fuel can or an oil can off the ground, walk it to one of your own vehicles,
- * and either put it straight on (A: bolt it on, pour it in, top the sump up) or stow it in the trucks (X) for later.
- * X anywhere else sets it down.
- */
+export { fittedAt, type SocketHit };
 
-/** Vehicles that count as "our ride": the convoy's own cars with a build, standing still. */
-const isOwnRide = (v: Vehicle) => v.faction === 'convoy' && !!v.build && !v.wreck && v.kind !== 'crew';
+/**
+ * Carrying things by hand. Lift a part, a fuel can or an oil can off the ground, walk it to one of your own vehicles, and
+ * take it to the right place on it: the engine goes in at the engine bay (bonnet open), fuel at the flap, a crate in the boot
+ * (lid open). A bolts it on or pours it; X stows it where a boot or an open door lets you, or sets it down. The rules for
+ * where and in what order are `sim/access.ts`; where you stand against a vehicle is `game/access.ts`.
+ */
 
 /** Where on a vehicle a job at `site` happens, in the world. */
 export function sitePos(v: Vehicle, site: Site): THREE.Vector3 {
@@ -41,6 +43,7 @@ export function sitePos(v: Vehicle, site: Site): THREE.Vector3 {
     case 'front': return at(0, 0.7, l + 0.1);
     case 'gun': return at(0, 1.5, -0.3);
     case 'under': return at(0, 0.25, 0);
+    case 'cabin': return at(0, 0.8, 0.1);
   }
 }
 
@@ -57,45 +60,8 @@ function ownRideNear(p: Player): Vehicle | null {
 
 // ---------------------------------------------------------------- sockets
 
-/** How close your hands must be to a socket to work on it, and how far away its outline shows. */
-export const FIT_REACH = 3.6;
+/** How far away the outline of the place a carried part goes shows. */
 export const SHOW_REACH = 11;
-
-const _q = new THREE.Quaternion();
-const _v = new THREE.Vector3();
-
-/** A world point in a vehicle's own frame. */
-function toLocal(v: Vehicle, x: number, y: number, z: number): [number, number, number] {
-  const t = v.body.body.translation();
-  const r = v.body.body.rotation();
-  _q.set(r.x, r.y, r.z, r.w).invert();
-  _v.set(x - t.x, y - t.y, z - t.z).applyQuaternion(_q);
-  return [_v.x, _v.y, _v.z];
-}
-
-function anchorWorld(v: Vehicle, a: Anchor): THREE.Vector3 {
-  const [x, y, z] = v.body.toWorld(a.x, a.y, a.z);
-  return new THREE.Vector3(x, y, z);
-}
-
-function ghostAnchors(v: Vehicle, sock: Socket, only?: number): GhostAnchor[] {
-  const r = v.body.body.rotation();
-  const list = only === undefined ? sock.anchors : [sock.anchors[only]];
-  return list.map((a) => ({ pos: anchorWorld(v, a), quat: new THREE.Quaternion(r.x, r.y, r.z, r.w), size: [a.sx + 0.04, a.sy + 0.04, a.sz + 0.04] as [number, number, number] }));
-}
-
-export interface SocketHit {
-  v: Vehicle;
-  sock: Socket;
-  anchor: Anchor;
-  /** Which anchor of the socket: for wheels, brakes and springs this is the wheel number. */
-  index: number;
-  /** Metres from the player's hands to the closest anchor. */
-  dist: number;
-}
-
-/** Sockets that count as one place per wheel. */
-const PER_WHEEL: PartSlot[] = ['wheels', 'suspension', 'brakes'];
 
 /**
  * The mount a hit means for `installPart`: the wheel number for a tyre, otherwise the slot. Springs and brakes are
@@ -103,18 +69,6 @@ const PER_WHEEL: PartSlot[] = ['wheels', 'suspension', 'brakes'];
  */
 export function mountOf(hit: SocketHit): PartSlot | number {
   return hit.sock.slot === 'wheels' ? hit.index : hit.sock.slot;
-}
-
-/** The part fitted at a hit, with how worn it is: the tyre on that wheel, or whatever is in the slot. Null for an empty mount. */
-export function fittedAt(hit: SocketHit): { id: string; cond: number } | null {
-  const b = hit.v.build;
-  if (!b) return null;
-  if (hit.sock.slot === 'wheels') {
-    const id = tyreIdAt(b, hit.index);
-    return id ? { id, cond: b.comp.tires[hit.index] ?? 1 } : null;
-  }
-  const id = idInSlot(b, hit.sock.slot);
-  return id ? { id, cond: currentCond(b, hit.sock.slot) } : null;
 }
 
 /** The sockets a part of this category can go in on a chassis: a door fits either side, a tyre any wheel. */
@@ -125,7 +79,7 @@ function socketsFor(v: Vehicle, category: PartSlot): Socket[] {
     .filter((s): s is Socket => !!s);
 }
 
-/** The socket for a part's category that is closest to the player, across the convoy's own vehicles. */
+/** The socket for a part's category that is closest to the player, across the convoy's own vehicles: its outline, from afar. */
 export function nearestSocket(p: Player, category: PartSlot, within = SHOW_REACH): SocketHit | null {
   let best: SocketHit | null = null;
   for (const v of p.ctx.vehicles) {
@@ -134,41 +88,6 @@ export function nearestSocket(p: Player, category: PartSlot, within = SHOW_REACH
     for (const sock of socketsFor(v, category)) {
       const { dist, anchor, index } = socketDistance(sock, lx, ly, lz);
       if (dist <= within && (!best || dist < best.dist)) best = { v, sock, anchor, index, dist };
-    }
-  }
-  return best;
-}
-
-/** Parts that sit under the body panels: a panel wins when both are in reach, until the panel is off. */
-const INTERNAL: PartSlot[] = ['engine', 'cooling', 'gearbox', 'exhaust', 'suspension', 'brakes'];
-/** Big panels: easy to mean when you are looking at them, so they win a close call against small parts beside them. */
-const PANELS: PartSlot[] = ['hood', 'roof', 'doorL', 'doorR'];
-
-/**
- * Of one vehicle's sockets, the one the player is facing and standing nearest to. With `occupied`, a mount with nothing
- * in it does not count, so a crowbar never stops at an empty mount with a part right behind it.
- */
-function aimedSocket(p: Player, v: Vehicle, within: number, occupied = false): SocketHit | null {
-  const [lx, ly, lz] = toLocal(v, p.pos.x, p.pos.y + 1.0, p.pos.z);
-  const fx = Math.sin(p.aimYaw);
-  const fz = Math.cos(p.aimYaw);
-  let best: SocketHit | null = null;
-  let bs = Infinity;
-  for (const slot of v.def.slots ?? []) {
-    const sock = socketFor(v.def, slot);
-    if (!sock) continue;
-    const { dist, anchor, index } = socketDistance(sock, lx, ly, lz);
-    if (dist > within) continue;
-    const hit: SocketHit = { v, sock, anchor, index, dist };
-    if (occupied && !fittedAt(hit)) continue;
-    const w = anchorWorld(v, anchor);
-    const dx = w.x - p.pos.x;
-    const dz = w.z - p.pos.z;
-    const l = Math.hypot(dx, dz) || 1;
-    const score = dist - 1.4 * Math.max(0, (dx * fx + dz * fz) / l) + (INTERNAL.includes(slot) ? 0.35 : 0) - (PANELS.includes(slot) ? 0.3 : 0);
-    if (score < bs) {
-      bs = score;
-      best = hit;
     }
   }
   return best;
@@ -205,14 +124,14 @@ function aimedPanel(p: Player, v: Vehicle, within = 3.4): PanelHit | null {
   return best;
 }
 
-function panelGhost(v: Vehicle, a: Anchor): GhostAnchor[] {
+function panelGhost(v: Vehicle, a: Anchor) {
   const r = v.body.body.rotation();
-  return [{ pos: anchorWorld(v, a), quat: new THREE.Quaternion(r.x, r.y, r.z, r.w), size: [a.sx + 0.05, a.sy + 0.05, a.sz + 0.05] }];
+  return [{ pos: anchorWorld(v, a), quat: new THREE.Quaternion(r.x, r.y, r.z, r.w), size: [a.sx + 0.05, a.sy + 0.05, a.sz + 0.05] as [number, number, number] }];
 }
 
 type Can = Extract<Carried, { kind: 'paint' }>;
 
-/** Hold A with a spray can: paint the panel you are facing. */
+/** Hold A with a spray can: paint the panel you are facing. A bonnet or door has to be on the car; it need not be shut. */
 function sprayCandidate(p: Player, c: Can): Cand | null {
   const ctx = p.ctx;
   const v = ownRideNear(p);
@@ -225,13 +144,16 @@ function sprayCandidate(p: Player, c: Can): Cand | null {
   const name = PANEL_NAME[hit.panel].toLowerCase();
   const already = panelColor(b.paint, b.panels, hit.panel) === c.color;
   const moving = Math.abs(v.speed) > 2;
+  // A panel that is not there (a stripped bonnet, a door torn off) has nothing to spray.
+  const swing = hit.panel === 'hood' || hit.panel === 'doorL' || hit.panel === 'doorR' ? hit.panel : null;
+  const missing = !!swing && v.def.slots?.includes(swing) === true && !v.hasPanel(swing);
   const rgb: [number, number, number] = [((c.color >> 16) & 255) / 255, ((c.color >> 8) & 255) / 255, (c.color & 255) / 255];
   return {
     kind: 'spray',
-    prompt: moving ? `${v.def.name} is moving` : already ? `The ${name} is already ${colorName(c.color)}` : `Spray the ${name} ${colorName(c.color)} (${c.charges} left)`,
+    prompt: moving ? `${v.def.name} is moving` : missing ? `There is no ${name} to spray` : already ? `The ${name} is already ${colorName(c.color)}` : `Spray the ${name} ${colorName(c.color)} (${c.charges} left)`,
     dur: 2,
     target: `${v.id}:${hit.panel}`,
-    ok: !already && !moving,
+    ok: !already && !moving && !missing,
     label: 'spray',
     noise: 14,
     run: () => {
@@ -265,27 +187,158 @@ function sprayCandidate(p: Player, c: Can): Cand | null {
   };
 }
 
+// ---------------------------------------------------------------- what carrying means at a vehicle
+
+/** The game's view of fitting what you carry to this vehicle: the plan, where it is done, and where you stand against it. */
+interface CarryInfo {
+  v: Vehicle;
+  plan: FitPlan;
+  /** The mount a part goes in, when you are at it. */
+  hit: SocketHit | null;
+  /** Where the job happens, in the world (the point you stand at, or the nearest one when you are not at any). */
+  at: THREE.Vector3 | null;
+  /** The place you stand at for the job. */
+  place: Place | null;
+  /** Points to light up. */
+  spots: Spot[];
+}
+
+/** What a fit needs to know of a vehicle. */
+function fitTarget(v: Vehicle, hit: SocketHit | null): FitTarget {
+  return {
+    def: v.def,
+    fitted: (slot) => {
+      const id = v.build ? idInSlot(v.build, slot as PartSlot) : null;
+      return id ? { id } : undefined;
+    },
+    current: hit ? fittedAt(hit) ?? null : undefined,
+    fuel: v.fuel,
+    tankMax: v.tankMax,
+    oil: v.health.comp.oil,
+    tank: v.fuelType,
+    engine: v.stats.fuel,
+    coolant: v.health.comp.coolant ?? 1,
+    coolantL: v.stats.coolantL,
+    sumpL: v.stats.sumpL,
+  };
+}
+
+/** What holding A with this in hand does at this vehicle, and what stands in the way. */
+function carryInfo(p: Player, v: Vehicle, c: Carried): CarryInfo {
+  const open = v.panelOpen();
+  if (c.kind === 'part') {
+    const slot = partDef(c.item.id).slot;
+    const tgt = carryTarget(p, v, slot);
+    if (!tgt.hit) {
+      if (!tgt.spots.length) return { v, plan: planFit(c, fitTarget(v, null)), hit: null, at: null, place: null, spots: [] };
+      return {
+        v,
+        plan: { ok: false, label: needText(v.def, { kind: 'go', spots: tgt.spots }, `fit ${partName(c.item)}`), secs: 1, need: { kind: 'go', spots: tgt.spots } },
+        hit: null,
+        at: nearestOf(p, v, tgt.spots),
+        place: null,
+        spots: tgt.spots,
+      };
+    }
+    const plan = planFit(c, { ...fitTarget(v, tgt.hit), access: { at: tgt.reach.pt.spot, open, mount: tgt.mount } });
+    return { v, plan, hit: tgt.hit, at: tgt.reach.pos, place: { v, job: tgt.mount, at: tgt.reach, open, gate: tgt.gate }, spots: workFor(v.def, tgt.mount)?.at ?? [] };
+  }
+  const job = c.kind === 'fuel' ? 'fuel' : c.kind === 'oil' ? 'oil' : 'water';
+  const place = placeFor(p, v, job);
+  const plan = planFit(c, { ...fitTarget(v, null), access: { at: place.at?.pt.spot ?? null, open } });
+  const spots = workFor(v.def, job)?.at ?? [];
+  return { v, plan, hit: null, at: place.at?.pos ?? nearestOf(p, v, spots), place, spots };
+}
+
+/** The world position of the nearest point of any of these kinds. */
+function nearestOf(p: Player, v: Vehicle, spots: Spot[]): THREE.Vector3 | null {
+  let best: THREE.Vector3 | null = null;
+  let bd = Infinity;
+  for (const pt of accessPointsOf(v.def)) {
+    if (!spots.includes(pt.spot)) continue;
+    const pos = pointPos(v, pt);
+    const d = Math.hypot(pos.x - p.pos.x, pos.z - p.pos.z);
+    if (d < bd) {
+      bd = d;
+      best = pos;
+    }
+  }
+  return best;
+}
+
+/** The job in a few words, for "Open the bonnet · then fit ...". */
+function thenOf(c: Carried): string {
+  switch (c.kind) {
+    case 'part':
+      return `then fit ${partName(c.item)}`;
+    case 'fuel':
+      return 'then pour the fuel in';
+    case 'oil':
+      return 'then top up the oil';
+    case 'water':
+      return 'then top up the radiator';
+    case 'paint':
+      return '';
+  }
+}
+
+/** Light up the points this job could be done at, and call out the one you are at. */
+function focusCarry(p: Player, info: CarryInfo, c: Carried, moving: boolean) {
+  const v = info.v;
+  const dots = accessPointsOf(v.def)
+    .filter((pt) => info.spots.includes(pt.spot))
+    .map((pt) => pointPos(v, pt));
+  if (!info.at) {
+    p.ctx.work.focus(p.index, dots, null);
+    return;
+  }
+  const mk = c.kind === 'part' ? Math.min(3, Math.max(1, partDef(c.item.id).mk)) : 1;
+  const here = !!info.place?.at;
+  const need = info.plan.need;
+  let text: string;
+  let ok = info.plan.ok && !moving;
+  if (!here) {
+    text = c.kind === 'part' ? `Bring ${partName(c.item)} here` : `${carriedName(c)}: bring it here`;
+    ok = false;
+  } else if (need?.kind === 'open') {
+    const name = needText(v.def, need).replace(/ first$/, '').replace(/^Open the /, '');
+    text = `${name.charAt(0).toUpperCase()}${name.slice(1)} closed - hold to open`;
+    ok = !moving;
+  } else text = info.plan.label;
+  p.ctx.work.focus(p.index, dots, { pos: info.at, text, css: MK_CSS[mk], ok });
+}
+
 /**
- * Every tick: outlines where a carried part goes (white from afar, green and filled when you are in reach, red when
- * the place is right but the job is not), a tag on the spot, and tags over loose parts and fitted ones you inspect.
+ * Every tick: outlines where a carried part goes (white from afar, green and filled when you are at the place and it is
+ * open, red when the place is right but the job is not), a tag on the spot, and tags over loose parts and fitted ones you
+ * inspect with a tool.
  */
 export function guide(p: Player) {
   const ctx = p.ctx;
   if (p.state !== 'foot') return;
   if (p.carry?.kind === 'part') {
     const item = p.carry.item;
-    const hit = nearestSocket(p, partDef(item.id).slot);
-    if (!hit) return;
-    const { v, sock, anchor } = hit;
-    const inReach = hit.dist <= FIT_REACH;
+    const slot = partDef(item.id).slot;
+    const v = p.nearestVehicle(SHOW_REACH, isOwnRide);
+    if (!v?.build) return;
+    const tgt = carryTarget(p, v, slot);
     const moving = Math.abs(v.speed) > 2;
-    // From afar every place it could go shows; up close only the one you would fit it to (one wheel of four).
-    const focus = inReach && PER_WHEEL.includes(sock.slot) ? hit.index : undefined;
-    ctx.work.ghost(`g${p.index}`, ghostAnchors(v, sock, focus), !inReach ? 'idle' : moving ? 'blocked' : 'aimed');
-    if (inReach && !ctx.work.holding(p.index)) {
+    if (!tgt.hit) {
+      // From afar every place it could go shows.
+      const far = nearestSocket(p, slot, SHOW_REACH);
+      if (far) ctx.work.ghost(`g${p.index}`, ghostAnchors(far.v, far.sock), 'idle');
+      return;
+    }
+    const { hit, gate } = tgt;
+    const { v: tv, sock, anchor } = hit;
+    // Up close only the one you would fit it to (one wheel of four).
+    ctx.work.ghost(`g${p.index}`, ghostAnchors(tv, sock, PER_WHEEL.includes(sock.slot) ? hit.index : undefined), gate.ok && !moving ? 'aimed' : 'blocked');
+    if (!ctx.work.holding(p.index)) {
+      const info = carryInfo(p, tv, p.carry);
       const cur = fittedAt(hit);
-      const lines = [{ text: sock.label, css: '#cfc8b4' }, { text: cur ? `Now: ${partDef(cur.id).name} ${Math.round(cur.cond * 100)}%` : 'Empty mount', css: '#e6dcc0' }, { text: moving ? 'Wait for it to stop' : `Attach ${partDef(item.id).name}`, css: moving ? '#ff8a6a' : '#8cf08c' }];
-      ctx.work.tag(`t${p.index}`, lines, anchorWorld(v, anchor).add(new THREE.Vector3(0, 0.9, 0)));
+      const act = moving ? 'Wait for it to stop' : info.plan.ok ? `Attach ${partDef(item.id).name}` : info.plan.label;
+      const lines = [{ text: sock.label, css: '#cfc8b4' }, { text: cur ? `Now: ${partDef(cur.id).name} ${Math.round(cur.cond * 100)}%` : 'Empty mount', css: '#e6dcc0' }, { text: act, css: moving || !info.plan.ok ? '#ff8a6a' : '#8cf08c' }];
+      ctx.work.tag(`t${p.index}`, lines, anchorWorld(tv, anchor).add(new THREE.Vector3(0, 0.9, 0)));
     }
     return;
   }
@@ -302,21 +355,23 @@ export function guide(p: Player) {
     ctx.work.tag(`i${p.index}`, inspectLines(near.carried), new THREE.Vector3(near.x, near.y + 1.15, near.z));
     return;
   }
-  // The wrench or crowbar in hand next to your own car: look at what is bolted to it.
+  // The wrench or crowbar in hand at your own car: look at what is bolted to the point you are at.
   if (p.equip === 'wrench' || p.equip === 'crowbar') {
     const v = ownRideNear(p);
     if (!v?.build) return;
-    const hit = aimedSocket(p, v, FIT_REACH);
-    if (!hit) return;
+    const th = toolHit(p, v, null);
+    if (!th) return;
+    const { hit, gate } = th;
     const cur = fittedAt(hit);
-    ctx.work.ghost(`g${p.index}`, ghostAnchors(v, hit.sock, PER_WHEEL.includes(hit.sock.slot) ? hit.index : undefined), 'aimed');
+    ctx.work.ghost(`g${p.index}`, ghostAnchors(v, hit.sock, PER_WHEEL.includes(hit.sock.slot) ? hit.index : undefined), gate.ok ? 'aimed' : 'blocked');
     const lines = cur ? [{ text: hit.sock.label, css: '#cfc8b4' }, ...partInspect({ uid: '', id: cur.id, cond: cur.cond })] : [{ text: hit.sock.label, css: '#cfc8b4' }, { text: 'Empty mount', css: '#ff8a6a' }];
+    if (gate.need) lines.push({ text: needText(v.def, gate.need), css: '#ff8a6a' });
     ctx.work.tag(`t${p.index}`, lines, anchorWorld(v, hit.anchor).add(new THREE.Vector3(0, 0.9, 0)));
   }
 }
 
-/** The hold-A candidate: lift what is at your feet, or fit what is in your hands to the car beside you. */
-export function haulCandidate(p: Player): Cand | null {
+/** The hold-A candidate: lift what is at your feet, or take what is in your hands to the right place on the car beside you. */
+export function haulCandidate(p: Player, deck?: () => Cand | null): Cand | null {
   const ctx = p.ctx;
   if (!p.carry) {
     const lifting = p.action?.kind === 'lift' ? String(p.action.target) : undefined;
@@ -338,7 +393,7 @@ export function haulCandidate(p: Player): Cand | null {
         },
       };
     }
-    if (!near) return deckCandidate(p);
+    if (!near) return deck?.() ?? null;
     const label = carriedName(near.carried);
     return {
       kind: 'lift',
@@ -359,62 +414,32 @@ export function haulCandidate(p: Player): Cand | null {
   }
   const c = p.carry;
   if (c.kind === 'paint') return sprayCandidate(p, c);
-  let v = ownRideNear(p);
-  let hit: SocketHit | null = null;
-  if (c.kind === 'part') {
-    // Parts go where they belong: stand at the socket, not just somewhere near the car.
-    hit = nearestSocket(p, partDef(c.item.id).slot);
-    if (hit) v = hit.v;
-    if (hit && hit.dist > FIT_REACH) {
-      return {
-        kind: 'fit',
-        prompt: `Walk to the ${hit.sock.label.toLowerCase()} to fit ${partName(c.item)}`,
-        dur: 1,
-        target: hit.v,
-        ok: false,
-        label: 'fit',
-        run: () => {},
-      };
-    }
-  }
-  if (!v) return null;
-  const plan = planFit(c, {
-    def: v.def,
-    fitted: (slot) => {
-      const id = v.build ? idInSlot(v.build, slot as PartSlot) : null;
-      return id ? { id } : undefined;
-    },
-    current: hit ? fittedAt(hit) ?? null : undefined,
-    fuel: v.fuel,
-    tankMax: v.tankMax,
-    oil: v.health.comp.oil,
-    tank: v.fuelType,
-    engine: v.stats.fuel,
-    coolant: v.health.comp.coolant ?? 1,
-    coolantL: v.stats.coolantL,
-    sumpL: v.stats.sumpL,
-  });
+  const v = p.nearestVehicle(c.kind === 'part' ? 9 : 4.5, isOwnRide);
+  if (!v?.build) return null;
+  const info = carryInfo(p, v, c);
   const moving = Math.abs(v.speed) > 2;
-  // A part goes on at its own mount: carry it there, and the mount rings. Hold it over the spot to bolt it on.
-  const slot = c.kind === 'part' ? partDef(c.item.id).slot : null;
-  const pick = slot && !hit ? pickMount(p, v, slot) : null;
-  const away = hit ? false : (!!pick && !pick.near);
-  const where = slot ? PARTS.labels[slot].toLowerCase() : '';
-  if (pick && c.kind === 'part') {
-    const mk = Math.min(3, Math.max(1, partDef(c.item.id).mk));
-    ctx.work.focus(p.index, pick.all.map((m) => m.pos), { pos: pick.mount.pos, text: away ? `Bring ${partName(c.item)} to the ${where}` : plan.label, css: MK_CSS[mk], ok: plan.ok && !moving && !away });
+  focusCarry(p, info, c, moving);
+  // Standing at a panel that is shut and in the way: the next step is to open it.
+  const need = info.plan.need;
+  if (need?.kind === 'open' && info.place?.at) return panelCand(p, v, need.panel, true, thenOf(c));
+  // Hands full at a shut boot or door that you could stow through: open it first.
+  if (need?.kind === 'go') {
+    const stow = stowPlace(p, v);
+    const sn = stow.gate.need;
+    if (stow.at && sn?.kind === 'open' && planStow(c, stowRoom(p)).ok) return panelCand(p, v, sn.panel, true, 'then X to stow it');
   }
+  const hit = info.hit;
   return {
     kind: 'fit',
-    prompt: moving ? `${v.def.name} is moving` : away ? `Carry it to the ${where} (the ringed spot)` : plan.label,
-    dur: plan.secs,
+    prompt: moving ? `${v.def.name} is moving` : info.plan.label,
+    dur: info.plan.secs,
     target: v,
-    ok: plan.ok && !moving && !away,
+    ok: info.plan.ok && !moving && !!info.place?.at,
     label: 'fit',
     noise: c.kind === 'part' ? 22 : 14,
-    run: () => fit(p, v, c, hit),
+    run: () => fit(p, v, c, hit, info.at),
     tick: () => {
-      if (c.kind === 'part') ctx.work.hold(p.index, c.item, handPos(p), hit ? anchorWorld(v, hit.anchor) : (pick?.mount.pos ?? sitePos(v, slotSite(c.item.id))), p.action ? p.action.t / p.action.dur : 0);
+      if (c.kind === 'part') ctx.work.hold(p.index, c.item, handPos(p), hit ? anchorWorld(v, hit.anchor) : (info.at ?? sitePos(v, slotSite(c.item.id))), p.action ? p.action.t / p.action.dur : 0);
       if (c.kind === 'part' && Math.random() < 0.18) ctx.fx.spark(v.position.x + (Math.random() - 0.5), v.position.y + 0.8, v.position.z + (Math.random() - 0.5), 2, 3);
       return true;
     },
@@ -423,19 +448,22 @@ export function haulCandidate(p: Player): Cand | null {
 
 /**
  * Crowbar at your own vehicle: pry the part you are facing off its mount and carry it away. A door, the bonnet, a tyre,
- * the engine, the gearbox: anything bolted on comes off, and the mount shows bare until something else goes on.
+ * the engine, the gearbox: anything bolted on comes off, and the mount shows bare until something else goes on. Behind a shut
+ * panel the next step is to open it; with a panel open it is what is behind it that you work on.
  */
 export function pryCandidate(p: Player): Cand | null {
   const ctx = p.ctx;
   const v = ownRideNear(p);
   if (!v?.build) return null;
-  const hit = aimedSocket(p, v, FIT_REACH, true) ?? aimedSocket(p, v, FIT_REACH);
-  if (!hit) return null;
+  const th = toolHit(p, v, null, (h) => !!fittedAt(h)) ?? toolHit(p, v, null);
+  if (!th) return panelClose(p);
+  const { hit, gate } = th;
   const cur = fittedAt(hit);
   const label = hit.sock.label;
   const moving = Math.abs(v.speed) > 2;
-  if (!cur) return { kind: 'pry', prompt: `${label}: nothing to pry off`, dur: 1, target: `${v.id}:${label}`, ok: false, label: 'pry', run: () => {} };
+  if (!cur) return panelClose(p) ?? { kind: 'pry', prompt: `${label}: nothing to pry off`, dur: 1, target: `${v.id}:${label}`, ok: false, label: 'pry', run: () => {} };
   const name = partDef(cur.id).name;
+  if (gate.need?.kind === 'open') return panelCand(p, v, gate.need.panel, true, `then pry off the ${name.toLowerCase()}`);
   const wheel = hit.sock.slot === 'wheels';
   return {
     kind: 'pry',
@@ -474,8 +502,28 @@ export function pryCandidate(p: Player): Cand | null {
   };
 }
 
-/** Put what is in your hands onto the vehicle. */
-function fit(p: Player, v: Vehicle, c: Carried, hit: SocketHit | null) {
+/** A tool with nothing to do at a panel that is open: the job is to close it. */
+export function panelClose(p: Player): Cand | null {
+  const v = ownRideNear(p);
+  if (!v?.build) return null;
+  const open = v.panelOpen();
+  const spots = (['hood', 'doorL', 'doorR', 'trunk'] as const).filter((s) => v.hasPanel(s) && open[s]);
+  if (!spots.length) return null;
+  let best: { panel: Panel; d: number } | null = null;
+  for (const pt of accessPointsOf(v.def)) {
+    if (!(spots as readonly Spot[]).includes(pt.spot)) continue;
+    const pos = pointPos(v, pt);
+    const dx = pos.x - p.pos.x;
+    const dz = pos.z - p.pos.z;
+    const d = Math.hypot(dx, dz);
+    const f = d < 0.45 ? 1 : (dx * Math.sin(p.aimYaw) + dz * Math.cos(p.aimYaw)) / d;
+    if (d <= 1.8 && f >= 0.2 && (!best || d < best.d)) best = { panel: pt.spot as Panel, d };
+  }
+  return best ? panelCand(p, v, best.panel, false) : null;
+}
+
+/** Put what is in your hands onto the vehicle. `at` is where the job is, for the pour. */
+function fit(p: Player, v: Vehicle, c: Carried, hit: SocketHit | null, at: THREE.Vector3 | null) {
   const camp = p.ctx.campaign;
   const ctx = p.ctx;
   if (p.carry !== c) return;
@@ -490,11 +538,10 @@ function fit(p: Player, v: Vehicle, c: Carried, hit: SocketHit | null) {
       p.carry = null;
       ctx.audio.play('wrench', v.position.x, v.position.z, 0.8);
       const name = partName(c.item);
-      const pick = pickMount(p, v, partDef(c.item.id).slot);
-      const anchor = pick?.mount.pos.clone() ?? (hit ? anchorWorld(v, hit.anchor) : sitePos(v, slotSite(c.item.id)));
+      const anchor = hit ? anchorWorld(v, hit.anchor) : (at?.clone() ?? sitePos(v, slotSite(c.item.id)));
       const mk = Math.min(3, Math.max(1, partDef(c.item.id).mk));
       // A set of tyres goes on at every wheel.
-      if (pick && pick.mount.slot === 'wheels') for (const m of pick.all) if (m.slot === 'wheels' && m !== pick.mount) ctx.work.burst(m.pos, mk, 0.7);
+      if (hit && hit.sock.slot === 'wheels') for (const pt of accessPointsOf(v.def)) if (pt.spot === 'wheel' && pt.index !== hit.index) ctx.work.burst(pointPos(v, pt), mk, 0.7);
       ctx.work.swap({
         key: p.index,
         anchor,
@@ -529,8 +576,9 @@ function fit(p: Player, v: Vehicle, c: Carried, hit: SocketHit | null) {
       }
       const r = pourFuel(v.fuel, v.tankMax, c.amount);
       v.fuel = r.fuel;
-      ctx.work.pour(handPos(p), sitePos(v, 'rear'), [0.85, 0.7, 0.2]);
-      ctx.work.label(`+${r.used.toFixed(1)} FU`, '#ffd27a', sitePos(v, 'rear').add(new THREE.Vector3(0, 0.8, 0)));
+      const to = at ?? sitePos(v, 'rear');
+      ctx.work.pour(handPos(p), to, [0.85, 0.7, 0.2]);
+      ctx.work.label(`+${r.used.toFixed(1)} FU`, '#ffd27a', to.clone().add(new THREE.Vector3(0, 0.8, 0)));
       p.carry = r.left > 0.05 ? { kind: 'fuel', amount: r.left, fuel: kind } : null;
       p.note(`+${r.used.toFixed(1)} FU of ${kind} in the tank${p.carry ? ', some left in the can' : ''}`, 'good');
       if (v.fuelType !== v.stats.fuel) p.note(`The engine runs ${v.stats.fuel}: drain the tank with the jerrycan`, 'warn');
@@ -541,8 +589,9 @@ function fit(p: Player, v: Vehicle, c: Carried, hit: SocketHit | null) {
       const r = pourWater(v.health.comp.coolant ?? 1, c.amount, v.stats.coolantL);
       v.health.comp.coolant = r.coolant;
       v.commit();
-      ctx.work.pour(handPos(p), sitePos(v, 'hood'), [0.4, 0.65, 0.9]);
-      ctx.work.label(`WATER ${Math.round(r.coolant * 100)}%`, '#8ecbff', sitePos(v, 'hood').add(new THREE.Vector3(0, 0.8, 0)));
+      const to = at ?? sitePos(v, 'hood');
+      ctx.work.pour(handPos(p), to, [0.4, 0.65, 0.9]);
+      ctx.work.label(`WATER ${Math.round(r.coolant * 100)}%`, '#8ecbff', to.clone().add(new THREE.Vector3(0, 0.8, 0)));
       p.carry = r.left > 0.2 ? { kind: 'water', amount: r.left } : null;
       p.note(`The radiator is at ${Math.round(r.coolant * 100)}% (${r.used.toFixed(1)} L in)`, 'good');
       ctx.audio.play('pickup', v.position.x, v.position.z, 0.5);
@@ -552,8 +601,9 @@ function fit(p: Player, v: Vehicle, c: Carried, hit: SocketHit | null) {
       const r = pourOil(v.health.comp.oil, c.amount, v.stats.sumpL);
       v.health.comp.oil = r.oil;
       v.commit();
-      ctx.work.pour(handPos(p), sitePos(v, 'hood'), [0.12, 0.1, 0.08]);
-      ctx.work.label(`OIL ${Math.round(r.oil * 100)}%`, '#e6dcc0', sitePos(v, 'hood').add(new THREE.Vector3(0, 0.8, 0)));
+      const to = at ?? sitePos(v, 'hood');
+      ctx.work.pour(handPos(p), to, [0.12, 0.1, 0.08]);
+      ctx.work.label(`OIL ${Math.round(r.oil * 100)}%`, '#e6dcc0', to.clone().add(new THREE.Vector3(0, 0.8, 0)));
       p.carry = r.left > 0.02 ? { kind: 'oil', amount: r.left } : null;
       p.note(`Oil topped up to ${Math.round(r.oil * 100)}%`, 'good');
       ctx.audio.play('pickup', v.position.x, v.position.z, 0.5);
@@ -562,28 +612,44 @@ function fit(p: Player, v: Vehicle, c: Carried, hit: SocketHit | null) {
   }
 }
 
-/** Stow what is in your hands in the trucks. Returns true if the hands are now empty. */
+// ---------------------------------------------------------------- stowing
+
+/** What the trucks have room for. */
+function stowRoom(p: Player, v?: Vehicle | null) {
+  const camp = p.ctx.campaign;
+  return { parts: camp.inventoryRoom, oil: OIL_RESERVE_MAX - camp.items.oil, water: WATER_RESERVE_MAX - camp.items.water, inside: v?.build ? v.insideRoom() : undefined };
+}
+
+/** Where the player stands against a vehicle for putting something in: the boot with its lid up, or the back seat through an open door. */
+export function stowPlace(p: Player, v: Vehicle): Place {
+  return placeFor(p, v, 'stow');
+}
+
+/**
+ * Stow what is in your hands in the trucks, through the boot (lid open) or an open door to the back seat. Returns true if the
+ * hands are now empty. Standing anywhere else, or at a shut boot, it is refused and says why.
+ */
 export function stowCarry(p: Player, quiet = false): boolean {
   const c = p.carry;
   if (!c) return true;
-  const camp = p.ctx.campaign;
-  const plan = planStow(c, { parts: camp.inventoryRoom, oil: OIL_RESERVE_MAX - camp.items.oil, water: WATER_RESERVE_MAX - camp.items.water });
+  const near = ownRideNear(p);
+  const plan = planStow(c, stowRoom(p, near), near ? { def: near.def, at: stowPlace(p, near).at?.pt.spot ?? null, open: near.panelOpen() } : undefined);
   if (!plan.ok) {
     if (!quiet) p.note(plan.label, 'warn');
     return false;
   }
-  const near = ownRideNear(p);
+  const camp = p.ctx.campaign;
   if (near && !quiet) {
-    // It flies to the spot on the car's deck it will sit in, and appears there as it lands.
-    const spot = near.nextDeckSpot(c.kind === 'part' ? { part: { uid: c.item.uid, id: c.item.id } } : c.kind === 'fuel' ? { fuel: near.load.fuel + 1 } : { oil: near.load.oil + 1 }) ?? trunkPos(near);
-    p.ctx.work.stow(c.kind === 'part' ? modelKey(c.item) : carryModelKey(c), handPos(p), spot, () => near.refreshLoadNow());
+    // It flies into the boot (or the cab) and is gone: stowed things are inside, not sitting on the car.
+    const [bx, by, bz] = near.body.toWorld(0, 0.8, -near.def.length * 0.42);
+    p.ctx.work.stow(c.kind === 'part' ? modelKey(c.item) : carryModelKey(c), handPos(p), new THREE.Vector3(bx, by, bz));
   }
   switch (c.kind) {
     case 'part':
       if (near?.build) c.item.on = near.build.uid;
       camp.stowPart(c.item);
       p.carry = null;
-      if (!quiet) p.note(`${partName(c.item)} stowed in the trunk`, 'good');
+      if (!quiet) p.note(`${partName(c.item)} stowed in the ${near?.insideRoom().name ?? 'trunk'}: secure at any speed`, 'good');
       break;
     case 'fuel':
       camp.stowFuel(c.amount, c.fuel ?? 'petrol');
@@ -633,7 +699,7 @@ export function returnCarry(p: Player) {
   // A spray can has no place in the trucks: it is simply left behind.
 }
 
-/** Climbing in with full hands: it goes in the trunk if it fits, otherwise it is set down beside the car. */
+/** Climbing in with full hands: it goes in the trunk if you are at an open one and it fits, otherwise it is set down beside the car. */
 export function stashBeforeEntering(p: Player) {
   if (!p.carry) return;
   // Only your own convoy's trunk takes it; a found car has no trunk of yours to teleport things into.
@@ -641,22 +707,151 @@ export function stashBeforeEntering(p: Player) {
   else p.note('Stowed in the trunk', 'info');
 }
 
-/** X while carrying: stow it at your car, or set it down anywhere else. */
-export function haulKey(p: Player) {
-  if (!p.carry) return;
-  if (p.carry.kind !== 'paint' && ownRideNear(p)) stowCarry(p);
-  else dropCarry(p);
+// ---------------------------------------------------------------- loads on the outside
+
+/** Vehicles that have been warned about a loose load this session (the long warning is shown once per car). */
+const warned = new Set<string>();
+
+/** Where the player stands against a vehicle for putting something on the outside: the roof, the bed, the rack, the rear cage. */
+export function loadPlace(p: Player, v: Vehicle): Reach | null {
+  if (!v.build) return null;
+  return reached(p, v, loadSpots(v.def, v.build.fit));
 }
 
-/** The prompt for a player whose hands are full: A does the fit (already in `p.prompt`), X stows or sets it down. */
+/** What setting `c` down at `spot` would do. */
+export function loadPlan(v: Vehicle, spot: Spot, c: Carried): LoadPlan {
+  return planLoad(v.def, v.build!.fit, v.cargoRig.entries, spot, c);
+}
+
+function surfaceNameOf(v: Vehicle, zone: Zone): string {
+  return surfacesOf(v.def, v.build!.fit).find((s) => s.zone === zone)?.name ?? zone;
+}
+
+/** X at the roof, the bed or a rack: set what you carry on the outside of the car. It is secure only if a holder takes it. */
+export function loadCarry(p: Player): boolean {
+  const c = p.carry;
+  const v = ownRideNear(p);
+  if (!c || !v?.build) return false;
+  const at = loadPlace(p, v);
+  if (!at) return false;
+  const plan = loadPlan(v, at.pt.spot, c);
+  if (!plan.ok || !plan.zone) {
+    p.note(plan.label, 'warn');
+    return false;
+  }
+  if (Math.abs(v.speed) > 2) {
+    p.note(t('access.moving', { name: v.def.name }), 'warn');
+    return false;
+  }
+  const spot = v.cargoRig.nextSpot(c, plan.zone);
+  p.ctx.work.stow(c.kind === 'part' ? modelKey(c.item) : carryModelKey(c), handPos(p), spot, () => v.refreshLoadNow());
+  v.cargoRig.add(c, plan.zone);
+  p.carry = null;
+  p.note(t('cargo.putOn', { name: carriedName(c), where: surfaceNameOf(v, plan.zone), state: plan.label }), plan.secure ? 'good' : 'warn');
+  if (!plan.secure && !warned.has(v.build.uid)) {
+    warned.add(v.build.uid);
+    p.note(t('cargo.warnOnce'), 'warn');
+  }
+  p.ctx.audio.play('pickup', p.pos.x, p.pos.z, 0.5);
+  return true;
+}
+
+/** X with empty hands at the roof, the bed, the rack or the cage: the thing nearest your hands that rides there. */
+export function cargoTakeTarget(p: Player): { v: Vehicle; entry: CargoEntry } | null {
+  if (p.carry) return null;
+  const v = p.nearestVehicle(3.8, isOwnRide);
+  if (!v?.build || !v.cargoRig.entries.length) return null;
+  const at = loadPlace(p, v);
+  if (!at) return null;
+  const zones = surfacesOf(v.def, v.build.fit).filter((s) => s.spot === at.pt.spot).map((s) => s.zone);
+  const hands = new THREE.Vector3(p.pos.x, p.pos.y + 1.0, p.pos.z);
+  let best: CargoEntry | null = null;
+  let bd = Infinity;
+  for (const e of v.cargoRig.entries) {
+    if (!zones.includes(e.zone)) continue;
+    const d = hands.distanceTo(v.cargoRig.worldOf(e));
+    if (d < bd) {
+      bd = d;
+      best = e;
+    }
+  }
+  return best ? { v, entry: best } : null;
+}
+
+/** Take a load off the outside of the car into your arms. */
+export function cargoTakeKey(p: Player): boolean {
+  const target = cargoTakeTarget(p);
+  if (!target) return false;
+  const { v, entry } = target;
+  const from = v.cargoRig.worldOf(entry);
+  const e = v.cargoRig.remove(entry.id);
+  if (!e) return false;
+  p.carry = e.c;
+  p.ctx.work.stow(carryModelKey(e.c), from, handPos(p));
+  p.ctx.audio.play('pickup', v.position.x, v.position.z, 0.7);
+  p.note(`Took ${carriedName(e.c)} off the ${surfaceNameOf(v, e.zone)}`, 'good');
+  return true;
+}
+
+/** The prompt under the main one for empty hands at a loaded roof or bed. */
+export function cargoTakePrompt(p: Player) {
+  const target = cargoTakeTarget(p);
+  if (!target) return;
+  const text = `${t('cargo.takeOff', { name: carriedName(target.entry.c), where: surfaceNameOf(target.v, target.entry.zone) })}  ·  ${target.v.cargoRig.isSecure(target.entry) ? 'secure' : 'loose'}`;
+  if (p.prompt) p.promptAlt = { text, button: 'X', ok: true };
+  else p.prompt = { text, progress: -1, button: 'X' };
+}
+
+/**
+ * Where X puts what you carry: inside (the boot, or through a door) or on the outside (roof, bed, rack, cage). At a boot or door
+ * you stow, or are told to open it first (a shut door never turns into a loose load on the roof by accident); with both in reach
+ * and the way in open, the nearer one you face wins. Step back from the doors to reach the roof.
+ */
+function xPlace(p: Player, v: Vehicle): 'stow' | 'load' | null {
+  const place = stowPlace(p, v);
+  const st = place.at;
+  const ld = loadPlace(p, v);
+  if (st && place.gate.ok && ld) return st.dist - 1.2 * st.facing <= ld.dist - 1.2 * ld.facing ? 'stow' : 'load';
+  if (st) return 'stow';
+  return ld ? 'load' : null;
+}
+
+/** X while carrying: stow it inside your car (boot or door open), put it on the roof or in the bed, or set it down. A shut boot you are standing at says so first. */
+export function haulKey(p: Player) {
+  if (!p.carry) return;
+  const v = p.carry.kind !== 'paint' ? ownRideNear(p) : null;
+  if (!v) return dropCarry(p);
+  const x = xPlace(p, v);
+  if (x === 'stow') return void stowCarry(p);
+  if (x === 'load') return void loadCarry(p);
+  // Not at a place to put it: set it down.
+  dropCarry(p);
+}
+
+/** The prompt for a player whose hands are full: A does the fit (already in `p.prompt`), X stows it or sets it down. */
 export function haulPrompt(p: Player) {
   const c = p.carry;
   if (!c) return;
-  const camp = p.ctx.campaign;
-  const near = ownRideNear(p);
-  const x = near
-    ? planStow(c, { parts: camp.inventoryRoom, oil: OIL_RESERVE_MAX - camp.items.oil, water: WATER_RESERVE_MAX - camp.items.water })
-    : { ok: true, label: `Put down ${carriedName(c)}  ·  walk it to your car to fit or stow it` };
+  const v = c.kind !== 'paint' ? ownRideNear(p) : null;
+  let x: { ok: boolean; label: string };
+  if (!v) x = { ok: true, label: `Put down ${carriedName(c)}  ·  walk it to your car to fit or stow it` };
+  else {
+    const place = stowPlace(p, v);
+    const where = xPlace(p, v);
+    const lp = where === 'load' ? loadPlace(p, v) : null;
+    if (where === 'stow' && place.at) {
+      x = planStow(c, stowRoom(p, v), { def: v.def, at: place.at.pt.spot, open: v.panelOpen() });
+      if (!x.ok && loadPlace(p, v)) x = { ...x, label: `${x.label}  ·  or step back from the door to put it on the roof` };
+    }
+    else if (lp) {
+      const plan = loadPlan(v, lp.pt.spot, c);
+      x = { ok: plan.ok, label: plan.ok ? `Put it on the ${surfaceNameOf(v, plan.zone!)}  ·  ${plan.label}` : plan.label };
+    } else {
+      const inside = v.def.id === 'pickup' || v.def.id === 'buggy' ? 'stow it through a door' : `stow it at the ${spotName(v.def, 'trunk')}${v.def.slots?.includes('seatR') ? ' or a back door' : ''}`;
+      const outside = loadSpots(v.def, v.build!.fit).includes('roof') ? ' (or put it on the roof)' : '';
+      x = { ok: true, label: `Put down ${carriedName(c)}  ·  ${inside}${outside}` };
+    }
+  }
   // Another prompt (a fit in progress, "enter the car") keeps the main slot; X rides underneath it.
   if (p.prompt) p.promptAlt = { text: x.label, button: 'X', ok: x.ok };
   else p.prompt = { text: x.label, progress: -1, button: 'X' };

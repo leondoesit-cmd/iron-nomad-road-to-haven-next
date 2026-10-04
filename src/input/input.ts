@@ -37,6 +37,8 @@ export interface Settings {
   firstPerson: [boolean, boolean];
   /** Horizontal field of view in first person, degrees. */
   fpFov: number;
+  /** Horizontal field of view of the chase camera, degrees. */
+  chaseFov: number;
   /** Which physical input drives which action, per device. */
   bindings: Bindings;
 }
@@ -51,7 +53,8 @@ export const defaultSettings = (): Settings => ({
   lookSens: [1, 1],
   keyTurn: 1,
   firstPerson: [false, false],
-  fpFov: 100,
+  fpFov: 110,
+  chaseFov: 110,
   bindings: defaultBindings(),
 });
 
@@ -397,6 +400,7 @@ export class InputManager {
       keyTurn: s.keyTurn,
       firstPerson: s.firstPerson,
       fpFov: s.fpFov,
+      chaseFov: s.chaseFov,
       bindings: exportBindings(s.bindings),
     };
   }
@@ -422,6 +426,7 @@ export class InputManager {
     s.deadzone = num(r.deadzone, 0.05, 0.4, s.deadzone);
     s.keyTurn = num(r.keyTurn, 0.4, 2.5, s.keyTurn);
     s.fpFov = num(r.fpFov, 70, 120, s.fpFov);
+    s.chaseFov = num(r.chaseFov, 70, 130, s.chaseFov);
     if (r.bindings) s.bindings = importBindings(r.bindings);
     this.bindingsChanged();
   }

@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { crate, heavyGun, jerryCan, plate, rivets, spareTyre, strap } from './parts';
-import { partDef } from '../data';
+import { isInteriorSlot, partDef } from '../data';
+import { cabinPartModel } from './cabinModels';
+import { drawEngine } from './engineModels';
+import { holderPartModel, isHolderModel } from './cargoParts';
 
 /**
  * What a vehicle part looks like off the car: the thing you lift, carry, hover over its mount and bolt on. One shape per
@@ -12,38 +15,6 @@ import { partDef } from '../data';
 const steel = (c = 0x6a6e72, w = 0.6) => S.steel(c, w);
 const dark = () => S.steel(0x2c2f31, 0.6);
 const brass = () => S.metal(0xb89a52, 0.45);
-
-function engine(b: MeshBuilder, mk: number) {
-  const block = mk >= 3 ? S.paint(0x2c2e30, 0.5) : mk === 2 ? S.paint(0x4a4e52, 0.55) : S.paint(0x6c6e70, 0.6);
-  // Cradle, block and sump.
-  b.rbox(0, 0.05, 0, 0.5, 0.06, 0.7, 0.015, dark());
-  b.rbox(0, 0.22, 0, 0.36, 0.3, 0.52, 0.03, block);
-  b.rbox(0, 0.1, 0, 0.3, 0.12, 0.42, 0.03, steel(0x3a3c3e));
-  // Cylinder head and the ribs along it.
-  b.rbox(0, 0.42, 0, 0.34, 0.1, 0.5, 0.02, steel(0x5a5d60, 0.5));
-  const n = mk >= 3 ? 8 : mk === 2 ? 6 : 4;
-  for (let i = 0; i < n; i++) b.box(0, 0.5, -0.22 + (i / (n - 1)) * 0.44, 0.38, 0.015, 0.025, steel(0x4a4d50));
-  // Pulleys and belt at the front.
-  b.cyl(0, 0.26, 0.32, 0.16, 0.05, 0.16, steel(0x2a2c2e), Math.PI / 2, 0, 0, 14);
-  b.cyl(0.08, 0.38, 0.34, 0.11, 0.05, 0.11, S.chrome(), Math.PI / 2, 0, 0, 12);
-  b.cyl(-0.08, 0.2, 0.34, 0.1, 0.05, 0.1, S.chrome(), Math.PI / 2, 0, 0, 12);
-  if (mk === 1) {
-    // One chrome air-filter pod.
-    b.cyl(0, 0.56, -0.02, 0.22, 0.1, 0.22, S.chrome(), 0, 0, 0, 16);
-    b.cyl(0, 0.62, -0.02, 0.18, 0.03, 0.18, steel(0x2a2a2a), 0, 0, 0, 16);
-  } else if (mk === 2) {
-    b.rbox(0, 0.58, 0, 0.26, 0.12, 0.26, 0.04, steel(0x3c4044, 0.6));
-    b.box(0, 0.58, 0.14, 0.22, 0.07, 0.02, S.plastic(0x0c0c0c));
-    for (const sx of [1, -1]) b.pipe([[sx * 0.18, 0.4, 0.2], [sx * 0.24, 0.3, 0.05], [sx * 0.26, 0.16, -0.18]], 0.03, brass(), 8);
-  } else {
-    // Supercharger blower, chrome stacks and fat headers.
-    b.rbox(0, 0.6, 0, 0.26, 0.2, 0.34, 0.05, S.metal(0x6a6e72, 0.4));
-    b.cyl(0, 0.74, 0, 0.2, 0.1, 0.3, steel(0x25272a), 0, 0, 0, 14);
-    for (let i = 0; i < 8; i++) b.cyl(-0.12 + (i % 4) * 0.08, 0.62, -0.1 + Math.floor(i / 4) * 0.2, 0.05, 0.16, 0.05, S.chrome(), 0, 0, 0, 8);
-    for (const sx of [1, -1]) b.pipe([[sx * 0.18, 0.4, 0.2], [sx * 0.28, 0.28, 0.04], [sx * 0.3, 0.14, -0.2], [sx * 0.3, 0.1, -0.34]], 0.04, S.metal(0x8a5a3a, 0.7), 8);
-    b.box(0, 0.5, 0.22, 0.12, 0.02, 0.06, S.glow(0xffb454, 2));
-  }
-}
 
 function wheels(b: MeshBuilder, mk: number) {
   // A pair of tyres, one standing and one leant against it. The better the set, the fatter and knobblier.
@@ -197,8 +168,11 @@ function side(b: MeshBuilder, id: string) {
 export function buildPartModel(b: MeshBuilder, id: string) {
   const d = partDef(id);
   b.jitter = 0.03;
+  if (isInteriorSlot(d.slot)) return cabinPartModel(b, id);
+  // Cargo holders (roof baskets, the net rack, rear cages, bed kits) are drawn by render/cargoParts.ts.
+  if (isHolderModel(id)) return holderPartModel(b, id);
   switch (d.slot) {
-    case 'engine': return engine(b, d.mk);
+    case 'engine': return void drawEngine(b, id);
     case 'wheels': return wheels(b, d.mk);
     case 'armor': return armour(b, d.mk);
     case 'weapon': return weapon(b, d.mk);

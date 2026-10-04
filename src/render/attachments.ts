@@ -2,8 +2,12 @@ import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { crate, jerryCan, plate, rivets, spareTyre, strap, heavyGun } from './parts';
 import { partDef } from '../data';
-import { partMeta, partTag } from './bodyParts';
+import { PANEL_TAG, partMeta, partTag } from './bodyParts';
+import { basketOn, bedKitOn, cageOn, isHolderModel } from './cargoParts';
 import type { Fit } from '../sim/parts';
+import { engineDims, type Dims } from '../sim/engineSize';
+import type { HoodState } from '../sim/engines';
+import { drawEngine, engineExtent } from './engineModels';
 
 /**
  * How fitted parts look. Every chassis hands over a `Mounts` record (where its bumpers, roof, doors and bonnet are),
@@ -25,6 +29,8 @@ export interface Mounts {
   trunk?: { y: number; z0: number; z1: number; hw: number };
   /** Door zone down the flank. */
   side: { y0: number; y1: number; z0: number; z1: number };
+  /** The flank has real doors that swing (a car): their plating goes with them. */
+  doors?: boolean;
   /** Height of the sill under the doors. */
   sill: number;
   /** Where a fixed front gun sits, just above the bonnet. */
@@ -33,6 +39,8 @@ export interface Mounts {
   narrow?: boolean;
   /** Wheel radius, so racks and pipes can stay clear of the tyres. */
   wheelR: number;
+  /** Height of the floor of the engine bay, where the engine mounts sit. Default: just above the sill. */
+  bayFloor?: number;
 }
 
 /** Lamps are registered through the rig so cached shells can replay them onto each instance. */
@@ -45,6 +53,8 @@ export interface Rig {
 
 /** What the engine in the bay looks like from outside. Derived from the build, so cached shells key off the fitted part ids. */
 export interface EngineLook {
+  /** The engine part in the bay: its model, its family colours and its real size. */
+  id: string;
   /** Aftermarket quality 1..3, or 0 for a factory engine (even one carried over from another car). */
   mk: number;
   /** Not the engine this chassis was built with. */
@@ -57,6 +67,10 @@ export interface EngineLook {
   size: number;
   /** The bay has been stripped. */
   empty: boolean;
+  /** The engine's condition as a wear value 0 (new) to 1 (wrecked), in steps of a third so cached shells are shared. */
+  wear: number;
+  /** A whole bonnet, one with a hole cut in it, or none. */
+  hood: HoodState;
 }
 
 export interface CoolingLook {
@@ -88,6 +102,20 @@ function rnd(seed: number) {
     s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
     return s / 4294967296;
   };
+}
+
+/**
+ * The bonnet's joint: it hinges at its rear edge, so the panel can swing up (see `Bodywork`). Everything drawn between this
+ * and `end()` goes up with it: the pressed panel, its vents and scoops, the plating over it, the engine that pokes through.
+ */
+export function markHood(b: MeshBuilder, m: Mounts) {
+  const h = m.hood!;
+  b.mark(PANEL_TAG.hood, partMeta({ kind: 'hood', pivot: [0, h.y - 0.04, h.z0 - 0.1] }));
+}
+
+/** A door's joint, for what is bolted over it: the same tag as the door itself, so it swings with it. */
+function markDoor(b: MeshBuilder, m: Mounts, sx: 1 | -1) {
+  b.mark(partTag('door', sx), partMeta({ kind: 'door', side: sx, pivot: [sx * (m.hw - 0.07), (m.side.y0 + m.side.y1) / 2, m.side.z1] }));
 }
 
 const mkOf = (fit: Fit, slot: keyof Fit) => (fit[slot] ? partDef(fit[slot]!.id).mk : 0);
@@ -134,10 +162,80 @@ function armorKit(b: MeshBuilder, m: Mounts, mk: number, look: KitLook) {
   }
 }
 
+// ---------------------------------------------------------------- the engine bay, as a volume
+
+/** The real engine bay of a model: the room between the cowl, the radiator, the wings, the floor and the underside of the bonnet. */
+export interface BayVolume {
+  x0: number;
+  x1: number;
+  z0: number;
+  z1: number;
+  floor: number;
+  /** Underside of the closed bonnet. */
+  top: number;
+  l: number;
+  w: number;
+  h: number;
+}
+
+/** Clearance an engine keeps from the bonnet and the wings when it is meant to fit. */
+export const BAY_CLEAR = 0.03;
+
+/** Derived from the mounts: the bonnet's height (a bonnet is 0.1 m of panel), its length and its half width, and the wing walls. */
+export function bayVolume(m: Mounts): BayVolume | null {
+  const h = m.hood;
+  if (!h) return null;
+  const floor = m.bayFloor ?? m.sill + 0.04;
+  const top = h.y - 0.1;
+  // Room under the cowl at the back, and the radiator, core and fan at the front.
+  const z0 = h.z0 - 0.15;
+  const z1 = h.z1 - 0.16;
+  const hw = h.hw * 0.85;
+  return { x0: -hw, x1: hw, z0, z1, floor, top, l: z1 - z0, w: hw * 2, h: top - floor };
+}
+
+/** Where an engine sits in its bay: centre of its base, and how far up it has been jacked to get it in under a bonnet it overshoots. */
+export function enginePlacement(m: Mounts, e: EngineLook): { x: number; y: number; z: number; dims: Dims; lift: number } | null {
+  const vol = bayVolume(m);
+  if (!vol || e.empty) return null;
+  const spec = partDef(e.id).engine;
+  if (!spec) return null;
+  // What is really drawn, not the box it is allowed (see `engineExtent`).
+  const ext = engineExtent(e.id);
+  const dims: Dims = { l: Math.min(ext.l, engineDims(spec).l), w: Math.min(ext.w, engineDims(spec).w), h: Math.min(ext.h, engineDims(spec).h) };
+  const y = vol.floor + 0.03;
+  let lift = 0;
+  // A snug engine is wedged up on its mounts until the bonnet just clears it, and the bonnet bulges over what is left.
+  if (e.oversize === 1 && e.hood === 'closed') lift = Math.max(0, Math.min(0.06, vol.top + 0.03 - (y + dims.h)));
+  // Through a cut bonnet it is the other way round: the engine stands up through the hole, the further the bigger it is.
+  else if (e.oversize > 0 && e.hood === 'cut' && m.hood) lift = Math.max(0, Math.min(0.28, m.hood.y + 0.01 + 0.06 + 0.05 * Math.min(3, e.oversize) - (y + dims.h)));
+  const z = vol.z1 - dims.l / 2 - 0.02;
+  return { x: 0, y: y + lift, z, dims, lift };
+}
+
+/** Stand an engine model in `b` at a place, in real size. */
+function placeEngine(b: MeshBuilder, id: string, wear: number, x: number, y: number, z: number) {
+  const sub = new MeshBuilder();
+  sub.jitter = 0.02;
+  drawEngine(sub, id, { wear });
+  b.appendMatrix(sub, new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion(), new THREE.Vector3(1, 1, 1)));
+}
+
+/** How far a bulge over the engine stands above the bonnet's top surface, metres: 0 when the engine fits flat. */
+export function bulgeHeight(m: Mounts, e: EngineLook): number {
+  if (e.oversize !== 1 || e.hood !== 'closed') return 0;
+  const pl = enginePlacement(m, e);
+  const h = m.hood;
+  if (!pl || !h) return 0;
+  // The bonnet's top surface is 0.01 above its mount height; leave 0.035 of sheet over the engine.
+  return Math.max(0.04, pl.y + pl.dims.h + 0.035 - (h.y + 0.01));
+}
+
 /**
- * Engine visible from outside. A tuned engine shows an air-filter pod, a scoop or a supercharger. An engine too big for
- * its bay pushes up through the bonnet (more of it the more it overshoots), a swapped diesel gets an exhaust stack, and
- * on a bike or quad the motor simply hangs out where everyone can see it.
+ * Engine visible from outside. An engine that fits shows nothing above the bonnet at all (it is in the bay, see `bayKit`). One
+ * that overshoots by a step (snug) raises a painted bulge in the bonnet; a tighter one holds the bonnet propped open on its own
+ * (the hood panel is posed by `Bodywork`, from `bayFit`), and one that is far too big cannot be closed over at all: the bonnet is
+ * cut (`cutHoodKit`) or taken off. On a bike or quad the motor simply hangs out where everyone can see it.
  */
 function engineKit(b: MeshBuilder, m: Mounts, e: EngineLook, look: KitLook, hoodOff = false) {
   const mk = e.mk;
@@ -158,61 +256,73 @@ function engineKit(b: MeshBuilder, m: Mounts, e: EngineLook, look: KitLook, hood
       b.limb(x + 0.04, m.sill, m.rear.z * 0.3, x + 0.05, m.sill + 0.04, m.rear.z * 0.85, 0.06 + mk * 0.01, 0.045, chromeMat(), 12);
     }
     if (e.swapped && e.size >= 2) {
-      // A car engine bolted in where a bike motor used to be: block, heads, headers and a blower, all hanging out.
-      const s = 0.1 + 0.04 * e.size;
-      const y = m.sill + s * 0.9;
-      const z = (m.side.z0 + m.side.z1) / 2 - 0.1;
-      b.rbox(0, y, z, s * 1.6, s * 1.2, s * 2.1, 0.03, S.metal(0x55595d, 0.6));
-      b.rbox(0, y + s * 0.75, z, s * 1.45, s * 0.35, s * 1.95, 0.02, S.metal(0x8a8e92, 0.5));
-      for (let i = 0; i < Math.min(8, e.size * 2); i++) b.cyl(-s * 0.5 + (i % 2) * s, y + s * 0.95, z - s * 0.8 + Math.floor(i / 2) * s * 0.5, 0.045, 0.09, 0.045, chromeMat(), 0, 0, 0, 8);
-      for (const sx of [1, -1]) b.pipe([[sx * s * 0.8, y, z + s * 0.9], [sx * (s * 0.8 + 0.08), y - s * 0.4, z], [sx * (s * 0.8 + 0.1), y - s * 0.5, z - s * 1.4]], 0.03, S.metal(0x8a5a3a, 0.7), 8);
-      if (e.blown) b.cyl(0, y + s * 1.15, z, s * 0.9, s * 0.45, s * 0.9, S.steel(0x2a2c2f), 0, 0, 0, 14);
+      // A car engine bolted in where a bike motor used to be: the real thing, hanging out of the frame for everyone to see.
+      placeEngine(b, e.id, e.wear, 0, m.sill + 0.05, (m.side.z0 + m.side.z1) / 2 - 0.1);
     }
     return;
   }
-  const h = m.hood;
-  const zc = (h.z0 + h.z1) / 2 + (h.z1 - h.z0) * 0.12;
   // With the bonnet off the whole engine is on show (see `bayKit`), so nothing needs to poke through it.
   if (hoodOff) {
     if (e.diesel && e.swapped) dieselStack(b, m);
     return;
   }
-  if (mk === 1) {
-    b.cyl(0, h.y + 0.05, zc, 0.26, 0.1, 0.26, chromeMat(), 0, 0, 0, 16);
-    b.cyl(0, h.y + 0.1, zc, 0.22, 0.03, 0.22, S.steel(0x2a2a2a), 0, 0, 0, 16);
-  } else if (mk === 2) {
-    b.rbox(0, h.y + 0.07, zc, h.hw * 0.7, 0.12, (h.z1 - h.z0) * 0.42, 0.04, S.steel(0x3c4044, 0.6), -0.08, 0, 0);
-    b.box(0, h.y + 0.06, zc + (h.z1 - h.z0) * 0.21, h.hw * 0.62, 0.07, 0.02, S.plastic(0x0c0c0c));
-  } else if (mk >= 3) {
-    // Blower poking through the bonnet, with eight chrome stacks and fat headers out of the wings.
-    b.rbox(0, h.y + 0.13, zc, h.hw * 0.62, 0.22, (h.z1 - h.z0) * 0.4, 0.05, S.metal(0x6a6e72, 0.4));
-    b.cyl(0, h.y + 0.27, zc, 0.22, 0.12, 0.34, S.steel(0x25272a), 0, 0, 0, 14);
-    for (let i = 0; i < 8; i++) b.cyl(-h.hw * 0.27 + (i % 4) * h.hw * 0.18, h.y + 0.26, zc - 0.1 + Math.floor(i / 4) * 0.2, 0.05, 0.14, 0.05, chromeMat(), 0, 0, 0, 8);
-    for (const sx of [1, -1]) {
-      b.pipe(
-        [
-          [sx * (h.hw * 0.9), h.y - 0.1, h.z1 - 0.2],
-          [sx * (h.hw + 0.08), h.y - 0.16, (h.z0 + h.z1) / 2],
-          [sx * (h.hw + 0.1), h.y - 0.32, h.z0 + 0.15],
-        ],
-        0.04,
-        S.metal(0x8a5a3a, 0.7),
-        8,
-      );
-    }
-  }
-  // An engine bigger than the bay: the bonnet is cut and the block shows through.
-  if (e.swapped && e.oversize >= 2) {
-    const up = 0.05 + 0.045 * e.oversize;
-    const body = S.paint(look.paint, Math.min(1, look.wear + 0.2));
-    b.rbox(0, h.y + up * 0.5, zc, h.hw * (1.05 + 0.05 * e.oversize), up + 0.06, (h.z1 - h.z0) * 0.62, 0.05, body);
-    b.rbox(0, h.y + up * 0.95, zc, h.hw * 0.9, 0.04, (h.z1 - h.z0) * 0.5, 0.02, S.steel(0x1c1e20, 0.6));
-    if (e.oversize >= 3) {
-      for (let i = 0; i < 6; i++) b.cyl(-h.hw * 0.36 + (i % 3) * h.hw * 0.36, h.y + up + 0.1, zc - 0.12 + Math.floor(i / 3) * 0.26, 0.07, 0.2, 0.07, chromeMat(), 0, 0, 0, 8);
-      if (e.blown) b.cyl(0, h.y + up + 0.13, zc, 0.3, 0.2, 0.4, S.steel(0x25272a), 0, 0, 0, 14);
-    }
+  const bulge = bulgeHeight(m, e);
+  const h = m.hood;
+  if (bulge > 0) {
+    const pl = enginePlacement(m, e)!;
+    // Whatever is raised on the bonnet is bolted to it: it swings up with the panel.
+    markHood(b, m);
+    const body = S.paint(look.paint, Math.min(1, look.wear + 0.1));
+    const w = Math.min(h.hw * 1.7, pl.dims.w + 0.1);
+    const len = Math.min(h.z1 - h.z0 - 0.1, pl.dims.l * 0.78);
+    // A pressed dome the shape of the engine's top, with a dark seam where it meets the bonnet and louvres for the heat.
+    b.rbox(0, h.y + 0.01 + bulge * 0.5, pl.z, w, bulge, len, Math.min(0.07, bulge * 0.9), body);
+    b.box(0, h.y + 0.014, pl.z, w * 1.02, 0.008, len * 1.02, S.plastic(0x0c0c0c));
+    for (let i = 0; i < 4; i++) b.box(0, h.y + 0.01 + bulge + 0.002, pl.z - len * 0.3 + i * len * 0.2, w * 0.6, 0.006, 0.02, S.plastic(0x0c0c0c));
+    b.end();
   }
   if (e.diesel && e.swapped) dieselStack(b, m);
+}
+
+/**
+ * The bonnet with a hole cut in it (`hood_cut`): a ragged opening sized for the engine under it, the torn steel curled up round
+ * the edge, and a dark pit. It is part of the bonnet, so it lifts with it. Whatever stands taller than the bay comes up through it.
+ */
+function cutHoodKit(b: MeshBuilder, m: Mounts, look: KitLook) {
+  const h = m.hood;
+  if (!h) return;
+  const e = look.engine;
+  const pl = e && !e.empty ? enginePlacement(m, { ...e, oversize: 0 }) : null;
+  const len = Math.min(h.z1 - h.z0 - 0.12, (pl?.dims.l ?? 0.55) * 0.9);
+  const wid = Math.min(h.hw * 1.6, (pl?.dims.w ?? 0.5) * 0.92);
+  const zc = pl?.z ?? (h.z0 + h.z1) / 2;
+  const y = h.y + 0.014;
+  const bare = S.steel(0x8a8e92, 0.9);
+  const rust = S.rust(0x7a3f22);
+  const pit = S.steel(0x0c0c0c, 0.2);
+  markHood(b, m);
+  b.rbox(0, y, zc, wid, 0.012, len, 0.004, pit);
+  // The cut edge: jagged teeth of torn steel all round, bent up at different angles. Seeded, so a car's hood is always the same.
+  const r = rnd(look.seed + 211);
+  const teeth = (n: number, at: (t: number) => [number, number], yaw: number, size: number) => {
+    for (let i = 0; i < n; i++) {
+      const [x, z] = at((i + 0.5) / n);
+      const tilt = 0.5 + r() * 0.8;
+      const sz = size * (0.7 + r() * 0.7);
+      b.rbox(x, y + 0.012 + Math.sin(tilt) * sz * 0.4, z, sz * 0.7, 0.008, sz, 0.002, r() > 0.55 ? rust : bare, -tilt * Math.cos(yaw), yaw, tilt * Math.sin(yaw));
+    }
+  };
+  teeth(7, (t) => [-wid / 2 + t * wid, len / 2 + zc], 0, 0.07);
+  teeth(7, (t) => [-wid / 2 + t * wid, -len / 2 + zc], Math.PI, 0.07);
+  teeth(6, (t) => [wid / 2, zc - len / 2 + t * len], Math.PI / 2, 0.07);
+  teeth(6, (t) => [-wid / 2, zc - len / 2 + t * len], -Math.PI / 2, 0.07);
+  // A bright scratched rim where the cutter ran.
+  const rim = S.metal(0xd0d4d8, 0.3);
+  b.box(0, y + 0.005, zc + len / 2, wid, 0.004, 0.012, rim);
+  b.box(0, y + 0.005, zc - len / 2, wid, 0.004, 0.012, rim);
+  b.box(wid / 2, y + 0.005, zc, 0.012, 0.004, len, rim);
+  b.box(-wid / 2, y + 0.005, zc, 0.012, 0.004, len, rim);
+  b.end();
 }
 
 /** A diesel in a car that left the factory on petrol: an upright exhaust stack behind the cab. */
@@ -361,21 +471,9 @@ function roofKit(b: MeshBuilder, rig: Rig, m: Mounts, id: string, look: KitLook)
   const L = ro.z1 - ro.z0;
   const zc = (ro.z0 + ro.z1) / 2;
   const hw = ro.hw;
-  if (id === 'rf_rack') {
-    const rail = S.steel(0x2e3032, 0.65);
-    const y = ro.y + 0.16;
-    for (const sx of [1, -1]) for (const z of [ro.z0 + 0.05, ro.z1 - 0.05]) b.rod(sx * hw, ro.y, z, sx * hw, y, z, 0.016, rail, 6);
-    b.pipe([[hw, y, ro.z0 + 0.05], [hw, y, ro.z1 - 0.05], [-hw, y, ro.z1 - 0.05], [-hw, y, ro.z0 + 0.05], [hw, y, ro.z0 + 0.05]], 0.016, rail, 6);
-    for (let i = 0; i < 5; i++) b.rod(-hw, y - 0.02, ro.z0 + 0.05 + (i * (L - 0.1)) / 4, hw, y - 0.02, ro.z0 + 0.05 + (i * (L - 0.1)) / 4, 0.012, rail, 6);
-    // A load strapped on: crate and cans, different per car.
-    const k = Math.floor(r() * 3);
-    if (k === 0) crate(b, 0, y + 0.17, zc - L * 0.12, hw * 1.2, 0.3, L * 0.34, 0.1);
-    else if (k === 1) {
-      jerryCan(b, -hw * 0.45, y - 0.01, zc, 0x55603e, 0.3);
-      jerryCan(b, hw * 0.05, y - 0.01, zc + 0.1, look.paint, -0.2);
-      jerryCan(b, hw * 0.5, y - 0.01, zc - 0.1, 0xb0301e, 0.1);
-    } else spareTyre(b, 0, y + 0.1, zc, 0.34, 0.2, 0, 0.3);
-    strap(b, [[-hw, y, zc + 0.12], [-hw, y + 0.34, zc + 0.12], [hw, y + 0.34, zc + 0.12], [hw, y, zc + 0.12]]);
+  if (id === 'rf_rack' || isHolderModel(id)) {
+    // Rails, baskets and nets only hold what is put in them (see sim/cargo.ts): no load is painted on.
+    basketOn(b, ro, id);
   } else if (id === 'rf_light') {
     const z = ro.z1 - 0.12;
     b.rbox(0, ro.y + 0.07, z, hw * 1.7, 0.1, 0.16, 0.03, S.plastic(0x181818));
@@ -417,6 +515,8 @@ function rearKit(b: MeshBuilder, m: Mounts, id: string, look: KitLook) {
       b.box(sx * m.rear.hw * 0.98, y + 0.03, zz, 0.025, 0.1, 0.34, S.paint(look.paint, 0.4));
     }
     b.rbox(0, y + 0.03, zz, m.rear.hw * 1.96, 0.025, 0.32, 0.01, S.paint(look.stripe ? look.stripeColor : 0x1e1e20, 0.4), -0.12, 0, 0);
+  } else if (isHolderModel(id)) {
+    cageOn(b, m, id);
   } else {
     // Cargo box: on the boot or bed when there is one, else a carrier behind the bumper.
     const col = S.steel(0x4a4e50, 0.75);
@@ -547,84 +647,72 @@ function doorOffKit(b: MeshBuilder, m: Mounts, sx: 1 | -1) {
   for (const z of [m.side.z0 + 0.03, m.side.z1 - 0.03]) b.rbox(x, y, z, 0.12, h, 0.06, 0.015, steelDark);
   // The hinges are still on the post, with nothing hanging off them.
   for (const dy of [0.28, -0.28]) b.cyl(x + sx * 0.05, y + dy * h, m.side.z1 - 0.03, 0.04, 0.09, 0.04, S.steel(0x7a7e82, 0.5), 0, 0, 0, 8);
-  // The edge of the seat cushion.
-  b.rbox(sx * (m.hw - 0.4), m.side.y0 + 0.13, zc + 0.05, 0.5, 0.17, 0.5, 0.05, S.leather(0x3a3228, 0.8));
+  // The seat behind it is the cabin's own (see `interior.ts`), fully visible through the gap.
 }
 
 /**
- * The engine bay with the bonnet off: the whole engine on show, sized for what it is. A big V8 stands up tall, a diesel
- * has its injector lines, a blown engine its supercharger, and a stripped bay is empty rails.
+ * The engine bay with the bonnet up (or off): the real room under it, and the engine standing in it at its real size with the
+ * radiator, hoses, battery and the rest of what makes a bay look like one. Every engine is its own model (`engineModels.ts`),
+ * so a V8 and a scooter motor are not mistaken for each other. A stripped bay is empty mounts. The bay is derived from the
+ * model's own bonnet (`bayVolume`), the same room the fit rules use.
  */
-function bayKit(b: MeshBuilder, m: Mounts, look: KitLook, floor: number) {
+export function bayKit(b: MeshBuilder, m: Mounts, look: KitLook, _floor?: number) {
+  void _floor;
   const h = m.hood;
-  if (!h) return;
+  const vol = bayVolume(m);
+  if (!h || !vol) return;
   const e = look.engine;
   const c = look.cooling;
-  const zc = (h.z0 + h.z1) / 2;
-  const len = h.z1 - h.z0;
-  const hw = h.hw;
+  const { floor, top, z0, z1 } = vol;
+  const hw = vol.x1;
+  const zc = (z0 + z1) / 2;
+  const len = z1 - z0 + 0.1;
+  const height = top - floor;
   const tray = S.steel(0x1c1e20, 0.8);
-  b.rbox(0, floor, zc, hw * 2, 0.04, len, 0.01, tray);
+  const wall = S.steel(0x2a2d30, 0.8);
+  // Floor, the two wing walls (with the strut towers over the wheels) and the firewall at the cowl.
+  b.rbox(0, floor - 0.02, zc, hw * 2 + 0.1, 0.04, len, 0.01, tray);
   for (const sx of [1, -1]) {
-    b.rbox(sx * (hw - 0.04), floor + 0.1, zc, 0.07, 0.16, len, 0.02, S.steel(0x34383b, 0.8));
-    b.cyl(sx * (hw - 0.12), floor + 0.2, h.z1 - 0.28, 0.14, 0.2, 0.14, S.steel(0x2a2c2e, 0.8), 0, 0, 0, 10);
+    b.rbox(sx * (hw + 0.03), floor + height / 2, zc, 0.06, height, len, 0.015, wall);
+    b.rbox(sx * (hw - 0.07), top - 0.06, z0 + 0.18, 0.2, 0.12, 0.2, 0.03, S.steel(0x3a3d40, 0.7));
+    b.cyl(sx * (hw - 0.07), top, z0 + 0.18, 0.1, 0.03, 0.1, S.steel(0x7a7e82, 0.5), 0, 0, 0, 10);
   }
+  b.rbox(0, floor + height / 2, z0 - 0.02, hw * 2 + 0.1, height, 0.05, 0.01, S.steel(0x15171a, 0.8));
   // Radiator support and the factory core (an aftermarket one is drawn by `coolingKit`, in the grille).
-  b.rbox(0, floor + 0.18, h.z1 - 0.05, hw * 1.7, 0.32, 0.05, 0.015, S.steel(0x34383b, 0.8));
+  const ry = floor + height * 0.45;
+  b.rbox(0, ry, z1 + 0.02, hw * 1.7, height * 0.78, 0.05, 0.015, S.steel(0x34383b, 0.8));
   if (c && !c.empty && c.mk <= 0) {
-    b.rbox(0, floor + 0.18, h.z1 - 0.09, hw * 1.5, 0.28, 0.06, 0.012, S.steel(0x3a3d40, 0.7));
-    for (let i = 0; i < 12; i++) b.box(-hw * 0.7 + i * ((hw * 1.4) / 11), floor + 0.18, h.z1 - 0.12, 0.01, 0.25, 0.01, S.steel(0x1c1d1f, 0.6));
+    b.rbox(0, ry, z1 - 0.01, hw * 1.5, height * 0.62, 0.06, 0.012, S.steel(0x3a3d40, 0.7));
+    for (let i = 0; i < 12; i++) b.box(-hw * 0.7 + i * ((hw * 1.4) / 11), ry, z1 - 0.045, 0.01, height * 0.55, 0.01, S.steel(0x1c1d1f, 0.6));
   }
+  // Battery, washer bottle and a brake booster: the clutter that stops a bay looking like a box.
+  b.rbox(hw - 0.17, floor + 0.12, z0 + 0.2, 0.2, 0.2, 0.3, 0.02, S.plastic(0x1a2a1a, 0.4));
+  b.box(hw - 0.17, floor + 0.23, z0 + 0.2, 0.05, 0.02, 0.04, S.chrome());
+  b.rbox(-hw + 0.14, floor + 0.14, z0 + 0.14, 0.14, 0.22, 0.1, 0.02, S.plastic(0x2a5a7a, 0.4));
+  b.cyl(-hw + 0.3, floor + height * 0.78, z0 + 0.06, 0.18, 0.1, 0.18, S.steel(0x2a2c2e, 0.7), Math.PI / 2, 0, 0, 12);
   if (!e || e.empty) {
-    // Empty mounts: two cross-members and the bolts where it sat.
+    // Empty mounts: the cradle's feet and a cross-member, bolts where it sat.
     for (const dz of [-0.2, 0.2]) b.box(0, floor + 0.07, zc + dz * len, hw * 1.7, 0.05, 0.06, S.steel(0x4a4d50, 0.8));
     return;
   }
-  const sz = Math.max(0, e.size);
-  const bw = Math.min(hw * 0.88, 0.16 + 0.045 * sz);
-  const bl = Math.min(len * 0.8, 0.34 + 0.11 * sz);
-  const bh = 0.13 + 0.035 * sz;
-  const ze = zc - len * 0.03;
-  const y0 = floor + 0.1;
-  const block = S.metal(e.blown ? 0x3a3d40 : 0x4a4e52, 0.6);
-  b.rbox(0, y0 + bh / 2, ze, bw * 1.5, bh, bl, 0.03, block);
-  const cover = e.mk >= 3 ? S.paint(0xd62a1a, 0.4) : e.mk === 2 ? S.paint(0x2a7a3a, 0.4) : S.metal(0x8a8e92, 0.5);
-  if (sz >= 3) {
-    // Two banks of cylinders in a V.
-    for (const sx of [1, -1]) {
-      b.rbox(sx * bw * 0.42, y0 + bh + 0.03, ze, bw * 0.62, 0.08, bl * 0.92, 0.02, cover, 0, 0, -sx * 0.32);
-      for (let i = 0; i < Math.min(4, sz); i++) b.cyl(sx * bw * 0.46, y0 + bh + 0.1, ze - bl * 0.34 + i * (bl * 0.68) / Math.max(1, Math.min(4, sz) - 1), 0.04, 0.05, 0.04, S.chrome(), 0, 0, 0, 6);
-    }
-  } else {
-    b.rbox(0, y0 + bh + 0.03, ze, bw * 1.3, 0.08, bl * 0.9, 0.02, cover);
-    for (let i = 0; i < 4; i++) b.cyl(-bw * 0.4 + (i % 2) * bw * 0.8, y0 + bh + 0.09, ze - bl * 0.25 + Math.floor(i / 2) * bl * 0.5, 0.04, 0.05, 0.04, S.chrome(), 0, 0, 0, 6);
+  const pl = enginePlacement(m, e);
+  if (!pl) return;
+  const { dims } = pl;
+  // Mounts under the engine, with a spacer block when it has been jacked up to get it in.
+  for (const sx of [1, -1]) {
+    b.rbox(sx * dims.w * 0.42, floor + 0.01 + pl.lift / 2, pl.z, 0.07, 0.04 + pl.lift, dims.l * 0.4, 0.01, S.steel(0x3a3d40, 0.8));
   }
-  const topY = y0 + bh + 0.12;
-  if (e.diesel) {
-    // Injector pump on the side, a line to each cylinder, and a turbo on the exhaust.
-    b.rbox(-bw * 0.8, y0 + bh * 0.55, ze + bl * 0.1, bw * 0.34, bh * 0.45, bl * 0.28, 0.02, S.metal(0xb89a52, 0.5));
-    for (let i = 0; i < 4; i++) b.rod(-bw * 0.8, y0 + bh * 0.8, ze - bl * 0.3 + i * bl * 0.2, -bw * 0.2, y0 + bh + 0.1, ze - bl * 0.3 + i * bl * 0.2, 0.008, S.metal(0xd0d4d8, 0.4), 5);
-    b.cyl(bw * 0.95, y0 + bh * 0.6, ze - bl * 0.1, 0.12, 0.11, 0.12, S.steel(0x5a4a3a, 0.8), 0, 0, Math.PI / 2, 12);
-    b.cyl(bw * 1.05, y0 + bh * 0.6, ze - bl * 0.1, 0.07, 0.1, 0.07, S.steel(0x2a2c2e, 0.8), 0, 0, Math.PI / 2, 10);
-  } else {
-    // Air cleaner pot, or carb stacks on a tuned engine.
-    if (e.mk >= 2) for (let i = 0; i < 3; i++) b.cyl(-0.07 + i * 0.07, topY + 0.02, ze, 0.065, 0.1, 0.065, S.chrome(), 0, 0, 0, 10);
-    else b.cyl(0, topY, ze, bw * 0.9, 0.09, bw * 0.9, S.steel(0x3a3d40, 0.7), 0, 0, 0, 14);
-  }
-  if (e.blown) {
-    b.rbox(0, topY + 0.05, ze, bw * 0.9, 0.14, bl * 0.5, 0.04, S.steel(0x25272a, 0.6));
-    b.cyl(0, topY + 0.14, ze + bl * 0.1, bw * 0.55, 0.1, bw * 0.55, S.steel(0x15171a, 0.6), 0, 0, 0, 14);
-    b.cyl(0, y0 + bh * 0.5, ze + bl * 0.5 + 0.02, 0.12, 0.04, 0.12, S.steel(0x2a2c2e, 0.6), Math.PI / 2, 0, 0, 12);
-  }
-  // Headers out of each side, a fan and the belt at the front.
-  for (const sx of [1, -1]) b.pipe([[sx * bw * 0.7, y0 + bh * 0.5, ze + bl * 0.3], [sx * (bw + 0.07), y0 + bh * 0.1, ze], [sx * (bw + 0.09), y0 - 0.02, ze - bl * 0.7]], 0.028, S.metal(0x8a5a3a, 0.7), 8);
-  const fz = ze + bl / 2 + 0.05;
-  b.cyl(0, y0 + bh * 0.5, fz, Math.min(0.34, bw * 1.8), 0.02, Math.min(0.34, bw * 1.8), S.plastic(0x141414, 0.5), Math.PI / 2, 0, 0, 14);
-  b.cyl(0, y0 + bh * 0.5, fz - 0.03, 0.06, 0.04, 0.06, S.steel(0x7a7e82, 0.5), Math.PI / 2, 0, 0, 8);
-  // Hoses from the radiator, and the battery in the corner.
-  b.pipe([[hw * 0.3, floor + 0.3, h.z1 - 0.12], [hw * 0.2, y0 + bh, ze + bl * 0.35]], 0.026, S.rubber(0x1c1c1e), 6);
-  b.pipe([[-hw * 0.3, floor + 0.1, h.z1 - 0.12], [-hw * 0.2, y0 + bh * 0.3, ze + bl * 0.35]], 0.026, S.rubber(0x1c1c1e), 6);
-  b.rbox(-hw + 0.2, floor + 0.12, h.z0 + 0.2, 0.2, 0.18, 0.28, 0.02, S.plastic(0x1a2a1a, 0.4));
+  b.rbox(0, floor + 0.01, pl.z, hw * 1.7, 0.03, 0.08, 0.01, S.steel(0x3a3d40, 0.8));
+  placeEngine(b, e.id, e.wear, pl.x, pl.y, pl.z);
+  // Hoses from the radiator to the engine: the top hose to the thermostat housing, the bottom hose to the water pump.
+  const front = pl.z + dims.l / 2;
+  const hose = S.rubber(0x1c1c1e);
+  b.pipe([[hw * 0.4, ry + height * 0.3, z1 - 0.08], [hw * 0.3, pl.y + dims.h * 0.7, front + 0.02], [dims.w * 0.2, pl.y + dims.h * 0.62, front - 0.04]], 0.026, hose, 6);
+  b.pipe([[-hw * 0.4, ry - height * 0.3, z1 - 0.08], [-hw * 0.25, pl.y + dims.h * 0.2, front + 0.02], [-dims.w * 0.15, pl.y + dims.h * 0.3, front - 0.04]], 0.026, hose, 6);
+  // A fan shroud behind the core, sized to the engine.
+  const fr = Math.min(0.22, height * 0.38, hw * 0.4);
+  b.cyl(0, ry, z1 - 0.1, fr * 2, 0.04, fr * 2, S.plastic(0x141414, 0.5), Math.PI / 2, 0, 0, 16);
+  b.cyl(0, ry, z1 - 0.12, fr * 0.4, 0.05, fr * 0.4, S.steel(0x7a7e82, 0.5), Math.PI / 2, 0, 0, 8);
 }
 
 // ---------------------------------------------------------------- drivetrain
@@ -708,7 +796,11 @@ function paintDetails(b: MeshBuilder, m: Mounts, look: KitLook) {
     for (const [top, zs] of [[m.hood, 0], [m.roof, 0], [m.trunk, 0]] as const) {
       if (!top) continue;
       void zs;
+      // The boot lid's stripes belong to the lid: they swing up with it instead of staying behind on the car.
+      const lid = top === m.trunk;
+      if (lid) b.mark(PANEL_TAG.trunk, partMeta({ kind: 'trunk', pivot: [0, top.y - 0.04, top.z1 + 0.05] }));
       for (const sx of [1, -1]) b.box(sx * 0.13, top.y + 0.006, (top.z0 + top.z1) / 2, 0.12, 0.004, top.z1 - top.z0 - 0.04, col);
+      if (lid) b.end();
     }
   } else if (look.stripe === 3) {
     const col = S.paint(look.stripeColor, 0.5);
@@ -733,14 +825,25 @@ export function addKit(b: MeshBuilder, rig: Rig, m: Mounts, look: KitLook, o: { 
   if (look.engine && !look.engine.empty) engineKit(b, m, look.engine, look, !!hood?.off);
   if (look.cooling) coolingKit(b, m, look.cooling);
   if (m.hood) {
-    if (hood?.off) bayKit(b, m, look, o.bayFloor ?? m.hood.y - 0.14);
-    else if (hood && !hood.stock) hoodKit(b, m, hood.id, look);
+    if (hood?.off) bayKit(b, m, look);
+    else if (hood?.id === 'hood_cut') cutHoodKit(b, m, look);
+    else if (hood && !hood.stock) {
+      markHood(b, m);
+      hoodKit(b, m, hood.id, look);
+      b.end();
+    }
   }
   for (const [slot, sx] of [['doorL', 1], ['doorR', -1]] as const) {
     const d = bodyPart(fit, slot);
     if (!d) continue;
     if (d.off) doorOffKit(b, m, sx);
-    else if (!d.stock) doorKit(b, m, sx, d.id, look);
+    else if (!d.stock) {
+      // A plated or armoured door is the door: it swings with it. (A canvas flap is not a hinged panel.)
+      const hinged = !!m.doors && d.id !== 'door_light';
+      if (hinged) markDoor(b, m, sx);
+      doorKit(b, m, sx, d.id, look);
+      if (hinged) b.end();
+    }
   }
   const exh = fit.exhaust ? partDef(fit.exhaust.id) : null;
   if (exh && !exh.stock) exhaustKit(b, m, exh.id, !!exh.empty);
@@ -751,7 +854,9 @@ export function addKit(b: MeshBuilder, rig: Rig, m: Mounts, look: KitLook, o: { 
   const wpn = mkOf(fit, 'weapon');
   if (wpn || o.nativeGun) weaponKit(b, rig, m, wpn, o.nativeGun);
   const utl = mkOf(fit, 'utility');
-  if (utl) utilityKit(b, m, utl, look);
+  const utlId = fit.utility?.id;
+  if (utl && utlId && isHolderModel(utlId)) bedKitOn(b, m, utlId);
+  else if (utl) utilityKit(b, m, utl, look);
   // Bolt-on modules are marked, so a hard enough knock can tear them off the merged body.
   const one = (slot: 'front' | 'roof' | 'rear', pivot: [number, number, number], draw: (id: string) => void) => {
     const it = fit[slot];

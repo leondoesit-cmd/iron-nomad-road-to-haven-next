@@ -14,11 +14,6 @@ const HEIGHT: Record<AnimalKind, number> = { hare: 0.35, deer: 1.3, vulture: 0.4
 
 let aid = 1;
 
-/** Hides and tusks fetch scrap from the big game. */
-function hideScrap(a: Animal) {
-  return a.def.meat >= 4 ? Math.floor(a.def.meat / 2) : 0;
-}
-
 export class Animal {
   id = aid++;
   def: AnimalDef;
@@ -347,7 +342,7 @@ export class WildlifeSystem {
       x: a.x,
       z: a.z,
       r: 2.4,
-      prompt: `Hold to butcher ${a.def.name} (${a.def.meat} rations${hideScrap(a) ? `, ${hideScrap(a)} scrap` : ''})`,
+      prompt: `Hold to butcher ${a.def.name} (${a.def.meat} rations)`,
       dur: this.butcherTime(a),
       priority: 1,
       enabled: () => a.dead && !a.butchered,
@@ -365,13 +360,11 @@ export class WildlifeSystem {
     a.butchered = true;
     const ctx = this.ctx;
     ctx.interact?.remove(`carcass:${a.id}`);
-    const gross: Partial<Record<'rations' | 'scrap', number>> = { rations: a.def.meat };
-    const scrap = hideScrap(a);
-    if (scrap) gross.scrap = scrap;
-    ctx.addLoot(gross, 'hunt');
+    // Meat is food and nothing else: no abstract Scrap comes off a carcass.
+    ctx.addLoot({ rations: a.def.meat }, 'hunt');
     ctx.fx.blood(a.x, a.y + 0.3, a.z, 3);
     ctx.audio.play('pickup', a.x, a.z, 0.8);
-    ctx.notify(-1, t('hunt.meat', { name: a.def.name, n: a.def.meat }) + (scrap ? ` +${scrap} scrap from the hide.` : ''), 'good');
+    ctx.notify(-1, t('hunt.meat', { name: a.def.name, n: a.def.meat }), 'good');
     if (by) a.deadT = Math.max(a.deadT, a.keepFor - 4);
   }
 

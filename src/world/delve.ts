@@ -1,5 +1,6 @@
 import { Rng } from '../core/rng';
-import type { Stocks, ZombieKind } from '../data';
+import type { ZombieKind } from '../data';
+import { rollLoot, type GunStash, type LootContext, type LootSpec } from '../sim/loot';
 import type { Aabb, PropKind } from './layout';
 import { newAabbId } from './layout';
 import type { DelveTheme } from './delveSites';
@@ -18,7 +19,10 @@ import type { DrugId } from '../sim/drugs';
 export const CELL = 2;
 
 export interface ChestLoot extends Partial<Record<DrugId, number>> {
-  stocks: Partial<Stocks>;
+  /** Guns, rolled from the weapons table when the chest is opened. */
+  guns?: GunStash;
+  /** Named finds: parts with their wear, cans, tins, dressings (see `sim/loot.ts`). Never abstract Scrap or Parts. */
+  items: LootSpec[];
   ammo?: number;
   medkit?: number;
   bandage?: number;
@@ -655,18 +659,26 @@ class Gen {
       metro: ['a ticket-office safe', 'a luggage cage', 'a vending machine', 'a maintenance locker'],
     };
     const drng = new Rng(m.seed * 40503 + tier * 977 + 11);
-    const loot = (): ChestLoot => ({ ...baseLoot(), ...drugLoot(theme, drng, false) });
+    const loot = (): ChestLoot => {
+      const l: ChestLoot = { ...baseLoot(), ...drugLoot(theme, drng, false) };
+      // Armouries and caches hold the odd gun.
+      if ((theme === 'bunker' && rng.chance(0.35)) || (theme !== 'bunker' && rng.chance(0.12))) l.guns = { context: theme === 'bunker' ? 'bunker' : 'cache', seed: rng.int(1, 1e9), depth: 1 };
+      return l;
+    };
+    // What each kind of place keeps: a mine its spares and fuel, a bunker its ammunition and dressings, a cave a smuggler's cache.
+    const ctx: LootContext = ({ cave: 'delve_cave', mine: 'delve_mine', bunker: 'delve_bunker', metro: 'delve_metro' } as const)[theme];
+    const progress = Math.min(1, 0.15 + tier * 0.22);
     const baseLoot = (): ChestLoot => {
-      const s = (n: number) => Math.round(n * (0.8 + tier * 0.35));
+      const items = rollLoot(ctx, rng.int(1, 1e9), 1, { progress });
       switch (theme) {
         case 'cave':
-          return { stocks: { scrap: s(rng.int(10, 18)), rations: rng.int(1, 2), parts: rng.chance(0.6) ? s(rng.int(3, 7)) : 0, medicine: rng.chance(0.4) ? 1 : 0 }, ammo: rng.chance(0.5) ? 10 : 0 };
+          return { items, ammo: rng.chance(0.5) ? 10 : 0 };
         case 'mine':
-          return { stocks: { parts: s(rng.int(6, 12)), scrap: s(rng.int(8, 16)), fuel: rng.chance(0.5) ? 5 : 0, tech: rng.chance(0.3) ? 1 : 0 }, charge: rng.chance(0.3) ? 1 : 0 };
+          return { items, charge: rng.chance(0.3) ? 1 : 0 };
         case 'bunker':
-          return { stocks: { tech: rng.int(1, 2) + (tier > 2 ? 1 : 0), medicine: rng.int(1, 2), rations: rng.int(1, 2) }, ammo: rng.int(12, 24) + tier * 6, medkit: rng.chance(0.35) ? 1 : 0, bandage: rng.chance(0.6) ? rng.int(1, 2) : 0, flare: rng.chance(0.4) ? 1 : 0 };
+          return { items, ammo: rng.int(12, 24) + tier * 6, medkit: rng.chance(0.35) ? 1 : 0, bandage: rng.chance(0.6) ? rng.int(1, 2) : 0, flare: rng.chance(0.4) ? 1 : 0 };
         default:
-          return { stocks: { scrap: s(rng.int(10, 20)), parts: s(rng.int(5, 10)), medicine: rng.chance(0.5) ? 1 : 0, tech: rng.chance(0.35) ? 1 : 0 }, molotov: rng.chance(0.3) ? 1 : 0, ammo: rng.chance(0.4) ? 12 : 0 };
+          return { items, molotov: rng.chance(0.3) ? 1 : 0, ammo: rng.chance(0.4) ? 12 : 0 };
       }
     };
     let n = 0;
@@ -684,7 +696,7 @@ class Gen {
       }
     }
     // The hoard behind the boss.
-    const hoard: ChestLoot = { stocks: { tech: 3 + tier, medicine: 2, parts: 14 + tier * 6, scrap: 30 + tier * 14, rations: 3 }, ammo: 30 + tier * 10, medkit: 1 + (tier > 1 ? 1 : 0), bandage: 2 + tier, charge: 1, ...drugLoot(theme, drng, true) };
+    const hoard: ChestLoot = { guns: { context: theme === 'bunker' || theme === 'metro' ? 'bunker' : 'cache', seed: m.seed * 31 + 3, depth: 2 }, items: [...rollLoot(ctx, m.seed * 977 + 5, 2, { progress: Math.min(1, progress + 0.3) }), ...rollLoot(ctx, m.seed * 977 + 6, 2, { progress: Math.min(1, progress + 0.3) })], ammo: 30 + tier * 10, medkit: 1 + (tier > 1 ? 1 : 0), bandage: 2 + tier, charge: 1, ...drugLoot(theme, drng, true) };
     const br = m.rooms.find((r) => r.role === 'boss');
     if (br) {
       let hx = m.boss.x + (br.x1 - br.x0) * CELL * 0.28;

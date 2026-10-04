@@ -5,11 +5,12 @@ import { promptLabel } from '../input/input';
 import { ChaseCamera, type CamMode } from '../render/camera';
 import { Humanoid, type Held, type Palette } from '../render/humanoid';
 import { identityOf, lookOf } from '../render/outfit';
+import { HERO_LOOKS } from '../render/heroLooks';
 import { makeCarryModel } from '../render/props';
 import { PLAYER_COLORS } from '../render/palette';
 import { clamp, damp, dampAngle, lerp } from '../core/math';
 import type { Aabb } from '../world/layout';
-import { ENEMIES, gearDef, partDef, t } from '../data';
+import { ENEMIES, gearDef, partDef, t, type HeroId } from '../data';
 import { roadX } from '../world/terrain';
 import { steerTo, newSteerState } from './aiDrive';
 import { applyRepair, planRepair } from '../sim/repair';
@@ -21,15 +22,20 @@ import { BLEED, STAMINA, bind, bleedLabel, canSprint, jamChance, newBleed, newSt
 import { ammoForGun } from '../sim/ballistics';
 import { HANDLING, kickVelocity, spring, stepSpring, swayAt, type Handling, type Spring } from '../sim/handling';
 import type { ShellKind } from '../render/brass';
+import { GunBeam } from '../render/gunBeam';
+import { kitOf, lookKey, type GunKit } from '../sim/gunmods';
 import type { DriveInput } from '../physics/vehicle';
 import type { Ctx } from './ctx';
 import type { Pilot, Vehicle } from './vehicle';
 import type { Interactable } from './interact';
 import { carryModelKey, carrySlow, type Carried } from '../sim/carry';
+import { canRidePassenger } from '../sim/cabin';
 import { UTILITY_SLOT, damageTaken, effectiveGun, effectiveMelee, heldItem, statsOf, stepSel, type EffectiveGun, type GearItem, type HurtKind, type Loadout, type Resolved } from '../sim/gear';
 import type { MeleeStats } from '../data';
 import { OIL_LOW, pourOil } from '../sim/oil';
-import { wrenchCandidate } from './carwork';
+import { takeOutKey, takeOutPrompt, wrenchCandidate } from './carwork';
+import { goLine, panelCand, panelCandidate, placeFor, pointPos, toLocal } from './access';
+import { accessPointsOf } from '../render/accessPoints';
 import { COOLANT_LOW, WATER_CAN, WATER_RESERVE_MAX, pourWater } from '../sim/fluids';
 import { TANK_DREGS, addReserve, planDrain, reserveOf, takeReserve } from '../sim/fuel';
 import { dropCarry, guide, sitePos, haulCandidate, haulKey, haulPrompt, pryCandidate, returnCarry, stashBeforeEntering } from './hauling';
@@ -82,7 +88,7 @@ export interface Prompt {
 /** A second line under the prompt for the other thing a button can do. */
 export interface PromptAlt {
   text: string;
-  button: 'X';
+  button: 'X' | 'Y';
   ok: boolean;
 }
 
@@ -102,6 +108,8 @@ const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _v4 = new THREE.Vector3();
+const _v5 = new THREE.Vector3();
+const _v6 = new THREE.Vector3();
 const _camE = new THREE.Euler();
 
 export class Player implements Pilot {
@@ -114,6 +122,10 @@ export class Player implements Pilot {
   aimYaw = 0;
   aimPitch = 0;
   ads = 0;
+  /** Magnification of the view right now: 1 unless aiming through a scope. */
+  zoomNow = 1;
+  /** Laser dot and torch cone for the gun in hand, made when a light is first fitted. */
+  private beam: GunBeam | null = null;
   /** Aim-down-sights as a spring: it comes up with the weight of the gun and can overshoot a hair. */
   private adsS: Spring = spring();
   /** What the last shots threw at the view. Each channel is its own spring, so it snaps up fast and settles. */
@@ -140,6 +152,8 @@ export class Player implements Pilot {
   vehicle: Vehicle | null = null;
   ownVehicle: Vehicle | null = null;
   human: Humanoid;
+  /** How this person looks right now: their hero and what they wear. Seats in vehicles draw them from it too. */
+  palette: Palette;
   cam = new ChaseCamera();
   equip: Equip = 'gun';
   utility: Utility;
@@ -190,6 +204,10 @@ export class Player implements Pilot {
   viewFirst = false;
   /** Smoothed eye height above the feet, so crouching and swimming ease the first-person camera. */
   private eyeH = EYE_STAND;
+  /** How much taller (or shorter) this hero stands than the stock rig: their eyes are that much higher in first person. */
+  private get tall(): number {
+    return HERO_LOOKS[this.hero].scale;
+  }
   /** Free look while driving in first person: yaw and pitch offsets from the heading. */
   private driveLook: [number, number] = [0, 0];
   /** What the first-person camera hid for the owner's view, to put back after it draws. */
@@ -255,7 +273,9 @@ export class Player implements Pilot {
   ) {
     this.utility = ctx.campaign.players[index].utility;
     this.viewFirst = !!ctx.input.settings.firstPerson?.[index];
-    this.human = new Humanoid(this.outfit());
+    this.palette = this.outfit();
+    this.human = new Humanoid(this.palette);
+    this.eyeH = EYE_STAND * this.tall;
     ctx.root.add(this.human.root);
     this.body = ctx.P.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, 1, 0));
     this.collider = ctx.P.world.createCollider(
@@ -296,17 +316,23 @@ export class Player implements Pilot {
     else this.looseMag = v;
   }
 
+  /** Who this seat plays: Chinsky or Leo. */
+  get hero(): HeroId {
+    return this.ctx.campaign.players[this.index].hero;
+  }
+
   /** The palette for what is being worn right now. Anyone not in their own colours wears an armband in them. */
   private outfit(): Palette {
     const body = this.gear.worn.body;
     const own = !!body && !!gearDef(body.id).look?.tint;
-    return { ...identityOf(this.index), look: lookOf(this.gear.worn), band: own ? undefined : PLAYER_COLORS[this.index] };
+    return { ...identityOf(this.index), look: lookOf(this.gear.worn), band: own ? undefined : PLAYER_COLORS[this.index], hero: this.hero };
   }
 
   /** Call after the loadout changes: restat, change clothes, and re-read what is in hand. */
   refreshGear() {
     this.stats = statsOf(this.gear);
-    this.human.dress(this.outfit());
+    this.palette = this.outfit();
+    this.human.dress(this.palette);
     this.syncEquip();
   }
 
@@ -346,10 +372,25 @@ export class Player implements Pilot {
     return g.belt.find((b) => !!b && gearDef(b.id).kind === 'gun') ?? null;
   }
 
-  /** Its numbers with this person's gloves and goggles applied. With no gun at all, the starter pistol. */
-  gun(): EffectiveGun {
+  /** The gun in hand with its add-ons summed (zoom, kick, sway and the rest), cached until the gun or what is fitted changes. */
+  private kitCache: { key: string; kit: GunKit; hd: Handling } | null = null;
+  kit(): GunKit {
+    return this.kitState().kit;
+  }
+  private kitState() {
     const it = this.gunItem();
-    return effectiveGun(gearDef(it?.id ?? 'w_pistol').gun!, this.stats);
+    const key = `${it?.uid ?? ''}|${it?.id ?? ''}|${it?.att ? Object.values(it.att).join(',') : ''}`;
+    if (this.kitCache?.key === key) return this.kitCache;
+    const kit = kitOf(it);
+    const base = HANDLING[gearDef(it?.id ?? 'w_pistol').gun!.model];
+    // The stiffness of the aim spring is how fast the sights come up; the sway is the barrel's own wander.
+    const hd: Handling = kit.count ? { ...base, adsK: base.adsK * kit.aimSpeed * kit.aimSpeed, sway: base.sway * kit.sway } : base;
+    return (this.kitCache = { key, kit, hd });
+  }
+
+  /** Its numbers with this person's gloves and goggles and the fitted add-ons applied. With no gun at all, the starter pistol. */
+  gun(): EffectiveGun {
+    return effectiveGun(this.kitState().kit.gun, this.stats);
   }
 
   /** The melee weapon in hand, or null for bare hands. */
@@ -378,6 +419,11 @@ export class Player implements Pilot {
       default:
         return this.equip;
     }
+  }
+
+  /** The fitted add-ons of the gun in hand, as the key the model is drawn from. Empty for anything but a gun. */
+  private heldMods(): string {
+    return this.equip === 'gun' ? lookKey(this.gunItem()?.att) : '';
   }
 
   /** What is in hand, by name, for the HUD. */
@@ -557,7 +603,7 @@ export class Player implements Pilot {
       if (!v.driver) {
         const d1 = Math.min(...[1, -1].map((s) => Math.hypot(v.doorPos(s as 1 | -1)[0] - this.pos.x, v.doorPos(s as 1 | -1)[2] - this.pos.z)));
         if (!best || d1 < best.d) best = { v, seat: 'driver', d: d1 };
-      } else if (v.driver !== this && v.faction === 'convoy' && v.def.seats >= 2 && !v.passenger) {
+      } else if (v.driver !== this && v.faction === 'convoy' && v.def.seats >= 2 && !v.passenger && canRidePassenger(v.def, v.build?.fit ?? {}, v.weapon === 'bedMG')) {
         // Second seat: the gun post in a bed, or the passenger seat in a cab.
         const g = v.gunnerPos();
         const d2 = Math.hypot(g[0] - this.pos.x, g[2] - this.pos.z);
@@ -587,6 +633,8 @@ export class Player implements Pilot {
       return;
     }
     this.vehicle = v;
+    // The door you climbed through swings shut behind you.
+    if (v.build) v.setPanel(toLocal(v, this.enterFrom.x, this.enterFrom.y, this.enterFrom.z)[0] >= 0 ? 'doorL' : 'doorR', false);
     if (this.enterSeat === 'driver') {
       // Climbing into an abandoned car claims it for the convoy.
       if (v.faction === 'neutral') this.ctx.cars.claim(v, this);
@@ -595,9 +643,11 @@ export class Player implements Pilot {
       this.state = 'driving';
       v.setEngine(true);
       if (v.startFail) this.note(v.startFail + (v.startFail.startsWith('Engine seized') ? ': equip the wrench' : ''), 'warn');
+      if (v.stats.noSteer) this.note(t('car.noSteer'), 'warn');
+      else if (v.stats.noDriverSeat) this.note(t('car.noSeat'), 'warn');
       if (this.ctx.night > 0.45) v.lights = true;
     } else {
-      v.passenger = { index: this.index };
+      v.passenger = this;
       this.state = 'gunner';
     }
     this.equipGun();
@@ -978,7 +1028,7 @@ export class Player implements Pilot {
 
   currentSignature(): number {
     if (this.vehicle && (this.state === 'driving' || this.state === 'gunner')) return Math.round(this.vehicle.signature());
-    return this.footSignature() + (this.muzzleT > 0 ? 60 : 0);
+    return this.footSignature() + (this.muzzleT > 0 ? 60 * (this.equip === 'gun' ? this.kit().quiet : 1) : 0);
   }
 
   // ------------------------------------------------------------------ on foot
@@ -1192,7 +1242,9 @@ export class Player implements Pilot {
   }
 
   private updateAim(dt: number, it: PlayerIntent) {
-    const sens = lerp(2.9, 1.55, this.ads) * (it.device === 'keyboard' ? 0.9 : 1) * this.lookGain(it);
+    // A scope magnifies the view, so the same stick or mouse movement has to turn it less.
+    this.zoomNow = this.equip === 'gun' ? 1 + (this.kit().zoom - 1) * clamp(this.ads, 0, 1) : 1;
+    const sens = (lerp(2.9, 1.55, this.ads) * (it.device === 'keyboard' ? 0.9 : 1) * this.lookGain(it)) / this.zoomNow;
     const [pLo, pHi] = this.pitchRange();
     this.aimYaw -= it.look[0] * sens * dt;
     this.aimPitch = clamp(this.aimPitch + it.look[1] * sens * 0.7 * dt, pLo, pHi);
@@ -1211,7 +1263,7 @@ export class Player implements Pilot {
 
   /** Mouse look is slowed while aiming down sights. */
   private mouseScale() {
-    return lerp(1, 0.6, this.ads);
+    return lerp(1, 0.6, this.ads) / this.zoomNow;
   }
 
   /** Raycast from the camera through the reticle and find where the shot lands. */
@@ -1370,7 +1422,8 @@ export class Player implements Pilot {
       ammo: 'pistol',
       damage: 24,
       // Shooting off a bouncing seat is loose, and worse the faster the ride goes.
-      spread: 0.05 + Math.min(0.05, Math.abs(v.speed) * 0.003),
+      // A driver sitting on the floor of a seatless car shoots worse still.
+      spread: (0.05 + Math.min(0.05, Math.abs(v.speed) * 0.003)) * (this.state === 'driving' ? v.stats.seatSpread : 1),
       assist: it0(this.intent.aimAssist) * 0.8,
       noise: 60,
       range: 65,
@@ -1408,11 +1461,13 @@ export class Player implements Pilot {
     const spread =
       lerp(gun.spread, gun.adsSpread, Math.min(1, this.ads)) * (this.crouch ? 0.7 : 1) * (this.moveSpeed > 3 ? 1.6 : 1) * this.drugs.mods().spread * wearSpread(gi?.cond) * (this.stamina.winded ? 1.3 : 1);
     if (gi) gi.cond = wearBy(gi.cond, WEAR.shot);
+    const kit = this.kit();
     // A shotgun throws a handful of pellets from one shot. The first carries the noise and the aim assist.
     for (let n = 0; n < gun.pellets; n++) {
       ctx.combat.shoot(mx, my, mz, dx, dy, dz, {
         side: 'convoy',
         ammo: ammoForGun(gun.model),
+        vel: kit.vel !== 1 ? kit.vel : undefined,
         damage: gun.dmg,
         spread,
         pierce: gun.pierce || undefined,
@@ -1423,14 +1478,16 @@ export class Player implements Pilot {
         owner: this,
       });
     }
-    ctx.fx.flash(mx, my, mz, 0.9 + (gun.pellets > 1 ? 0.3 : 0));
-    ctx.audio.play(gun.sound, mx, mz, 0.8, { occluded: 0 });
-    const kick = Math.min(0.14, (gun.dmg * gun.pellets) / 700);
-    const hd = HANDLING[gun.model];
-    this.throwKick(hd);
+    ctx.fx.flash(mx, my, mz, (0.9 + (gun.pellets > 1 ? 0.3 : 0)) * kit.flash);
+    // A suppressed shot is quieter and duller to the ear as well as to the Signature grid.
+    ctx.audio.play(gun.sound, mx, mz, 0.8 * (0.3 + 0.7 * Math.min(1.2, kit.quiet)), { occluded: 0, muffle: kit.quiet < 0.95 ? clamp((1 - kit.quiet) * 1.1, 0, 0.95) : 0 });
+    this.human.flashK = kit.flash;
+    const kick = Math.min(0.14, (gun.dmg * gun.pellets) / 700) * kit.recoil;
+    const hd = this.handling();
+    this.throwKick(hd, kit.recoil);
     if (hd.eject === 'shot') this.ejectCase(hd.shell);
     else if (hd.eject === 'cycle') this.brassQ.push({ t: hd.cycleDelay, kind: hd.shell });
-    else this.spent++;
+    else if (hd.eject === 'reload') this.spent++;
     ctx.phantoms.onShot(this, a.ox, a.oy, a.oz, a.dx, a.dy, a.dz);
     this.cam.addShake(0.02 + kick * 0.6);
     ctx.input.rumble(this.index, 0.15 + kick * 2, 0.3, 50);
@@ -1440,7 +1497,7 @@ export class Player implements Pilot {
 
   /** How the gun in hand feels: the pistol's if there is none. */
   private handling(): Handling {
-    return HANDLING[gearDef(this.gunItem()?.id ?? 'w_pistol').gun!.model];
+    return this.kitState().hd;
   }
 
   /**
@@ -1472,6 +1529,9 @@ export class Player implements Pilot {
       const [sx, sy] = swayAt(hd, ctx.time, this.index * 3.7, this.moveSpeed, this.ads, this.crouch, this.stamina.winded);
       this.sway[0] = sx;
       this.sway[1] = sy;
+      // A laser needs to know where the barrel points: the aim ray, cast once a tick while it is lit.
+      const bm = this.kit().beam;
+      if (bm === 'laser' || bm === 'both') this.computeAim();
     } else {
       this.sway[0] = 0;
       this.sway[1] = 0;
@@ -1634,6 +1694,8 @@ export class Player implements Pilot {
     this.promptAlt = null;
     if (!cand) cand = haulCandidate(this);
     if (this.carry && wasPressed(it, Btn.X) && !this.action) haulKey(this);
+    // X with empty hands at an open boot takes the last thing stowed out again (with the wrench out, X is the workbench).
+    else if (!this.carry && this.equip !== 'wrench' && wasPressed(it, Btn.X) && !this.action) takeOutKey(this);
     // 3. Tools on vehicles: the wrench repairs, the crowbar strips, the jerrycan fills and siphons.
     if (!cand && !this.carry && this.equip === 'wrench') cand = wrenchCandidate(this, () => this.repairCandidate()) ?? this.repairCandidate();
     else if (!cand && !this.carry && this.equip === 'crowbar') cand = this.salvageCandidate() ?? pryCandidate(this);
@@ -1661,6 +1723,8 @@ export class Player implements Pilot {
       }
     }
 
+    // Bare hands, or a tool with nothing to do: the bonnet, door or boot in front of you opens and shuts with a short hold.
+    if (!cand && !this.carry) cand = panelCandidate(this, this.equip === 'wrench' || this.equip === 'crowbar' || this.equip === 'jerrycan');
     // Enter prompt when nothing else is going on and a vehicle is near.
     if (!cand) {
       const door = this.nearestDoor();
@@ -1701,6 +1765,11 @@ export class Player implements Pilot {
     }
     if (this.action) this.speedPenalty();
     if (this.carry) haulPrompt(this);
+    else {
+      takeOutPrompt(this);
+      // The panel prompt has the main slot; getting in is still Y.
+      if (cand?.kind === 'panel' && !this.promptAlt && this.nearestDoor()) this.promptAlt = { text: t('prompt.enter'), button: 'Y', ok: true };
+    }
     guide(this);
   }
 
@@ -1812,6 +1881,8 @@ export class Player implements Pilot {
       // A tank holding the other fuel can't be topped up: it has to come out first.
       if (own.convoyEngine && own.fuelType !== engineFuel && own.fuel >= TANK_DREGS) {
         const drain = planDrain(own.fuelType, own.fuel, engineFuel);
+        const fuelPlace = placeFor(this, own, 'fuel');
+        if (!fuelPlace.gate.ok) return { kind: 'drain', prompt: goLine(own, fuelPlace, 'drain the tank'), dur: 4, target: own, ok: false, label: 'drain', run: () => {} };
         return {
           kind: 'drain',
           prompt: drain.label,
@@ -1886,11 +1957,26 @@ export class Player implements Pilot {
           },
         };
       };
+      // The oil and the water go in at the engine bay (bonnet open), the fuel at the flap: where you stand picks the job.
+      const flap = placeFor(this, own, 'fuel');
+      const bay = placeFor(this, own, 'oil');
+      const bayJob = (c: Cand, verb: string): Cand => {
+        if (bay.gate.ok) return c;
+        const need = bay.gate.need;
+        if (need?.kind === 'open' && bay.at) return panelCand(this, own, need.panel, true, verb);
+        return { ...c, prompt: goLine(own, bay, verb), ok: false, run: () => {}, tick: undefined };
+      };
+      const dots = [...accessPointsOf(own.def).filter((q) => q.spot === 'flap' || q.spot === 'hood').map((q) => pointPos(own, q))];
+      ctx.work.focus(this.index, dots, null);
+      const atBay = !!bay.at && !flap.at;
       // What is running out comes first; then fuel; then the things that merely want a top-up.
-      if (oilUrgent) return topOil();
-      if (coolUrgent) return topWater();
-      if (!needsFuel && oilWanted) return topOil();
-      if (!needsFuel && coolWanted) return topWater();
+      if (atBay && (oilWanted || coolWanted) && !(flap.at && needsFuel)) return oilUrgent || (oilWanted && !coolUrgent && oil <= cool) ? bayJob(topOil(), 'top up the oil') : bayJob(topWater(), 'top up the radiator');
+      if (!flap.at || !needsFuel) {
+        if (oilUrgent) return bayJob(topOil(), 'top up the oil');
+        if (coolUrgent) return bayJob(topWater(), 'top up the radiator');
+        if (!needsFuel && oilWanted) return bayJob(topOil(), 'top up the oil');
+        if (!needsFuel && coolWanted) return bayJob(topWater(), 'top up the radiator');
+      }
       const c: Cand = {
         kind: 'refuel',
         prompt: space > 0.4 ? `${t('prompt.refuel')} (${engineFuel})` : 'Tank is full',
@@ -1909,6 +1995,7 @@ export class Player implements Pilot {
         },
       };
       if (space > 0.4 && stock <= 0.4) c.prompt = engineFuel === 'diesel' ? 'The convoy has no diesel: find some, or swap in a petrol engine' : 'Convoy reserve is empty';
+      if (c.ok && !flap.gate.ok) return { ...c, prompt: goLine(own, flap, 'refuel'), ok: false, run: () => {} };
       return c;
     }
     const donor = this.nearestVehicle(3.8, (q) => (q.faction === 'neutral' || q.wreck) && q.fuel > 0.4);
@@ -1931,12 +2018,14 @@ export class Player implements Pilot {
       };
     }
     const hot = donor.wreck && donor.burnT > 0;
+    // The hose goes in at the donor's fuel flap.
+    const donorFlap = placeFor(this, donor, 'fuel');
     return {
       kind: 'siphon',
-      prompt: hot ? 'Still burning: too hot to touch' : `Siphon the ${donor.fuelType} tank (${Math.min(5, donor.fuel).toFixed(1)} FU)`,
+      prompt: hot ? 'Still burning: too hot to touch' : !donorFlap.gate.ok ? goLine(donor, donorFlap, 'siphon the tank') : `Siphon the ${donor.fuelType} tank (${Math.min(5, donor.fuel).toFixed(1)} FU)`,
       dur: 3,
       target: donor,
-      ok: !hot,
+      ok: !hot && donorFlap.gate.ok,
       label: 'siphon',
       run: () => {
         const amt = Math.min(5, donor.fuel);
@@ -2231,6 +2320,8 @@ export class Player implements Pilot {
       eye,
       kick: { pitch: this.kick.pitch.x + this.sway[1], yaw: this.kick.yaw.x + this.sway[0], roll: this.kick.roll.x, back: this.kick.back.x },
     });
+    // Through a scope the view narrows: only on foot with a gun up, and back to normal the moment the sights come down.
+    this.ctx.R.setZoom?.(this.index, this.state === 'foot' && this.equip === 'gun' && !this.showcase ? this.zoomNow : 1);
     if (this.showcase) this.orbitShowcase(dt, target);
   }
 
@@ -2284,7 +2375,7 @@ export class Player implements Pilot {
       return e;
     }
     if (this.state !== 'foot') return e.set(target.x, target.y + 1.5, target.z);
-    const want = this.swimming ? EYE_SWIM : this.crouch ? EYE_CROUCH : EYE_STAND;
+    const want = (this.swimming ? EYE_SWIM : this.crouch ? EYE_CROUCH : EYE_STAND) * this.tall;
     this.eyeH = damp(this.eyeH, want, 14, dt);
     // A hair forward of the neck so the near plane stays clear of the shoulders.
     return e.set(target.x + Math.sin(this.aimYaw) * 0.08, target.y + this.eyeH, target.z + Math.cos(this.aimYaw) * 0.08);
@@ -2328,7 +2419,8 @@ export class Player implements Pilot {
     h.root.rotation.y = this.yaw;
     let aim = this.equip === 'gun' ? clamp(this.ads + (this.muzzleT > 0 ? 0.7 : 0), 0, 1) : 0;
     const weapon = this.heldModel();
-    h.setWeapon(lying || this.carry ? 'none' : weapon);
+    h.setWeapon(lying || this.carry ? 'none' : weapon, this.heldMods());
+    this.syncBeam(lying || !!this.carry);
     h.swing = this.swingT;
     h.gunSway[0] = this.sway[0];
     h.gunSway[1] = this.sway[1];
@@ -2340,6 +2432,22 @@ export class Player implements Pilot {
     h.update(dt, lying ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch, this.airVis);
     h.muzzle(this.muzzleT > 0.05);
     if (this.invuln > 0) h.root.visible = Math.floor(this.invuln * 12) % 2 === 0;
+  }
+
+  /** The laser dot and torch cone of a light on the gun in hand, shown only while the gun is up and the person is on their feet. */
+  private syncBeam(hidden: boolean) {
+    const bm = this.equip === 'gun' && !hidden && this.state === 'foot' ? this.kit().beam : null;
+    if (!bm) return void this.beam?.hide();
+    const b = (this.beam ??= new GunBeam(this.ctx.root));
+    const [mx, my, mz] = this.muzzlePos();
+    const from = _v5.set(mx, my, mz);
+    if (bm === 'laser' || bm === 'both') b.laser(true, from, this.aimPoint);
+    else b.laser(false);
+    if (bm === 'torch' || bm === 'both') {
+      const dir = _v6.copy(this.aimPoint).sub(from);
+      if (dir.lengthSq() < 4) dir.set(Math.sin(this.aimYaw), 0, Math.cos(this.aimYaw));
+      b.torch(true, from, dir.normalize(), 0.12 + 0.88 * this.ctx.night, this.aimPoint);
+    } else b.torch(false);
   }
 
   private carryKey = '';
@@ -2360,6 +2468,7 @@ export class Player implements Pilot {
     this.ctx.P.world.removeCharacterController(this.kcc);
     this.human.root.removeFromParent();
     this.human.dispose();
+    this.beam?.dispose();
   }
 }
 

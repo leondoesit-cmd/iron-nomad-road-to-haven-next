@@ -9,7 +9,7 @@ import { clamp, clamp01 } from '../core/math';
  * drop and wind drift, fast enough that anything inside a street is still near-instant.
  */
 
-export type AmmoKind = 'pistol' | 'magnum' | 'smg' | 'pellet' | 'rifle' | 'sniper' | 'turret' | 'raider';
+export type AmmoKind = 'pistol' | 'magnum' | 'smg' | 'pellet' | 'rifle' | 'sniper' | 'turret' | 'raider' | 'carbine' | 'battle' | 'lever' | 'bolt';
 
 export interface AmmoSpec {
   /** Muzzle velocity, m/s. */
@@ -37,6 +37,14 @@ export const AMMO: Record<AmmoKind, AmmoSpec> = {
   sniper: { speed: 540, drag: 0.0005, mass: 0.0097, pen: 0.95, gore: 1.1, zero: 90, hole: 0.18 },
   turret: { speed: 480, drag: 0.0007, mass: 0.0095, pen: 0.6, gore: 1.1, zero: 70, hole: 0.21 },
   raider: { speed: 260, drag: 0.0023, mass: 0.0085, pen: 0.3, gore: 0, zero: 45, hole: 0.09 },
+  // Intermediate rifle round (assault rifle, carbine, LMG): fast and light, a little less than a full rifle round.
+  carbine: { speed: 500, drag: 0.00065, mass: 0.004, pen: 0.85, gore: 1.2, zero: 90, hole: 0.12 },
+  // Full-power rifle round for the battle rifle and marksman rifle.
+  battle: { speed: 510, drag: 0.00058, mass: 0.0095, pen: 1.1, gore: 1.5, zero: 100, hole: 0.15 },
+  // A rifle in a pistol-class cartridge: slower than a rifle round, harder than a pistol.
+  lever: { speed: 380, drag: 0.0011, mass: 0.0105, pen: 0.62, gore: 1.0, zero: 70, hole: 0.13 },
+  // A crossbow bolt: slow and heavy, so it drops and takes real flight time, and it goes through a body.
+  bolt: { speed: 150, drag: 0.0016, mass: 0.03, pen: 0.55, gore: 1.2, zero: 45, hole: 0.1 },
 };
 
 /** The round a gun model fires. */
@@ -51,6 +59,27 @@ export function ammoForGun(model: string): AmmoKind {
       return 'pellet';
     case 'rifle':
       return 'rifle';
+    case 'cannon':
+      return 'magnum';
+    case 'mp':
+    case 'smg2':
+      return 'smg';
+    case 'combat':
+    case 'coach':
+      return 'pellet';
+    case 'carbine':
+    case 'ar':
+    case 'lmg':
+      return 'carbine';
+    case 'br':
+    case 'dmr':
+      return 'battle';
+    case 'sniper':
+      return 'sniper';
+    case 'lever':
+      return 'lever';
+    case 'crossbow':
+      return 'bolt';
     default:
       return 'pistol';
   }

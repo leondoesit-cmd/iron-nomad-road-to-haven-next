@@ -188,7 +188,7 @@ describe('wasteland interiors', () => {
     expect(L.zones.length).toBeGreaterThanOrEqual(5);
     const containers = L.zones.flatMap((z) => z.containers);
     expect(containers.length).toBeGreaterThanOrEqual(15);
-    for (const c of containers) expect(Object.keys(c.loot).length).toBeGreaterThan(0);
+    for (const c of containers) expect(c.items.length + Object.keys(c.drugs ?? {}).length + (c.guns ? 1 : 0)).toBeGreaterThan(0);
     expect(new Set(containers.map((c) => c.label)).size).toBeGreaterThanOrEqual(4);
   });
   it('the dead wait inside some of them', () => {

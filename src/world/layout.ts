@@ -1,15 +1,16 @@
-import { legById, partDef, type LegDef, type SetPiece, type Stocks, type ZombieKind } from '../data';
-import { rollPartSpec } from '../sim/parts';
+import { legById, type LegDef, type SetPiece, type ZombieKind } from '../data';
 import type { DrugId } from '../sim/drugs';
-import { OIL_CAN } from '../sim/oil';
+import { HOST_PROPS, pickupOf, rollItem, rollLoot, specFoot, type ItemSize, type LootContext, type LootSpec, type LootTag } from '../sim/loot';
+import type { CarGrade } from '../sim/cars';
 import { Rng, hash2 } from '../core/rng';
 import { makeTerrainDef, roadX, heightAt, roadSlope, keepOutZ, waterAt, type Site, type TerrainDef } from './terrain';
-import { buildRoadside, buildSite, type RuralBuilding, type SiteContent } from './settlements';
+import { SiteBuilder, buildRoadside, buildSite, type RuralBuilding, type SiteContent } from './settlements';
 import { isLakeSite, lakeAt } from './lakes';
 import { delveName, delveSiteKind, type DelveSite } from './delveSites';
 import { planById } from './plans';
 import { districtAt, nearestRoad, type District } from './openWorld';
 import type { BuildingRole, CityPlan, Facing, LandmarkKind, PlannedPlace, PlannedStreet } from './cityPlan';
+import type { Look } from './interiors';
 
 export type AabbKind = 'building' | 'wall' | 'car' | 'rock' | 'barricade' | 'crate' | 'pillar' | 'tower' | 'partition' | 'furniture' | 'stair' | 'floor' | 'dock';
 
@@ -127,7 +128,22 @@ export interface SignSpawn {
   theme: SignTheme;
 }
 
-export type PickupKind = 'fuel' | 'oil' | 'scrap' | 'parts' | 'tech' | 'rations' | 'medicine' | 'ammo' | 'fragment' | 'chassis' | 'part' | 'paint' | 'water';
+/**
+ * What a loose thing in the world is. Every kind is a specific, named object: there is no loose Scrap, Tech or "Parts" to
+ * find (see `world/loot.ts`). `chassis` and `fragment` are the two story items, a bare frame and a radio board.
+ */
+export type PickupKind = 'fuel' | 'oil' | 'rations' | 'medicine' | 'medkit' | 'bandage' | 'ammo' | 'fragment' | 'chassis' | 'part' | 'paint' | 'water' | 'gear';
+
+/** What lets a loose thing lie where it does: the furniture it is on, or the thing it is beside. */
+export interface PickupHost {
+  /** A furniture kind ('workbench', 'shelf', 'rack', 'enginestand'...), a prop kind ('pump', 'tires', 'container'...), 'car', 'building', 'tarp'... */
+  kind: string;
+  /** `on`: lying on a surface of the host (inside a building, on its furniture). `beside`: on the ground within a few metres of it. */
+  mode: 'on' | 'beside';
+  /** The context the item was generated from (`LootContext`), for tests and for tuning. */
+  context?: string;
+}
+
 export interface PickupSpawn {
   id: string;
   kind: PickupKind;
@@ -138,9 +154,16 @@ export interface PickupSpawn {
   fuel?: 'petrol' | 'diesel';
   /** For kind 'paint': the colour in the can (`amount` holds the sprays left). Only ever put down by a player or found in a trunk. */
   color?: number;
+  /** For kind 'gear': a gun (or add-on) on display, the `index`th of `rollGunLoot(context, seed, depth)`. It lies belly down on its rack or counter; taking it is remembered under this pickup's id. */
+  gun?: { context: import('../sim/loot').GunStash['context']; seed: number; depth: 0 | 1 | 2; index: number };
   x: number;
   y: number;
   z: number;
+  /** How it lies: a fixed heading and a natural tilt (a radiator leaned on a wall). It never moves or turns after that. Missing means a heading hashed from the id. */
+  yaw?: number;
+  tilt?: [number, number];
+  /** Why it is here. Every item the world generates has one; items a player puts down do not. */
+  host?: PickupHost;
 }
 
 /** A car standing in the world. Its chassis and condition come from its seed unless forced. */
@@ -153,6 +176,10 @@ export interface CarSpawn {
   seed: number;
   chassis?: string;
   status?: 'hulk' | 'rough' | 'intact';
+  /** What the car's condition is rolled from (`sim/cars.ts`): where it stands says what shape it is in. Missing means an ordinary roadside car. */
+  grade?: import('../sim/cars').CarGrade;
+  /** How far from the start of the map, 0 to 1: better kit stays on cars the further out they are. */
+  reach?: number;
   /** Marker for the roadside Encounter car. */
   tag?: number;
 }
@@ -170,7 +197,10 @@ export interface ScavContainer {
   x: number;
   z: number;
   depth: 0 | 1 | 2;
-  loot: Partial<Stocks>;
+  /** The named things inside (`world/loot.ts`). Searching hands them over; nothing abstract. */
+  items: import('../sim/loot').LootSpec[];
+  /** Guns in it, rolled from `rollGunLoot` when it is searched. */
+  guns?: import('../sim/loot').GunStash;
   /** Drugs among the loot. Rolled apart from everything else, so adding one never reshuffles a map. */
   drugs?: Partial<Record<DrugId, number>>;
   taken: boolean;
@@ -182,7 +212,7 @@ export interface ScavContainer {
 
 export interface ScavZone {
   id: string;
-  kind: 'pharmacy' | 'depot' | 'parking' | 'hospital' | 'house' | 'store' | 'motel' | 'barn' | 'warehouse' | 'shack';
+  kind: 'pharmacy' | 'depot' | 'parking' | 'hospital' | 'house' | 'store' | 'motel' | 'barn' | 'warehouse' | 'shack' | 'garage' | 'dealership' | 'tyreshop' | 'police';
   x: number;
   z: number;
   w: number;
@@ -361,12 +391,15 @@ export class LegLayoutImpl implements LegLayout {
   campSpots: { x: number; z: number }[] = [];
   private lotGrid = new Map<number, Lot[]>();
   private rng: Rng;
+  /** What lies where gets its own stream: tuning the loot never shifts a street. */
+  private lootRng: Rng;
   private pid = 0;
 
   constructor(leg: LegDef) {
     this.leg = leg;
     this.terrain = makeTerrainDef(leg);
     this.rng = new Rng(leg.seed * 7919 + 13);
+    this.lootRng = new Rng((leg.seed ^ 0x100f77) >>> 0);
     if (leg.open) {
       this.buildOpen();
       return;
@@ -384,7 +417,6 @@ export class LegLayoutImpl implements LegLayout {
     ];
     if (leg.biome === 'city') {
       this.cityAmbient();
-      this.roadsideKit();
       this.buildMetro();
       if (this.plan?.vernacular === 'israeli') this.shopSigns();
     } else {
@@ -392,7 +424,6 @@ export class LegLayoutImpl implements LegLayout {
       const n0 = [this.props.length, this.pickups.length, this.aabbs.length];
       this.wastelandAmbient();
       this.roadsideJams();
-      this.roadsideKit();
       // The scatter of rocks and trees stays out of the settlements.
       const inSite = (x: number, z: number) => this.terrain.sites.some((s) => s.radius > 0 && Math.hypot(x - s.x, z - s.z) < s.radius * 0.95);
       this.props = this.props.filter((p, i) => i < n0[0] || !inSite(p.x, p.z));
@@ -404,7 +435,12 @@ export class LegLayoutImpl implements LegLayout {
     }
     // Later passes (parked cars, rocks) may overlap earlier spawns: nothing spawns inside an obstacle.
     this.zombies = this.zombies.filter((z) => !this.blockedAt(z.x, z.z, 0.3));
-    this.pickups = this.pickups.filter((p) => !this.blockedAt(p.x, p.z, 0.2) || p.kind === 'fragment' || p.kind === 'chassis');
+    this.pickups = this.pickups.filter((p) => this.pickupOk(p));
+  }
+
+  /** A loose thing may lie on a surface inside a building (it is on furniture, which is a collider), or in clear ground; the two story items stand where they were put. */
+  private pickupOk(p: PickupSpawn) {
+    return p.host?.mode === 'on' || p.kind === 'fragment' || p.kind === 'chassis' || !this.blockedAt(p.x, p.z, 0.2);
   }
 
   // ---------------------------------------------------------------- the open world
@@ -430,7 +466,6 @@ export class LegLayoutImpl implements LegLayout {
     this.wastelandAmbient();
     this.openAmbient();
     this.roadsideJams();
-    this.roadsideKit();
     this.sideRoadKit();
     const inSite = (x: number, z: number) => T.sites.some((s) => s.radius > 0 && Math.hypot(x - s.x, z - s.z) < s.radius * 0.95);
     this.props = this.props.filter((p, i) => i < n0[0] || !inSite(p.x, p.z));
@@ -449,7 +484,7 @@ export class LegLayoutImpl implements LegLayout {
     this.mines = this.mines.filter((m) => outside(m.x, m.z));
     for (const d of o.districts) this.absorbDistrict(d);
     this.zombies = this.zombies.filter((z) => !this.blockedAt(z.x, z.z, 0.3));
-    this.pickups = this.pickups.filter((p) => !this.blockedAt(p.x, p.z, 0.2) || p.kind === 'fragment' || p.kind === 'chassis');
+    this.pickups = this.pickups.filter((p) => this.pickupOk(p));
   }
 
   /** Builds a district's city leg on its own, slides it north to its place, and merges it into this layout. */
@@ -472,6 +507,7 @@ export class LegLayoutImpl implements LegLayout {
     this.props.push(...sub.props);
     this.signs.push(...sub.signs);
     this.cars.push(...sub.cars);
+    this.rural.push(...sub.rural);
     this.zombies.push(...sub.zombies);
     this.aabbs.push(...sub.aabbs);
     this.delves.push(...sub.delves);
@@ -502,6 +538,11 @@ export class LegLayoutImpl implements LegLayout {
       z.z += dz;
       for (const c of z.containers) c.z += dz;
     }
+    // City buildings: the plan, its colliders (already in `aabbs`), the loose things on its furniture and its floor.
+    for (const b of this.rural) {
+      once(b.aabb, (a) => this.shiftAabb(a, dz));
+      once(b.plan, (pl) => this.shiftPlan(pl as RuralBuilding['plan'], dz));
+    }
     for (const a of this.ambushes) a.z += dz;
     for (const e of this.encounters) e.z += dz;
     for (const t of this.tips) t.z += dz;
@@ -525,31 +566,24 @@ export class LegLayoutImpl implements LegLayout {
     if (a.ramp) a.ramp.z += dz;
   }
 
-  // ---------------------------------------------------------------- roadside kit
-
-  /**
-   * Oil cans and the odd dropped car part along the road, so a convoy that keeps moving can keep its engines
-   * topped up and its cars improving. Its own random stream: adding or tuning these never shifts the rest of the leg.
-   */
-  private roadsideKit() {
-    const rng = new Rng(this.leg.seed ^ 0x0e11);
-    const city = this.leg.biome === 'city';
-    const T = this.terrain;
-    for (let z = 90; z < this.leg.length; z += rng.range(95, 160)) {
-      const rx = roadX(T, z);
-      const side = rng.sign();
-      const dist = city ? rng.range(8, 11) : rng.range(7, 30);
-      if (rng.chance(0.55)) {
-        const x = rx + side * dist;
-        this.pickups.push({ id: this.id('ro'), kind: 'oil', amount: OIL_CAN, x, z, y: city ? 0 : heightAt(T, x, z) });
-      }
-      if (rng.chance(0.18)) {
-        const x = rx - side * rng.range(city ? 8 : 8, city ? 11 : 26);
-        const zz = z + rng.range(-12, 12);
-        const spec = rollPartSpec(rng, { minMk: 1, maxMk: rng.chance(0.2) ? 2 : 1 });
-        this.pickups.push({ id: this.id('rp'), kind: 'part', amount: partDef(spec.id).mk, part: spec, x, z: zz, y: city ? 0 : heightAt(T, x, zz) });
-      }
+  /** Slide a building plan north by dz: walls, rooms, furniture, stairs, wells, debris, the loose items and the car bays. */
+  private shiftPlan(pl: RuralBuilding['plan'], dz: number) {
+    pl.z0 += dz;
+    pl.z1 += dz;
+    for (const w of pl.walls) {
+      if (w.axis === 'x') w.c += dz;
+      else (w.a += dz), (w.b += dz);
+      if (w.axis === 'z') for (const op of w.ops) (op.a += dz), (op.b += dz);
     }
+    for (const r of pl.rooms) (r.z0 += dz), (r.z1 += dz);
+    for (const f of pl.furn) f.z += dz;
+    for (const st of pl.stairs) st.z += dz;
+    for (const q of pl.wells) (q.z0 += dz), (q.z1 += dz);
+    for (const q of pl.debris) q.z += dz;
+    for (const l of pl.lairs) l.z += dz;
+    for (const it of pl.items) it.z += dz;
+    for (const g of pl.guns) g.z += dz;
+    for (const bay of pl.bays) bay.z += dz;
   }
 
   // ---------------------------------------------------------------- city grid
@@ -779,7 +813,6 @@ export class LegLayoutImpl implements LegLayout {
   private dressLandmarks(plan: CityPlan) {
     const rng = new Rng(this.leg.seed ^ 0x7e11);
     const faceYaw = (dx: number, dz: number) => Math.atan2(dx, dz);
-    const ground = (id: string, kind: PickupKind, amount: number, x: number, z: number) => this.pickups.push({ id: this.id(id), kind, amount, x, z, y: 0 });
     const depthZ = (l: Lot) => l.z1 - l.z0;
     const lamp = (x: number, z: number, towardX: number) => this.plainProp('streetlight', x, z, x < towardX ? 0 : Math.PI, 1, 1 + this.props.length);
     let cluster = 6100;
@@ -833,11 +866,10 @@ export class LegLayoutImpl implements LegLayout {
             lamp(xAt(depth - 1.4), cz + dz, cx);
           }
           for (let i = 0; i < 3; i++) this.plainProp('rubble', xAt(rng.range(4, depth - 4)), cz + rng.range(-24, 24), rng.range(0, 6), 1, rng.int(0, 99));
-          ground('sq', 'scrap', 12, fx + 4.2, cz - 2.5);
-          ground('sq', 'scrap', 9, fx - 4.5, cz + 3.5);
-          ground('sq', 'rations', 1, xAt(20), cz + 6);
-          ground('sq', 'medicine', 1, xAt(24), cz - 7);
-          ground('sq', 'fuel', 5, xAt(depth - 4), lot.z0 + 5);
+          // What was left on the benches: a tin of food and a bottle of pills, each beside the bench it was put down by.
+          const benches = this.props.filter((q) => q.kind === 'bench' && Math.hypot(q.x - fx, q.z - cz) < 8);
+          if (benches[0]) this.besideProp(benches[0], 'house', { only: ['food'] });
+          if (benches[2]) this.besideProp(benches[2], 'house', { only: ['med'] });
           // The square is where everyone went, and some of them are still there.
           pushZombies(this, rng, fx, cz, 9, ['walker', 'walker', 'walker', 'runner'], 11, true, cluster++);
           pushZombies(this, rng, xAt(26), cz, 1, ['brute'], 2, true, cluster++);
@@ -853,7 +885,6 @@ export class LegLayoutImpl implements LegLayout {
           }
           this.plainProp('bench', xAt(2.6), cz + 6, faceYaw(out, 0), 1, 1);
           this.plainProp('bench', xAt(2.6), cz - 6, faceYaw(out, 0), 1, 2);
-          ground('sy', 'oil', OIL_CAN, xAt(4), lot.z0 + 3);
           break;
         }
         case 'cityHall': {
@@ -873,9 +904,9 @@ export class LegLayoutImpl implements LegLayout {
           }
           lamp(lot.x1 - 1.4, lot.z0 + 14, lx);
           lamp(lot.x1 - 1.4, lot.z1 - 3, lx);
-          ground('ch', 'tech', 2, lx + 2, lot.z0 + 40);
-          ground('ch', 'scrap', 14, lx + 3, lot.z0 + 22);
-          ground('ch', 'medicine', 1, lx + 1.5, lot.z0 + 30);
+          // The staff's own cars: what their owners had out when it started, beside them.
+          const cars = this.cars.filter((c) => c.x > lx && c.x < lot.x1 && c.z > lot.z0 && c.z < lot.z1);
+          this.lootRng.shuffle(cars).slice(0, 4).forEach((c, i) => this.besideCar(c, 1, i === 0 ? 'trunk' : 'wreck', i === 0 ? { only: ['med', 'food'] } : {}));
           // The staff who never went home.
           pushZombies(this, rng, lx + 6, lot.z0 + 38, 6, ['walker', 'walker', 'runner'], 8, true, cluster++);
           pushZombies(this, rng, lx + 3, lot.z0 + 50, 1, ['screamer'], 2, true, cluster++);
@@ -898,10 +929,8 @@ export class LegLayoutImpl implements LegLayout {
           // Signs: the hall's name along its roof line, and one on the glass tower beside it.
           this.signs.push({ x: xAt(hallFront) - out * 0.2, y: 13.9, z: cz, yaw: faceYaw(-out, 0), w: 26, h: 3.2, text: 'תחנה מרכזית פתח תקווה', sub: 'PETAH TIKVA CENTRAL BUS STATION', theme: 'bus' });
           this.signs.push({ x: xAt(hallFront) - out * 0.2, y: 3.5, z: cz, yaw: faceYaw(-out, 0), w: 12, h: 0.9, text: 'כרטיסים · יציאות', sub: 'TICKETS · DEPARTURES', theme: 'bus' });
-          ground('bs', 'scrap', 10, xAt(7), lot.z0 + 30);
-          ground('bs', 'rations', 2, xAt(10.5), lot.z0 + 52);
-          ground('bs', 'tech', 1, xAt(11), lot.z0 + 88);
-          ground('bs', 'medicine', 1, xAt(9), lot.z0 + 70);
+          // Left luggage: what the waiting passengers set down, beside the buses and the shelters.
+          for (const bus of this.props.filter((q) => q.kind === 'bus' && q.z > lot.z0 && q.z < lot.z1).slice(0, 4)) this.besideProp(bus, 'trunk', { only: ['food', 'med', 'water'] });
           pushZombies(this, rng, xAt(8), cz - 18, 9, ['walker', 'walker', 'walker', 'runner'], 12, true, cluster++);
           pushZombies(this, rng, xAt(8), cz + 22, 5, ['walker', 'runner'], 9, true, cluster++);
           pushZombies(this, rng, xAt(20), cz, 1, ['brute'], 3, true, cluster++);
@@ -916,11 +945,10 @@ export class LegLayoutImpl implements LegLayout {
           }
           this.signs.push({ x: lot.x0 - 0.2, y: 8.6, z: cz, yaw: faceYaw(-out, 0), w: 26, h: 3.4, text: 'אצטדיון המושבה', sub: 'HAMOSHAVA STADIUM', theme: 'stadium' });
           // The gate on the forecourt side: a ticket kiosk and some turnstile-shaped debris, and the supporters who never left.
-          ground('st', 'scrap', 16, lot.x0 + 3, lot.z0 + 40);
-          ground('st', 'fuel', 5, lot.x0 + 45, cz + 10);
-          ground('st', 'rations', 2, lot.x0 + 40, cz - 8);
-          ground('st', 'medicine', 1, lot.x0 + 52, cz + 18);
-          ground('st', 'ammo', 12, lot.x0 + 36, cz - 20);
+          // The groundsmen's stores at the floodlight masts: fuel and oil for the generators, a tin of food.
+          for (const mast of this.props.filter((q) => q.kind === 'floodlight' && q.z > lot.z0 && q.z < lot.z1).slice(0, 3)) this.besideProp(mast, 'garage', { only: ['fuel', 'oil'] });
+          const mast0 = this.props.find((q) => q.kind === 'floodlight' && q.z > lot.z0 && q.z < lot.z1);
+          if (mast0) this.besideProp(mast0, 'house', { only: ['food', 'ammo'] });
           pushZombies(this, rng, lot.x0 + 45, cz, 12, ['walker', 'walker', 'walker', 'runner'], 22, true, cluster++);
           pushZombies(this, rng, lot.x0 + 45, cz - 30, 2, ['brute'], 6, true, cluster++);
           pushZombies(this, rng, lot.x0 + 45, cz + 34, 1, ['screamer'], 3, true, cluster++);
@@ -938,8 +966,8 @@ export class LegLayoutImpl implements LegLayout {
         this.plainProp('cafeChair', out * 7.85, cz + dz + 0.1, Math.PI / 2, 1, 1 + Math.round(dz));
         this.plainProp('cafeChair', out * 9.65, cz + dz - 0.1, -Math.PI / 2, 1, 2 + Math.round(dz));
       }
-      ground('sh', 'rations', 2, out * 9.1, cz - 2.5);
-      ground('sh', 'rations', 1, out * 9.1, cz + 3);
+      // Something to eat, left on the tables outside.
+      for (const t of this.props.filter((q) => q.kind === 'cafeTable' && q.x === out * 8.75 && Math.abs(q.z - cz) < 7).slice(0, 2)) this.besideProp(t, 'kitchen', { only: ['food'] });
     }
   }
 
@@ -995,6 +1023,51 @@ export class LegLayoutImpl implements LegLayout {
     return `${this.leg.id}:${prefix}${this.pid++}`;
   }
 
+  /** How far from the start of the map a point is, 0 to 1: better kit lies further out. */
+  private reachAt(x: number, z: number) {
+    return Math.min(1, Math.hypot(x, z - 12) / 3600);
+  }
+
+  /** A named thing set on the ground at (x, z), at a fixed heading, because of a host. */
+  private putAt(spec: LootSpec, x: number, z: number, host: PickupSpawn['host'], o: { y?: number; yaw?: number; tilt?: [number, number] } = {}) {
+    const k = pickupOf(spec);
+    if (!k) return;
+    const y = o.y ?? (this.leg.biome === 'city' && !this.leg.open ? 0 : heightAt(this.terrain, x, z));
+    this.pickups.push({ id: this.id('lp'), ...k, x, z, y, yaw: o.yaw ?? hash2(Math.round(x * 10), Math.round(z * 10), this.leg.seed) * Math.PI * 2, tilt: o.tilt, host });
+  }
+
+  /**
+   * A thing from `context` lying on the ground just beside a host (a car, a bench, a bus, a drum): a metre or two from its
+   * edge, on clear ground. Nothing in this world lies in open ground by itself. False if there was no room.
+   */
+  besideAt(hostKind: string, hx: number, hz: number, hr: number, context: LootContext, o: { only?: LootTag[]; cap?: ItemSize; progress?: number } = {}): boolean {
+    const spec = rollItem(context, this.lootRng, { progress: o.progress ?? this.reachAt(hx, hz), only: o.only, cap: o.cap });
+    if (!spec) return false;
+    const foot = specFoot(spec);
+    const half = Math.max(foot.w, foot.d) / 2 + 0.1;
+    for (let t = 0; t < 12; t++) {
+      const a = this.lootRng.range(0, Math.PI * 2);
+      const r = hr + half + this.lootRng.range(0.25, 1.4);
+      const x = hx + Math.cos(a) * r;
+      const z = hz + Math.sin(a) * r;
+      if (this.blockedAt(x, z, half)) continue;
+      this.putAt(spec, x, z, { kind: hostKind, mode: 'beside', context });
+      return true;
+    }
+    return false;
+  }
+
+  /** A thing beside a car (maybe: `chance`), for a part or a can that its last owner had out. */
+  private besideCar(car: CarSpawn, chance: number, context: LootContext = 'wreck', o: { only?: LootTag[] } = {}) {
+    if (!this.lootRng.chance(chance)) return;
+    this.besideAt('car', car.x, car.z, 1.6, context, o);
+  }
+
+  /** A thing beside a prop already placed: its kind says what hosts it. */
+  private besideProp(p: PropSpawn, context: LootContext, o: { only?: LootTag[]; progress?: number } = {}) {
+    return this.besideAt(p.kind, p.x, p.z, (HOST_PROPS[p.kind] ?? 1) * p.scale, context, o);
+  }
+
   // ---------------------------------------------------------------- authored set pieces
 
   private place(s: SetPiece) {
@@ -1007,42 +1080,47 @@ export class LegLayoutImpl implements LegLayout {
         this.tips.push({ id: this.id('tip'), tip: String(s.id), z: s.at });
         break;
       case 'fuelCache': {
+        // A stash by a dead car: drums at its tail and the cans stood beside them and beside the car.
         const n = (s.count as number) ?? 2;
-        for (let i = 0; i < n; i++) {
-          const z = s.at + i * 14 + rng.range(-5, 5);
-          const side = rng.sign();
-          const x = rxAt(z) + side * rng.range(city ? 8 : 6, city ? 12 : 14);
-          this.pickups.push({ id: this.id('f'), kind: 'fuel', amount: 5, x, z, y: heightAt(T, x, z) });
-        }
         const wx = rxAt(s.at) + rng.sign() * 9;
-        this.addCar(wx, s.at, rng.range(0, 6), rng.int(0, 9999));
+        const car = this.addCar(wx, s.at, rng.range(0, 6), rng.int(0, 9999), { grade: 'donor' });
+        // The drums stand on the far side of the car from the road.
+        const out = Math.sign(wx - rxAt(s.at)) || 1;
+        const dx = wx + out * 4.5;
+        const dy = heightAt(T, dx, s.at - 5);
+        const drum = { kind: 'barrel' as const, x: dx, y: dy, z: s.at - 5, yaw: 0, scale: 1, seed: 3 };
+        this.props.push(drum, { ...drum, x: dx + out * 0.9, z: s.at - 4.6, seed: 5 });
+        this.aabbs.push({ id: newAabbId(), minX: Math.min(dx, dx + out * 0.9) - 0.4, maxX: Math.max(dx, dx + out * 0.9) + 0.4, minZ: s.at - 5.4, maxZ: s.at - 4.2, y0: dy - 0.5, y1: dy + 1, kind: 'crate', hp: 9999 });
+        for (let i = 0; i < n; i++) {
+          if (i % 2) this.besideAt('car', car.x, car.z, 1.6, 'cache', { only: ['fuel'] });
+          else this.besideAt('barrel', dx + out * 0.45, s.at - 4.8, 1.3, 'cache', { only: ['fuel'] });
+        }
         break;
       }
       case 'scrapPile': {
+        // A tyre dump by the road: stacks of old tyres, and a good one or a can of oil beside them.
         const n = (s.count as number) ?? 3;
         for (let i = 0; i < n; i++) {
           const z = s.at + i * 18 + rng.range(-8, 8);
           const x = rxAt(z) + rng.sign() * rng.range(9, 28);
           const y = heightAt(T, x, z);
-          this.pickups.push({ id: this.id('s'), kind: 'scrap', amount: rng.int(14, 22), x, z, y });
-          this.props.push({ kind: 'tires', x: x + 1.2, y, z: z + 0.8, yaw: rng.range(0, 6), scale: 1, seed: rng.int(0, 9999) });
+          const pile: PropSpawn = { kind: 'tires', x, y, z, yaw: rng.range(0, 6), scale: 1.2, seed: rng.int(0, 9999) };
+          this.props.push(pile, { kind: 'tires', x: x + 1.9, y: heightAt(T, x + 1.9, z + 1.1), z: z + 1.1, yaw: rng.range(0, 6), scale: 1, seed: rng.int(0, 9999) });
+          this.besideProp(pile, 'garage', { only: ['tyre', 'oil'] });
+          if (rng.chance(0.4)) this.besideProp(pile, 'garage', { only: ['tyre'] });
         }
         break;
       }
       case 'partsWreck': {
+        // A pile-up of cars somebody has been through, most of them donors with their good kit still on, a part beside each.
         const n = (s.count as number) ?? 3;
         for (let i = 0; i < n; i++) {
           const z = s.at + i * 22 + rng.range(-8, 8);
           const x = rxAt(z) + rng.sign() * rng.range(10, 34);
-          const y = heightAt(T, x, z);
           const carSeed = rng.int(0, 9999);
-          this.addCar(x, z, rng.range(0, 6), carSeed, carSeed % 5 < 3 ? { status: 'hulk' } : {});
-          if (carSeed % 4 === 0) {
-            const spec = rollPartSpec(new Rng(carSeed * 7 + 5), { minMk: 1, maxMk: 2 });
-            this.pickups.push({ id: this.id('pp'), kind: 'part', amount: partDef(spec.id).mk, part: spec, x: x - 2.4, z: z - 1.6, y });
-          }
-          this.pickups.push({ id: this.id('p'), kind: 'parts', amount: rng.int(9, 14), x: x + 2.2, z: z + 1.4, y });
-          if (rng.chance(0.3)) this.pickups.push({ id: this.id('t'), kind: 'tech', amount: rng.int(1, 3), x: x - 2, z: z + 1, y });
+          const car = this.addCar(x, z, rng.range(0, 6), carSeed, { grade: carSeed % 5 < 2 ? 'donor' : carSeed % 5 < 4 ? 'hulk' : undefined });
+          this.besideAt('car', car.x, car.z, 1.6, 'wreck', { only: ['radiator', 'gearbox', 'tyre', 'brake', 'exhaust', 'spring', 'panel', 'engine', 'mount'] });
+          if (carSeed % 4 === 0) this.besideAt('car', car.x, car.z, 1.6, 'wreck', { only: ['fuel', 'oil', 'food', 'med'] });
         }
         break;
       }
@@ -1051,7 +1129,7 @@ export class LegLayoutImpl implements LegLayout {
         const x = rxAt(s.at) + side * (city ? 11 : 16);
         const y = heightAt(T, x, s.at);
         this.props.push({ kind: 'pylon', x, y, z: s.at, yaw: 0, scale: 1, seed: 1, tag: 3 });
-        this.pickups.push({ id: this.id('r'), kind: 'fragment', amount: (s.n as number) ?? 1, x, z: s.at + 2, y });
+        this.pickups.push({ id: this.id('r'), kind: 'fragment', amount: (s.n as number) ?? 1, x, z: s.at + 2, y, yaw: 0.6, host: { kind: 'pylon', mode: 'beside', context: 'quest' } });
         break;
       }
       case 'chassisWreck': {
@@ -1059,7 +1137,7 @@ export class LegLayoutImpl implements LegLayout {
         const x = rxAt(s.at) + side * (city ? 12 : 15);
         const y = heightAt(T, x, s.at);
         this.props.push({ kind: 'tarp', x, y, z: s.at, yaw: rng.range(-0.5, 0.5), scale: 1, seed: 7, tag: 1 });
-        this.pickups.push({ id: this.id('c'), kind: 'chassis', amount: 1, x, z: s.at + 3, y });
+        this.pickups.push({ id: this.id('c'), kind: 'chassis', amount: 1, x, z: s.at + 3, y, yaw: 0.4, host: { kind: 'tarp', mode: 'beside', context: 'quest' } });
         break;
       }
       case 'ambush':
@@ -1108,10 +1186,10 @@ export class LegLayoutImpl implements LegLayout {
           const xc = rxAt(r.z0 + r.len) + r.xOff;
           const cz = r.z0 + r.len + r.gap + r.plateauLen * 0.5;
           const cy = heightAt(T, xc, cz);
-          this.props.push({ kind: 'crateStack', x: xc, y: cy, z: cz, yaw: 0, scale: 1.2, seed: 3, tag: 2 });
-          this.pickups.push({ id: this.id('rc'), kind: 'scrap', amount: 34, x: xc - 1.5, z: cz, y: cy });
-          this.pickups.push({ id: this.id('rc'), kind: 'parts', amount: 16, x: xc + 1.5, z: cz, y: cy });
-          this.pickups.push({ id: this.id('rc'), kind: 'tech', amount: 4, x: xc, z: cz + 1.5, y: cy });
+          const stack: PropSpawn = { kind: 'crateStack', x: xc, y: cy, z: cz, yaw: 0, scale: 1.2, seed: 3, tag: 2 };
+          this.props.push(stack);
+          // The ramp's prize: the best of what a warehouse holds, stood by the crates at the top.
+          for (const only of [['engine', 'radiator'], ['gearbox', 'spring', 'mount'], ['radiator', 'gearbox', 'mount', 'panel']] as LootTag[][]) this.besideProp(stack, 'warehouse', { only, progress: 0.85 });
           this.props.push({ kind: 'sign', x: xc, y: heightAt(T, xc, r.z0 - 10), z: r.z0 - 10, yaw: 0, scale: 1, seed: 9, tag: 2 });
         }
         break;
@@ -1186,80 +1264,86 @@ export class LegLayoutImpl implements LegLayout {
     }
   }
 
+  /**
+   * A city lot set aside as a place worth a trip: a pharmacy, a clinic, a depot, and the car trades (a garage with engines on
+   * stands and parts shelving, a dealership with its showroom cars, a tyre shop, a warehouse with pallet racking). Each is a
+   * real building with a floor plan, furniture and loose things lying on it, built through the same `SiteBuilder` as the
+   * roadside places, with its yard of cars beside it. A car park is an open lot of cars.
+   */
   private addZone(s: SetPiece) {
-    const kind = (s.kind as 'pharmacy' | 'depot' | 'parking' | 'hospital') ?? 'depot';
+    const kind = (s.kind as keyof typeof TRADE | 'parking') ?? 'depot';
     const side = ((s.side as number) ?? 1) as 1 | -1;
     const slot = this.slotNear(s.at);
     // Use the boulevard-facing strip lot in this slot as the zone footprint.
     const lot = this.lots.find((l) => l.slot === this.slots.indexOf(slot) && l.side === side && l.strip === 0);
-    if (!lot || lot.fixed) return;
+    if (!lot || lot.fixed || lot.kind === 'zone') return;
     lot.kind = 'zone';
-    const w = lot.x1 - lot.x0;
-    const d = lot.z1 - lot.z0;
     const cx = (lot.x0 + lot.x1) / 2;
     const cz = (lot.z0 + lot.z1) / 2;
-    const rng = new Rng(this.leg.seed + Math.floor(s.at));
     const open = (side === 1 ? -1 : 1) as 1 | -1; // open face looks at the boulevard
-    const zone: ScavZone = { id: this.id('z'), kind, x: cx, z: cz, w, d, open, containers: [] };
-    const table: Record<'pharmacy' | 'depot' | 'parking' | 'hospital', (depth: number, r: Rng) => Partial<Stocks>> = {
-      pharmacy: (d0, r) => ({ medicine: [1, 2, 3][d0] + (r.chance(0.3) ? 1 : 0), rations: d0 === 0 ? 1 : 0, tech: d0 === 2 && r.chance(0.5) ? 1 : 0 }),
-      depot: (d0) => ({ scrap: [8, 14, 22][d0], parts: [2, 5, 9][d0], fuel: d0 === 2 ? 5 : 0 }),
-      parking: (d0, r) => ({ parts: [4, 8, 14][d0], scrap: [4, 8, 12][d0], fuel: d0 === 1 && r.chance(0.6) ? 5 : 0, rations: d0 === 0 && r.chance(0.5) ? 1 : 0 }),
-      hospital: (d0) => ({ medicine: [2, 4, 6][d0], tech: [1, 3, 5][d0], rations: d0 === 0 ? 2 : 0 }),
-    };
-    const nCont = 7 + rng.int(0, 2);
-    for (let i = 0; i < nCont; i++) {
-      const depth = (i < 2 ? 0 : i < 5 ? 1 : 2) as 0 | 1 | 2;
-      // Depth runs from the open face inward along x.
-      const frac = depth === 0 ? rng.range(0.1, 0.3) : depth === 1 ? rng.range(0.4, 0.6) : rng.range(0.7, 0.9);
-      const px = side === 1 ? lot.x0 + frac * w : lot.x1 - frac * w;
-      const pz = cz + rng.range(-0.38, 0.38) * d;
-      zone.containers.push({ id: this.id('lc'), x: px, z: pz, depth, loot: table[kind](depth, rng), taken: false });
-    }
-    // Pharmacies and hospitals keep pills; depots keep a bottle or two somewhere.
-    const dr = new Rng(this.leg.seed * 977 + Math.floor(s.at) + 5);
-    for (const c of zone.containers) {
-      const give = (id: DrugId, p: number, n = 1) => {
-        if (dr.chance(p)) c.drugs = { ...c.drugs, [id]: (c.drugs?.[id] ?? 0) + n };
-      };
-      if (kind === 'pharmacy' || kind === 'hospital') {
-        give('painkiller', 0.4, c.depth === 0 ? 1 : 2);
-        if (c.depth >= 1) give('stim', 0.3);
-        if (c.depth === 2) give('adrenaline', 0.4);
-      } else if (kind === 'depot' && c.depth >= 1) give('alcohol', 0.35, 2);
-    }
-    this.zones.push(zone);
-    // Ruined walls on three sides (back and two flanks). The open face looks at the boulevard.
-    const th = 0.6;
-    const hgt = 4.2;
-    const backX = side === 1 ? lot.x1 - th / 2 : lot.x0 + th / 2;
-    const wall = (minX: number, maxX: number, minZ: number, maxZ: number, y1 = hgt) =>
-      this.aabbs.push({ id: newAabbId(), minX, maxX, minZ, maxZ, y0: 0, y1, kind: 'wall', hp: 9999, tint: 2 });
-    wall(backX - th / 2, backX + th / 2, lot.z0, lot.z1);
-    // Flanks leave a gap so a person can slip in from the side streets.
-    wall(lot.x0, lot.x1, lot.z0, lot.z0 + th);
-    wall(lot.x0, lot.x1, lot.z1 - th, lot.z1);
-    // A sign and a few shelves set the scene.
-    const sx = side === 1 ? lot.x0 + 1 : lot.x1 - 1;
-    this.props.push({ kind: 'sign', x: sx, y: 0, z: lot.z0 + 2, yaw: 0, scale: 1.3, seed: 1, tag: kind === 'pharmacy' ? 6 : kind === 'hospital' ? 7 : 5 });
-    for (const c of zone.containers) {
-      this.props.push({ kind: kind === 'pharmacy' || kind === 'hospital' ? 'shelf' : 'locker', x: c.x, y: 0, z: c.z, yaw: side === 1 ? Math.PI / 2 : -Math.PI / 2, scale: 1, seed: c.depth, tag: c.depth });
-    }
-    // Zombies lurk deeper in.
+    const rng = new Rng(this.leg.seed + Math.floor(s.at));
     const zr = new Rng(this.leg.seed * 31 + Math.floor(s.at));
     const kinds: ZombieKind[] = ['walker', 'walker', 'runner'];
-    pushZombies(this, zr, cx, cz, 3 + this.leg.index, kinds, Math.min(w, d) * 0.4, true, 2000 + Math.floor(s.at));
+    const sign = (tag: number) => this.props.push({ kind: 'sign', x: side === 1 ? lot.x0 + 1 : lot.x1 - 1, y: 0, z: lot.z0 + 2, yaw: 0, scale: 1.3, seed: 1, tag });
+    if (kind === 'parking') {
+      // A car park: two back-to-back rows of cars nobody came back for, a part or a can beside a few of them.
+      sign(5);
+      for (const [row, off] of [[0, 4], [1, 9]] as const) {
+        const x = side === 1 ? lot.x0 + off : lot.x1 - off;
+        for (let z = lot.z0 + 4; z < lot.z1 - 3; z += 2.7) {
+          if (!rng.chance(0.62)) continue;
+          const seed = rng.int(0, 9999);
+          const car = this.addCar(x + rng.range(-0.25, 0.25), z, (row === 0 ? -Math.PI / 2 : Math.PI / 2) + rng.range(-0.08, 0.08), seed, { y: 0 });
+          this.besideCar(car, 0.3, 'trunk');
+        }
+      }
+      pushZombies(this, zr, cx, cz, 3 + this.leg.index, kinds, Math.min(lot.x1 - lot.x0, lot.z1 - lot.z0) * 0.4, true, 2000 + Math.floor(s.at));
+      return;
+    }
+    const cfg = TRADE[kind];
+    if (!cfg) return;
+    const bw = Math.min(cfg.w, lot.x1 - lot.x0 - 3);
+    const bd = Math.min(cfg.d, lot.z1 - lot.z0 - 6);
+    const bx = side === 1 ? lot.x0 + 1.5 + bw / 2 : lot.x1 - 1.5 - bw / 2;
+    const site: Site = { kind: 'cityLot', z: cz, side, off: 0, radius: 0, seed: this.leg.seed * 131 + Math.floor(s.at) + 7, x: cx };
+    const sb = new SiteBuilder({ def: this.terrain, newId: newAabbId }, site);
+    const style = rng.pick([0, 1, 2]);
+    const rb = sb.building(bx, cz, bw, bd, 1, cfg.look, style, rng.pick([0xd2c6a8, 0xb8b6ae, 0xc8b8a0, 0x9ea4a6]), 'flat', { city: true, door: open, use: cfg.use, cars: cfg.cars, margin: 1, wear: 0.15 + rng.next() * 0.3 });
+    sign(cfg.tag);
+    // The yard behind and beside the building: its own cars (a dealership's stock out on the lot, a garage's customers) and the odd drum.
+    const yardX0 = side === 1 ? lot.x0 + 1.5 + bw + 2.5 : Math.max(lot.x0 + 2, -38);
+    const yardX1 = side === 1 ? Math.min(lot.x1 - 2, 38) : lot.x1 - 1.5 - bw - 2.5;
+    const nYard = kind === 'dealership' ? 4 : kind === 'garage' || kind === 'tyreshop' ? 3 : 2;
+    for (let i = 0; i < nYard && yardX1 - yardX0 > 3.2; i++) {
+      const x = rng.range(yardX0 + 1.4, yardX1 - 1.4);
+      const z = rng.range(lot.z0 + 3, lot.z1 - 3);
+      if (!sb.free(x - 1.2, x + 1.2, z - 2.4, z + 2.4, 0.6)) continue;
+      sb.out.cars.push({ x, y: 0, z, yaw: rng.range(0, 6.28), seed: rng.int(0, 9999), grade: kind === 'dealership' ? 'complete' : kind === 'garage' ? 'donor' : undefined, reach: sb.reach });
+    }
+    if (kind === 'garage' || kind === 'tyreshop') {
+      const x = rng.range(yardX0 + 1, Math.max(yardX0 + 1.2, yardX1 - 1));
+      const z = rng.range(lot.z0 + 3, lot.z1 - 3);
+      if (sb.free(x - 1.5, x + 1.5, z - 1.5, z + 1.5, 0.5)) {
+        sb.prop('tires', x, z, rng.range(0, 6), 1.1, 1);
+        sb.besideProp('tires', 'garage', { only: ['tyre', 'oil'] });
+      }
+    }
+    this.mergeSite(sb.out);
+    pushZombies(this, zr, cx, cz, 2 + this.leg.index, kinds, Math.min(lot.x1 - lot.x0, lot.z1 - lot.z0) * 0.3, true, 2000 + Math.floor(s.at));
     if (kind === 'hospital') {
       pushZombies(this, zr, cx, cz, 1, ['brute'], 3, true, 2999);
       pushZombies(this, zr, cx, cz, 1, ['bloater'], 3, true, 2998);
     }
+    void rb;
   }
 
   // ---------------------------------------------------------------- roadside places
 
   /** A car by the road: a real vehicle once the convoy gets near. `seed` fixes its make and condition. */
-  private addCar(x: number, z: number, yaw: number, seed: number, o: Partial<CarSpawn> = {}) {
-    this.cars.push({ id: this.id('car'), x, y: heightAt(this.terrain, x, z), z, yaw, seed: seed * 131 + this.cars.length * 7 + 11, ...o });
+  private addCar(x: number, z: number, yaw: number, seed: number, o: Partial<CarSpawn> = {}): CarSpawn {
+    const car: CarSpawn = { id: this.id('car'), x, y: heightAt(this.terrain, x, z), z, yaw, seed: seed * 131 + this.cars.length * 7 + 11, reach: this.reachAt(x, z), ...o };
+    this.cars.push(car);
+    return car;
   }
 
   private mergeSite(c: SiteContent) {
@@ -1268,7 +1352,7 @@ export class LegLayoutImpl implements LegLayout {
     this.aabbs.push(...c.aabbs);
     this.props.push(...c.props);
     this.zones.push(...c.zones);
-    for (const p of c.pickups) this.pickups.push({ id: this.id('sp'), kind: p.kind, amount: p.amount, part: p.part, x: p.x, y: p.y, z: p.z });
+    for (const p of c.pickups) this.pickups.push({ id: this.id('sp'), ...p });
     for (const z of c.zombies) pushZombies(this, this.rng, z.x, z.z, z.n, z.kinds, z.spread, true, 4000 + this.pid, z.spread < 3 ? 0.4 : 0.8);
   }
 
@@ -1319,7 +1403,9 @@ export class LegLayoutImpl implements LegLayout {
         if (inSite(x, z)) continue;
         const along = Math.atan2(roadSlope(T, z), 1);
         const yaw = along + (rng.chance(0.5) ? 0 : Math.PI) + (rng.chance(0.25) ? rng.range(-0.9, 0.9) : rng.range(-0.1, 0.1));
-        this.addCar(x, z, yaw, rng.int(0, 9999));
+        const car = this.addCar(x, z, yaw, rng.int(0, 9999));
+        // Boxes and cans the drivers had out when they gave up, beside the cars.
+        this.besideCar(car, 0.3);
       }
     }
   }
@@ -1346,16 +1432,6 @@ export class LegLayoutImpl implements LegLayout {
       if (rng.chance(0.05)) {
         const x = rx + rng.sign() * rng.range(8, 70);
         this.props.push({ kind: 'bones', x, y: heightAt(T, x, z), z, yaw: rng.range(0, 6.28), scale: 1, seed: rng.int(0, 99) });
-      }
-      // Scrap shards on the roadside: low value, keeps the road rewarding to explore.
-      if (rng.chance(0.09)) {
-        const x = rx + rng.sign() * rng.range(7, 40);
-        const y = heightAt(T, x, z);
-        this.pickups.push({ id: this.id('rs'), kind: 'scrap', amount: rng.int(4, 8), x, z, y });
-      }
-      if (rng.chance(0.015)) {
-        const x = rx + rng.sign() * rng.range(8, 36);
-        this.pickups.push({ id: this.id('rf'), kind: 'fuel', amount: 5, x, z, y: heightAt(T, x, z) });
       }
     }
     // Roadside poles along the road.
@@ -1394,7 +1470,7 @@ export class LegLayoutImpl implements LegLayout {
   }
 
   /**
-   * The rest of the map: rocks, dead trees, bones, scrap, the odd fuel can and wandering dead, one roll per 60 m square,
+   * The rest of the map: rocks, dead trees, bones and wandering dead, one roll per 60 m square,
    * leaving the strip along the highway to `wastelandAmbient`. Its own random stream.
    */
   private openAmbient() {
@@ -1411,8 +1487,6 @@ export class LegLayoutImpl implements LegLayout {
         const rBig = rng.next();
         const rTree = rng.next();
         const rBones = rng.next();
-        const rScrap = rng.next();
-        const rFuel = rng.next();
         const rDead = rng.next();
         const ox = rng.range(-20, 20);
         const oz = rng.range(-20, 20);
@@ -1429,14 +1503,12 @@ export class LegLayoutImpl implements LegLayout {
         }
         if (rTree < 0.14) this.props.push({ kind: 'deadTree', x: x + ox, y: heightAt(T, x + ox, z + oz), z: z + oz, yaw: rng.range(0, 6.28), scale: rng.range(0.8, 1.5), seed: rng.int(0, 99) });
         if (rBones < 0.04) this.props.push({ kind: 'bones', x: x - ox, y: heightAt(T, x - ox, z - oz), z: z - oz, yaw: rng.range(0, 6.28), scale: 1, seed: rng.int(0, 99) });
-        if (rScrap < 0.05) this.pickups.push({ id: this.id('os'), kind: 'scrap', amount: rng.int(5, 10), x: x + oz, z: z + ox, y: heightAt(T, x + oz, z + ox) });
-        if (rFuel < 0.005) this.pickups.push({ id: this.id('of'), kind: 'fuel', amount: 5, x: x - oz, z: z + ox, y: heightAt(T, x - oz, z + ox) });
         if (rDead < 0.014) pushZombies(this, rng, x, z, rng.int(2, 4), ['walker'], 10, false, 3000 + i * 57 + j);
       }
     }
   }
 
-  /** Oil cans and the odd part along the side roads, like the highway's, but sparser. */
+  /** Cars left along the side roads, with what their drivers had out beside them: cans, and the odd part. */
   private sideRoadKit() {
     const rng = new Rng(this.leg.seed ^ 0x51de);
     const T = this.terrain;
@@ -1449,14 +1521,12 @@ export class LegLayoutImpl implements LegLayout {
         if (acc < 140) continue;
         acc = rng.range(0, 60);
         const side = rng.sign();
-        const x = p[k] + side * rng.range(7, 22);
         const z = p[k + 1] + rng.range(-8, 8);
-        if (rng.chance(0.4)) this.pickups.push({ id: this.id('so'), kind: 'oil', amount: OIL_CAN, x, z, y: heightAt(T, x, z) });
-        if (rng.chance(0.14)) {
-          const spec = rollPartSpec(rng, { minMk: 1, maxMk: rng.chance(0.2) ? 2 : 1 });
-          this.pickups.push({ id: this.id('sp'), kind: 'part', amount: partDef(spec.id).mk, part: spec, x: x - side * 4, z, y: heightAt(T, x - side * 4, z) });
+        if (Math.abs(p[k] - roadX(T, z)) < 60) continue;
+        if (rng.chance(0.45)) {
+          const car = this.addCar(p[k] + side * rng.range(5.6, 8.4), z, rng.range(0, 6.28), rng.int(0, 9999));
+          this.besideCar(car, 0.55);
         }
-        if (rng.chance(0.22) && Math.abs(p[k] - roadX(T, z)) > 60) this.addCar(p[k] + side * rng.range(5.6, 8.4), z, rng.range(0, 6.28), rng.int(0, 9999));
       }
     }
   }
@@ -1477,7 +1547,9 @@ export class LegLayoutImpl implements LegLayout {
       l.z0 > 240 &&
       l.z1 < leg.length - 240 &&
       !this.barricades.some((b) => b.z > l.z0 - 18 && b.z < l.z1 + 18) &&
-      !this.zones.some((q) => Math.abs(q.z - (l.z0 + l.z1) / 2) < 40);
+      !this.zones.some((q) => Math.abs(q.z - (l.z0 + l.z1) / 2) < 40) &&
+      // The story items (the frame under its tarp, the radio board at its pylon) are never cleared away for a headhouse.
+      !leg.sets.some((q) => (q.type === 'chassisWreck' || q.type === 'radioFragment') && q.at > l.z0 - 20 && q.at < l.z1 + 20);
     let lot: Lot | null = null;
     for (const l of this.lots) if (fits(l) && (!lot || Math.abs((l.z0 + l.z1) / 2 - target) < Math.abs((lot.z0 + lot.z1) / 2 - target))) lot = l;
     if (!lot) return;
@@ -1509,7 +1581,8 @@ export class LegLayoutImpl implements LegLayout {
       if (rng.chance(0.45)) {
         const x = rng.range(-5.2, 5.2);
         const yaw = rng.range(-0.6, 0.6) + (rng.chance(0.5) ? Math.PI : 0);
-        this.addCar(x, z, yaw, rng.int(0, 9999), { y: 0 });
+        const car = this.addCar(x, z, yaw, rng.int(0, 9999), { y: 0 });
+        this.besideCar(car, 0.2, 'trunk');
       }
       if (rng.chance(0.2)) {
         const x = rng.sign() * (BOULEVARD_HALF + 1.6);
@@ -1532,25 +1605,29 @@ export class LegLayoutImpl implements LegLayout {
     for (let z = 140; z < this.leg.length; z += 90) {
       pushZombies(this, rng, rng.range(-6, 6), z, rng.int(2, 3), kinds, 5, false, cluster++);
     }
-    // Loose city loot on the sidewalks.
-    for (let z = 40; z < this.leg.length; z += 33) {
-      if (!rng.chance(0.5)) continue;
-      const x = rng.sign() * rng.range(8, 11);
-      const kind: PickupKind = rng.pick(['scrap', 'scrap', 'parts', 'rations', 'medicine']);
-      const amount = kind === 'scrap' ? rng.int(5, 10) : kind === 'parts' ? rng.int(3, 6) : 1;
-      this.pickups.push({ id: this.id('cl'), kind, amount, x, z, y: 0 });
-    }
     // A few dumpsters and debris piles.
     for (let z = 25; z < this.leg.length + 60; z += 41) {
       const x = rng.sign() * rng.range(7.5, 9.5);
-      this.props.push({ kind: rng.pick(['dumpster', 'rubble', 'barrel']), x, y: 0, z, yaw: rng.range(0, 6), scale: 1, seed: rng.int(0, 99) });
-    }
-    // Fuel and rations are rare in cities; a couple of canisters sit in side streets.
-    for (let z = 200; z < this.leg.length; z += 380) {
-      this.pickups.push({ id: this.id('cf'), kind: 'fuel', amount: 5, x: rng.sign() * rng.range(8, 10), z, y: 0 });
+      const prop: PropSpawn = { kind: rng.pick(['dumpster', 'rubble', 'barrel']), x, y: 0, z, yaw: rng.range(0, 6), scale: 1, seed: rng.int(0, 99) };
+      this.props.push(prop);
+      // What was thrown out, and what was left in the drums: a tin or a can beside the odd one.
+      if (prop.kind !== 'rubble' && this.lootRng.chance(0.3)) this.besideProp(prop, prop.kind === 'barrel' ? 'garage' : 'house', { only: prop.kind === 'barrel' ? ['fuel', 'oil', 'water'] : ['food', 'med'] });
     }
   }
 }
+
+/** The city lots a `scavengeZone` can turn into: what building stands there, what it is for, how big and which sign stands out front. */
+const TRADE: Record<string, { look: Look; use: LootContext; w: number; d: number; tag: number; cars?: number }> = {
+  pharmacy: { look: 'store', use: 'pharmacy', w: 14, d: 18, tag: 6 },
+  hospital: { look: 'store', use: 'clinic', w: 18, d: 28, tag: 7 },
+  police: { look: 'store', use: 'police', w: 14, d: 18, tag: 12 },
+  gunshop: { look: 'store', use: 'gun_shop', w: 14, d: 16, tag: 12 },
+  depot: { look: 'warehouse', use: 'depot', w: 26, d: 40, tag: 5 },
+  warehouse: { look: 'warehouse', use: 'warehouse', w: 26, d: 40, tag: 11 },
+  garage: { look: 'garage', use: 'garage', w: 16, d: 18, tag: 8 },
+  dealership: { look: 'dealership', use: 'dealership', w: 22, d: 22, tag: 9, cars: 3 },
+  tyreshop: { look: 'tyreshop', use: 'tyreshop', w: 14, d: 15, tag: 10 },
+};
 
 export function chunkKey(cx: number, cz: number) {
   return cx * 4096 + cz;

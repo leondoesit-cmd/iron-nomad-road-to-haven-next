@@ -1,55 +1,28 @@
 import * as THREE from 'three';
-import { MeshBuilder, S } from './builder';
-import { addKit, bodyPart, doorSkipsSteel, fitSignature, panelOff, type Mounts, type Rig } from './attachments';
+import { MeshBuilder, S, type Surf } from './builder';
+import { addKit, bodyPart, doorSkipsSteel, panelOff, type Mounts, type Rig } from './attachments';
 import type { Fit } from '../sim/parts';
 import { addWheelSet, addWheels, blank, bodyMat, headlamp, lightMat as lampOn, lightOffMat as lampOff, rider, taillight, wheelSpec, wheelSpecs, type VehicleVisual } from './vehicleKit';
 import { acquireShell, hasShell, releaseShell, type Shell } from './shellCache';
 import { heavyGun } from './parts';
-import { partDef, type VehicleDef } from '../data';
-import { partMeta, partTag, type PartRange } from './bodyParts';
+import { isInteriorSlot, partDef, type VehicleDef } from '../data';
+import { SPECS, restHeight, type Spec } from './carSpecs';
+export { restHeight };
+import { PANEL_TAG, partMeta, partTag, type PartRange } from './bodyParts';
 import { PaneSet } from './glass';
+import { attachBay } from './bayMesh';
 import type { VehicleLook } from './vehicleModels';
 import type { CarPane } from '../sim/glass';
 import { paintPanels } from './paintJob';
 import { panelSignature } from '../sim/paint';
+import { cabinGaps } from '../sim/cabin';
+import { CABIN_FILL, cabinKey, cabinLayout, drawCabin, fillLight, hipHeight, rimGeometry, seatOccupant } from './interior';
 
 /**
  * Drivable versions of the cars standing along the road: hatchback, sedan, pickup and van.
  * The windscreen and rear glass are in place but the side windows are open, so whoever is driving can be seen.
  * Bodies are built in a frame where y = 0 is the ground, then shifted to the chassis centre.
  */
-
-interface Spec {
-  id: 'hatch' | 'sedan' | 'pickup' | 'van';
-  L: number;
-  W: number;
-  sill: number;
-  belt: number;
-  hood: number;
-  roof: number;
-  /** Windscreen base and top (z). */
-  wsBase: number;
-  wsTop: number;
-  /** Rear glass base and top (z), where the cabin ends. */
-  rwBase: number;
-  rwTop: number;
-}
-
-const SPECS: Record<Spec['id'], Spec> = {
-  hatch: { id: 'hatch', L: 3.75, W: 1.72, sill: 0.26, belt: 0.92, hood: 0.95, roof: 1.5, wsBase: 0.78, wsTop: 0.3, rwBase: -1.84, rwTop: -1.42 },
-  sedan: { id: 'sedan', L: 4.4, W: 1.82, sill: 0.26, belt: 0.95, hood: 0.98, roof: 1.46, wsBase: 0.88, wsTop: 0.38, rwBase: -1.42, rwTop: -0.82 },
-  pickup: { id: 'pickup', L: 5.0, W: 1.96, sill: 0.32, belt: 1.08, hood: 1.12, roof: 1.92, wsBase: 1.0, wsTop: 0.68, rwBase: -0.56, rwTop: -0.56 },
-  van: { id: 'van', L: 5.3, W: 2.0, sill: 0.34, belt: 1.12, hood: 1.06, roof: 2.3, wsBase: 1.5, wsTop: 1.16, rwBase: 0.5, rwTop: 0.5 },
-};
-
-/**
- * Distance from the chassis centre down to the ground when the suspension has settled.
- * The spring term is `g / (wheels * stiffness)`; Rapier's controller settles 2.2 cm higher than that, measured.
- */
-export function restHeight(def: VehicleDef): number {
-  const p = def.physics;
-  return -p.hardY + (p.suspension.rest - 9.81 / (p.wheelCount * p.suspension.stiffness)) + p.wheelRadius + 0.022;
-}
 
 /** A flat plate laid between two points of a side profile (each [y, z]), spanning `width` across the car. */
 function slab(b: MeshBuilder, a: [number, number], c: [number, number], width: number, thick: number, color: Parameters<MeshBuilder['box']>[6], x = 0) {
@@ -115,6 +88,7 @@ function mountsFor(sp: Spec, wheelR: number): Mounts {
   const hw = sp.W / 2;
   const nose = sp.L / 2;
   const base: Mounts = {
+    doors: true,
     hw,
     front: { z: nose + 0.08, y: 0.48, hw: hw - 0.08 },
     rear: { z: -nose - 0.08, y: 0.48, hw: hw - 0.08 },
@@ -169,11 +143,26 @@ function lowerBody(b: MeshBuilder, sp: Spec, d: VehicleDef, paint: ReturnType<ty
   const yc = (sp.sill + sp.belt) / 2;
   const h = sp.belt - sp.sill;
   const dark = S.metal(0x0e0e0e, 0.2);
-  // Inner core (dark) so the wheel wells read as wells.
-  b.rbox(0, yc, 0, (wx - 0.12) * 2, h, sp.L - 0.2, 0.05, dark);
+  // Dark cores so the wheel wells read as wells: the engine bay up front, and the boot, bed or cargo box at the back. The
+  // cabin between them is hollow (its floor, seats and dash are in the cabin mesh, see `interior.ts`).
+  const cw = (wx - 0.12) * 2;
+  const lay = cabinLayout(d)!;
+  const zF = lay.zFront;
+  // The engine bay is hollow: a floor tray, two wing walls and the firewall, so a real engine stands in it (see `bayKit`).
+  const bayL = nose - 0.1 - zF;
+  const bayZ = (zF + nose - 0.1) / 2;
+  b.rbox(0, sp.sill + 0.03, bayZ, cw, 0.06, bayL, 0.02, dark);
+  for (const sx of [1, -1]) b.rbox(sx * (cw / 2 - 0.03), yc, bayZ, 0.06, h, bayL, 0.02, dark);
+  b.rbox(0, yc, zF + 0.03, cw, h, 0.06, 0.02, dark);
+  const zR = -nose + 0.1;
+  const topR = sp.id === 'pickup' ? 0.84 : sp.belt;
+  if (lay.zBack - zR > 0.15) b.rbox(0, (sp.sill + topR) / 2, (lay.zBack + zR) / 2, cw, topR - sp.sill, lay.zBack - zR, 0.05, dark);
   // End caps.
   b.rbox(0, yc, nose - 0.08, sp.W - 0.04, h, 0.16, 0.06, paint);
+  // A hatchback's tailgate reaches down to the bumper; every other rear end stays put.
+  if (sp.id === 'hatch') b.mark(PANEL_TAG.trunk, partMeta({ kind: 'trunk', pivot: [0, sp.roof + 0.02, sp.rwTop] }));
   b.rbox(0, yc, -nose + 0.08, sp.W - 0.04, h, 0.16, 0.06, paint);
+  if (sp.id === 'hatch') b.end();
   const zones: [number, number][] = [
     [nose - 0.1, wf + gap],
     [wf - gap, wr + gap],
@@ -188,6 +177,16 @@ function lowerBody(b: MeshBuilder, sp: Spec, d: VehicleDef, paint: ReturnType<ty
       if (zi === 1 && doorSkipsSteel(look.fit, doorSlot)) return;
       if (zi === 1) b.mark(partTag('door', sx), partMeta({ kind: 'door', side: sx as 1 | -1, pivot: [x, yc, Math.max(a, c)] }));
       b.rbox(x, yc, (a + c) / 2, 0.14, h, Math.abs(a - c), 0.04, paint);
+      if (zi === 1) {
+        // The door's inside: a trim card with an armrest and a pull, so the cab is not walled in body paint. It is part of
+        // the door, so it goes when the door does.
+        const ix = sx * (hw - 0.152);
+        const zc = (a + c) / 2;
+        const card: Surf = { ...S.plastic(0x4a4439, 0.5), e: CABIN_FILL };
+        b.rbox(ix, yc - 0.01, zc, 0.02, h - 0.06, Math.abs(a - c) - 0.08, 0.008, card);
+        b.rbox(ix - sx * 0.025, sp.belt - 0.15, zc - 0.05, 0.05, 0.05, Math.abs(a - c) * 0.45, 0.015, { ...S.plastic(0x2e2b27, 0.5), e: CABIN_FILL });
+        b.rbox(ix - sx * 0.015, sp.belt - 0.08, zc + Math.abs(a - c) * 0.3, 0.03, 0.03, 0.12, 0.01, S.chrome(0xb4b8bc));
+      }
       if (zi === 1) b.end();
     });
     for (const wz of [wf, wr]) {
@@ -216,26 +215,6 @@ function lowerBody(b: MeshBuilder, sp: Spec, d: VehicleDef, paint: ReturnType<ty
   }
 }
 
-/** Interior visible through the open side windows: seats, a dash and a wheel. */
-function interior(b: MeshBuilder, sp: Spec, d: VehicleDef, zSeat: number) {
-  const hw = sp.W / 2;
-  const fabric = S.leather(0x3a3228, 0.8);
-  const plastic = S.plastic(0x1c1c1c, 0.5);
-  const seatTop = sp.sill + 0.34;
-  b.box(0, sp.sill + 0.04, zSeat, sp.W - 0.3, 0.04, 1.2, S.plastic(0x15130f, 0.6));
-  for (const sx of [1, -1]) {
-    const x = sx * (hw - 0.45);
-    b.rbox(x, seatTop - 0.1, zSeat, 0.5, 0.16, 0.5, 0.05, fabric);
-    b.rbox(x, seatTop + 0.22, zSeat - 0.25, 0.5, 0.58, 0.12, 0.05, fabric, 0.14, 0, 0);
-    b.rbox(x, seatTop + 0.58, zSeat - 0.3, 0.26, 0.18, 0.1, 0.04, fabric, 0.14, 0, 0);
-  }
-  const dashZ = sp.wsBase - 0.2;
-  b.rbox(0, sp.belt - 0.04, dashZ, sp.W - 0.3, 0.26, 0.34, 0.06, plastic);
-  const sw = d.seat?.driver[0] ?? 0.38;
-  b.torus(sw, sp.belt + 0.14, dashZ - 0.22, 0.17, 0.018, S.leather(0x111111), -1.0, 0, 0, 6, 16);
-  b.rod(sw, sp.belt + 0.14, dashZ - 0.22, sw, sp.belt - 0.02, dashZ - 0.04, 0.02, plastic, 6);
-}
-
 function lights(b: MeshBuilder, rig: Rig, sp: Spec, big: boolean) {
   const hw = sp.W / 2;
   const nose = sp.L / 2;
@@ -251,7 +230,9 @@ function lights(b: MeshBuilder, rig: Rig, sp: Spec, big: boolean) {
   for (let i = 0; i < 5; i++) b.box(0, y - 0.1 + i * 0.045, nose + 0.03, sp.W * 0.44, 0.012, 0.012, S.chrome(0xbfc3c7));
   // Plates.
   b.box(0, 0.55, nose + 0.075, 0.42, 0.14, 0.01, S.paint(0xd8cf9a, 0.95));
+  if (sp.id === 'hatch') b.mark(PANEL_TAG.trunk, partMeta({ kind: 'trunk', pivot: [0, sp.roof + 0.02, sp.rwTop] }));
   b.box(0, 0.62, -nose - 0.075, 0.42, 0.14, 0.01, S.paint(0xd8cf9a, 0.95));
+  if (sp.id === 'hatch') b.end();
 }
 
 function trim(b: MeshBuilder, sp: Spec, trimMat: ReturnType<typeof S.metal>) {
@@ -273,7 +254,10 @@ function bonnet(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, loo
   const nose = sp.L / 2;
   const armored = part?.id === 'hood_armor';
   const pan = armored ? S.steel(0x5a5d60, 0.8) : paint;
+  // The bonnet hinges at the cowl and swings up (`Bodywork` poses it when someone opens it).
+  b.mark(PANEL_TAG.hood, partMeta({ kind: 'hood', pivot: [0, sp.hood - 0.04, sp.wsBase] }));
   b.rbox(0, sp.hood - 0.04, (nose + sp.wsBase) / 2 - 0.02, sp.W - 0.1, thick + (armored ? 0.03 : 0), nose - sp.wsBase - 0.04, 0.05, pan, tilt, 0, 0);
+  b.end();
 }
 
 /** Doors: seam lines and handles, mirrors. */
@@ -319,17 +303,35 @@ function hatchBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, 
   // Bonnet and cowl.
   bonnet(b, sp, paint, look, 0.1, -0.02);
   // Pillars; the windows are panes of their own (see carPanes).
-  // Roof and tailgate.
-  b.rbox(0, sp.roof + 0.015, (sp.wsTop + sp.rwTop) / 2, sp.W - 0.24, 0.07, sp.wsTop - sp.rwTop + 0.12, 0.04, roofMat);
-  b.rbox(0, sp.belt + 0.01, -nose + 0.2, sp.W - 0.12, 0.1, 0.42, 0.05, paint);
+  // Roof.
+  b.rbox(0, sp.roof + 0.015, (sp.wsTop + sp.rwTop) / 2, sp.W - 0.24, 0.07, sp.wsTop - sp.rwTop + 0.04, 0.04, roofMat);
+  // The tailgate: roof hinge header, slanted frame rails framing the rear window, waist bar, and handle.
+  // The entire rear assembly lifts together on a roof hinge.
+  const hinge: [number, number, number] = [0, sp.roof + 0.02, sp.rwTop];
+  b.mark(PANEL_TAG.trunk, partMeta({ kind: 'trunk', pivot: hinge }));
+  // Top header along the roof edge
+  b.rbox(0, sp.roof + 0.015, sp.rwTop - 0.01, sp.W - 0.24, 0.06, 0.06, 0.02, paint);
+  // Slanted side frame rails framing the rear window
+  for (const sx of [1, -1]) {
+    const tx = sx * (hw - 0.08);
+    b.rod(tx, sp.belt + 0.04, sp.rwBase, tx - sx * 0.05, sp.roof, sp.rwTop, 0.04, paint, 6);
+  }
+  // Waist bar under the rear window joining the window frame to the lower panel
+  b.rbox(0, sp.belt + 0.04, (sp.rwBase + (-nose + 0.08)) / 2, sp.W - 0.12, 0.08, Math.abs(-nose + 0.08 - sp.rwBase) + 0.08, 0.03, paint);
+  // Tailgate handle
+  b.box(0, sp.belt + 0.02, -nose + 0.01, 0.22, 0.03, 0.03, S.chrome(0xb4b8bc));
+  b.end();
   for (const sx of [1, -1]) {
     const xo = sx * (hw - 0.08);
+    // A-pillar
     b.rod(xo, sp.belt, sp.wsBase, xo - sx * 0.05, sp.roof, sp.wsTop, 0.03, paint, 6);
+    // B-pillar
     b.rod(xo, sp.belt, -0.3, xo - sx * 0.04, sp.roof, -0.3, 0.032, paint, 6);
-    b.rod(xo, sp.belt + 0.04, sp.rwBase, xo - sx * 0.05, sp.roof, sp.rwTop, 0.04, paint, 6);
-    b.rbox(sx * (hw - 0.07), sp.belt + 0.02, (sp.wsBase + sp.rwBase) / 2, 0.06, 0.06, sp.wsBase - sp.rwBase, 0.02, paint);
+    // Rear cabin post at the C-pillar supporting the roof corner when tailgate is open
+    b.rod(xo, sp.belt + 0.02, sp.rwTop, xo - sx * 0.04, sp.roof, sp.rwTop, 0.034, paint, 6);
+    // Flank waist rail under the side windows
+    b.rbox(sx * (hw - 0.07), sp.belt + 0.02, (sp.wsBase + sp.rwTop) / 2, 0.06, 0.06, sp.wsBase - sp.rwTop, 0.02, paint);
   }
-  interior(b, sp, d, -0.2);
   doors(b, sp, 0.55, -0.55, look.fit);
 }
 
@@ -339,7 +341,9 @@ function sedanBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, 
   bonnet(b, sp, paint, look, 0.1, -0.02);
   b.rbox(0, sp.roof + 0.015, (sp.wsTop + sp.rwTop) / 2, sp.W - 0.24, 0.07, sp.wsTop - sp.rwTop + 0.12, 0.04, roofMat);
   // Boot lid.
+  b.mark(PANEL_TAG.trunk, partMeta({ kind: 'trunk', pivot: [0, sp.belt + 0.02, sp.rwBase] }));
   b.rbox(0, sp.belt + 0.02, (-nose + sp.rwBase) / 2 + 0.05, sp.W - 0.12, 0.1, sp.rwBase + nose - 0.1, 0.05, paint);
+  b.end();
   for (const sx of [1, -1]) {
     const xo = sx * (hw - 0.08);
     b.rod(xo, sp.belt, sp.wsBase, xo - sx * 0.05, sp.roof, sp.wsTop, 0.03, paint, 6);
@@ -347,7 +351,6 @@ function sedanBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, 
     b.rod(xo, sp.belt + 0.04, sp.rwBase, xo - sx * 0.05, sp.roof, sp.rwTop, 0.042, paint, 6);
     b.rbox(sx * (hw - 0.07), sp.belt + 0.02, (sp.wsBase + sp.rwBase) / 2, 0.06, 0.06, sp.wsBase - sp.rwBase, 0.02, paint);
   }
-  interior(b, sp, d, -0.15);
   doors(b, sp, 0.62, -0.28, look.fit);
 }
 
@@ -375,7 +378,6 @@ function pickupBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>,
   }
   b.rbox(0, (floor + 1.18) / 2, zr, sp.W - 0.12, 1.18 - floor, 0.08, 0.03, paint);
   b.rbox(0, (floor + 1.12) / 2, zf, sp.W - 0.12, 1.12 - floor + 0.1, 0.08, 0.03, paint);
-  interior(b, sp, d, 0.2);
   doors(b, sp, 0.9, 0.0, look.fit);
 }
 
@@ -400,7 +402,14 @@ function vanBody(b: MeshBuilder, sp: Spec, paint: ReturnType<typeof S.paint>, ro
     b.rbox(sx * (hw + 0.006), sp.belt + 0.28, -1.7, 0.012, 0.3, 1.2, 0.004, rust);
   }
   b.box(0, (sp.belt + sp.roof) / 2, zr - 0.005, 0.02, sp.roof - sp.belt - 0.2, 0.012, S.plastic(0x0e0e0e, 0.3));
-  interior(b, sp, d, 0.95);
+  // The rear door lifts on a hinge along the roof; the opening behind it is a dark cargo bay.
+  const yMid = (sp.belt + sp.roof) / 2;
+  const doorH = sp.roof - sp.belt - 0.04;
+  b.rbox(0, yMid, zr - 0.006, sp.W - 0.34, doorH - 0.16, 0.012, 0.004, S.metal(0x0e0e0e, 0.2));
+  b.mark(PANEL_TAG.trunk, partMeta({ kind: 'trunk', pivot: [0, sp.roof + 0.03, zr] }));
+  b.rbox(0, yMid + 0.02, zr - 0.012, sp.W - 0.12, doorH, 0.034, 0.012, paint);
+  b.box(0, yMid - 0.1, zr - 0.034, 0.16, 0.03, 0.012, S.chrome(0xb4b8bc));
+  b.end();
   doors(b, sp, 1.05, 0.62, look.fit);
 }
 
@@ -484,9 +493,36 @@ function wheelXZ(def: VehicleDef): [number, number][] {
   return out;
 }
 
-function shellKey(def: VehicleDef, look: VehicleLook): string {
-  return `${def.id}|${look.paint}|${look.stripe}|${look.stripeColor}|${look.seed}|${Math.round(look.wear * 10)}|${fitSignature(look.fit)}|${panelSignature(look.panels)}`;
+/** The fitted parts that change the body shell. The cabin's seats, wheel and dash are their own mesh and are not in it. */
+function bodySignature(fit: VehicleLook['fit']): string {
+  return Object.keys(fit)
+    .filter((k) => !isInteriorSlot(k as never))
+    .sort()
+    .map((k) => `${k}:${fit[k as keyof typeof fit]!.id}`)
+    .join(',');
 }
+
+function shellKey(def: VehicleDef, look: VehicleLook): string {
+  return `${def.id}|${look.paint}|${look.stripe}|${look.stripeColor}|${look.seed}|${Math.round(look.wear * 10)}|${bodySignature(look.fit)}|${panelSignature(look.panels)}`;
+}
+
+/** The cabin mesh: floor, headliner, seats, dash and the wheel's column, each part as fitted. Shared between identical cars. */
+function makeCabin(def: VehicleDef, look: VehicleLook): Shell & { rim?: { id: string; x: number; y: number; z: number; tilt: number } | null } {
+  const g0 = restHeight(def);
+  const b = new MeshBuilder();
+  b.jitter = 0.03;
+  b.roundSeg = 2;
+  b.seed(look.seed + 9);
+  const rim = drawCabin(b, def, look.fit);
+  fillLight(b, 0, CABIN_FILL);
+  const geo = b.build();
+  geo.translate(0, -g0, 0);
+  geo.computeBoundingSphere();
+  geo.computeBoundingBox();
+  return { geo, lamps: [], tails: [], muzzle: null, rim: rim ? { ...rim, y: rim.y - g0 } : null };
+}
+
+const cabinShellKey = (def: VehicleDef, look: VehicleLook) => `cab|${def.id}|${cabinKey(def, look.fit)}`;
 
 /** Build a car's shell ahead of the car itself, a slice per step, so spawning it later is a cache hit and not a dropped frame. */
 export function* prepareCarShell(def: VehicleDef, look: VehicleLook): Generator<void> {
@@ -495,6 +531,12 @@ export function* prepareCarShell(def: VehicleDef, look: VehicleLook): Generator<
   const shell = yield* makeShellSteps(def, look);
   acquireShell(key, () => shell);
   releaseShell(key);
+  const ckey = cabinShellKey(def, look);
+  if (!hasShell(ckey)) {
+    yield;
+    acquireShell(ckey, () => makeCabin(def, look));
+    releaseShell(ckey);
+  }
 }
 
 export function buildCar(def: VehicleDef, wheelLocal: [number, number, number][], steered: boolean[], look: VehicleLook): VehicleVisual {
@@ -520,23 +562,34 @@ export function buildCar(def: VehicleDef, wheelLocal: [number, number, number][]
     for (const h of v.headlights) h.material = on ? lampOn : lampOff;
   };
   addWheelSet(v, def, wheelLocal, steered, wheelSpecs(def, look.tyres, look.brakeMk ?? 0));
-  // Seats: occupants are built the first time someone sits down.
-  const seat = def.seat!;
-  const seatY = SPECS[def.id as Spec['id']].sill + 0.34 - g0 - 0.2;
+  // The cabin is a mesh of its own under the roof, so it shows through an open door or a broken window.
+  const ckey = cabinShellKey(def, look);
+  const cab = acquireShell(ckey, () => makeCabin(def, look)) as ReturnType<typeof makeCabin>;
+  v.interior = new THREE.Mesh(cab.geo, bodyMat);
+  v.interior.receiveShadow = true;
+  v.inner.add(v.interior);
+  // The wheel's rim turns with the steering.
+  if (cab.rim) {
+    const pivot = new THREE.Group();
+    pivot.position.set(cab.rim.x, cab.rim.y, cab.rim.z);
+    pivot.rotation.x = cab.rim.tilt;
+    const rim = new THREE.Mesh(rimGeometry(cab.rim.id), bodyMat);
+    rim.receiveShadow = true;
+    pivot.add(rim);
+    v.inner.add(pivot);
+    v.steerWheel = rim;
+  }
+  // Seats: occupants are built the first time someone sits down, and sat in the cabin's seats every frame.
+  const L = cabinLayout(def)!;
   const color = look.paint;
-  v.lazy = {
-    driver: () => {
-      const r = rider(color, color);
-      r.root.position.set(seat.driver[0], seatY, seat.driver[2] - 0.05);
-      return r;
-    },
-    passenger: () => {
-      const r = rider(color, color);
-      r.root.position.set(seat.passenger[0], seatY, seat.passenger[2] - 0.05);
-      return r;
-    },
+  v.lazy = { driver: () => rider(color, color), passenger: () => rider(color, color) };
+  const gaps = cabinGaps(def, look.fit);
+  v.seat = (who, h, drop) => {
+    const spot = who === 'driver' ? L.seats.seatD! : L.seats.seatP!;
+    seatOccupant(h, L, spot, hipHeight(L, spot, who === 'driver' ? gaps.seatD : gaps.seatP, drop), who === 'driver' ? -0.06 : -0.02);
   };
-  v.gunSeat = [seat.passenger[0], seatY, seat.passenger[2] - 0.05];
+  const ps = L.seats.seatP!;
+  v.gunSeat = [ps.x, L.floor - g0, ps.z];
   // A bed gun on a pickup: a pivoting heavy MG and a standing spot for the gunner.
   if (def.weaponMount === 'bed' && look.fit.weapon) {
     const bedZ = -1.55;
@@ -563,7 +616,10 @@ export function buildCar(def: VehicleDef, wheelLocal: [number, number, number][]
   v.dispose = () => {
     panes.dispose();
     releaseShell(key);
+    releaseShell(ckey);
   };
+  // The engine bay under the bonnet, for when someone lifts it.
+  attachBay(v, def.id, mountsFor(SPECS[def.id as Spec['id']], def.physics.wheelRadius), look, SPECS[def.id as Spec['id']].belt - 0.03, g0);
   return v;
 }
 

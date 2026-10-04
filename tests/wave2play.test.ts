@@ -8,6 +8,7 @@ import { newPart } from '../src/sim/parts';
 import { WATER_CAN } from '../src/sim/fluids';
 import { socketFor, wheelCentres } from '../src/render/sockets';
 import { fakeServices } from './helpers/sim';
+import { openPanel, standAt as standAtSpot } from './helpers/access';
 import type { Vehicle, Pilot } from '../src/game/vehicle';
 
 // Real leg scenes in Node: the whole machine in the player's hands. Tyres go on one wheel at a time, a crowbar pries
@@ -209,6 +210,8 @@ describe('water for the radiator', () => {
     const p = sc.players[0];
     v.health.comp.coolant = 0.2;
     p.carry = { kind: 'water', amount: WATER_CAN };
+    openPanel(v, 'hood');
+    standAtSpot(sc, v, 'hood');
     hold(h, sc, 0, Btn.A, 4);
     expect(v.health.comp.coolant ?? 0).toBeGreaterThan(0.9);
     expect(p.notes.some((n) => /radiator/i.test(n.text))).toBe(true);
@@ -220,6 +223,8 @@ describe('water for the radiator', () => {
     big.syncFromBuild();
     big.health.comp.coolant = 0;
     sc2.players[0].carry = { kind: 'water', amount: WATER_CAN };
+    openPanel(big, 'hood');
+    standAtSpot(sc2, big, 'hood');
     hold(h2, sc2, 0, Btn.A, 4);
     expect(big.health.comp.coolant ?? 0).toBeLessThan(v.health.comp.coolant ?? 1);
   });

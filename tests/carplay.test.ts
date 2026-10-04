@@ -6,6 +6,7 @@ import { Btn } from '../src/input/intents';
 import { newBuild } from '../src/sim/garage';
 import { newPart } from '../src/sim/parts';
 import { fakeServices } from './helpers/sim';
+import { standAt } from './helpers/access';
 import type { Vehicle } from '../src/game/vehicle';
 
 // Each test builds a real leg scene (terrain, textures, physics); give them room when the whole suite runs in parallel.
@@ -224,6 +225,10 @@ describe('abandoned cars in a live leg', () => {
     p.equip = 'jerrycan';
     const fuel0 = c.stocks.fuel;
     const diesel0 = c.items.diesel;
+    // The hose goes in at the flap: from the door it only says where to go.
+    run(sc, 0.2);
+    expect(p.prompt?.text).toMatch(/Go to the fuel flap/);
+    standAt(sc, v, 'flap');
     hold(h, sc, 0, Btn.A, 5);
     expect(v.fuel).toBeCloseTo(1, 1);
     expect(c.stocks.fuel).toBeCloseTo(fuel0 + 5, 1);
@@ -238,6 +243,10 @@ describe('abandoned cars in a live leg', () => {
     p.equip = 'jerrycan';
     const fuel0 = c.stocks.fuel;
     const diesel0 = c.items.diesel;
+    // The hose goes in at the flap: from the door it only says where to go.
+    run(sc, 0.2);
+    expect(p.prompt?.text).toMatch(/Go to the fuel flap/);
+    standAt(sc, v, 'flap');
     hold(h, sc, 0, Btn.A, 5);
     expect(v.fuel).toBeCloseTo(1, 1);
     expect(c.items.diesel).toBeCloseTo(diesel0 + 5, 1);

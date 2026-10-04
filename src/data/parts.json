@@ -1,6 +1,11 @@
 {
-  "slots": ["engine", "cooling", "gearbox", "exhaust", "wheels", "suspension", "brakes", "hood", "doorL", "doorR", "armor", "weapon", "utility", "front", "roof", "rear", "side"],
+  "slots": ["engine", "cooling", "gearbox", "exhaust", "wheels", "suspension", "brakes", "hood", "doorL", "doorR", "armor", "weapon", "utility", "front", "roof", "rear", "side", "seatD", "seatP", "seatR", "steer", "dash"],
   "labels": {
+    "seatD": "Driver seat",
+    "seatP": "Passenger seat",
+    "seatR": "Rear seat",
+    "steer": "Steering wheel",
+    "dash": "Dashboard",
     "engine": "Engine",
     "cooling": "Radiator",
     "gearbox": "Gearbox",
@@ -21,6 +26,7 @@
   },
   "rarity": { "1": "Common", "2": "Uncommon", "3": "Rare" },
   "stockCondition": 0.45,
+  "interior": { "noSteerLock": 0.18, "noSeatGrip": 0.94, "noSeatSpread": 1.35, "noSeatDrop": 0.42 },
   "parts": [
     {
       "id": "eng_i4",
@@ -32,6 +38,17 @@
       "engine": { "litres": 2.0, "kw": 95, "mass": 130, "size": 3, "fuel": "petrol", "layout": "I4" },
       "cost": { "parts": 10, "scrap": 15 },
       "weight": 14
+    },
+    {
+      "id": "eng_b4",
+      "slot": "engine",
+      "mk": 2,
+      "name": "2.5 L Boxer Four",
+      "blurb": "Flat and wide, low and burbling. Sits lower than an inline four.",
+      "stats": {},
+      "engine": { "litres": 2.5, "kw": 110, "mass": 150, "size": 3, "fuel": "petrol", "layout": "B4" },
+      "cost": { "parts": 20, "scrap": 30, "tech": 5 },
+      "weight": 4
     },
     {
       "id": "eng_v6",
@@ -502,10 +519,11 @@
       "slot": "utility",
       "mk": 1,
       "name": "Jerry-Can Rack",
-      "blurb": "Straps for four extra cans, and room for loot.",
+      "blurb": "Holders for four extra cans, and room for loot. Cans in the rack stay put at any speed.",
       "stats": { "tank": 0.2, "cargo": 2 },
       "cost": { "parts": 10, "scrap": 15 },
-      "weight": 13
+      "weight": 13,
+      "hold": { "zone": "rack", "units": 4, "max": 1, "only": "cans" }
     },
     {
       "id": "utl_tank",
@@ -526,6 +544,94 @@
       "stats": { "tank": 0.65, "cargo": 5, "top": -0.01 },
       "cost": { "parts": 60, "scrap": 90, "tech": 25 },
       "weight": 2.5
+    },
+    {
+      "id": "rf_basket",
+      "slot": "roof",
+      "mk": 1,
+      "name": "Wire Roof Basket",
+      "blurb": "A welded wire basket on the roof rails. Small and medium loads stay in it at any speed.",
+      "stats": { "top": -0.005 },
+      "cost": { "parts": 10, "scrap": 15 },
+      "weight": 10,
+      "hold": { "zone": "roof", "units": 6, "max": 2 }
+    },
+    {
+      "id": "rf_net",
+      "slot": "roof",
+      "mk": 2,
+      "name": "Roof Rack & Net",
+      "blurb": "Rails with a cargo net pulled over the load. Holds medium loads.",
+      "stats": { "top": -0.008 },
+      "cost": { "parts": 14, "scrap": 20 },
+      "weight": 7,
+      "hold": { "zone": "roof", "units": 8, "max": 2 }
+    },
+    {
+      "id": "rf_basket2",
+      "slot": "roof",
+      "mk": 2,
+      "name": "Steel Cargo Basket",
+      "blurb": "A deep steel basket with tie-down eyes. Holds big parts too.",
+      "stats": { "top": -0.012 },
+      "cost": { "parts": 18, "scrap": 26, "tech": 3 },
+      "weight": 6,
+      "hold": { "zone": "roof", "units": 10, "max": 4 }
+    },
+    {
+      "id": "rf_basket3",
+      "slot": "roof",
+      "mk": 3,
+      "name": "Expedition Roof Basket",
+      "blurb": "Full-length basket with a net and ratchet straps. A whole engine rides up there.",
+      "stats": { "top": -0.02 },
+      "cost": { "parts": 30, "scrap": 45, "tech": 10 },
+      "weight": 3,
+      "hold": { "zone": "roof", "units": 16, "max": 4 }
+    },
+    {
+      "id": "rr_cage",
+      "slot": "rear",
+      "mk": 1,
+      "name": "Rear Carrier Cage",
+      "blurb": "A wire cage behind the bumper for small loads.",
+      "stats": { "top": -0.005 },
+      "cost": { "parts": 10, "scrap": 15 },
+      "weight": 9,
+      "hold": { "zone": "carrier", "units": 4, "max": 2 }
+    },
+    {
+      "id": "rr_cage2",
+      "slot": "rear",
+      "mk": 2,
+      "name": "Heavy Cargo Cage",
+      "blurb": "A steel cage on a welded carrier. Holds medium and large loads.",
+      "stats": { "top": -0.01 },
+      "cost": { "parts": 18, "scrap": 26, "tech": 3 },
+      "weight": 5,
+      "hold": { "zone": "carrier", "units": 8, "max": 4 }
+    },
+    {
+      "id": "utl_tie",
+      "slot": "utility",
+      "mk": 1,
+      "name": "Bed Tie-down Kit",
+      "blurb": "Eyebolts and straps for a pickup or buggy bed. Whatever you strap down stays there.",
+      "stats": { },
+      "cost": { "parts": 8, "scrap": 12 },
+      "weight": 9,
+      "hold": { "zone": "bed", "units": 8, "max": 4 }
+    },
+    {
+      "id": "utl_net",
+      "slot": "utility",
+      "mk": 2,
+      "name": "Bed Cargo Net",
+      "blurb": "A heavy net over the whole bed, tied to every eyebolt.",
+      "stats": { "top": -0.005 },
+      "cost": { "parts": 14, "scrap": 20 },
+      "weight": 6,
+      "hold": { "zone": "bed", "units": 14, "max": 4 }
     },
     {
       "id": "fr_bull",
@@ -562,10 +668,11 @@
       "slot": "roof",
       "mk": 1,
       "name": "Roof Rack",
-      "blurb": "Rails for gear. Carries more, holds a little fuel.",
+      "blurb": "Rails and two straps for a few small loads. Anything bigger or heavier will not stay put.",
       "stats": { "cargo": 4, "tank": 0.1 },
       "cost": { "parts": 8, "scrap": 12 },
-      "weight": 12
+      "weight": 12,
+      "hold": { "zone": "roof", "units": 4, "max": 2 }
     },
     {
       "id": "rf_light",
@@ -595,7 +702,8 @@
       "blurb": "A spare on the back. Flat tyres are a quick swap.",
       "stats": { "spare": 1 },
       "cost": { "parts": 8, "scrap": 12 },
-      "weight": 12
+      "weight": 12,
+      "hold": { "zone": "spare", "units": 4, "max": 4, "only": "tyres" }
     },
     {
       "id": "rr_wing",
@@ -1255,6 +1363,17 @@
       "weight": 0
     },
     {
+      "id": "hood_cut",
+      "slot": "hood",
+      "mk": 1,
+      "name": "Cut bonnet",
+      "blurb": "A hole torn through the panel for an engine that does not fit. It does not grow back.",
+      "stats": {"armorF": -0.04, "airflow": 0.14},
+      "stock": true,
+      "cost": {  },
+      "weight": 0
+    },
+    {
       "id": "door_none",
       "slot": "doorL",
       "mk": 1,
@@ -1534,6 +1653,208 @@
       "stats": {"armorS": 0.16, "armor": 0.02, "top": -0.02},
       "cost": { "parts": 20, "scrap": 30, "tech": 5 },
       "weight": 5
+    },
+    {
+      "id": "seat_none",
+      "slot": "seatD",
+      "mk": 1,
+      "name": "No seat",
+      "blurb": "Bare floor mounts and a loose belt buckle. Nobody can ride here; the driver sits on the floor.",
+      "stats": {"cargo": 1},
+      "stock": true,
+      "empty": true,
+      "cost": {  },
+      "weight": 0
+    },
+    {
+      "id": "bench_none",
+      "slot": "seatR",
+      "mk": 1,
+      "name": "No rear seat",
+      "blurb": "Bare floor and bolt brackets. Room for cargo.",
+      "stats": {"cargo": 2},
+      "stock": true,
+      "empty": true,
+      "cost": {  },
+      "weight": 0
+    },
+    {
+      "id": "steer_none",
+      "slot": "steer",
+      "mk": 1,
+      "name": "No steering wheel",
+      "blurb": "A bare column stub and a loom of wires. The steering barely turns.",
+      "stats": {},
+      "stock": true,
+      "empty": true,
+      "cost": {  },
+      "weight": 0
+    },
+    {
+      "id": "dash_none",
+      "slot": "dash",
+      "mk": 1,
+      "name": "No dashboard",
+      "blurb": "A bare cross-beam with the wiring hanging out. The lamps flicker.",
+      "stats": {"light": -0.3},
+      "stock": true,
+      "empty": true,
+      "cost": {  },
+      "weight": 0
+    },
+    {
+      "id": "seat_std",
+      "slot": "seatD",
+      "mk": 1,
+      "name": "Factory seat",
+      "blurb": "Cloth on a spring frame, sagging a little.",
+      "stats": {},
+      "stock": true,
+      "cost": { "parts": 5, "scrap": 8 },
+      "weight": 0
+    },
+    {
+      "id": "bench_std",
+      "slot": "seatR",
+      "mk": 1,
+      "name": "Factory rear seat",
+      "blurb": "A cloth bench with a folding back.",
+      "stats": {},
+      "stock": true,
+      "cost": { "parts": 6, "scrap": 10 },
+      "weight": 0
+    },
+    {
+      "id": "steer_std",
+      "slot": "steer",
+      "mk": 1,
+      "name": "Factory steering wheel",
+      "blurb": "A plain plastic rim on a spoked hub.",
+      "stats": {},
+      "stock": true,
+      "cost": { "parts": 4, "scrap": 6 },
+      "weight": 0
+    },
+    {
+      "id": "dash_std",
+      "slot": "dash",
+      "mk": 1,
+      "name": "Factory dashboard",
+      "blurb": "A moulded dash with speedo, temperature and fuel dials.",
+      "stats": {},
+      "stock": true,
+      "cost": { "parts": 8, "scrap": 12 },
+      "weight": 0
+    },
+    {
+      "id": "seat_torn",
+      "slot": "seatD",
+      "mk": 1,
+      "name": "Torn Cloth Seat",
+      "blurb": "Foam showing through the cloth. Still a seat.",
+      "stats": {},
+      "cost": { "parts": 4, "scrap": 6 },
+      "weight": 10
+    },
+    {
+      "id": "seat_bucket",
+      "slot": "seatD",
+      "mk": 2,
+      "name": "Racing Bucket Seat",
+      "blurb": "Deep bolsters and a harness. Holds a driver in the corners (driver's seat only).",
+      "stats": {"grip": 0.02},
+      "cost": { "parts": 14, "scrap": 20 },
+      "weight": 5
+    },
+    {
+      "id": "seat_leather",
+      "slot": "seatD",
+      "mk": 2,
+      "name": "Padded Leather Seat",
+      "blurb": "Thick padding takes the shakes out of rough road (driver's seat only).",
+      "stats": {"grip": 0.01, "travel": 0.02},
+      "cost": { "parts": 14, "scrap": 20 },
+      "weight": 5
+    },
+    {
+      "id": "seat_plate",
+      "slot": "seatD",
+      "mk": 3,
+      "name": "Plated Seat",
+      "blurb": "A steel back plate behind the cushion. A little armour, a little weight.",
+      "stats": {"armorR": 0.04, "armorS": 0.02, "top": -0.01},
+      "cost": { "parts": 22, "scrap": 30, "tech": 5 },
+      "weight": 2
+    },
+    {
+      "id": "bench_torn",
+      "slot": "seatR",
+      "mk": 1,
+      "name": "Torn Cloth Bench",
+      "blurb": "Stuffing spilling out of the cushion. A bench is a bench.",
+      "stats": {},
+      "cost": { "parts": 4, "scrap": 6 },
+      "weight": 10
+    },
+    {
+      "id": "bench_fold",
+      "slot": "seatR",
+      "mk": 2,
+      "name": "Fold-Flat Bench",
+      "blurb": "Folds down to a flat load floor when there is cargo to carry.",
+      "stats": {"cargo": 1},
+      "cost": { "parts": 14, "scrap": 20 },
+      "weight": 5
+    },
+    {
+      "id": "bench_rack",
+      "slot": "seatR",
+      "mk": 2,
+      "name": "Cargo Rack",
+      "blurb": "A steel frame and straps where the back seat was. Lots of room, nowhere to sit.",
+      "stats": {"cargo": 4},
+      "cost": { "parts": 16, "scrap": 24 },
+      "weight": 4
+    },
+    {
+      "id": "steer_sport",
+      "slot": "steer",
+      "mk": 2,
+      "name": "Small Sport Wheel",
+      "blurb": "A small suede rim with a quick feel. A touch more lock.",
+      "stats": {"steer": 0.1},
+      "cost": { "parts": 12, "scrap": 18 },
+      "weight": 6
+    },
+    {
+      "id": "steer_chain",
+      "slot": "steer",
+      "mk": 1,
+      "name": "Chain-Wrapped Wheel",
+      "blurb": "Chain wound round the rim for grip. Rattles like a bag of spanners.",
+      "stats": {"sig": 0.02},
+      "cost": { "parts": 4, "scrap": 7 },
+      "weight": 8
+    },
+    {
+      "id": "dash_cracked",
+      "slot": "dash",
+      "mk": 1,
+      "name": "Cracked Dash",
+      "blurb": "Sun-split plastic and a taped-over glovebox. Everything still lights up.",
+      "stats": {},
+      "cost": { "parts": 5, "scrap": 8 },
+      "weight": 8
+    },
+    {
+      "id": "dash_gauge",
+      "slot": "dash",
+      "mk": 2,
+      "name": "Gauge-Pod Dash",
+      "blurb": "Aluminium panel with a pod of race gauges. You can see what the engine wants: a little less fuel burned.",
+      "stats": {"burn": -0.02, "light": 0.05},
+      "cost": { "parts": 14, "scrap": 20, "tech": 3 },
+      "weight": 4
     }
   ],
   "paints": [

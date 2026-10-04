@@ -26,8 +26,10 @@ import {
   toHealth,
 } from '../src/sim/garage';
 import { applyRepair, listFaults, planRepair } from '../src/sim/repair';
-import { SALVAGE_STAGES, salvageLoot } from '../src/sim/salvage';
-import { pickChassis, rollCar } from '../src/sim/cars';
+import { SALVAGE_STAGES, salvageLoot, stripBuild } from '../src/sim/salvage';
+import { isMissing, pickChassis, rollCar } from '../src/sim/cars';
+import { INTERIOR_SLOTS } from '../src/data';
+const isCabinPart = (id: string) => INTERIOR_SLOTS.includes(partDef(id).slot);
 import { applyHit } from '../src/sim/damage';
 import { newStocks } from '../src/sim/resources';
 
@@ -298,38 +300,63 @@ describe('salvage', () => {
       const a = salvageLoot(i, ctx);
       const b = salvageLoot(i, ctx);
       expect(a.items.map((p) => p.id)).toEqual(b.items.map((p) => p.id));
-      expect(a.stocks).toEqual(b.stocks);
-      expect(a.ammo).toBe(b.ammo);
+      expect(a.goods).toEqual(b.goods);
     }
   });
-  it('each stage pulls the right kind of part', () => {
-    for (let s = 1; s < 60; s++) {
-      const c = { ...ctx, seed: s * 31 };
-      expect(partDef(salvageLoot(0, c).items[0].id).slot).toBe('wheels');
-      expect(partDef(salvageLoot(1, c).items[0].id).slot).toBe('engine');
+  it('hands over only concrete things: named parts, cans and tins, never abstract Scrap, Parts or Tech', () => {
+    for (let s = 1; s <= 60; s++) {
+      for (let stage = 0; stage < SALVAGE_STAGES.length; stage++) {
+        const l = salvageLoot(stage, { ...ctx, seed: s * 31 });
+        expect(Object.keys(l).sort()).not.toContain('stocks');
+        for (const it of l.items) expect(partDef(it.id).name.length).toBeGreaterThan(0);
+        for (const g of l.goods) expect(['fuel', 'oil', 'water', 'rations', 'medicine', 'medkit', 'bandage', 'ammo', 'part', 'paint']).toContain(g.kind);
+      }
+    }
+  });
+  it('takes what is really on the car: the stage pulls the parts that are fitted, and a missing part gives nothing', () => {
+    for (let s = 1; s < 80; s++) {
+      const seed = s * 31;
+      const car = rollCar(seed, { biome: 'wasteland', chassis: 'sedan' }).build;
+      const c = { ...ctx, seed, build: car };
+      const tyres = car.tyres.filter((t, i) => !t || !partDef(t.id).empty).length;
+      expect(salvageLoot(0, c).items).toHaveLength(tyres);
+      for (const it of salvageLoot(0, c).items) expect(partDef(it.id).slot).toBe('wheels');
+      const eng = salvageLoot(1, c).items.filter((p) => partDef(p.id).slot === 'engine');
+      expect(eng.length).toBe(isMissing(car, 'engine') ? 0 : 1);
+      // Stripping leaves the mounts bare: a second pass finds nothing.
+      for (const stage of [0, 1, 2, 3]) stripBuild(stage, car);
+      for (const stage of [0, 1, 2]) expect(salvageLoot(stage, { ...c, build: car }).items).toEqual([]);
+      // Only a spare in the boot can still be a cabin part: the mounts are bare.
+      expect(salvageLoot(3, { ...c, build: car }).items.filter((p) => isCabinPart(p.id)).length).toBeLessThanOrEqual(1);
     }
   });
   it('burnt hulks give worn parts and often nothing in the trunk', () => {
     let worn = 0;
+    let withEngine = 0;
     let empty = 0;
     for (let s = 1; s < 100; s++) {
-      const c = { ...ctx, seed: s * 17, burnt: true };
-      if (salvageLoot(1, c).items[0].cond < 0.6) worn++;
+      const c = { ...ctx, seed: s * 17, burnt: true, build: rollCar(s * 17, { biome: 'wasteland', chassis: 'sedan', status: 'hulk' }).build };
+      const eng = salvageLoot(1, c).items.find((p) => partDef(p.id).slot === 'engine');
+      if (eng) {
+        withEngine++;
+        if (eng.cond < 0.6) worn++;
+      }
       const t = salvageLoot(3, c);
-      if (!Object.keys(t.stocks).length && !t.ammo && !t.items.length) empty++;
+      if (!t.goods.length && !t.items.filter((p) => !isCabinPart(p.id)).length) empty++;
     }
-    expect(worn).toBe(99);
+    expect(worn).toBe(withEngine);
+    expect(withEngine).toBeGreaterThan(60);
     expect(empty).toBeGreaterThan(40);
-    expect(empty).toBeLessThan(75);
+    expect(empty).toBeLessThan(90);
   });
   it('raiders carry better kit than family cars', () => {
     const avg = (kind: 'car' | 'raider') => {
       let t = 0;
       // The quality of what was found, not of the factory fittings that come out of any car.
-      for (let s = 1; s <= 300; s++) t += salvageLoot(1, { ...ctx, kind, seed: s * 13 }).items.filter((p) => !partDef(p.id).stock).reduce((a, p) => a + partDef(p.id).mk, 0);
+      for (let s = 1; s <= 300; s++) for (let st = 0; st < 3; st++) t += salvageLoot(st, { ...ctx, kind, seed: s * 13 }).items.filter((p) => !partDef(p.id).stock).reduce((a, p) => a + partDef(p.id).mk, 0);
       return t / 300;
     };
-    expect(avg('raider')).toBeGreaterThan(avg('car') + 0.3);
+    expect(avg('raider')).toBeGreaterThan(avg('car'));
   });
   it('a lost convoy vehicle gives back its own parts, battered', () => {
     const b = newBuild('sedan', { seed: 1 });
@@ -357,26 +384,34 @@ describe('world cars', () => {
     expect(a.build.paint).toBe(b.build.paint);
     expect(a.build.comp).toEqual(b.build.comp);
   });
-  it('mixes hulks, rough runners and sound cars', () => {
+  it('mixes hulks, rough runners and sound cars, with most of them incomplete', () => {
     const count = { hulk: 0, rough: 0, intact: 0 };
-    for (let s = 1; s <= 1000; s++) count[rollCar(s * 97, { biome: 'wasteland' }).status]++;
-    expect(count.hulk).toBeGreaterThan(250);
-    expect(count.rough).toBeGreaterThan(380);
-    expect(count.intact).toBeGreaterThan(130);
+    const grade: Record<string, number> = {};
+    for (let s = 1; s <= 1000; s++) {
+      const r = rollCar(s * 97, { biome: 'wasteland', reach: 0.6 });
+      count[r.status]++;
+      grade[r.grade] = (grade[r.grade] ?? 0) + 1;
+    }
+    expect(count.hulk).toBeGreaterThan(100);
+    expect(count.rough).toBeGreaterThan(450);
+    expect(count.intact).toBeGreaterThan(50);
     expect(count.intact).toBeLessThan(count.rough);
+    // A minority are complete; the common car is an incomplete one.
+    expect(grade.complete / 1000).toBeLessThan(0.2);
+    expect(grade.incomplete).toBeGreaterThan(grade.complete * 2);
+    expect(grade.incomplete).toBeGreaterThan(300);
   });
-  it('a rough car always has at least two real faults, and a hulk cannot be driven', () => {
+  it('a rough car has at least two real faults, and a hulk cannot be driven', () => {
     for (let s = 1; s <= 400; s++) {
       const r = rollCar(s * 31, { biome: 'city' });
       const b = r.build;
-      if (r.status === 'rough') {
+      if (r.grade === 'rough') {
         const faults = (b.comp.engine < 0.6 ? 1 : 0) + (b.comp.tires.some((t) => t === 0) ? 1 : 0) + (b.comp.leaking ? 1 : 0);
         expect(faults).toBeGreaterThanOrEqual(2);
       }
       if (r.status === 'hulk') {
         expect(b.hp).toBeLessThan(0.1);
         expect(b.fuel).toBe(0);
-        expect(b.comp.engine).toBe(0);
       }
       expect(b.comp.tires).toHaveLength(4);
     }

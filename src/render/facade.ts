@@ -76,14 +76,12 @@ vec4 fG = texture2D( tGrungeF, vec2( vFWPos.x + vFWPos.z, vFWPos.y ) * 0.35 );
 vec4 fM = texture2D( tMacroF, vec2( vFWPos.x + vFWPos.z, vFWPos.y ) * 0.02 + fSeed );
 // Wall material.
 vec3 fWall = diffuseColor.rgb;
-float fHgt = 0.0;
 float fRough = 0.9;
 if ( fStyle < 0.5 ) {
   // Precast concrete panels with joints at every floor and cell.
   vec2 pj = abs( fract( vec2( fUv.x / ( fCellW * 2.0 ), fUv.y / fFloor ) + 0.5 ) - 0.5 ) * vec2( fCellW * 2.0, fFloor );
   float joint = 1.0 - smoothstep( 0.015, 0.035, min( pj.x, pj.y ) );
   fWall *= 1.0 - joint * 0.35;
-  fHgt -= joint * 0.01;
   fWall *= 0.92 + fHash( floor( vec2( fUv.x / ( fCellW * 2.0 ), fUv.y / fFloor ) ) + fSeed ) * 0.14;
 } else if ( fStyle < 1.5 ) {
   // Running-bond brick.
@@ -95,7 +93,6 @@ if ( fStyle < 0.5 ) {
   float mortar = 1.0 - smoothstep( 0.0, 0.08, min( min( bf.x, 1.0 - bf.x ) * bs.x / bs.y, min( bf.y, 1.0 - bf.y ) ) );
   float tone = fHash( bi + fSeed );
   fWall *= mix( 0.78 + tone * 0.3, 1.25, mortar );
-  fHgt -= mortar * 0.006;
 } else if ( fStyle < 2.5 ) {
   // Stucco: blotchy render with cracks.
   fWall *= 0.9 + fM.r * 0.2;
@@ -112,7 +109,6 @@ if ( fStyle < 0.5 ) {
   float bt = fHash( vec2( floor( bd ), floor( fUv.x / 2.4 ) + fSeed ) );
   fWall *= 0.88 + bt * 0.2;
   fWall *= mix( 0.7, 1.0, smoothstep( 0.0, 0.2, bf ) );
-  fHgt -= ( 1.0 - smoothstep( 0.0, 0.14, bf ) ) * 0.008;
   float bare = smoothstep( 0.78, 0.95, fM.g + fG.r * 0.3 + bt * 0.12 );
   fWall = mix( fWall, vec3( 0.46, 0.37, 0.28 ) * ( 0.8 + bt * 0.3 ), bare * 0.4 );
 } else if ( fStyle < 5.5 ) {
@@ -125,7 +121,6 @@ if ( fStyle < 0.5 ) {
   fWall = mix( fWall, fWall * 1.25, rail );
   float skirt = 1.0 - smoothstep( 0.1, 0.12, v );
   fWall = mix( fWall, fWall * 0.55, skirt );
-  fHgt += rail * 0.012 + skirt * 0.012;
   float stripe = step( 0.5, fract( fUv.x / 0.24 + fSeed ) ) * step( 0.5, fHash( vec2( floor( fSeed * 7.0 ), 1.0 ) ) ) * ( 1.0 - wain );
   fWall *= 1.0 - stripe * 0.05;
   float damp2 = smoothstep( 0.4, 0.95, fG.r * 0.6 + fM.g * 0.5 ) * ( 1.0 - smoothstep( 0.0, 1.6, v ) );
@@ -136,7 +131,6 @@ if ( fStyle < 0.5 ) {
   // Corrugated sheet metal, rusted along the seams.
   float rib = abs( fract( fUv.x / 0.1 ) - 0.5 );
   fWall *= 0.78 + rib * 0.55;
-  fHgt += rib * 0.016;
   fRough = 0.52;
   float rust = smoothstep( 0.52, 0.75, fM.g + fG.r * 0.45 + ( 1.0 - smoothstep( 0.0, 1.2, fUv.y ) ) * 0.25 );
   fWall = mix( fWall, vec3( 0.42, 0.22, 0.12 ) * ( 0.7 + fM.r * 0.5 ), rust * 0.4 );
@@ -155,7 +149,6 @@ if ( fStyle < 0.5 ) {
   fWall *= 0.85 + fM.g * 0.3;
   fWall *= 1.0 - smoothstep( 0.6, 0.85, fG.r + fM.b * 0.4 ) * 0.4;
   fRough = 0.7;
-  fHgt -= ( 1.0 - smoothstep( 0.0, 0.01, seam ) ) * 0.004;
 } else if ( fStyle < 8.5 ) {
   // Square tiles with grout, a few cracked or missing.
   vec2 tc = fUv / 0.3;
@@ -166,7 +159,6 @@ if ( fStyle < 0.5 ) {
   fWall = mix( fWall, vec3( 0.32, 0.3, 0.27 ), grout );
   fWall *= 1.0 - smoothstep( 0.7, 0.9, fG.r + fM.b * 0.4 ) * 0.35;
   fRough = 0.35 + grout * 0.5;
-  fHgt -= grout * 0.004;
 } else {
   // Poured concrete floor: mottled, with cracks and saw joints.
   fWall *= 0.82 + fM.r * 0.3;
@@ -195,7 +187,6 @@ if ( fShop ) {
       // Rolling shutter, corrugated.
       float rib = abs( fract( fUv.y * 9.0 ) - 0.5 );
       fCol = vec3( 0.32, 0.33, 0.34 ) * ( 0.75 + rib * 0.5 );
-      fHgt += rib * 0.01;
       fRough = 0.55;
       // Graffiti blotches.
       fCol = mix( fCol, signCol * 0.5, smoothstep( 0.62, 0.72, fM.g + fG.r * 0.2 ) * 0.7 );
@@ -210,7 +201,8 @@ vec3 fRoom = vec3( 0.0 );
 if ( fIn > 0.5 || fGlass > 0.0 ) {
   vec3 N = normalize( vFWN );
   vec3 T = normalize( cross( vec3( 0.0, 1.0, 0.0 ), N ) );
-  vec3 V = normalize( vFWPos - cameraPosition );
+  // Camera-relative: vFWPos - cameraPosition loses precision far from the origin and the ray shimmers into noise.
+  vec3 V = inverseTransformDirection( - normalize( vViewPosition ), viewMatrix );
   vec3 rd = vec3( dot( V, T ), V.y, -dot( V, N ) );
   float roomW = fShop ? fCellW * 2.0 : fCellW;
   float roomH = fShop ? fGround : fFloor;
@@ -242,7 +234,6 @@ if ( fIn > 0.5 ) {
   if ( fBoard > 0.5 ) {
     float plank = fract( fCf.y * 6.0 + fCf.x * 0.3 );
     fCol = vec3( 0.32, 0.24, 0.16 ) * ( 0.7 + 0.5 * fHash( floor( vec2( fCf.y * 6.0 + fCf.x * 0.3, fCi.x ) ) ) );
-    fHgt += smoothstep( 0.0, 0.1, plank ) * 0.01;
     fRough = 0.9;
   } else if ( fBroken > 0.5 ) {
     fCol = fRoom * 0.35;
@@ -264,15 +255,6 @@ if ( fShop && fGlass > 0.0 ) {
 }
 fCol = mix( fCol, fWall * 0.62, fFrame );
 fCol = mix( fCol, fWall * 1.18, fSill );
-// Relief from a smooth signed distance to the window box (metres), so the bump has no hard steps.
-if ( !fShop && fPlain < 0.5 ) {
-  vec2 fq = ( abs( fCf - ( fWin.xy + fWin.zw ) * 0.5 ) - ( fWin.zw - fWin.xy ) * 0.5 ) * vec2( fCellW, fFloor );
-  float fBoxD = max( fq.x, fq.y );
-  float fRecess = 1.0 - smoothstep( -0.012, 0.012, fBoxD );
-  float fRing = smoothstep( -0.015, 0.005, fBoxD ) * ( 1.0 - smoothstep( 0.03, 0.05, fBoxD ) );
-  float fSillS = smoothstep( 0.02, 0.0, abs( ( fCf.y - fWin.y ) * fFloor + 0.06 ) - 0.04 ) * step( fq.x, 0.08 );
-  fHgt += fRing * 0.02 + fSillS * 0.03 - fRecess * 0.07;
-}
 // Grime: soft rain streaks under sills, dirt at the base, soot above broken windows.
 float streakMask = ( 1.0 - fPlain ) * fInX * step( fCf.y, fWin.y ) * smoothstep( fWin.y - 0.55, fWin.y, fCf.y );
 float streak = streakMask * texture2D( tGrungeF, vec2( vFWPos.x + vFWPos.z, vFWPos.y * 0.25 ) * 0.12 ).a;
@@ -286,22 +268,7 @@ float fEmit = ( fLit * fIn + fShopLit * step( 0.5, fGlass ) * ( fShop ? 1.0 : 0.
 `;
 
 const FRAG_ROUGH = /* glsl */ `
-float roughnessFactor = mix( fRough, 0.06, fGlass * ( 1.0 - fBroken * fIn ) );
-`;
-
-const FRAG_NORMAL = /* glsl */ `
-{
-  // Bump from the analytic height: window recesses, sills, brick and panel joints.
-  vec3 dpdx = dFdx( - vViewPosition );
-  vec3 dpdy = dFdy( - vViewPosition );
-  float dhx = dFdx( fHgt );
-  float dhy = dFdy( fHgt );
-  vec3 r1 = cross( dpdy, normal );
-  vec3 r2 = cross( normal, dpdx );
-  float det = dot( dpdx, r1 );
-  vec3 grad = sign( det ) * ( dhx * r1 + dhy * r2 );
-  normal = normalize( abs( det ) * normal - grad * 1.5 );
-}
+float roughnessFactor = mix( fRough, 0.08, fGlass * ( 1.0 - fBroken * fIn ) );
 `;
 
 const FRAG_EMISSIVE = /* glsl */ `
@@ -328,8 +295,11 @@ export function facadeMaterial(): THREE.MeshStandardMaterial {
       .replace('#include <color_fragment>', FRAG_COLOR)
       .replace('#include <roughnessmap_fragment>', FRAG_ROUGH)
       .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = 0.0;')
-      .replace('#include <normal_fragment_maps>', FRAG_NORMAL)
-      .replace('#include <emissivemap_fragment>', FRAG_EMISSIVE);
+      .replace('#include <emissivemap_fragment>', FRAG_EMISSIVE)
+      .replace(
+        '#include <opaque_fragment>',
+        '#include <opaque_fragment>\ndiffuseColor.a = 1.0;\ngl_FragColor.a = 1.0;',
+      );
   };
   m.customProgramCacheKey = () => 'facade';
   m.userData.shared = true;

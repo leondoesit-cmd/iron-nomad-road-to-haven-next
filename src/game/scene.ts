@@ -729,7 +729,7 @@ export abstract class Scene implements Ctx {
       }
       v.active = true;
       p.cam.apply(v.camera);
-      R.setViewMode(i, p.firstPerson, this.input.settings.fpFov);
+      R.setViewMode(i, p.firstPerson, this.input.settings.fpFov, this.input.settings.chaseFov);
       this.syncTrip(i, p, dt);
       v.focus.set(p.pos.x, p.pos.y, p.pos.z);
       if (p.vehicle) v.focus.set(p.vehicle.position.x, p.vehicle.position.y, p.vehicle.position.z);
@@ -971,6 +971,9 @@ export abstract class Scene implements Ctx {
 
   dispose() {
     this.disposed = true;
+    if ('stopRadioChatter' in this.audio && typeof this.audio.stopRadioChatter === 'function') {
+      this.audio.stopRadioChatter();
+    }
     // Only clear the hooks if a newer scene has not already taken them over.
     if (this.R.onBeforeView[2] === this.beforeViewHook) this.R.onBeforeView[2] = () => {};
     if (this.R.onAfterView[0] === this.afterViewHook) this.R.onAfterView[0] = () => {};

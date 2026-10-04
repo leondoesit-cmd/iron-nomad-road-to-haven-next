@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Iron Nomad · Portraits</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #1b1714; color: #e8dcc4; font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+      #view { position: absolute; inset: 0; display: flex; }
+      #gl { flex: 1 1 0; min-width: 0; display: block; }
+      #ref { flex: 1 1 0; min-width: 0; object-fit: contain; background: #111; display: none; }
+      #bar { position: absolute; left: 8px; top: 8px; display: flex; gap: 6px; flex-wrap: wrap; max-width: 60%; }
+      #bar button { background: #2a231d; color: #e8dcc4; border: 1px solid #5a4a3a; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+      #bar button.on { background: #6a4a2a; }
+      #bar.hide { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="view"><canvas id="gl"></canvas><img id="ref" alt="" /></div>
+    <div id="bar"></div>
+    <script type="module" src="/src/tools/portrait.ts"></script>
+  </body>
+</html>

@@ -22,7 +22,7 @@ const DT = 1 / 60;
 /** Every pane of street glass in the leg, by walking the chunks along the boulevard. */
 function allPanes(from: ChunkSource = src): Aabb[] {
   const out: Aabb[] = [];
-  for (let cx = -1; cx <= 0; cx++) for (let cz = -2; cz < 40; cz++) out.push(...from.get(cx, cz).aabbs.filter((a) => a.pane));
+  for (let cx = -1; cx <= 0; cx++) for (let cz = -2; cz < 40; cz++) out.push(...from.get(cx, cz).aabbs.filter((a) => a.pane && a.wall === undefined));
   return out;
 }
 

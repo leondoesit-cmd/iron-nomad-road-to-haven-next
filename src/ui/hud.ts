@@ -1,3 +1,4 @@
+import { setMarkerUiScale } from '../render/markers';
 import { gearDef, t } from '../data';
 import { DRUGS } from '../sim/drugs';
 import { STAMINA, bleedLabel, wearLabel, wearOf } from '../sim/vitals';
@@ -285,6 +286,7 @@ export class Hud {
 
   setScale(s: number) {
     this.uiScale = s;
+    setMarkerUiScale(s);
     document.documentElement.style.setProperty('--u', String(s));
   }
 
@@ -546,8 +548,10 @@ export class Hud {
     }
 
     // Reticle: on foot aiming or manning the bed gun.
-    const showRet = (p.state === 'foot' && p.equip === 'gun' && !p.carry) || p.state === 'gunner';
+    const driveRet = p.state === 'driving' && p.equip === 'gun';
+    const showRet = (p.state === 'foot' && p.equip === 'gun' && !p.carry) || p.state === 'gunner' || driveRet;
     h.setStyle('reticle', 'display', showRet ? 'block' : 'none');
+    h.setStyle('reticle', 'opacity', driveRet ? '0.5' : '1');
     h.setStyle('reticle', 'transform', `scale(${1 + (1 - p.ads) * 0.4})`);
 
     // Damage / downed overlays
@@ -656,6 +660,10 @@ export class Hud {
       if (v.stats.tyresGone) parts.push(chip(`${v.stats.tyresGone} BARE WHEEL${v.stats.tyresGone > 1 ? 'S' : ''}`, 'bad'));
       if (v.stats.hoodOff) parts.push(chip('NO BONNET', 'warn'));
       if (v.stats.doorsOff) parts.push(chip(`${v.stats.doorsOff} DOOR${v.stats.doorsOff > 1 ? 'S' : ''} OFF`, 'warn'));
+      if (v.stats.noSteer) parts.push(chip('NO STEERING WHEEL', 'bad'));
+      if (v.stats.noDriverSeat) parts.push(chip('NO DRIVER SEAT', 'warn'));
+      if (v.stats.noPassengerSeat) parts.push(chip('NO PASSENGER SEAT', 'warn'));
+      if (v.stats.noDash) parts.push(chip('NO DASH', 'warn'));
       parts.push(chip(`BODY ${Math.round(v.hpFrac * 100)}%`, v.hpFrac < 0.35 ? 'bad' : v.hpFrac < 0.65 ? 'warn' : ''));
       const bent = v.bodywork.dentLevel();
       if (bent > 0.5) parts.push(chip('CRUMPLED', 'warn'));

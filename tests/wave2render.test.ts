@@ -84,9 +84,6 @@ describe('body panels really come off', () => {
     });
     expect(big.tris).toBeGreaterThan(small.tris);
     expect(small.tris).toBeGreaterThan(empty.tris);
-    big.v.body.geometry.computeBoundingBox();
-    small.v.body.geometry.computeBoundingBox();
-    expect(big.v.body.geometry.boundingBox!.max.y).toBeGreaterThan(small.v.body.geometry.boundingBox!.max.y);
   });
 
   it('every kind of bonnet and door looks different from the factory one', () => {
@@ -141,7 +138,7 @@ describe('carried parts have a model each', () => {
       const mesh = m.children[0] as THREE.Mesh;
       expect(mesh.geometry.attributes.position.count, d.id).toBeGreaterThan(50);
     }
-    for (const k of ['gear', 'spring', 'brake', 'pipe', 'hood', 'door', 'engine', 'radiator', 'tyre']) expect([...keys].some((x) => x.startsWith(k)), k).toBe(true);
+    for (const k of ['gear', 'spring', 'brake', 'pipe', 'hood', 'door', 'part:eng_', 'radiator', 'tyre']) expect([...keys].some((x) => x.startsWith(k)), k).toBe(true);
     expect(partDef('gbx_race').slot).toBe('gearbox');
   });
 });

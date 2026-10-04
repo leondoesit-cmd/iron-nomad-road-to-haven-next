@@ -62,31 +62,60 @@ export function fuelOf(def: VehicleDef, fit: Fit): FuelType {
 
 export type BayLabel = 'loose' | 'fits' | 'snug' | 'tight' | 'cut';
 
+/** What the bonnet is: a whole one, one with a hole cut in it (`hood_cut`), or none. */
+export type HoodState = 'closed' | 'cut' | 'off';
+
 export interface BayFit {
   /** Engine size class minus bay size class. Negative: room to spare. */
   oversize: number;
   label: BayLabel;
   /** Share of the radiator's airflow that survives the engine crowding it. */
   airflow: number;
+  hood: HoodState;
+  /** The engine goes entirely under a closed bonnet. False for anything past `fits`. */
+  fitsClosed: boolean;
+  /** How the bonnet copes: it is just closed, bulges over the engine, sits propped on it, or has to be cut or removed. */
+  bonnet: 'flat' | 'bulge' | 'prop' | 'blocked';
 }
 
+/** With a whole bonnet. */
 export const BAY_TEXT: Record<BayLabel, string> = {
   loose: 'Rattles around in the bay',
+  fits: 'Fits under the bonnet',
+  snug: 'Does not quite fit: the bonnet bulges over it',
+  tight: 'Too big: the bonnet sits propped on it, hoses and airflow suffer',
+  cut: 'Does not fit under the bonnet: cut the hood or remove it',
+};
+
+/** With the bonnet cut or gone: the engine just stands proud. */
+export const BAY_TEXT_OPEN: Record<BayLabel, string> = {
+  loose: 'Rattles around in the bay',
   fits: 'Fits the bay',
-  snug: 'A snug fit',
-  tight: 'Tight: hoses and airflow suffer',
-  cut: 'Forced in: the bonnet is cut to fit',
+  snug: 'A snug fit: the top stands proud of the bay',
+  tight: 'Tight: it stands well above the bay, hoses and airflow suffer',
+  cut: 'Forced in: it pokes through the bonnet opening and starves the radiator',
 };
 
 /** The same in a few words, for crowded cards. */
-export const BAY_SHORT: Record<BayLabel, string> = { loose: 'loose fit', fits: 'fits', snug: 'snug fit', tight: 'tight fit', cut: 'bonnet cut' };
+export const BAY_SHORT: Record<BayLabel, string> = { loose: 'loose fit', fits: 'fits', snug: 'bulges bonnet', tight: 'bonnet propped', cut: 'cut hood or remove' };
 
-export function bayFit(def: VehicleDef, spec: EngineSpec): BayFit {
+export const bayText = (label: BayLabel, hood: HoodState = 'closed'): string => (hood === 'closed' ? BAY_TEXT[label] : BAY_TEXT_OPEN[label]);
+
+/** The state of the bonnet in a build. */
+export function hoodState(fit: Fit): HoodState {
+  const id = fit.hood?.id;
+  if (!id) return 'closed';
+  if (id === 'hood_cut') return 'cut';
+  return partDef(id).empty ? 'off' : 'closed';
+}
+
+export function bayFit(def: VehicleDef, spec: EngineSpec, hood: HoodState = 'closed'): BayFit {
   const bay = def.bay ?? spec.size;
   const oversize = spec.size - bay;
   const label: BayLabel = oversize <= -2 ? 'loose' : oversize <= 0 ? 'fits' : oversize === 1 ? 'snug' : oversize === 2 ? 'tight' : 'cut';
   const airflow = label === 'snug' ? 0.92 : label === 'tight' ? 0.8 : label === 'cut' ? 0.66 : 1;
-  return { oversize, label, airflow };
+  const bonnet = oversize <= 0 ? 'flat' : oversize === 1 ? 'bulge' : oversize === 2 ? 'prop' : 'blocked';
+  return { oversize, label, airflow, hood, fitsClosed: oversize <= 0, bonnet };
 }
 
 // ---------------------------------------------------------------- what an engine does to a chassis
@@ -125,7 +154,7 @@ export function engineEffects(def: VehicleDef, fit: Fit): EngineEffects {
   const empty = bayEmpty(def, fit);
   const ratio = empty ? 0 : spec.kw / Math.max(1, stock.kw);
   const massDelta = spec.mass - stock.mass;
-  const bay = bayFit(def, spec);
+  const bay = bayFit(def, spec, hoodState(fit));
   const f = clamp(massDelta / Math.max(60, def.physics.mass), -0.25, 1);
   const heavy = Math.max(0, f);
   let force: number;

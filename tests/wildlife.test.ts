@@ -123,7 +123,8 @@ describe('shots and meat', () => {
     const { W, loot } = world([player(0, 0)]);
     const deer = W.spawn('deer', 0, 20);
     expect(W.damage(deer, 500, { fromX: 0, fromZ: 0, killer: 0 })).toBe(true);
-    expect(loot).toEqual([{ rations: WILDLIFE.species.deer.meat, scrap: Math.floor(WILDLIFE.species.deer.meat / 2) }]);
+    // Meat is food and nothing else: no Scrap comes off a carcass.
+    expect(loot).toEqual([{ rations: WILDLIFE.species.deer.meat }]);
     W.damage(deer, 500, { fromX: 0, fromZ: 0, killer: 0 });
     expect(loot.length).toBe(1);
     const dog = W.spawn('dog', 0, 20);
@@ -139,7 +140,7 @@ describe('shots and meat', () => {
     expect(loot.length).toBe(0);
     expect(adds.length).toBe(1);
     adds[0].run(player(0, 19));
-    expect(loot).toEqual([{ rations: WILDLIFE.species.boar.meat, scrap: 2 }]);
+    expect(loot).toEqual([{ rations: WILDLIFE.species.boar.meat }]);
     adds[0].run(player(0, 19));
     expect(loot.length).toBe(1);
   });

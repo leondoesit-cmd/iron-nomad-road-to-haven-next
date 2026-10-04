@@ -143,9 +143,11 @@
         { "at": 640, "type": "barricade", "grade": "flimsy" },
         { "at": 900, "type": "encounter", "id": "pharmacy_looters" },
         { "at": 1150, "type": "scavengeZone", "kind": "depot", "side": 1 },
+        { "at": 1341, "type": "scavengeZone", "kind": "garage", "side": 1 },
         { "at": 1400, "type": "chassisWreck" },
         { "at": 1600, "type": "barricade", "grade": "reinforced" },
         { "at": 1850, "type": "scavengeZone", "kind": "parking", "side": -1 },
+        { "at": 2012, "type": "scavengeZone", "kind": "dealership", "side": -1 },
         { "at": 2100, "type": "encounter", "id": "survivors_cellar" },
         { "at": 2400, "type": "hordeStreet" },
         { "at": 2650, "type": "radioFragment", "n": 2 }
@@ -194,11 +196,14 @@
       "sets": [
         { "at": 260, "type": "scavengeZone", "kind": "depot", "side": 1 },
         { "at": 560, "type": "hordeStreet" },
+        { "at": 700, "type": "scavengeZone", "kind": "garage", "side": -1 },
         { "at": 900, "type": "encounter", "id": "wreck_salvage" },
         { "at": 1200, "type": "scavengeZone", "kind": "pharmacy", "side": -1 },
+        { "at": 1400, "type": "scavengeZone", "kind": "warehouse", "side": 1 },
         { "at": 1500, "type": "barricade", "grade": "reinforced" },
         { "at": 1800, "type": "scavengeZone", "kind": "hospital", "side": 1 },
         { "at": 2200, "type": "encounter", "id": "lost_courier" },
+        { "at": 2400, "type": "scavengeZone", "kind": "tyreshop", "side": 1 },
         { "at": 2500, "type": "hordeStreet" },
         { "at": 2800, "type": "radioFragment", "n": 4 },
         { "at": 3000, "type": "scavengeZone", "kind": "parking", "side": -1 }
@@ -219,11 +224,16 @@
       "endHub": "rustgate",
       "campSites": ["plaza", "carPark"],
       "sets": [
+        { "at": 20, "type": "scavengeZone", "kind": "garage", "side": -1 },
         { "at": 90, "type": "tip", "id": "petah" },
         { "at": 150, "type": "barricade", "grade": "flimsy" },
+        { "at": 150, "type": "scavengeZone", "kind": "dealership", "side": -1 },
         { "at": 196, "type": "scavengeZone", "kind": "pharmacy", "side": -1 },
         { "at": 283, "type": "encounter", "id": "founders_well", "side": 1 },
         { "at": 330, "type": "hordeStreet" },
+        { "at": 349, "type": "scavengeZone", "kind": "garage", "side": 1 },
+        { "at": 407, "type": "scavengeZone", "kind": "tyreshop", "side": 1 },
+        { "at": 470, "type": "scavengeZone", "kind": "police", "side": 1 },
         { "at": 520, "type": "scavengeZone", "kind": "depot", "side": 1 },
         { "at": 600, "type": "barricade", "grade": "reinforced" },
         { "at": 655, "type": "chassisWreck" },
@@ -232,7 +242,9 @@
         { "at": 950, "type": "hordeStreet" },
         { "at": 1013, "type": "scavengeZone", "kind": "parking", "side": -1 },
         { "at": 1110, "type": "radioFragment", "n": 4 },
-        { "at": 1180, "type": "encounter", "id": "lost_courier", "side": 1 }
+        { "at": 1134, "type": "scavengeZone", "kind": "warehouse", "side": 1 },
+        { "at": 1180, "type": "encounter", "id": "lost_courier", "side": 1 },
+        { "at": 1198, "type": "scavengeZone", "kind": "gunshop", "side": -1 }
       ]
     }
   ]

@@ -10,6 +10,7 @@ import { T_OVERHEAT } from '../src/sim/thermal';
 import { socketFor, socketsOf } from '../src/render/sockets';
 import { CHASSIS, chassisDef } from '../src/data';
 import { fakeServices } from './helpers/sim';
+import { openPanel, standAt } from './helpers/access';
 import type { Vehicle } from '../src/game/vehicle';
 import type { Pilot } from '../src/game/vehicle';
 
@@ -81,15 +82,15 @@ describe('attach points: stand where the part goes', () => {
     hold(h, sc, 0, Btn.A, 5);
     expect(p.carry).not.toBeNull();
     expect(v.build!.fit.engine).toBeUndefined();
-    expect(p.prompt?.text).toMatch(/Walk to the engine bay/);
+    expect(p.prompt?.text).toMatch(/Go to the engine bay at the front/);
   });
 
   it('at the bonnet it fits, with the factory engine going to the trunk as a real part', () => {
     const { h, sc, c } = leg();
     const v = ownCar(sc, 'van');
     const p = sc.players[0];
-    const [fx, , fz] = v.body.toWorld(0.6, 0, v.def.length / 2 + 0.9);
-    p.placeAt(fx, fz, Math.PI);
+    openPanel(v, 'hood');
+    standAt(sc, v, 'hood');
     p.carry = { kind: 'part', item: newPart('eng_i4', 0.9) };
     hold(h, sc, 0, Btn.A, 5);
     expect(p.carry).toBeNull();
@@ -111,8 +112,11 @@ describe('attach points: stand where the part goes', () => {
     p.placeAt(fx, fz, 0);
     run(sc, 0.2);
     expect(sc.work.ghostState(`g${p.index}`)).toBe('idle');
-    const [gx, , gz] = v.body.toWorld(0.5, 0, v.def.length / 2 + 0.8);
-    p.placeAt(gx, gz, Math.PI);
+    standAt(sc, v, 'hood');
+    run(sc, 0.2);
+    // The bonnet is shut: the place is right but the job is not yet.
+    expect(sc.work.ghostState(`g${p.index}`)).toBe('blocked');
+    openPanel(v, 'hood');
     run(sc, 0.2);
     expect(sc.work.ghostState(`g${p.index}`)).toBe('aimed');
     // Put it down: the outline stops being refreshed and fades with the next frames.
@@ -166,6 +170,7 @@ describe('petrol and diesel on the road', () => {
     p.equip = 'jerrycan';
     const before = v.fuel;
     const diesel0 = c.items.diesel;
+    standAt(sc, v, 'flap');
     hold(h, sc, 0, Btn.A, 5);
     expect(v.fuel).toBe(0);
     expect(v.fuelType).toBe('petrol');
@@ -185,6 +190,7 @@ describe('petrol and diesel on the road', () => {
     const v = ownCar(sc, 'pickup', { fuel: 0.5 });
     const p = sc.players[0];
     p.carry = { kind: 'fuel', amount: FUEL_CAN, fuel: 'petrol' };
+    standAt(sc, v, 'flap');
     hold(h, sc, 0, Btn.A, 4);
     expect(p.carry).not.toBeNull();
     expect(v.fuelType).toBe('diesel');
@@ -205,6 +211,7 @@ describe('petrol and diesel on the road', () => {
     const p = sc.players[0];
     const f0 = v.fuel;
     p.carry = { kind: 'fuel', amount: FUEL_CAN, fuel: 'diesel' };
+    standAt(sc, v, 'flap');
     hold(h, sc, 0, Btn.A, 4);
     expect(v.fuel).toBeCloseTo(f0 + FUEL_CAN, 1);
     expect(v.fuelType).toBe('diesel');
@@ -327,7 +334,8 @@ describe('fuel cans in the world', () => {
     expect(p.carry).toMatchObject({ kind: 'fuel', fuel: 'diesel' });
     const d0 = c.items.diesel;
     const f0 = c.stocks.fuel;
-    p.placeAt(v.doorPos(1)[0], v.doorPos(1)[2], 0);
+    openPanel(v, 'trunk');
+    standAt(sc, v, 'trunk');
     h.intents[0].device = 'keyboard';
     h.intents[0].held |= 1 << Btn.X;
     h.intents[0].pressed = 1 << Btn.X;

@@ -6,6 +6,8 @@ import { shared } from './dispose';
 import { kitMaterial } from './materials';
 import { crate, drum, jerryCan, oilCan, spareTyre, strap } from './parts';
 import type { PropKind, PropSpawn } from '../world/layout';
+import { partDef } from '../data';
+import { engineDims } from '../sim/engineSize';
 
 /**
  * World props, built once per (kind, variant, tag) as prototypes and appended into each chunk's merged mesh.
@@ -23,6 +25,12 @@ const TAG_COL: Record<number, number> = {
   5: 0xe0832a,
   6: 0x3fbf6a,
   7: 0xd94a4a,
+  // The car trades: a garage, a dealership, a tyre shop, a warehouse, the police.
+  8: 0xe05a1a,
+  9: 0x3a7bd8,
+  10: 0xe8c020,
+  11: 0x8a8e92,
+  12: 0x3a4a9a,
 };
 
 function rng(seed: number) {
@@ -947,38 +955,30 @@ function pickupGeometry(kind: string): THREE.BufferGeometry {
     case 'oil':
       oilCan(b, 0, 0, 0);
       break;
-    case 'scrap': {
-      // A heap of bent sheet, pipe and a hubcap.
-      b.rbox(0, 0.08, 0, 0.7, 0.05, 0.5, 0.01, steel, 0.15, 0.3, 0.1);
-      b.rbox(0.1, 0.16, 0.05, 0.5, 0.04, 0.35, 0.01, S.rust(), -0.2, 1.1, 0.25);
-      b.rod(-0.3, 0.06, -0.2, 0.3, 0.22, 0.2, 0.03, S.metal(0x8a8e92), 8);
-      b.cyl(-0.15, 0.12, 0.2, 0.32, 0.04, 0.32, S.chrome(), 0.3, 0, 0.2, 14);
-      b.rbox(0.2, 0.25, -0.1, 0.2, 0.15, 0.25, 0.02, S.paint(0x4a6a8a, 0.8), 0.4, 0.5, 0);
-      break;
-    }
-    case 'parts':
-      b.rbox(0, 0.17, 0, 0.56, 0.3, 0.3, 0.02, S.paint(0xb0301e, 0.6));
-      b.rbox(0, 0.34, 0, 0.5, 0.05, 0.26, 0.02, S.paint(0x8a2418, 0.6));
-      b.box(0, 0.4, 0, 0.2, 0.04, 0.04, S.metal(0x2a2a2a));
-      b.torus(0.15, 0.36, 0.06, 0.07, 0.025, steel, Math.PI / 2, 0, 0, 6, 12);
-      b.cyl(-0.12, 0.42, 0.04, 0.1, 0.16, 0.1, S.metal(0x9a9a9a), 0, 0, 0.6, 10);
-      break;
-    case 'tech':
-      b.rbox(0, 0.06, 0, 0.5, 0.05, 0.36, 0.01, S.plastic(0x1f6b4a, 0.4));
-      b.rbox(0.05, 0.11, 0, 0.16, 0.05, 0.16, 0.005, S.plastic(0x1c1c1c, 0.3));
-      for (let i = 0; i < 4; i++) b.box(-0.18 + i * 0.05, 0.1, 0.1, 0.03, 0.04, 0.06, S.metal(0xc0a040, 0.3));
-      b.box(-0.12, 0.1, -0.08, 0.08, 0.03, 0.08, S.glow(C.tech, 1.5));
-      break;
     case 'rations':
       b.rbox(0, 0.17, 0, 0.5, 0.34, 0.38, 0.015, S.paint(0xc8a878, 0.6));
       b.box(0, 0.345, 0, 0.5, 0.01, 0.06, S.cloth(0xb04a3a, 0.5));
       for (let i = 0; i < 3; i++) b.cyl(-0.15 + i * 0.15, 0.4, 0.05, 0.1, 0.12, 0.1, S.metal(0xb8b0a0, 0.4), 0, 0, 0, 10);
       break;
     case 'medicine':
+      // A bottle of pills: amber glass, a white child-proof cap and a printed label, lying where it was left.
+      b.cyl(0, 0.08, 0, 0.09, 0.16, 0.09, S.glass(0x8a4a14), 0, 0, 0, 12);
+      b.cyl(0, 0.175, 0, 0.1, 0.035, 0.1, S.plastic(0xeeeeea, 0.4), 0, 0, 0, 12);
+      b.box(0, 0.08, 0.047, 0.08, 0.08, 0.004, S.paint(0xe8e4d4, 0.5));
+      b.box(0, 0.1, 0.05, 0.05, 0.015, 0.004, S.paint(0xd23a3a, 0.4));
+      break;
+    case 'medkit':
+      // A first-aid box: white case, a red cross, a clasp.
       b.rbox(0, 0.16, 0, 0.46, 0.3, 0.32, 0.04, S.plastic(0xeeeeea, 0.4));
       b.box(0, 0.17, 0.163, 0.2, 0.06, 0.01, S.plastic(0xd23a3a, 0.3));
       b.box(0, 0.17, 0.163, 0.06, 0.2, 0.01, S.plastic(0xd23a3a, 0.3));
       b.rbox(0, 0.33, 0, 0.16, 0.04, 0.04, 0.01, S.plastic(0x2a2a2a));
+      break;
+    case 'bandage':
+      // A roll of bandage on its side, a red band round the middle, a strip trailing.
+      b.cyl(0, 0.05, 0, 0.1, 0.1, 0.1, S.cloth(0xe8e4d8, 0.8), Math.PI / 2, 0, 0, 14);
+      b.cyl(0, 0.05, 0, 0.102, 0.03, 0.102, S.cloth(0xc83a3a, 0.7), Math.PI / 2, 0, 0, 14);
+      b.box(0.1, 0.012, 0.05, 0.16, 0.012, 0.06, S.cloth(0xe8e4d8, 0.8), 0, 0.4, 0);
       break;
     case 'ammo':
       b.rbox(0, 0.13, 0, 0.42, 0.24, 0.2, 0.015, S.paint(0x4e5a34, 0.6));
@@ -1172,12 +1172,19 @@ function pickupGeometry(kind: string): THREE.BufferGeometry {
   return g;
 }
 
+/** An engine is drawn at its real size; in the arms a big one is shrunk until it can be held in front of you at all. */
+function engineCarryScale(id: string): number {
+  const spec = partDef(id).engine;
+  const d = spec ? engineDims(spec) : null;
+  return d ? Math.min(1, 0.7 / Math.max(d.l, d.w * 1.2, 0.1)) : 1;
+}
+
 /** The model of a ground item as held in the arms: the same mesh, no glow, no bobbing. */
 export function makeCarryModel(kind: string): THREE.Group {
   const g = new THREE.Group();
   const m = new THREE.Mesh(pickupGeometry(kind), pickupMat);
   m.castShadow = true;
-  m.scale.setScalar(/^(part|engine|radiator|tyre|gear|spring|brake|pipe|hood|door)\d$/.test(kind) ? 0.9 : 1.1);
+  m.scale.setScalar(/^(part|engine|radiator|tyre|gear|spring|brake|pipe|hood|door)\d$/.test(kind) ? 0.9 : kind.startsWith('part:eng_') ? engineCarryScale(kind.slice(5)) : 1.1);
   g.add(m);
   return g;
 }
@@ -1187,11 +1194,10 @@ const GLOW: Record<string, number> = {
   diesel: 0xe8c020,
   water: 0x6ab4ff,
   oil: 0xe0b030,
-  scrap: 0xcfd6dc,
-  parts: 0xffa030,
-  tech: 0x3adc9c,
   rations: 0xf0d090,
   medicine: 0xffffff,
+  medkit: 0xffffff,
+  bandage: 0xe8e4d8,
   ammo: 0xd8c050,
   fragment: 0x3ad0ff,
   chassis: 0x3aa0ff,

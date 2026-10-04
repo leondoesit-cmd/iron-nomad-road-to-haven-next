@@ -1,4 +1,5 @@
 import { clamp } from '../core/math';
+import type { Panel } from './access';
 
 /**
  * The rules of bodywork: how deep a crash dents a car, how much of a knock a bolted-on part takes before its joint lets
@@ -25,6 +26,8 @@ export interface BodySave {
   gone: string[];
   /** Windows that are cracked (1), crazed (2) or gone (3), by pane key. */
   glass?: Record<string, number>;
+  /** Panels the player has left open (bonnet, doors, boot lid). Absent when everything is shut. */
+  open?: Panel[];
 }
 
 export const emptyBody = (): BodySave => ({ dents: [], dirt: [0, 0, 0], stress: {}, gone: [] });

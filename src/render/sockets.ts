@@ -1,7 +1,10 @@
-import { PARTS, type PartSlot, type VehicleDef } from '../data';
+import { PARTS, isInteriorSlot, type PartSlot, type VehicleDef } from '../data';
 import { slotsOf } from '../sim/parts';
 import { mountsOfChassis } from './vehicleModels';
 import type { PanelId } from '../sim/paint';
+import { cabinAnchor, cabinLayout } from './interior';
+import { bayVolume } from './attachments';
+import { envelopeOf } from '../sim/engineSize';
 
 /**
  * Attach points. Every part slot is a physical place on a vehicle: the engine goes under the bonnet, the radiator
@@ -48,6 +51,11 @@ export const SOCKET_LABEL: Record<PartSlot, string> = {
   roof: 'Roof',
   rear: 'Rear mount',
   side: 'Sills',
+  seatD: 'Driver seat',
+  seatP: 'Passenger seat',
+  seatR: 'Rear seat',
+  steer: 'Steering wheel',
+  dash: 'Dashboard',
 };
 
 /** Where Rapier puts the wheels for a chassis (see physics/vehicle.ts): resting wheel centres, chassis frame. */
@@ -76,6 +84,13 @@ export function socketFor(def: VehicleDef, slot: PartSlot): Socket | undefined {
   const len = def.length;
   const wr = def.physics.wheelRadius;
   let anchors: Anchor[] = [];
+  if (isInteriorSlot(slot)) {
+    // The cabin's mounts sit where the seats, the wheel and the dash are, inside the body.
+    const L = cabinLayout(def);
+    const a = L && cabinAnchor(L, slot);
+    if (!L || !a) return undefined;
+    return { slot, label: SOCKET_LABEL[slot], anchors: [box(a.x, a.y - L.g0, a.z, a.sx, a.sy, a.sz)] };
+  }
   if (slot === 'wheels') {
     anchors = wheelCentres(def).map(([x, y, z]) => box(x + Math.sign(x) * 0.04, y, z, Math.max(0.2, wr * 0.55), wr * 2.1, wr * 2.1));
   } else if (slot === 'suspension' || slot === 'brakes') {
@@ -89,11 +104,15 @@ export function socketFor(def: VehicleDef, slot: PartSlot): Socket | undefined {
   } else {
     const low = (y: number) => y - g0;
     switch (slot) {
-      case 'engine':
-        anchors = m.hood
-          ? [box(0, low(m.hood.y) - 0.12, (m.hood.z0 + m.hood.z1) / 2, m.hood.hw * 1.7, 0.4, Math.max(0.5, m.hood.z1 - m.hood.z0))]
+      case 'engine': {
+        // Hugs the room an engine of this chassis' class takes in its bay, not the whole bonnet.
+        const vol = bayVolume(m);
+        const env = envelopeOf(def.bay ?? 3);
+        anchors = vol
+          ? [box(0, low(vol.floor + 0.03 + Math.min(env.h, vol.h) / 2), vol.z1 - Math.min(env.l, vol.l) / 2 - 0.02, Math.min(env.w, vol.w), Math.min(env.h, vol.h), Math.min(env.l, vol.l))]
           : [box(0, low(m.sill) + 0.12, (m.side.z0 + m.side.z1) / 2 - 0.2, Math.max(0.3, m.hw * 1.6), 0.34, 0.6)];
         break;
+      }
       case 'cooling':
         anchors = [box(0, low(m.front.y), m.front.z - 0.08, Math.max(0.3, m.front.hw * 1.5), 0.3, 0.2)];
         break;

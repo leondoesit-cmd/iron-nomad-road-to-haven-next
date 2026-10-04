@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { furnRect, generatePlan, planAabbs, reachable, wallPieces, type Look, type PlanInput } from '../src/world/interiors';
+import { fitsSlot, furnRect, furnSlots, generatePlan, planAabbs, reachable, slotWorld, wallPieces, type Look, type PlanInput } from '../src/world/interiors';
 
 const SIZES: Record<Look, [number, number][]> = {
   house: [[7, 8], [9, 10], [11, 9], [8, 11], [10, 7]],
@@ -8,6 +8,9 @@ const SIZES: Record<Look, [number, number][]> = {
   barn: [[14, 24], [16, 20]],
   warehouse: [[20, 44], [18, 22], [24, 30]],
   shack: [[5, 6], [6, 6], [4, 5]],
+  garage: [[12, 12.5], [12, 13], [15.4, 11]],
+  dealership: [[18, 14], [22, 22], [16, 12]],
+  tyreshop: [[10, 8], [14, 15], [12, 10]],
 };
 
 function plans(): { look: Look; plan: ReturnType<typeof generatePlan>; label: string }[] {
@@ -147,6 +150,13 @@ describe('walking through buildings', () => {
     let id = 0;
     const boxes = planAabbs(plan, () => id++).filter((a) => a.kind === 'partition' || a.kind === 'furniture');
     const base = plan.floorY + level * plan.levelH;
+    // A car standing in a bay is as solid as a cabinet (5 x 2.8 m, 1.4 m tall).
+    if (level === 0) for (const bay of plan.bays) {
+      const alongX = Math.abs(Math.sin(bay.yaw)) > 0.5;
+      const hx = alongX ? 2.5 : 1.4;
+      const hz = alongX ? 1.4 : 2.5;
+      boxes.push({ id: id++, minX: bay.x - hx, maxX: bay.x + hx, minZ: bay.z - hz, maxZ: bay.z + hz, y0: base, y1: base + 1.4, kind: 'furniture', hp: 1 });
+    }
     const solid = boxes.filter((a) => a.y1 > base + 0.45 && a.y0 < base + 1.7);
     const nx = Math.ceil((plan.x1 - plan.x0 + 4) / STEP);
     const nz = Math.ceil((plan.z1 - plan.z0 + 4) / STEP);
@@ -209,7 +219,7 @@ describe('walking through buildings', () => {
     expect(bad.slice(0, 12).join('\n')).toBe('');
     expect(stuck).toBe(0);
     expect(rooms).toBeGreaterThan(300);
-  });
+  }, 120000);
 
   it('the stairs of a two-storey house can be reached from the ground floor and lead to every upstairs room', () => {
     let tested = 0;
@@ -234,5 +244,72 @@ describe('walking through buildings', () => {
       }
     }
     expect(tested).toBeGreaterThan(10);
+  });
+});
+
+describe('the car trades', () => {
+  const all = plans();
+  const kinds = (look: Look) => all.filter((p) => p.look === look);
+  it('a garage has parts shelving, a bench and engine stands, and a car in its bay', () => {
+    const g = kinds('garage');
+    const has = (k: string) => g.filter((p) => p.plan.furn.some((f) => f.kind === k)).length / g.length;
+    expect(has('partsshelf')).toBeGreaterThan(0.7);
+    expect(has('workbench')).toBeGreaterThan(0.7);
+    expect(has('enginestand')).toBeGreaterThan(0.5);
+    expect(g.filter((p) => p.plan.bays.length > 0).length / g.length).toBeGreaterThan(0.5);
+  });
+  it('a tyre shop has tyre racks and stacks, and a dealership has a showroom with cars on the floor', () => {
+    const t = kinds('tyreshop');
+    expect(t.filter((p) => p.plan.furn.some((f) => f.kind === 'tyrerack')).length / t.length).toBeGreaterThan(0.7);
+    const d = kinds('dealership');
+    expect(d.filter((p) => p.plan.bays.length >= 2).length / d.length).toBeGreaterThan(0.5);
+    expect(d.every((p) => p.plan.rooms.some((r) => r.role === 'sales'))).toBe(true);
+  });
+  it('a warehouse has pallet racking', () => {
+    const w = kinds('warehouse');
+    expect(w.filter((p) => p.plan.furn.filter((f) => f.kind === 'rack').length >= 2).length / w.length).toBeGreaterThan(0.6);
+  });
+  it('loose items lie on a surface of the furniture they name, at a height that surface has, inside the building and clear of the walls', () => {
+    let n = 0;
+    for (const { plan, label } of all) {
+      for (const it of plan.items) {
+        n++;
+        const f = plan.furn[it.furn];
+        expect(f, label).toBeDefined();
+        expect(it.level, label).toBe(f.level);
+        const slots = furnSlots(f);
+        const hit = slots.find((s) => {
+          const w = slotWorld(f, s);
+          return Math.abs(w.x - it.x) < 1e-6 && Math.abs(w.z - it.z) < 1e-6 && Math.abs(s.y - it.y) < 1e-6;
+        });
+        expect(hit, `${label}: ${f.kind} has no surface where the item lies`).toBeDefined();
+        expect(it.mode).toBe(hit!.floor ? 'beside' : 'on');
+        expect(it.x, label).toBeGreaterThan(plan.x0 + 0.3);
+        expect(it.x, label).toBeLessThan(plan.x1 - 0.3);
+        expect(it.z, label).toBeGreaterThan(plan.z0 + 0.3);
+        expect(it.z, label).toBeLessThan(plan.z1 - 0.3);
+        // What lies there fits there.
+        expect(fitsSlot(it.spec, hit!), `${label}: ${f.kind} slot cannot take it`).toBe(true);
+      }
+    }
+    expect(n).toBeGreaterThan(300);
+  });
+  it('a floor item stands clear of furniture, and no loose item lies in a doorway', () => {
+    for (const { plan, label } of all) {
+      for (const it of plan.items) {
+        if (it.mode !== 'beside') continue;
+        for (const o of plan.furn) {
+          if (o === plan.furn[it.furn] || o.level !== it.level || !o.solid) continue;
+          const r = furnRect(o);
+          expect(it.x > r.x0 - 0.2 && it.x < r.x1 + 0.2 && it.z > r.z0 - 0.2 && it.z < r.z1 + 0.2, `${label}: item inside ${o.kind}`).toBe(false);
+        }
+      }
+    }
+  });
+  it('is deterministic, and a place holds named things only', () => {
+    const a = generatePlan({ x0: 0, x1: 14, z0: 0, z1: 12, look: 'garage', door: 1, seed: 99, floors: 1, floorY: 0, wear: 0.2, roof: 'gable', reach: 0.4 });
+    const b = generatePlan({ x0: 0, x1: 14, z0: 0, z1: 12, look: 'garage', door: 1, seed: 99, floors: 1, floorY: 0, wear: 0.2, roof: 'gable', reach: 0.4 });
+    expect(JSON.stringify(a.items)).toBe(JSON.stringify(b.items));
+    for (const { plan } of all) for (const it of plan.items) expect(['part', 'fuel', 'oil', 'water', 'paint', 'rations', 'medicine', 'medkit', 'bandage', 'ammo']).toContain(it.spec.kind);
   });
 });

@@ -2,11 +2,14 @@ import { bind } from '../sim/vitals';
 import * as THREE from 'three';
 import { ENEMIES, VEHICLES, boatDef, partDef, t, type LegDef } from '../data';
 import { ChunkSource, type ChunkData } from '../world/chunkgen';
-import { CHUNK, groundHeight, heightAt, roadX, surfaceAt, waterAt as terrainWater, type Surface } from '../world/terrain';
+import { CHUNK, groundHeight, heightAt, normalAt, roadX, surfaceAt, waterAt as terrainWater, type Surface } from '../world/terrain';
 import type { Aabb, PickupSpawn, ScavContainer, ScavZone } from '../world/layout';
 import { chunkKey } from '../world/layout';
 import { ChunkView, disposeChunkMaterials, makeChunkMaterials, type ChunkMaterials } from '../render/chunkview';
 import { makeBeam, makePickup } from '../render/props';
+import { grantLoot } from './lootGrant';
+import { rollGunLoot } from '../sim/gunLoot';
+import { GroundGearField } from './groundGear';
 import { Landscape } from '../render/landscape';
 import { Destruction } from './destruction';
 import { clamp, smoothstep } from '../core/math';
@@ -30,26 +33,38 @@ import { districtMask } from '../world/openWorld';
 import type { WorldMemory, WorldPose } from './worldMemory';
 import { LegMapBaker, SITE_LABEL, minefieldOutline, newFrame, openRoadLines, roadLine, type MapFrame } from '../ui/mapdata';
 
+/**
+ * A loose thing lying in the world. It lies: a fixed place, a fixed heading and a natural tilt, set when it appears and never
+ * touched again. It does not bob, spin or hover; only its distance from the players decides whether it is drawn.
+ */
 interface PickupEntity {
   spawn: PickupSpawn;
   group: THREE.Group;
-  baseY: number;
-  phase: number;
   /** Set for parts, fuel cans and oil cans: things carried by hand. Everything else is banked on pickup. */
   loose?: Carried;
 }
 
+/** What each thing banked on pickup is called: every one is a named object, never a heap of Scrap or a crate of Parts. */
 const GOODS_NAME: Record<string, string> = {
-  scrap: 'Scrap',
-  parts: 'Spare parts',
-  tech: 'Tech',
-  rations: 'Rations',
-  medicine: 'Medicine',
-  ammo: 'Ammo',
+  rations: 'Ration tins',
+  medicine: 'Pill bottle',
+  medkit: 'Medkit',
+  bandage: 'Bandage roll',
+  ammo: 'Box of 9mm rounds',
   chassis: 'Salvaged chassis',
-  fragment: 'Radio fragment',
+  fragment: 'Radio board',
 };
-const goodsLabel = (p: PickupSpawn) => (p.kind === 'ammo' || p.amount <= 1 ? GOODS_NAME[p.kind] : `${GOODS_NAME[p.kind]} (${p.amount})`);
+const goodsLabel = (p: PickupSpawn) => (p.kind === 'ammo' || p.amount <= 1 || p.kind === 'bandage' || p.kind === 'medkit' ? GOODS_NAME[p.kind] : `${GOODS_NAME[p.kind]} (${p.amount})`);
+
+/** The model of a part lying on the ground: its own (engine, radiator, tyre...), and for the bolt-on kit its own too, never the generic crate. */
+const groundModelKey = (id: string) => {
+  const k = partModelKey(id);
+  return /^part\d$/.test(k) ? `part:${id}` : k;
+};
+
+/** Pickups farther than this from every player are not drawn. */
+const PICKUP_DRAW_R = 90;
+const UP = new THREE.Vector3(0, 1, 0);
 
 const partMk = (id: string) => partDef(id).mk;
 
@@ -181,7 +196,7 @@ export class LegScene extends Scene {
       const p = this.players[i];
       const v = p?.vehicle;
       const focus = p ? (v && p.state !== 'foot' ? { x: v.position.x, y: v.position.y, z: v.position.z } : { x: p.pos.x, y: p.pos.y, z: p.pos.z }) : null;
-      this.landscape.updateView(focus, cam.position.x, cam.position.z);
+      this.landscape.updateView(focus, cam.position.x, cam.position.y, cam.position.z);
     };
     this.wildlife.canStand = (x, z) => !this.src.layout.blockedAt(x, z, 1.2);
     this.zombies.onObstacleHit = (a, dmg, z) => {
@@ -536,6 +551,7 @@ export class LegScene extends Scene {
     if (!view) return;
     for (const a of view.data.aabbs) this.obs.remove(a);
     for (const p of view.data.pickups) {
+      if (p.kind === 'gear') this.groundGear?.removeKey(p.id);
       const e = this.pickups.get(p.id);
       if (e) {
         disposeTree(e.group);
@@ -688,7 +704,11 @@ export class LegScene extends Scene {
       },
       run: (p) => {
         c.taken = true;
-        this.addLoot(c.loot, 'search');
+        // What is in it: named parts, cans and tins, put where each goes (see lootGrant).
+        const found = grantLoot(this, c.items, { x: c.x, z: c.z }, p.pos);
+        if (found.length) p.note(`Found: ${found.join(', ')}`, 'good');
+        // Guns from the weapons table: laid on the ground by the container, seeded so a search always finds the same ones.
+        if (c.guns) rollGunLoot(c.guns.context, c.guns.seed, c.guns.depth).forEach((g, i) => this.dropGear(g, c.x + Math.cos(i * 2.1) * 0.9, c.z + Math.sin(i * 2.1) * 0.9));
         // Seeded by the container, so reloading a chunk never rerolls a find.
         const find = gearDrop(new Rng(hashString(c.id) ^ Math.imul(this.campaign.seed, 2654435761)), 'search', { depth: c.depth, progress: this.gearProgress, biome: this.biome === 'city' ? 'city' : 'waste' });
         if (find) this.dropGear(find, c.x, c.z);
@@ -942,30 +962,63 @@ export class LegScene extends Scene {
 
   // ------------------------------------------------------------------ pickups
 
-  /** Build the floating model for a pickup and register it. Nothing is picked up on touch: every item is taken by hand. */
+  /**
+   * Put a pickup in the world, lying where it was set down: the model sits on its surface at a fixed heading, tilted to the
+   * slope of the ground (or to the lean the generator gave it), and stays exactly so. Nothing is picked up on touch: every
+   * item is taken by hand.
+   */
   private spawnPickup(p: PickupSpawn) {
+    if (p.kind === 'gear') return this.spawnDisplayGun(p);
     const fuelKind = p.kind === 'fuel' ? (p.fuel ?? pickupFuel(p.id)) : undefined;
-    const m = makePickup(p.kind === 'part' ? (p.part ? partModelKey(p.part.id) : `part${p.amount}`) : p.kind === 'paint' ? `paint:${(p.color ?? 0xffffff).toString(16)}` : fuelKind === 'diesel' ? 'diesel' : p.kind);
-    m.group.position.set(p.x, p.y, p.z);
+    const m = makePickup(p.kind === 'part' ? (p.part ? groundModelKey(p.part.id) : `part${p.amount}`) : p.kind === 'paint' ? `paint:${(p.color ?? 0xffffff).toString(16)}` : fuelKind === 'diesel' ? 'diesel' : p.kind);
+    this.settlePickup(m.group, p);
+    // The outer group is where it lies; the model inside has the lean, and the beam stands straight up beside it.
+    const outer = new THREE.Group();
+    outer.position.set(p.x, p.y, p.z);
+    outer.add(m.group);
+    // Good finds show from a distance, in their rarity colour: a tall beam, but the thing itself is lying there too.
     if (p.kind === 'part') {
-      // Good parts show from a distance, in their rarity colour.
-      if (p.amount >= 2) m.group.add(makeBeam(p.amount >= 3 ? 0xffb454 : 0x7ddc7a, p.amount >= 3 ? 14 : 8));
+      if (p.amount >= 2) outer.add(makeBeam(p.amount >= 3 ? 0xffb454 : 0x7ddc7a, p.amount >= 3 ? 14 : 8));
     } else if (p.kind === 'fragment' || p.kind === 'chassis') {
       const col = p.kind === 'fragment' ? 0x3ad0ff : 0x3aa0ff;
-      m.group.add(makeBeam(col, 22));
-    } else if (p.amount >= 14 && p.kind !== 'fuel' && p.kind !== 'oil') {
-      m.group.add(makeBeam(0xffe9a0, 9));
-    } else if (p.kind === 'fuel') m.group.add(makeBeam(fuelKind === 'diesel' ? 0xe8c020 : 0xff6a3a, 7));
-    else if (p.kind === 'oil') m.group.add(makeBeam(0xe0b030, 6));
-    else if (p.kind === 'water') m.group.add(makeBeam(0x6ab4ff, 6));
-    this.root.add(m.group);
+      outer.add(makeBeam(col, 22));
+    } else if (p.kind === 'fuel') outer.add(makeBeam(fuelKind === 'diesel' ? 0xe8c020 : 0xff6a3a, 7));
+    this.root.add(outer);
     let loose: Carried | undefined;
     if (p.kind === 'part' && p.part) loose = { kind: 'part', item: newPart(p.part.id, p.part.cond) };
     else if (p.kind === 'fuel') loose = { kind: 'fuel', amount: p.amount, fuel: fuelKind };
     else if (p.kind === 'oil') loose = { kind: 'oil', amount: p.amount };
     else if (p.kind === 'water') loose = { kind: 'water', amount: p.amount };
     else if (p.kind === 'paint') loose = { kind: 'paint', color: p.color ?? 0xffffff, charges: p.amount };
-    this.pickups.set(p.id, { spawn: p, group: m.group, baseY: p.y, phase: Math.random() * 6.28, loose });
+    this.pickups.set(p.id, { spawn: p, group: outer, loose });
+  }
+
+  /** A gun on a rack or counter: the real model, belly down at the heading the plan gave it. Taking it is remembered, so it never comes back. */
+  private spawnDisplayGun(p: PickupSpawn) {
+    const g = p.gun;
+    const item = g ? rollGunLoot(g.context, g.seed, g.depth)[g.index] : undefined;
+    if (!item) return;
+    const field = (this.groundGear ??= new GroundGearField(this));
+    field.onTaken = (key) => this.takenPickups.add(key);
+    field.place(item, { x: p.x, y: p.y, z: p.z, yaw: p.yaw ?? 0, flat: false, key: p.id });
+  }
+
+  /** The heading and lean an item lies at: the spawn's own, else a heading hashed from where it is and the slope of the ground under it. */
+  private settlePickup(g: THREE.Group, p: PickupSpawn) {
+    const yaw = p.yaw ?? (((Math.sin(p.x * 12.9898 + p.z * 78.233) * 43758.5453) % 1) + 1) % 1 * Math.PI * 2;
+    if (p.tilt) {
+      // Leaning on something (a tyre on a stack, a radiator on a bench leg): pitch and roll after the heading.
+      g.rotation.set(p.tilt[0], yaw, p.tilt[1], 'YXZ');
+    } else if (p.host?.mode === 'on') {
+      g.rotation.set(0, yaw, 0);
+    } else {
+      // On the ground: sit square to the slope, within reason.
+      const n = this.terrain ? normalAt(this.terrain, p.x, p.z) : ([0, 1, 0] as [number, number, number]);
+      const tilt = Math.min(1, Math.acos(Math.max(-1, Math.min(1, n[1]))) / 0.42);
+      const nv = new THREE.Vector3(n[0], n[1], n[2]).lerp(UP, 1 - tilt).normalize();
+      g.quaternion.setFromUnitVectors(UP, nv).multiply(new THREE.Quaternion().setFromAxisAngle(UP, yaw));
+    }
+    g.updateMatrix();
   }
 
   private removePickup(id: string) {
@@ -1044,13 +1097,21 @@ export class LegScene extends Scene {
     while (dropped.length > MAX_DROPPED) this.removePickup(dropped.shift()!);
   }
 
-  private updatePickups(dt: number) {
-    const time = this.time;
-    for (const e of this.pickups.values()) {
-      e.group.position.y = e.baseY + 0.2 + Math.sin(time * 2 + e.phase) * 0.08;
-      e.group.rotation.y += dt * 1.4;
-    }
+  private pickupCullT = 0;
 
+  /** Pickups do nothing but lie there. Every third of a second those far from every player are hidden and those near are shown. */
+  private updatePickups(dt: number) {
+    this.pickupCullT -= dt;
+    if (this.pickupCullT > 0) return;
+    this.pickupCullT = 0.33;
+    for (const e of this.pickups.values()) {
+      let d = Infinity;
+      for (const pl of this.players) {
+        const pos = pl.vehicle ? pl.vehicle.position : pl.pos;
+        d = Math.min(d, Math.hypot(pos.x - e.spawn.x, pos.z - e.spawn.z));
+      }
+      e.group.visible = d < PICKUP_DRAW_R;
+    }
   }
 
   private collect(p: PickupSpawn, by: Player) {
@@ -1069,12 +1130,17 @@ export class LegScene extends Scene {
       }
       case 'oil':
         break;
-      case 'scrap':
-      case 'parts':
-      case 'tech':
       case 'rations':
       case 'medicine':
         this.addLoot({ [p.kind]: p.amount }, p.kind);
+        break;
+      case 'medkit':
+        camp.items.medkit += p.amount;
+        this.notify(-1, `+${p.amount} medkit`, 'good');
+        break;
+      case 'bandage':
+        camp.items.bandage += p.amount * 3;
+        this.notify(-1, `+${p.amount * 3} bandages`, 'good');
         break;
       case 'ammo':
         camp.ammo += p.amount;
@@ -1577,10 +1643,7 @@ export class LegScene extends Scene {
   }
 
   protected syncExtra(alpha: number, dt: number) {
-    for (const e of this.activeContainers.values()) {
-      e.glint.rotation.y += dt * 2.4;
-      e.glint.position.y += Math.sin(this.time * 3 + e.c.x) * 0.002;
-    }
+    // The marker over a searchable container stays where it is: it does not spin or bob.
     // Ground cover only exists near a player: hide it on chunks too far away for anyone to see it.
     const pts = this.players.map((p) => (p.vehicle ? p.vehicle.position : p.pos));
     for (const view of this.chunks.values()) {

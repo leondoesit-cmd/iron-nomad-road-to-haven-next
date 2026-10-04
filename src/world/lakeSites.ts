@@ -1,7 +1,7 @@
 import type { ZombieKind } from '../data';
-import type { Stocks } from '../data';
 import type { SiteBuilder } from './settlements';
-import type { ScavContainer, ScavZone } from './layout';
+import type { PropKind, ScavContainer, ScavZone } from './layout';
+import { rollLoot, type LootContext, type LootTag } from '../sim/loot';
 import { ENTRANCE_PROP, type DelveSite } from './delveSites';
 import { lakeQ, lakeWater, type Island, type Lake } from './lakes';
 
@@ -23,19 +23,28 @@ function where(sb: SiteBuilder): { lake: Lake; isl: Island | null } {
 
 const onLand = (sb: SiteBuilder, x: number, z: number) => !lakeWater(sb.def.lakes, x, z);
 
-/** A scavenge zone with a few searchable containers, for loot that is not in a building. */
-function lootZone(sb: SiteBuilder, tag: string, x: number, z: number, items: { dx: number; dz: number; label: string; loot: Partial<Stocks>; depth?: 0 | 1 | 2 }[], kind: ScavZone['kind'] = 'depot') {
+/**
+ * A scavenge zone with a few searchable containers, for loot that is not in a building. Each is a real thing standing
+ * there (a locker, a stack of crates, a drum) holding named finds rolled from the context it is in.
+ */
+function lootZone(sb: SiteBuilder, tag: string, x: number, z: number, items: { dx: number; dz: number; label: string; context: LootContext; depth?: 0 | 1 | 2; prop?: PropKind; only?: LootTag[] }[], kind: ScavZone['kind'] = 'depot') {
   const base = `${sb.def.seed}:${sb.site.kind}${sb.site.lake ?? 0}${sb.site.island ?? ''}:${tag}`;
-  const containers: ScavContainer[] = items.map((it, i) => ({
-    id: `${base}:${i}`,
-    x: x + it.dx,
-    z: z + it.dz,
-    depth: it.depth ?? 0,
-    loot: it.loot,
-    taken: false,
-    label: it.label,
-    y: sb.g(x + it.dx, z + it.dz) + 0.9,
-  }));
+  const containers: ScavContainer[] = items.map((it, i) => {
+    const cx = x + it.dx;
+    const cz = z + it.dz;
+    sb.prop(it.prop ?? 'crateStack', cx, cz, (i * 1.7 + sb.site.seed) % 6.28, 1, 2);
+    const depth = it.depth ?? 0;
+    return {
+      id: `${base}:${i}`,
+      x: cx,
+      z: cz,
+      depth,
+      items: rollLoot(it.context, sb.site.seed * 31 + i * 977 + depth, depth, { progress: sb.reach, only: it.only }),
+      taken: false,
+      label: it.label,
+      y: sb.g(cx, cz) + 0.9,
+    };
+  });
   sb.out.zones.push({ id: `${base}:z`, kind, x, z, w: 6, d: 6, open: 1, containers, pin: true });
 }
 
@@ -92,26 +101,21 @@ function lakeDock(sb: SiteBuilder) {
   }
   const avoid = [{ x: d.shoreX + d.dx * (d.len / 2), z: d.shoreZ + d.dz * (d.len / 2), r: d.len / 2 + 5 }];
   if (placed) avoid.push({ x: (placed.aabb.minX + placed.aabb.maxX) / 2, z: (placed.aabb.minZ + placed.aabb.maxZ) / 2, r: 8 });
-  // Supplies at the root of the pier, a noticeboard, and the odd barrel.
-  sb.pickup('fuel', d.shoreX - d.dx * 1.2 + px * 2.2, d.shoreZ - d.dz * 1.2 + pz * 2.2, 5);
-  if (rng.chance(0.6)) sb.pickup('rations', d.shoreX - d.dx * 2.5 - px * 2.4, d.shoreZ - d.dz * 2.5 - pz * 2.4, 1);
+  // A noticeboard, the odd barrel and a stack of crates at the root of the pier, with fuel and food stood beside them.
   sb.prop('sign', d.shoreX - d.dx * 4.5 + px * 4.2, d.shoreZ - d.dz * 4.5 + pz * 4.2, yaw + Math.PI, 1, 2);
   sb.prop('barrel', d.shoreX - d.dx * 5 - px * 3.4, d.shoreZ - d.dz * 5 - pz * 3.4, 0);
+  sb.prop('crateStack', d.shoreX - d.dx * 1.6 + px * 2.6, d.shoreZ - d.dz * 1.6 + pz * 2.6, rng.range(0, 6), 1, 2);
+  sb.besideProp('crateStack', 'cache', { only: ['fuel'] });
+  if (rng.chance(0.6)) sb.besideProp('crateStack', 'shop', { only: ['food', 'water'] });
+  sb.besideProp('barrel', 'garage', { only: ['oil', 'fuel'] });
   shoreClutter(sb, lake, 14, 1.12, 1.6, avoid);
   guards(sb, d.shoreX - d.dx * 12 + px * 6, d.shoreZ - d.dz * 12 + pz * 6, rng.int(2, 3), 6, 1);
-  // Flotsam: crates adrift on the water, worth a trip in a boat (or a swim).
-  const n = 5;
-  for (let i = 0, got = 0; i < 40 && got < n; i++) {
-    const a = rng.range(0, Math.PI * 2);
-    const rr = lake.r * rng.range(0.3, 0.72);
-    const x = lake.x + Math.cos(a) * rr * lake.ax;
-    const z = lake.z + Math.sin(a) * rr / lake.ax;
-    const w = lakeWater(sb.def.lakes, x, z);
-    if (!w || w.depth < 1.4) continue;
-    if (lake.islands.some((s) => Math.hypot(s.x - x, s.z - z) < s.r + 6)) continue;
-    const kind = rng.pick(['scrap', 'scrap', 'parts', 'fuel', 'rations'] as const);
-    sb.out.pickups.push({ kind, amount: kind === 'scrap' ? rng.int(10, 18) : kind === 'parts' ? rng.int(5, 9) : kind === 'fuel' ? 5 : 1, x, z, y: lake.level });
-    got++;
+  // Cargo left on the deck itself: a stack of crates, and what came off the boats stood beside it (never off the planking).
+  for (const t of [0.35, 0.7]) {
+    const x = d.shoreX + d.dx * d.len * t;
+    const z = d.shoreZ + d.dz * d.len * t;
+    sb.out.props.push({ kind: 'crateStack', x, y: d.deckY, z, yaw: rng.range(0, 6), scale: 0.9, seed: lake.seed + Math.round(t * 10), tag: 2 });
+    sb.beside('crateStack', x, z, 1.4, 'cache', { y: d.deckY, within: { x0: d.x0, x1: d.x1, z0: d.z0, z1: d.z1 } });
   }
 }
 
@@ -143,12 +147,11 @@ function islandShack(sb: SiteBuilder) {
   const lx = isl.x + bx * (isl.r * 0.55);
   const lz = isl.z + bz * (isl.r * 0.55);
   if (onLand(sb, lx, lz)) {
-    sb.pickup('fuel', lx + 1.4, lz, 5);
-    sb.pickup('scrap', lx - 1.2, lz + 1.2, rng.int(12, 18));
     sb.prop('barrel', lx + 2.4, lz - 1.6, 0);
+    sb.besideProp('barrel', 'cache', { only: ['fuel', 'oil'] });
   }
   lootZone(sb, 'stash', isl.x - bx * (isl.r * 0.45), isl.z - bz * (isl.r * 0.45), [
-    { dx: 0, dz: 0, label: 'the castaway’s stash', loot: { scrap: 24, parts: 9, rations: 2 }, depth: 1 },
+    { dx: 0, dz: 0, label: 'the castaway’s stash', context: 'cache', depth: 1, prop: 'crateStack' },
   ]);
   sb.prop('bones', isl.x + bz * 3, isl.z - bx * 3, rng.range(0, 6));
   sb.prop('deadTree', isl.x - bx * 5, isl.z - bz * 5, rng.range(0, 6), 1.2);
@@ -171,15 +174,15 @@ function islandWreck(sb: SiteBuilder) {
   const lx = alongX ? 1 : 0;
   const lz = alongX ? 0 : 1;
   lootZone(sb, 'hold', cx, cz, [
-    { dx: -lx * 0 + lz * 3.4, dz: lx * 3.4, label: 'the hold', loot: { scrap: 22, parts: 8 }, depth: 1 },
-    { dx: -lz * 3.4 + lx * 3, dz: -lx * 3.4 + lz * 3, label: 'the captain’s locker', loot: { tech: 2, medicine: 1, rations: 2 }, depth: 2 },
-    { dx: lx * 5, dz: lz * 5, label: 'a fish crate', loot: { rations: 2, fuel: 4 }, depth: 0 },
+    { dx: -lx * 0 + lz * 3.4, dz: lx * 3.4, label: 'the hold', context: 'container', depth: 1, prop: 'crateStack' },
+    { dx: -lz * 3.4 + lx * 3, dz: -lx * 3.4 + lz * 3, label: 'the captain’s locker', context: 'bunker', depth: 2, prop: 'locker' },
+    { dx: lx * 5, dz: lz * 5, label: 'a fish crate', context: 'shop', depth: 0, prop: 'crateStack', only: ['food', 'water', 'fuel'] },
   ]);
   const px = isl.x + bx * (isl.r * 0.6);
   const pz = isl.z + bz * (isl.r * 0.6);
   if (onLand(sb, px, pz)) {
-    sb.pickup('scrap', px, pz, rng.int(10, 16));
     sb.prop('crateStack', px + 2, pz + 1, rng.range(0, 6), 1, 2);
+    sb.besideProp('crateStack', 'container');
   }
   sb.prop('bones', cx + bz * 6, cz - bx * 6, rng.range(0, 6));
   guards(sb, cx, cz, rng.int(3, 4), 5, 2);
@@ -196,10 +199,11 @@ function islandLighthouse(sb: SiteBuilder) {
   const dx = isl.x + bx * 5;
   const dz = isl.z + bz * 5;
   lootZone(sb, 'keeper', dx, dz, [
-    { dx: bz * 1.8, dz: -bx * 1.8, label: 'the keeper’s locker', loot: { tech: 3, medicine: 2, rations: 1 }, depth: 2 },
-    { dx: -bz * 1.8, dz: bx * 1.8, label: 'the oil store', loot: { fuel: 8, scrap: 14 }, depth: 1 },
+    { dx: bz * 1.8, dz: -bx * 1.8, label: 'the keeper’s locker', context: 'bunker', depth: 2, prop: 'locker' },
+    { dx: -bz * 1.8, dz: bx * 1.8, label: 'the oil store', context: 'garage', depth: 1, prop: 'barrel', only: ['oil', 'fuel'] },
   ]);
-  sb.pickup('parts', isl.x - bx * 6, isl.z - bz * 6, rng.int(6, 10));
+  sb.prop('crateStack', isl.x - bx * 6, isl.z - bz * 6, rng.range(0, 6), 1, 2);
+  sb.besideProp('crateStack', 'garage', { only: ['radiator', 'gearbox', 'brake', 'exhaust'] });
   sb.prop('rock', isl.x + bz * 6, isl.z - bx * 6, rng.range(0, 6), 1.4);
   guards(sb, isl.x + bx * 7, isl.z + bz * 7, rng.int(2, 3), 4, 2);
 }
@@ -228,8 +232,8 @@ function islandRuin(sb: SiteBuilder) {
     } else wall(cx, cz, along ? 2 * h : t, along ? t : 2 * h);
   }
   lootZone(sb, 'strongbox', isl.x, isl.z, [
-    { dx: -1.2, dz: 0, label: 'the strongbox', loot: { scrap: 34, parts: 14, tech: 3 }, depth: 2 },
-    { dx: 1.5, dz: 1.2, label: 'a sealed case', loot: { medicine: 2, rations: 2, fuel: 5 }, depth: 1 },
+    { dx: -1.2, dz: 0, label: 'the strongbox', context: 'warehouse', depth: 2, prop: 'crateStack' },
+    { dx: 1.5, dz: 1.2, label: 'a sealed case', context: 'bunker', depth: 1, prop: 'locker' },
   ]);
   for (let i = 0; i < 4; i++) sb.prop(i % 2 ? 'bones' : 'rubble', isl.x + rng.range(-3.5, 3.5), isl.z + rng.range(-3.5, 3.5), rng.range(0, 6));
   sb.prop('cairn', isl.x + bx * 8, isl.z + bz * 8, 0);
@@ -276,9 +280,10 @@ export function delveEntrance(sb: SiteBuilder, delve: DelveSite) {
   const pz = fx;
   const gx = delve.x + fx * 4;
   const gz = delve.z + fz * 4;
-  sb.pickup('ammo', gx + px * 2.5, gz + pz * 2.5, 12 + delve.tier * 6);
-  if (rng.chance(0.7)) sb.pickup('medicine', gx - px * 2.5, gz - pz * 2.5, 1);
   sb.prop('barrel', gx + px * 4, gz + pz * 4, 0);
+  sb.prop('crateStack', gx - px * 3, gz - pz * 3, rng.range(0, 6), 1, 2);
+  sb.besideProp('crateStack', delve.theme === 'bunker' ? 'bunker' : 'cache', { only: ['ammo', 'med'] });
+  if (rng.chance(0.7)) sb.besideProp('barrel', 'cache', { only: ['fuel', 'oil', 'water'] });
   sb.prop('bones', gx - px * 3.5, gz - pz * 3.5, rng.range(0, 6));
   guards(sb, delve.x + fx * 11, delve.z + fz * 11, 2 + delve.tier, 6, delve.tier);
 }

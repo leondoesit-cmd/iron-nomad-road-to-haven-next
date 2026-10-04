@@ -1,5 +1,5 @@
 import { MeshBuilder, S } from './builder';
-import { furnRect, type Furn } from '../world/interiors';
+import { furnRect, furnSlots, GUN_RACK, type Furn } from '../world/interiors';
 
 /**
  * Furniture models, built in the item's own frame (origin on the floor at the centre of its footprint, +Z the
@@ -10,6 +10,16 @@ import { furnRect, type Furn } from '../world/interiors';
 const WOOD = [0x6a4a30, 0x8a6a44, 0x4e3a2a, 0x9a7c52, 0x5a4030];
 const CLOTH = [0x6a5a4a, 0x4a5a6a, 0x7a4a44, 0x5a6a50, 0x8a8068, 0x4a4a58];
 const GOODS = [0xb84a3a, 0x3a6a9a, 0xc8a83a, 0x4a8a5a, 0xd8d0c0, 0x8a5a9a, 0xd87a3a];
+
+/** Is a surface spot (board `board`, between local x `x0` and `x1`) taken by a loose item? Then the model keeps it clear. */
+function held(f: Furn, board: number, x0: number, x1: number, z?: number): boolean {
+  if (!f.used?.length) return false;
+  const slots = furnSlots(f);
+  return f.used.some((i) => {
+    const s = slots[i];
+    return !!s && s.board === board && x1 > s.x - s.w / 2 - 0.02 && x0 < s.x + s.w / 2 + 0.02 && (z === undefined || Math.sign(z) === Math.sign(s.z));
+  });
+}
 
 const pickC = (arr: number[], seed: number) => arr[Math.floor(Math.abs(seed)) % arr.length];
 const rnd = (seed: number) => {
@@ -264,9 +274,9 @@ function gondola(b: MeshBuilder, f: Furn) {
   b.box(0, 0.06, 0, f.w, 0.12, f.d, S.paint(0x4a4a48, 0.8));
   b.box(0, f.h / 2, 0, 0.03, f.h, f.d, frame, 0, 0, 0);
   for (const x of [-1, 1]) b.box(x * (f.w / 2 - 0.015), f.h / 2, 0, 0.03, f.h, f.d, frame);
-  const n = 4;
-  for (let i = 0; i < n; i++) {
-    const y = 0.22 + i * ((f.h - 0.3) / n);
+  // Three boards, 0.4 m apart: the goods fill what the loose items leave free.
+  for (let i = 0; i < 3; i++) {
+    const y = 0.22 + i * 0.4;
     b.box(0, y, 0, f.w, 0.025, f.d, frame);
     for (const side of [-1, 1]) {
       let x = -f.w / 2 + 0.1;
@@ -274,7 +284,7 @@ function gondola(b: MeshBuilder, f: Furn) {
         if (r() > 0.28) {
           const bw = 0.1 + r() * 0.16;
           const bh = 0.1 + r() * 0.18;
-          b.box(x + bw / 2, y + 0.012 + bh / 2, side * f.d * 0.2, bw, bh, f.d * 0.34, S.paint(GOODS[Math.floor(r() * GOODS.length)], 0.8));
+          if (!held(f, i, x - 0.02, x + bw + 0.02, side)) b.box(x + bw / 2, y + 0.012 + bh / 2, side * f.d * 0.2, bw, bh, f.d * 0.34, S.paint(GOODS[Math.floor(r() * GOODS.length)], 0.8));
           x += bw + 0.02;
         } else x += 0.25;
       }
@@ -321,8 +331,9 @@ function rack(b: MeshBuilder, f: Furn) {
     for (const z of [-f.d / 2 + 0.05, f.d / 2 - 0.05]) b.box(0, y, z, f.w, 0.1, 0.05, beam);
     b.box(0, y + 0.03, 0, f.w - 0.1, 0.03, f.d - 0.12, S.wood(0x8a6a44, 0.7));
     for (let i = 0; i < bays; i++) {
-      if (r() < 0.3) continue;
       const x = -f.w / 2 + ((i + 0.5) * f.w) / bays;
+      // The two low levels keep their bay clear for a loose item; the crates are stacked in whatever is left.
+      if (held(f, l, x - 0.1, x + 0.1) || r() < 0.3) continue;
       const n = 1 + Math.floor(r() * 2);
       for (let k = 0; k < n; k++) {
         const bh = 0.4 + r() * 0.5;
@@ -337,7 +348,7 @@ function pallet(b: MeshBuilder, f: Furn) {
   const wood = S.wood(0x8a6a44, 0.75);
   for (let i = 0; i < 3; i++) b.box(0, 0.06, -f.d / 2 + 0.08 + i * (f.d / 2 - 0.08), f.w, 0.1, 0.1, wood);
   for (let i = 0; i < 5; i++) b.box(-f.w / 2 + 0.05 + i * ((f.w - 0.1) / 4), 0.13, 0, 0.11, 0.03, f.d, wood);
-  const n = Math.floor(r() * 3);
+  const n = held(f, 0, -9, 9) ? 0 : Math.floor(r() * 3);
   for (let i = 0; i < n; i++) {
     const bh = 0.3 + r() * 0.4;
     b.box((i - (n - 1) / 2) * 0.4, 0.15 + bh / 2, 0, 0.7, bh, f.d - 0.15, r() > 0.5 ? S.paint(0x9a7a52, 0.8) : S.paint(GOODS[Math.floor(r() * GOODS.length)], 0.8), 0, (r() - 0.5) * 0.3, 0);
@@ -381,8 +392,8 @@ function workbench(b: MeshBuilder, f: Furn) {
   b.box(0, f.h + 0.6, -f.d / 2 + 0.03, f.w - 0.1, 0.8, 0.04, S.wood(0x4a3a28, 0.8));
   const r = rnd(f.seed + 29);
   for (let i = 0; i < 5; i++) b.rod(-f.w / 2 + 0.25 + i * ((f.w - 0.5) / 4), f.h + 0.4 + r() * 0.2, -f.d / 2 + 0.06, -f.w / 2 + 0.25 + i * ((f.w - 0.5) / 4) + (r() - 0.5) * 0.1, f.h + 0.8, -f.d / 2 + 0.06, 0.012, S.steel(0x7a7e80, 0.5), 4);
-  b.rbox(f.w / 2 - 0.3, f.h + 0.1, 0.05, 0.16, 0.16, 0.2, 0.02, S.paint(0x3a3c3e, 0.6));
-  b.box(-0.2, f.h + 0.02, 0.05, 0.3, 0.04, 0.08, S.paint(0xb84a2a, 0.7), 0, 0.3, 0);
+  b.rbox(f.w / 2 - 0.22, f.h + 0.1, 0.05, 0.16, 0.16, 0.2, 0.02, S.paint(0x3a3c3e, 0.6));
+  if (!f.used?.length) b.box(-0.2, f.h + 0.02, 0.05, 0.3, 0.04, 0.08, S.paint(0xb84a2a, 0.7), 0, 0.3, 0);
 }
 
 function stall(b: MeshBuilder, f: Furn) {
@@ -419,11 +430,95 @@ function shelf(b: MeshBuilder, f: Furn) {
       if (r() > 0.35) {
         const bw = 0.12 + r() * 0.22;
         const bh = 0.1 + r() * 0.22;
-        b.box(x + bw / 2, y + 0.015 + bh / 2, 0, bw, bh, f.d * 0.8, r() > 0.5 ? S.paint(0x9a7a52, 0.8) : S.paint(GOODS[Math.floor(r() * GOODS.length)], 0.8));
+        if (!held(f, i, x - 0.02, x + bw + 0.02)) b.box(x + bw / 2, y + 0.015 + bh / 2, 0, bw, bh, f.d * 0.8, r() > 0.5 ? S.paint(0x9a7a52, 0.8) : S.paint(GOODS[Math.floor(r() * GOODS.length)], 0.8));
         x += bw + 0.03;
       } else x += 0.2;
     }
   }
+}
+
+/** Heavy steel shelving: three tiers on blue uprights, a bin or two on each tier where nothing lies. */
+function partsshelf(b: MeshBuilder, f: Furn) {
+  const r = rnd(f.seed + 41);
+  const upright = S.paint(0x2a5a9a, 0.6);
+  const tiers = [0.1, 0.85, 1.5];
+  for (const x of [-1, 1]) for (const z of [-1, 1]) b.box(x * (f.w / 2 - 0.03), f.h / 2, z * (f.d / 2 - 0.03), 0.06, f.h, 0.06, upright);
+  for (const y of [...tiers, f.h - 0.03]) b.box(0, y, 0, f.w, 0.04, f.d, y === f.h - 0.03 ? upright : S.metal(0x7a7e82, 0.6));
+  b.box(0, f.h / 2, -f.d / 2 + 0.01, f.w - 0.1, f.h - 0.1, 0.012, S.metal(0x5a5e62, 0.7));
+  tiers.forEach((y, i) => {
+    if (r() < 0.35) return;
+    for (const x of [-f.w * 0.24, f.w * 0.24]) {
+      if (held(f, i, x - 0.2, x + 0.2) || r() < 0.3) continue;
+      const bh = 0.12 + r() * 0.22;
+      b.box(x, y + 0.02 + bh / 2, 0, 0.3 + r() * 0.2, bh, f.d - 0.15, r() > 0.5 ? S.plastic(0x9a2a1e, 0.6) : S.plastic(0xc8a82a, 0.6));
+    }
+  });
+}
+
+/** An engine stand: a rolling steel frame with a padded cradle. The engine sits on its deck. */
+function enginestand(b: MeshBuilder, f: Furn) {
+  const steel = S.steel(0x3a3d40, 0.7);
+  const paint = S.paint(0xc43a1e, 0.55);
+  for (const x of [-1, 1]) b.box(x * (f.w / 2 - 0.06), 0.1, 0, 0.08, 0.08, f.d, steel);
+  for (const z of [-1, 1]) b.box(0, 0.16, z * (f.d / 2 - 0.06), f.w, 0.05, 0.07, steel);
+  for (const x of [-1, 1]) for (const z of [-1, 1]) b.cyl(x * (f.w / 2 - 0.08), 0.05, z * (f.d / 2 - 0.05), 0.1, 0.1, 0.1, S.rubber(0x1c1c1e), Math.PI / 2, 0, 0, 8);
+  for (const x of [-1, 1]) {
+    b.box(x * (f.w / 2 - 0.08), 0.3, -f.d / 2 + 0.07, 0.07, 0.34, 0.07, paint);
+    b.box(x * (f.w / 2 - 0.08), 0.3, f.d / 2 - 0.07, 0.07, 0.34, 0.07, paint);
+    b.box(x * (f.w / 2 - 0.08), f.h - 0.025, 0, 0.1, 0.05, f.d - 0.04, paint);
+  }
+}
+
+/** A wall rack of tyres: two tiers of planking on uprights, tyres standing in the cells that hold no loose one. */
+function tyrerack(b: MeshBuilder, f: Furn) {
+  const upright = S.paint(0x2a5a9a, 0.6);
+  const rubber = S.rubber(0x161618);
+  const tiers = [0.12, 0.84];
+  for (let i = 0; i <= 3; i++) for (const z of [-f.d / 2 + 0.04, f.d / 2 - 0.04]) b.box(-f.w / 2 + (i * f.w) / 3, f.h / 2, z, 0.07, f.h, 0.07, upright);
+  for (const y of [...tiers, f.h - 0.04]) b.box(0, y, 0, f.w, 0.04, f.d, S.wood(0x8a6a44, 0.7));
+  tiers.forEach((y, k) => {
+    for (let c = 0; c < 3; c++) {
+      const x = -f.w / 2 + ((c + 0.5) * f.w) / 3;
+      if (held(f, k, x - 0.05, x + 0.05) || (f.seed + c + k * 3) % 4 === 0) continue;
+      b.torus(x, y + 0.02 + 0.3, 0, 0.23, 0.095, rubber, 0, 0, 0, 10, 24);
+      b.cyl(x, y + 0.02 + 0.3, 0, 0.3, 0.13, 0.3, S.metal(0x8a8e92, 0.5), Math.PI / 2, 0, 0, 14);
+    }
+  });
+}
+
+/** A stack of tyres on the floor, lying flat. */
+function tyrestack(b: MeshBuilder, f: Furn) {
+  const rubber = S.rubber(0x161618);
+  const n = 4 + (f.seed % 2);
+  for (let i = 0; i < n; i++) b.torus(((i % 2) - 0.5) * 0.03, 0.1 + i * 0.19, ((i % 3) - 1) * 0.02, 0.26, 0.09, rubber, Math.PI / 2, 0, 0, 10, 24);
+}
+
+/** A wall rack for guns: a backboard on two steel uprights, three padded tiers with a lip, and a locking bar. The guns themselves lie on it as separate objects. */
+function gunrack(b: MeshBuilder, f: Furn) {
+  // Light boards behind dark guns, so each one reads as a silhouette.
+  const steel = S.steel(0x6a6e72, 0.5);
+  const wood = S.wood(0xb89868, 0.5);
+  b.box(0, f.h / 2, -f.d / 2 + 0.02, f.w, f.h, 0.04, S.wood(0xd0b890, 0.5));
+  for (const x of [-1, 1]) b.box(x * (f.w / 2 - 0.03), f.h / 2, 0, 0.06, f.h, f.d, steel);
+  for (const y of GUN_RACK) {
+    b.box(0, y, 0, f.w - 0.1, 0.04, f.d - 0.02, wood);
+    b.box(0, y + 0.03, f.d / 2 - 0.02, f.w - 0.1, 0.03, 0.02, S.paint(0x8a2a1e, 0.5));
+    for (const x of [-0.45, 0.45]) b.box(x * (f.w / 1.5), y + 0.06, -f.d / 2 + 0.06, 0.03, 0.1, 0.03, steel);
+  }
+  b.box(0, f.h - 0.08, f.d / 2 - 0.02, f.w - 0.05, 0.05, 0.03, steel);
+  b.box(0, f.h + 0.01, 0, f.w, 0.03, f.d, steel);
+}
+
+/** A roller tool chest: a red cabinet with drawers and a worktop. */
+function toolchest(b: MeshBuilder, f: Furn) {
+  const red = S.paint(0xb02a1e, 0.45);
+  b.rbox(0, 0.1 + (f.h - 0.1) / 2, 0, f.w, f.h - 0.1, f.d, 0.02, red);
+  b.box(0, f.h + 0.015, 0, f.w + 0.02, 0.03, f.d + 0.02, S.steel(0x4a4d50, 0.6));
+  for (let i = 0; i < 5; i++) {
+    b.box(0, 0.2 + i * 0.18, f.d / 2 + 0.004, f.w - 0.1, 0.01, 0.01, S.paint(0x2a1210, 0.8));
+    b.box(0, 0.28 + i * 0.18, f.d / 2 + 0.02, f.w * 0.5, 0.025, 0.025, S.chrome(0xb0b4b6));
+  }
+  for (const x of [-1, 1]) for (const z of [-1, 1]) b.cyl(x * (f.w / 2 - 0.08), 0.05, z * (f.d / 2 - 0.06), 0.1, 0.1, 0.1, S.rubber(0x1c1c1e), Math.PI / 2, 0, 0, 8);
 }
 
 function rubble(b: MeshBuilder, f: Furn) {
@@ -448,7 +543,7 @@ function rubble(b: MeshBuilder, f: Furn) {
 const MODELS: Partial<Record<Furn['kind'], (b: MeshBuilder, f: Furn) => void>> = {
   bed, bunk, nightstand, wardrobe, dresser, sofa, armchair, table, coffeetable, chair, deskchair, tvstand, bookshelf, rug,
   counter, sinkunit, stove, fridge, toilet, vanity, tub, desk, filing, locker, safe, gondola, checkout, cooler, rack, pallet, crate, barrel,
-  haybale, workbench, stall, woodstove, footlocker, shelf, rubble,
+  haybale, workbench, stall, woodstove, footlocker, shelf, rubble, partsshelf, enginestand, tyrerack, tyrestack, toolchest, gunrack,
 };
 
 /** Append the model for one piece of furniture. `y` is the floor height under it. */

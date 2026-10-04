@@ -1,4 +1,4 @@
-import { FIT_SLOTS, FUEL_TYPES, LEGS, MERCS, PARTS, VEHICLES, hasChassis, hasPart, mountsFor, partDef, type FuelType, type MercRole, type PartSlot, type Stocks } from '../data';
+import { FIT_SLOTS, FUEL_TYPES, HEROES, LEGS, MERCS, PARTS, VEHICLES, hasChassis, hasPart, isHero, mountsFor, otherHero, partDef, seatHeroes, type FuelType, type HeroId, type MercRole, type PartSlot, type Stocks } from '../data';
 import { newAxes, type Axes } from '../sim/endings';
 import { newStocks } from '../sim/resources';
 import { newMerc, type Merc } from '../sim/loyalty';
@@ -13,6 +13,8 @@ import { WATER_RESERVE_MAX } from '../sim/fluids';
 import { cleanPanels } from '../sim/paint';
 
 export interface PlayerSave {
+  /** Who this seat plays: Chinsky or Leo. Their face, build and name come with it. */
+  hero: HeroId;
   name: string;
   /** Uid of the build this player rolls out in. */
   vehicle: string;
@@ -41,6 +43,28 @@ export interface Items extends Record<DrugId, number> {
 
 /** The most spare oil the convoy can stow. */
 export const OIL_RESERVE_MAX = 4;
+
+/**
+ * What the heroes set out in: the starter kit, but bareheaded, so their faces are seen. The helmet rides in the bag,
+ * one swap away in the inventory.
+ */
+export function heroLoadout(): Loadout {
+  const l = starterLoadout();
+  const helmet = l.worn.head;
+  if (helmet) {
+    delete l.worn.head;
+    l.bag.unshift(helmet);
+  }
+  return l;
+}
+
+/** The heroes for each seat from a save: what it names, or the usual seating for anything it does not. */
+function savedHeroes(players: readonly object[], solo: boolean): [HeroId, HeroId] {
+  const dflt = seatHeroes(solo);
+  const [a, b] = players.map((p) => (p as { hero?: unknown }).hero);
+  const first = isHero(a) ? a : dflt[0];
+  return [first, isHero(b) && b !== first ? b : otherHero(first)];
+}
 
 export interface Stats {
   zombiesKilled: number;
@@ -88,16 +112,19 @@ export class Campaign {
   /** The open world as the last Ledger left it (see WorldMemory). */
   worldSave?: WorldSave;
 
-  constructor(names: [string, string] = ['Ash', 'Rook'], solo = false) {
+  /** `heroes` picks who sits in each seat; by default Chinsky left and Leo right, or Leo alone. */
+  constructor(heroes?: readonly [HeroId, HeroId], solo = false) {
     this.solo = solo;
+    const who = heroes ?? seatHeroes(solo);
     const mopeds = Array.from({ length: solo ? 1 : 2 }, (_, i) => newBuild('moped', { paint: PLAYER_PAINT[i], seed: 11 + i }));
     this.garage.push(...mopeds);
     this.players = [0, 1].map((i) => ({
-      name: names[i],
+      hero: who[i],
+      name: HEROES[who[i]].name,
       vehicle: mopeds[i]?.uid ?? '',
       utility: i === 0 ? 'flare' : 'horn',
       alive: true,
-      gear: starterLoadout(),
+      gear: heroLoadout(),
     })) as [PlayerSave, PlayerSave];
   }
 
@@ -304,7 +331,9 @@ export class Campaign {
   }
 
   static deserialize(d: ReturnType<Campaign['serialize']> | LegacySave): Campaign {
-    const c = new Campaign([d.players[0]?.name ?? 'Driver', d.players[1]?.name ?? 'Partner'], !!d.solo);
+    // Saves from before the heroes had callsigns instead: each seat becomes whoever plays it now.
+    const heroes = savedHeroes(d.players, !!d.solo);
+    const c = new Campaign(heroes, !!d.solo);
     c.seed = d.seed;
     c.legId = d.legId;
     c.history = d.history;
@@ -334,7 +363,7 @@ export class Campaign {
       // Reserve every stored id before sanitizing can mint new ones, so a repaired item never collides with a saved one.
       seedUids(m.players.flatMap((p) => uidsIn((p as Partial<PlayerSave>).gear)));
       // Saves from before gear existed have no loadout: sanitizing hands out the starter kit.
-      c.players = m.players.map((p) => ({ ...p, gear: sanitizeLoadout((p as Partial<PlayerSave>).gear) })) as [PlayerSave, PlayerSave];
+      c.players = m.players.map((p, i) => ({ ...p, hero: heroes[i], name: HEROES[heroes[i]].name, gear: sanitizeLoadout((p as Partial<PlayerSave>).gear) })) as [PlayerSave, PlayerSave];
     } else {
       migrateV1(c, d as LegacySave);
     }
@@ -382,7 +411,8 @@ function migrateV1(c: Campaign, d: LegacySave) {
       if (def) installPart(b, newPart(def.id, 1));
     }
     c.garage.push(b);
-    return { name: p.name, vehicle: b.uid, utility: p.utility, alive: p.alive, gear: starterLoadout() };
+    const hero = c.players[i].hero;
+    return { hero, name: HEROES[hero].name, vehicle: b.uid, utility: p.utility, alive: p.alive, gear: heroLoadout() };
   }) as [PlayerSave, PlayerSave];
 }
 
@@ -412,5 +442,7 @@ function sanitizeBuild(b: VehicleBuild): VehicleBuild {
   if (isTyre(legacy) && !tyres.some(Boolean)) tyres = tyres.map((_, i) => ({ uid: newUid('p'), id: legacy.id, cond: comp.tires[i] ?? legacy.cond }));
   // Saves from before engines had a fuel: the tank holds whatever the engine in the bay burns.
   const tank: FuelType = FUEL_TYPES.includes(b.tank) ? b.tank : fuelOf(def, fit);
-  return { ...b, fit, tyres, comp, tank, panels: cleanPanels(b.panels), stripe: b.stripe ?? 0, stripeColor: b.stripeColor ?? 0xe9dfc7, fuel: b.fuel ?? 1, hp: Math.max(0.01, b.hp ?? 1) };
+  // Cargo on the outside: drop what no longer exists or has no zone on this chassis, keep the rest (a save never loses a load).
+  const cargo = Array.isArray(b.cargo) ? b.cargo.filter((e) => e && typeof e.id === 'string' && e.c && (e.c.kind !== 'part' || hasPart(e.c.item.id))).map((e) => ({ ...e, thr: Number.isFinite(e.thr) ? e.thr : 1 })) : undefined;
+  return { ...b, ...(cargo?.length ? { cargo } : { cargo: undefined }), fit, tyres, comp, tank, panels: cleanPanels(b.panels), stripe: b.stripe ?? 0, stripeColor: b.stripeColor ?? 0xe9dfc7, fuel: b.fuel ?? 1, hp: Math.max(0.01, b.hp ?? 1) };
 }

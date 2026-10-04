@@ -74,3 +74,27 @@ describe('procedural textures', () => {
     expect(Math.abs(v.f1[0] - v.f1[31])).toBeLessThan(0.3);
   });
 });
+
+describe('facade material', () => {
+  it('forces alpha to 1.0 to prevent screen-space reflections on procedural building windows', async () => {
+    const { facadeMaterial } = await import('../src/render/facade');
+    const { installGloss } = await import('../src/render/gloss');
+    const THREE = await import('three');
+    installGloss();
+
+    const m = facadeMaterial();
+    expect(m.customProgramCacheKey()).toBe('facade');
+
+    const shader = {
+      uniforms: {} as Record<string, any>,
+      vertexShader: THREE.ShaderLib.standard.vertexShader,
+      fragmentShader: THREE.ShaderLib.standard.fragmentShader,
+    };
+    m.onBeforeCompile(shader as any, {} as any);
+
+    expect(shader.fragmentShader).toContain('gl_FragColor.a = 1.0;');
+    expect(shader.fragmentShader).toContain('diffuseColor.a = 1.0;');
+    // Roughness for glass should be smooth without CRT noise
+    expect(shader.fragmentShader).toContain('roughnessFactor = mix( fRough, 0.08,');
+  });
+});

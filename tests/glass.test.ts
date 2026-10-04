@@ -6,7 +6,10 @@ import { newBuild } from '../src/sim/garage';
 import { planRepair } from '../src/sim/repair';
 import { GLASS_HP, blastGlassDamage, crashGlassDamage, glassDamage, hitPane, newPane, shardCount, stageOf } from '../src/sim/glass';
 import { PaneSet } from '../src/render/glass';
-import { carPanes } from '../src/render/carModels';
+import { carPanes, buildCar } from '../src/render/carModels';
+import { groupParts } from '../src/render/bodyParts';
+import { SPECS, restHeight } from '../src/render/carSpecs';
+import { lookOf } from '../src/render/vehicleModels';
 import { fakeServices } from './helpers/sim';
 import type { Vehicle } from '../src/game/vehicle';
 
@@ -163,8 +166,15 @@ function leg() {
   return { h, sc, c: h.campaign };
 }
 
+function pose(sc: LegScene) {
+  for (const v of sc.vehicles) v.syncVisual(1, DT);
+}
+
 function run(sc: LegScene, secs: number) {
-  for (let i = 0; i < Math.round(secs / DT); i++) sc.tick(DT);
+  for (let i = 0; i < Math.round(secs / DT); i++) {
+    sc.tick(DT);
+    pose(sc);
+  }
 }
 
 function car(sc: LegScene, id = 'sedan', seed = 3, dx = 14, dz = 6): Vehicle {
@@ -279,5 +289,47 @@ describe('a car in the world', () => {
     // Fitted new, it is whole again.
     const fixed = v.glass.keys().find((k) => v.glass.stageOf(k) === 0)!;
     expect(v.visual.panes!.stageOf(fixed)).toBe(0);
+  });
+
+  it('a hatchback rear window swings with the tailgate when opened instead of being hidden', () => {
+    const { sc } = leg();
+    const v = car(sc, 'hatch');
+    expect(v.visual.panes!.stageOf('rw')).toBe(0);
+    v.open.trunk = true;
+    run(sc, 1);
+    expect(v.swing.trunk).toBeGreaterThan(0.9);
+    // rw is still whole (not hidden or deleted) and has swung on its hinge
+    expect(v.visual.panes!.stageOf('rw')).toBe(0);
+    // When closed again, it swings back
+    v.open.trunk = false;
+    run(sc, 1);
+    expect(v.swing.trunk).toBeLessThan(0.01);
+    expect(v.visual.panes!.stageOf('rw')).toBe(0);
+  });
+
+  it('hatchback tailgate has its hinge pivot at the roof', () => {
+    const b = newBuild('hatch', { seed: 1 });
+    const def = chassisDef('hatch');
+    const p = def.physics;
+    const wl: [number, number, number][] = [];
+    const st: boolean[] = [];
+    for (let a = 0; a < p.wheelsZ.length; a++) {
+      const xs = p.wheelsX[0] === 0 ? [0] : p.wheelsX;
+      for (const wx of xs) {
+        if (wl.length >= p.wheelCount) break;
+        wl.push([wx, p.hardY, p.wheelsZ[a]]);
+        st.push(a < 1);
+      }
+    }
+    const vis = buildCar(def, wl, st, lookOf(b));
+    const parts = groupParts(vis.body.geometry.userData.parts);
+    const trunk = parts.find((g) => g.tag === 'trunk');
+    expect(trunk).toBeDefined();
+    expect(trunk!.meta.pivot).toBeDefined();
+    const [px, py, pz] = trunk!.meta.pivot!;
+    expect(px).toBe(0);
+    // In chassis coordinates, the body was shifted down by restHeight(def)
+    expect(py).toBeCloseTo(SPECS.hatch.roof + 0.02 - restHeight(def), 2);
+    expect(pz).toBeCloseTo(SPECS.hatch.rwTop, 2);
   });
 });

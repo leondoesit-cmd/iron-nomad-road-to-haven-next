@@ -37,6 +37,9 @@ export function fakeServices(opts: { onRadio?: (t: string) => void; solo?: boole
     setViewMode(i: number, first: boolean) {
       (this.views[i] as { first?: boolean }).first = first;
     },
+    setZoom(i: number, zoom: number) {
+      (this.views[i] as { zoom?: number }).zoom = zoom;
+    },
     interior: false,
     sky: { mesh: { visible: true } },
     setLight() {
@@ -77,7 +80,7 @@ export function fakeServices(opts: { onRadio?: (t: string) => void; solo?: boole
     pendingLook: () => [0, 0] as [number, number],
     mouseSeat: () => -1,
   };
-  const campaign = new Campaign(['Ash', 'Rook'], !!opts.solo);
+  const campaign = new Campaign(undefined, !!opts.solo);
   campaign.seed = 4242;
   const radio: string[] = [];
   const banners: string[] = [];

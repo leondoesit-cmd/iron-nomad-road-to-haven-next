@@ -46,7 +46,11 @@ export class Landscape {
       this.buildLakes();
       if (layout) this.buildSettlements(layout);
       if (def.open && cityBuildings?.length) this.buildDistrictFar(cityBuildings);
-    } else this.buildSkyline();
+    } else {
+      this.buildSkyline();
+      // City trades (a garage, a dealership, a depot) are real buildings with interiors, drawn like the roadside ones.
+      if (layout?.rural.length) this.buildSettlements(layout);
+    }
   }
 
   /** Plain walls and roofs for every building of a district, so Petah Tikva shows on the horizon before its chunks stream in. */
@@ -225,8 +229,8 @@ export class Landscape {
    * Per view, before it renders: cut away the building the viewer's focus is in (roof and upper storeys), leave
    * every other one whole, and drop furniture for cameras too far away to see through a window.
    */
-  updateView(focus: { x: number; y: number; z: number } | null, camX: number, camZ: number) {
-    for (const b of this.buildings) b.setView(focus, camX, camZ);
+  updateView(focus: { x: number; y: number; z: number } | null, camX: number, camY: number, camZ: number) {
+    for (const b of this.buildings) b.setView(focus, camX, camY, camZ);
   }
 
   /** One water sheet per lake, drawn for the whole leg. */

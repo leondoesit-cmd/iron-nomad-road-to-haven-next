@@ -1,4 +1,4 @@
-import { ENCOUNTERS, LEGS, STRUCTURES, encounterById, legById, t, type LegDef } from '../data';
+import { ENCOUNTERS, HEROES, LEGS, STRUCTURES, encounterById, legById, otherHero, seatHeroes, t, type HeroId, type LegDef } from '../data';
 import { FocusUI, type FocusItem } from './focus';
 import { LedgerPanel } from './ledger';
 import { ControlsMenu } from './controls';
@@ -16,13 +16,13 @@ import type { Game } from '../game/game';
 import type { CampScene } from '../game/campScene';
 import type { QualityPreset } from '../render/renderer';
 
-const CALLSIGNS = ['Ash', 'Rook', 'Wren', 'Pike', 'Juno', 'Cobb', 'Sparrow', 'Hollis', 'Dutch', 'Mags', 'Rafe', 'Tinker'];
-
 export class Overlays {
   root = document.getElementById('overlay')!;
   private pauseEl: HTMLElement | null = null;
   pauseFocus = new FocusUI();
-  private nameIdx: [number, number] = [0, 1];
+  /** Who plays alone (Leo unless picked otherwise), and whether split screen has swapped Chinsky and Leo between seats. */
+  private soloHero: HeroId = seatHeroes(true)[0];
+  private swapped = false;
   private debugEl: HTMLElement | null = null;
   private titleReady = false;
   private tickers: ((dt: number) => void)[] = [];
@@ -34,8 +34,11 @@ export class Overlays {
     };
   }
 
-  callsign(i: number) {
-    return CALLSIGNS[this.nameIdx[i] % CALLSIGNS.length];
+  /** Who sits in each seat for the next run: Chinsky left and Leo right in split screen, Leo alone, unless picked otherwise. */
+  heroes(): [HeroId, HeroId] {
+    if (this.game.solo) return [this.soloHero, otherHero(this.soloHero)];
+    const [a, b] = seatHeroes(false);
+    return this.swapped ? [b, a] : [a, b];
   }
 
   private clear() {
@@ -92,7 +95,7 @@ export class Overlays {
       return `<div class="slot p${i + 1} ${joined ? 'joined' : ''}">
         <div class="who" style="color:${PLAYER_CSS[i]}">${solo ? 'SOLO' : `PLAYER ${i + 1}`}</div>
         ${joined ? `<div>${dev}</div>` : `<div class="blink">${t('title.join')}</div><div class="hint">${join}</div>`}
-        <div style="margin-top:8px"><button data-fid="name${i}">‹ ${this.callsign(i)} ›</button></div>
+        <div style="margin-top:8px"><button data-fid="name${i}">‹ ${HEROES[this.heroes()[i]].name.toUpperCase()} ›</button></div>
       </div>`;
     };
     const saved = hasSave() ? ` <small>${savedSolo() ? 'solo' : '2P'}</small>` : '';
@@ -143,10 +146,15 @@ export class Overlays {
     g.focus.cursor = [0, 0];
   }
 
+  /** Pick the other hero for a seat. In split screen the two always differ, so picking one swaps them. */
   private cycleName(i: number) {
-    this.nameIdx[i] = (this.nameIdx[i] + 1) % CALLSIGNS.length;
-    if (this.nameIdx[0] === this.nameIdx[1]) this.nameIdx[i] = (this.nameIdx[i] + 1) % CALLSIGNS.length;
+    if (this.game.solo) this.soloHero = otherHero(this.soloHero);
+    else this.swapped = !this.swapped;
+    this.game.audio.play('click');
+    // The demo behind the menu restarts so whoever was picked rides in it.
+    this.game.restartAttract();
     this.renderTitle();
+    this.game.focus.cursor = [i + 1, i + 1];
   }
 
   private lastJoined = 0;
@@ -188,6 +196,7 @@ export class Overlays {
         ${solo ? '' : row('lay', 'Split screen', g.R.layout === 'horizontal' ? 'TOP / BOTTOM' : 'LEFT / RIGHT')}
         ${row('vol', 'Master volume', `${Math.round(g.audio.volume * 100)}%`)}
         ${row('mus', 'Music volume', `${Math.round(g.audio.musicVolume * 100)}%`)}
+        ${row('tts', 'Radio TTS voice', g.audio.ttsEnabled ? 'ON' : 'OFF')}
         ${row('rm1', solo ? 'Rumble' : 'P1 rumble', s.rumble[0] ? 'ON' : 'OFF')}
         ${solo ? '' : row('rm2', 'P2 rumble', s.rumble[1] ? 'ON' : 'OFF')}
         ${row('aa1', solo ? 'Aim assist' : 'P1 aim assist', `${Math.round(s.aimAssist[0] * 100)}%`)}
@@ -222,6 +231,9 @@ export class Overlays {
           case 'mus':
             g.audio.setMusicVolume(clamp(g.audio.musicVolume + dir * 0.1, 0, 1));
             break;
+          case 'tts':
+            g.audio.setTtsEnabled(!g.audio.ttsEnabled);
+            break;
           case 'rm1':
             st.rumble[0] = !st.rumble[0];
             break;
@@ -253,7 +265,7 @@ export class Overlays {
         render();
         fc.setItems(makeItems(), keys);
       };
-      const ids = ['q', 'ui', ...(solo ? [] : ['lay']), 'vol', 'mus', 'rm1', ...(solo ? [] : ['rm2']), 'aa1', ...(solo ? [] : ['aa2']), 'ms', 'dr', 'ag', 'dm'];
+      const ids = ['q', 'ui', ...(solo ? [] : ['lay']), 'vol', 'mus', 'tts', 'rm1', ...(solo ? [] : ['rm2']), 'aa1', ...(solo ? [] : ['aa2']), 'ms', 'dr', 'ag', 'dm'];
       const makeItems = (): FocusItem[] => [
         ...ids.flatMap((id) => [
           { el: el(`${id}-`), press: () => step(id, -1) },

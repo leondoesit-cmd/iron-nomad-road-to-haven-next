@@ -3,27 +3,17 @@ import { MeshBuilder } from './builder';
 import { crate, jerryCan, oilCan } from './parts';
 import { buildPartModel } from './partModels';
 import { C } from './palette';
-import { shared } from './dispose';
 import { bodyMat } from './vehicleKit';
 import type { Mounts } from './attachments';
+import type { Carried } from '../sim/carry';
+import type { Zone } from '../sim/cargo';
 
 /**
- * Stowed cargo you can see: the convoy's spare fuel cans, oil cans and crates of spare parts, strapped to whichever
- * flat surface a chassis has (boot lid, pickup bed, roof, or the carrier on a bike).
+ * Cargo you can see on a car: what was put on the roof, in the bed or in the rear cage (`sim/cargo.ts` says what each place
+ * holds and whether it is secure). Each item is drawn as itself, at a spot in that place's deck, in the chassis frame. What
+ * is stowed INSIDE (boot, cab, panniers) is not drawn at all, and the jerrycan rack and the spare-wheel carrier draw their own
+ * cans and tyre as part of the fitted model.
  */
-export interface Load {
-  fuel: number;
-  diesel: number;
-  oil: number;
-  /** Overflow: spare parts that did not fit on a deck are heaped in crates. */
-  crates: number;
-  /** Spare parts sitting on the deck, each one drawn as itself. */
-  parts: { uid: string; id: string }[];
-}
-
-export const noLoad = (): Load => ({ fuel: 0, diesel: 0, oil: 0, crates: 0, parts: [] });
-export const loadKey = (l: Load) => `${l.fuel}.${l.diesel}.${l.oil}.${l.crates}.${l.parts.map((p) => p.uid).join(',')}`;
-export const loadCount = (l: Load) => l.fuel + l.diesel + l.oil + l.crates + l.parts.length;
 
 /** A flat area cargo can sit on, in the chassis frame. */
 export interface Deck {
@@ -31,92 +21,99 @@ export interface Deck {
   z0: number;
   z1: number;
   hw: number;
-  /** A bike's carrier: items stack up rather than spread out. */
-  stack: boolean;
 }
 
-export function deckOf(m: Mounts, g0: number): Deck {
-  if (m.trunk) return { y: m.trunk.y - g0 + 0.02, z0: m.trunk.z0 + 0.1, z1: m.trunk.z1 - 0.1, hw: m.trunk.hw * 0.85, stack: false };
-  if (m.roof) return { y: m.roof.y - g0 + 0.02, z0: m.roof.z0 + 0.1, z1: m.roof.z1 - 0.1, hw: m.roof.hw * 0.8, stack: false };
-  return { y: m.rear.y + 0.3, z0: m.rear.z + 0.15, z1: m.rear.z + 0.75, hw: Math.max(0.1, m.rear.hw * 0.7), stack: true };
+/** How high a holder's floor stands above the bare roof. */
+const HOLDER_LIFT = 0.16;
+
+/** The deck of a zone on this chassis. Null where nothing is drawn (the rack and the spare carrier show their own load) or the chassis has no such surface. */
+export function deckOfZone(m: Mounts, g0: number, zone: Zone, holder: boolean): Deck | null {
+  switch (zone) {
+    case 'roof':
+      return m.roof ? { y: m.roof.y - g0 + 0.02 + (holder ? HOLDER_LIFT : 0), z0: m.roof.z0 + 0.1, z1: m.roof.z1 - 0.1, hw: m.roof.hw * 0.8 } : null;
+    case 'bed':
+      return m.trunk ? { y: m.trunk.y - g0 + 0.02, z0: m.trunk.z0 + 0.1, z1: m.trunk.z1 - 0.1, hw: m.trunk.hw * 0.85 } : null;
+    case 'carrier':
+      return { y: m.rear.y - g0 + 0.18, z0: m.rear.z - 0.62, z1: m.rear.z - 0.08, hw: Math.max(0.1, m.rear.hw * 0.75) };
+    default:
+      return null;
+  }
 }
 
-/** How many things a deck can hold at once. */
-export function deckRoom(d: Deck): number {
-  if (d.stack) return 2;
-  const cols = Math.max(1, Math.floor((d.hw * 2) / 0.34));
-  const rows = Math.max(1, Math.floor((d.z1 - d.z0) / 0.36));
-  return Math.min(6, cols * rows);
-}
-
-/** One thing on a deck, in the chassis frame. */
+/** One thing in a deck, in the chassis frame. */
 export interface Placed {
-  kind: 'part' | 'crate' | 'fuel' | 'diesel' | 'oil';
-  /** Part items: which one. */
-  uid?: string;
-  id?: string;
+  /** The cargo entry it is. */
+  id: string;
+  kind: 'part' | 'fuel' | 'diesel' | 'oil' | 'water';
+  partId?: string;
   x: number;
   y: number;
   z: number;
   yaw: number;
 }
 
+const kindOf = (c: Carried): Placed['kind'] => (c.kind === 'part' ? 'part' : c.kind === 'fuel' ? (c.fuel === 'diesel' ? 'diesel' : 'fuel') : c.kind === 'oil' ? 'oil' : 'water');
+
+/** Where each entry sits on its deck: a grid of spots, stacking up when it is full. */
+export function layoutEntries(deck: Deck, entries: { id: string; c: Carried }[]): Placed[] {
+  const cols = Math.max(1, Math.floor((deck.hw * 2) / 0.34));
+  const rows = Math.max(1, Math.floor((deck.z1 - deck.z0) / 0.36));
+  const cells = cols * rows;
+  const zc = (deck.z0 + deck.z1) / 2;
+  return entries.map((e, i) => {
+    const cell = i % cells;
+    const layer = Math.floor(i / cells);
+    const col = cell % cols;
+    const row = Math.floor(cell / cols);
+    const x = cols === 1 ? 0 : (col / (cols - 1) - 0.5) * (deck.hw * 2 - 0.3);
+    const z = rows === 1 ? zc : deck.z1 - 0.18 - row * 0.36;
+    const yaw = ((i * 53) % 17) * 0.05 - 0.4;
+    return { id: e.id, kind: kindOf(e.c), partId: e.c.kind === 'part' ? e.c.item.id : undefined, x, y: deck.y + layer * 0.3, z, yaw };
+  });
+}
+
 /** Spare parts are drawn at this fraction of their full size so a few fit side by side. */
 const PART_SCALE = 0.5;
 
-/** Where each thing in the load sits on its deck: parts first, then crates, fuel cans and oil cans. */
-export function layoutLoad(deck: Deck, load: Load): Placed[] {
-  const things: Pick<Placed, 'kind' | 'uid' | 'id'>[] = [];
-  for (const p of load.parts) things.push({ kind: 'part', uid: p.uid, id: p.id });
-  for (let i = 0; i < load.crates; i++) things.push({ kind: 'crate' });
-  for (let i = 0; i < load.fuel; i++) things.push({ kind: 'fuel' });
-  for (let i = 0; i < (load.diesel ?? 0); i++) things.push({ kind: 'diesel' });
-  for (let i = 0; i < load.oil; i++) things.push({ kind: 'oil' });
-  const out: Placed[] = [];
-  const cols = deck.stack ? 1 : Math.max(1, Math.floor((deck.hw * 2) / 0.34));
-  const zc = (deck.z0 + deck.z1) / 2;
-  let stackY = 0;
-  things.forEach((t, i) => {
-    const yaw = ((i * 53) % 17) * 0.05 - 0.4;
-    if (deck.stack) {
-      // On a carrier: one thing on the rack, the next on top of it.
-      out.push({ ...t, x: 0, y: deck.y + stackY, z: zc, yaw });
-      stackY += t.kind === 'crate' ? 0.22 : t.kind === 'part' ? 0.3 : 0.34;
-      return;
-    }
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const x = cols === 1 ? 0 : (col / (cols - 1) - 0.5) * (deck.hw * 2 - 0.3);
-    const z = deck.z1 - 0.18 - row * 0.36;
-    if (z < deck.z0 - 0.05) return;
-    out.push({ ...t, x, y: deck.y, z, yaw });
-  });
-  return out;
+/** The model of one carried thing on a deck. */
+function drawThing(b: MeshBuilder, t: Placed) {
+  if (t.kind === 'part') {
+    const pm = new MeshBuilder();
+    buildPartModel(pm, t.partId!);
+    b.appendMatrix(pm, new THREE.Matrix4().compose(new THREE.Vector3(t.x, t.y, t.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), t.yaw), new THREE.Vector3(PART_SCALE, PART_SCALE, PART_SCALE)));
+  } else if (t.kind === 'fuel' || t.kind === 'diesel') jerryCan(b, t.x, t.y, t.z, t.kind === 'diesel' ? C.diesel : C.fuel, t.yaw);
+  else if (t.kind === 'water') jerryCan(b, t.x, t.y, t.z, 0x3a6ea5, t.yaw);
+  else oilCan(b, t.x, t.y, t.z, t.yaw);
 }
 
-const cache = new Map<string, THREE.BufferGeometry>();
-
-/** A mesh of the load on its deck. Geometry is cached per layout, so rebuilding is cheap. */
-export function buildLoad(deck: Deck, load: Load, key: string): THREE.Mesh | null {
-  if (loadCount(load) <= 0) return null;
-  const ck = `${key}|${deck.y.toFixed(2)}|${deck.z0.toFixed(2)}|${deck.z1.toFixed(2)}|${deck.hw.toFixed(2)}|${load.parts.map((p) => p.id).join(',')}|${load.fuel}.${load.oil}.${load.crates}`;
-  let geo = cache.get(ck);
-  if (!geo) {
-    const b = new MeshBuilder();
-    b.jitter = 0.02;
-    for (const t of layoutLoad(deck, load)) {
-      if (t.kind === 'part') {
-        const pm = new MeshBuilder();
-        buildPartModel(pm, t.id!);
-        b.appendMatrix(pm, new THREE.Matrix4().compose(new THREE.Vector3(t.x, t.y, t.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), t.yaw), new THREE.Vector3(PART_SCALE, PART_SCALE, PART_SCALE)));
-      } else if (t.kind === 'crate') crate(b, t.x, t.y + 0.11, t.z, deck.stack ? 0.34 : 0.32, 0.22, 0.3, t.yaw);
-      else if (t.kind === 'fuel' || t.kind === 'diesel') jerryCan(b, t.x, t.y, t.z, t.kind === 'diesel' ? C.diesel : C.fuel, t.yaw);
-      else oilCan(b, t.x, t.y, t.z, t.yaw);
+/** A mesh of everything on the decks. Null when there is nothing to draw. */
+export function buildCargoMesh(decks: { deck: Deck; entries: { id: string; c: Carried }[] }[]): THREE.Mesh | null {
+  const b = new MeshBuilder();
+  b.jitter = 0.02;
+  let n = 0;
+  for (const { deck, entries } of decks) {
+    for (const t of layoutEntries(deck, entries)) {
+      drawThing(b, t);
+      n++;
     }
-    geo = shared(b.build());
-    cache.set(ck, geo);
   }
-  const mesh = new THREE.Mesh(geo, bodyMat);
+  if (!n) return null;
+  const mesh = new THREE.Mesh(b.build(), bodyMat);
   mesh.castShadow = true;
   return mesh;
+}
+
+/** The geometry of one carried thing at a size to tumble down the road. */
+export function pieceGeometry(c: Carried): THREE.BufferGeometry {
+  const b = new MeshBuilder();
+  b.jitter = 0.02;
+  if (c.kind === 'part') {
+    const pm = new MeshBuilder();
+    buildPartModel(pm, c.item.id);
+    b.appendMatrix(pm, new THREE.Matrix4().makeScale(0.8, 0.8, 0.8));
+  } else if (c.kind === 'fuel') jerryCan(b, 0, 0, 0, c.fuel === 'diesel' ? C.diesel : C.fuel, 0);
+  else if (c.kind === 'water') jerryCan(b, 0, 0, 0, 0x3a6ea5, 0);
+  else if (c.kind === 'oil') oilCan(b, 0, 0, 0, 0);
+  else crate(b, 0, 0.11, 0, 0.32, 0.22, 0.3, 0);
+  return b.build();
 }

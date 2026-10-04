@@ -85,6 +85,8 @@ export interface ResolvedEffects {
   ambush: number;
   zombies: number;
   fragment: boolean;
+  /** Named finds: how many things from which loot context. */
+  loot: { from: string; n: number }[];
 }
 
 /** Flatten an effect block, rolling any chance branch with the supplied RNG. */
@@ -96,6 +98,7 @@ export function resolveEffects(e: EncounterEffects, rng: Rng): ResolvedEffects {
     ambush: e.ambush ?? 0,
     zombies: e.zombies ?? 0,
     fragment: !!e.fragment,
+    loot: e.loot ? [e.loot] : [],
   };
   if (e.chance && rng.next() < e.chance.p) {
     const f = resolveEffects(e.chance.fail, rng);
@@ -107,6 +110,7 @@ export function resolveEffects(e: EncounterEffects, rng: Rng): ResolvedEffects {
     out.ambush += f.ambush;
     out.zombies += f.zombies;
     if (f.fragment) out.fragment = true;
+    out.loot.push(...f.loot);
   }
   return out;
 }

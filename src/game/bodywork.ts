@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BodyMesh, boundsOf } from '../render/deform';
-import { groupParts, type PartGroup } from '../render/bodyParts';
+import { PANEL_TAG, groupParts, type PartGroup } from '../render/bodyParts';
+import { PANELS, type Panel } from '../sim/access';
 import { newSkinUniforms, skinMaterial, type SkinUniforms } from '../render/vehicleDirt';
 import { bodyMat, wheelSpec } from '../render/vehicleKit';
 import { restHeight } from '../render/carModels';
@@ -73,7 +74,10 @@ interface Joint {
   gone: boolean;
 }
 
-const KIND_NAME: Record<string, string> = { door: 'Door', mirror: 'Mirror', bumper: 'Bumper', sign: 'Armour plate', spare: 'Spare wheel', crate: 'Crate', lightbar: 'Light bar', bullbar: 'Bull bar', slot: 'Part' };
+/** Modules bolted over a panel that swing open with it: the plating on the bonnet and on each door. */
+const FOLLOWS: Record<Panel, string[]> = { hood: ['slot:armor:hood'], doorL: ['slot:armor:1'], doorR: ['slot:armor:-1'], trunk: [] };
+
+const KIND_NAME: Record<string, string> = { door: 'Door', hood: 'Bonnet', trunk: 'Boot lid', mirror: 'Mirror', bumper: 'Bumper', sign: 'Armour plate', spare: 'Spare wheel', crate: 'Crate', lightbar: 'Light bar', bullbar: 'Bull bar', slot: 'Part' };
 
 export class Bodywork {
   readonly dirt: Dirt = { mud: 0, dust: 0, blood: 0 };
@@ -93,6 +97,8 @@ export class Bodywork {
   private time = Math.random() * 10;
   private sparkT = 0;
   private lastDirt = '';
+  /** Panels that have come off this model (a door, the bonnet): the vehicle counts them as open. Kept by `detach`, `hideGone` and `restoreOne`. */
+  private gone: Partial<Record<Panel, boolean>> = {};
 
   constructor(private v: Vehicle) {
     this.attach();
@@ -105,11 +111,18 @@ export class Bodywork {
     const v = this.v;
     this.release();
     this.enabled = v.def.physics.kind !== 'boat';
+    this.gone = {};
     if (!this.enabled) return;
     const vis = v.visual;
     this.restGeo = vis.body.geometry;
     const seed = v.build?.seed ?? v.id;
     const saved = v.build?.body;
+    // Panels left open when the vehicle was put away are open again, without swinging.
+    v.open = {};
+    for (const p of saved?.open ?? []) {
+      v.open[p] = true;
+      v.swing[p] = 1;
+    }
     this.joints = groupParts(this.restGeo.userData.parts).map((g) => ({
       g,
       tol: jointTol(g.meta.tol, seed, g.tag),
@@ -406,6 +419,16 @@ export class Bodywork {
 
   /** The part becomes its own mesh on a pivot, so it can rattle and swing on its joint. */
   private loosen(j: Joint) {
+    if (j.hang || j.gone) {
+      if (j.hang) j.state = 'loose';
+      return;
+    }
+    this.hang(j);
+    j.state = 'loose';
+  }
+
+  /** Lift the part out of the body into a mesh of its own on its pivot (a loose part, or a panel that is swung open). */
+  private hang(j: Joint) {
     if (j.hang || j.gone) return;
     this.geom(j);
     const hull = this.ensureHull();
@@ -418,7 +441,6 @@ export class Bodywork {
     grp.add(m);
     this.v.visual.inner.add(grp);
     j.hang = grp;
-    j.state = 'loose';
   }
 
   /** Hide a part for good (it came off in an earlier scene). */
@@ -428,6 +450,22 @@ export class Bodywork {
     j.gone = true;
     j.state = 'gone';
     j.stress = 1;
+    this.markGone(j);
+  }
+
+  /** Remember that a panel has come off, so the vehicle counts it as open (and forgets it was ever opened). */
+  private markGone(j: Joint) {
+    const p = PANELS.find((q) => PANEL_TAG[q] === j.g.tag);
+    if (!p) return;
+    this.gone[p] = true;
+    this.v.open[p] = false;
+    delete this.v.open[p];
+    this.v.swing[p] = 0;
+  }
+
+  /** Which panels have been torn or shot off this model. */
+  gonePanels(): Partial<Record<Panel, boolean>> {
+    return this.gone;
   }
 
   /** The joint lets go: the part leaves the body as a physical piece with the vehicle's speed and the knock behind it. */
@@ -441,6 +479,7 @@ export class Bodywork {
     j.gone = true;
     j.state = 'gone';
     j.stress = Math.max(j.stress, SNAP_AT);
+    this.markGone(j);
     // Where the part is right now, from the physics body and the model's own lean and swing: the scene graph's world
     // matrices are only brought up to date at render time.
     const { pos, quat } = this.partPose(grp);
@@ -680,6 +719,8 @@ export class Bodywork {
     j.state = 'fixed';
     this.hull.show(j.g);
     this.lampsDirty = true;
+    const p = PANELS.find((q) => PANEL_TAG[q] === j.g.tag);
+    if (p) delete this.gone[p];
     return this.nameOf(j);
   }
 
@@ -715,11 +756,17 @@ export class Bodywork {
       this.lampsDirty = false;
       this.carryLamps(hull);
     }
+    this.swingPanels(dt);
     // Parts hanging on their joints swing to the car's acceleration and rattle with its speed.
     const sp = Math.abs(v.speed);
     for (const j of this.joints) {
       const g = j.hang;
       if (!g) continue;
+      // A panel that is just standing open is not loose: it holds still at the angle it was swung to.
+      if (j.state === 'fixed') {
+        this.posePanel(j, g);
+        continue;
+      }
       const loose = clamp((j.stress - LOOSE_AT) / (SNAP_AT - LOOSE_AT), 0, 1);
       const hinge = j.g.meta.joint === 'hinge';
       const rattle = Math.sin(this.time * 31 + j.phase) * 0.018 * Math.min(1, sp / 12) * (0.4 + loose);
@@ -736,7 +783,64 @@ export class Bodywork {
       }
       if (hinge) g.rotation.set(0, j.ang[1], 0);
       else g.rotation.set(j.ang[0], 0, j.ang[1]);
+      this.posePanel(j, g, true);
     }
+  }
+
+  /** Seconds a panel takes to swing all the way open or shut. */
+  static readonly SWING_SECS = 0.55;
+
+  /** Ease each panel toward open or shut, keeping it a mesh of its own while it is away from the body. */
+  private swingPanels(dt: number) {
+    const v = this.v;
+    // Nothing is open and nothing is still swinging (almost always): nothing to do.
+    const prop = v.hoodProp();
+    if (!v.open.hood && !v.open.doorL && !v.open.doorR && !v.open.trunk && !prop && v.swing.hood + v.swing.doorL + v.swing.doorR + v.swing.trunk <= 0) return;
+    for (const p of PANELS) {
+      const j = this.joints.find((q) => q.g.tag === PANEL_TAG[p]);
+      if (!j || j.gone) continue;
+      // A bonnet over an engine that is too big for it cannot shut: it rests propped on it.
+      const want = v.open[p] ? 1 : p === 'hood' ? prop : 0;
+      let k = v.swing[p];
+      if (k !== want) {
+        k = k < want ? Math.min(want, k + dt / Bodywork.SWING_SECS) : Math.max(want, k - dt / Bodywork.SWING_SECS);
+        v.swing[p] = k;
+      }
+      if (k > 0.001 && !j.hang) this.hang(j);
+      else if (k <= 0.001 && j.hang && j.state === 'fixed') this.tighten(j);
+      // Armour plating welded over the panel goes with it, on the same hinge.
+      for (const f of this.joints) {
+        if (f === j || f.gone || !FOLLOWS[p].includes(f.g.tag)) continue;
+        if (k > 0.001 && !f.hang) {
+          this.geom(f);
+          f.pivot = [...j.pivot];
+          this.hang(f);
+        } else if (k <= 0.001 && f.hang && f.state === 'fixed') this.tighten(f);
+      }
+    }
+  }
+
+  /** The angle of each panel at full swing, radians. A van's rear door lifts further than a boot lid. */
+  private openAngle(p: Panel): number {
+    if (p === 'hood') return 1.1;
+    if (p === 'trunk') return this.v.def.id === 'van' ? 1.5 : this.v.def.id === 'hatch' ? 1.3 : 1.15;
+    return 1.2;
+  }
+
+  /** Swing a hung panel to where the vehicle's `swing` says it is (added to whatever a loose joint is doing). */
+  private posePanel(j: Joint, g: THREE.Group, add = false) {
+    const p = PANELS.find((q) => PANEL_TAG[q] === j.g.tag || FOLLOWS[q].includes(j.g.tag));
+    const k = p ? this.v.swing[p] : 0;
+    if (!p) {
+      if (!add) g.rotation.set(0, 0, 0);
+      return;
+    }
+    // Eased: a panel is slow to start and slow to settle.
+    const e = k * k * (3 - 2 * k) * this.openAngle(p);
+    const base = add ? g.rotation : g.rotation.set(0, 0, 0);
+    if (p === 'hood') base.x -= e;
+    else if (p === 'trunk') base.x += e;
+    else base.y -= (p === 'doorL' ? 1 : -1) * e;
   }
 
   /** Lamps ride the lattice with the panel they sit in, and go dark when it is crushed. */
@@ -768,6 +872,8 @@ export class Bodywork {
     }
     const glass = this.v.glass?.stages();
     if (glass) s.glass = glass;
+    const open = PANELS.filter((p) => this.v.open[p]);
+    if (open.length) s.open = open;
     return s;
   }
 
@@ -776,7 +882,7 @@ export class Bodywork {
     if (!b || !this.enabled) return;
     const s = this.save();
     if (!s) return;
-    const empty = !s.dents.length && !s.gone.length && !s.glass && !Object.keys(s.stress).length && s.dirt.every((d) => d < 0.004);
+    const empty = !s.dents.length && !s.gone.length && !s.glass && !s.open && !Object.keys(s.stress).length && s.dirt.every((d) => d < 0.004);
     if (empty) delete b.body;
     else b.body = s;
   }

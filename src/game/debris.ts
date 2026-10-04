@@ -32,6 +32,8 @@ export interface DebrisIn {
   mass: number;
   round?: boolean;
   item?: PartItem | null;
+  /** A thing that is not a fitted part but can still be lifted once it lies still: a can that fell off a roof. */
+  carried?: Carried | null;
   tag: string;
 }
 
@@ -45,6 +47,7 @@ export interface Piece {
   /** Seconds it has lain still. */
   rest: number;
   item: PartItem | null;
+  carried: Carried | null;
   armed: boolean;
   /** 1 while it exists, falling to 0 as scrap is cleared away. */
   fade: number;
@@ -105,6 +108,7 @@ export class DebrisField {
       age: 0,
       rest: 0,
       item: o.item ?? null,
+      carried: o.carried ?? null,
       armed: false,
       fade: 1,
       prev: { x: o.pos.x, y: o.pos.y, z: o.pos.z, qx: o.quat.x, qy: o.quat.y, qz: o.quat.z, qw: o.quat.w },
@@ -117,16 +121,16 @@ export class DebrisField {
   /** Which piece goes when there are too many: scrap that has stopped moving, then scrap, then anything but a part. */
   private oldest(): Piece {
     const pick = (f: (p: Piece) => boolean) => this.pieces.find(f);
-    return pick((p) => !p.item && p.rest > 1) ?? pick((p) => !p.item) ?? pick((p) => p.rest > 1) ?? this.pieces[0];
+    return pick((p) => !p.item && !p.carried && p.rest > 1) ?? pick((p) => !p.item && !p.carried) ?? pick((p) => p.rest > 1) ?? this.pieces[0];
   }
 
   /** Take a piece out of the world. A piece that still carries a part is not simply lost: it becomes an ordinary pickup where it lies, when `keep` is set. */
   remove(p: Piece, keep = false) {
     const i = this.pieces.indexOf(p);
     if (i < 0) return;
-    if (keep && p.item && this.ctx.loose) {
+    if (keep && (p.item || p.carried) && this.ctx.loose) {
       const t = p.body.translation();
-      this.ctx.loose.drop(t.x, t.z, { kind: 'part', item: p.item });
+      this.ctx.loose.drop(t.x, t.z, p.item ? { kind: 'part', item: p.item } : p.carried!);
     }
     this.pieces.splice(i, 1);
     this.ctx.P.world.removeCollider(p.collider, false);
@@ -161,7 +165,7 @@ export class DebrisField {
       const av = p.body.angvel();
       if (Math.hypot(lv.x, lv.y, lv.z) < 0.25 && Math.hypot(av.x, av.y, av.z) < 0.45) p.rest += dt;
       else p.rest = 0;
-      if (!p.item && p.age > SCRAP_LIFE) {
+      if (!p.item && !p.carried && p.age > SCRAP_LIFE) {
         p.fade -= dt / 3;
         p.mesh.scale.setScalar(Math.max(0.01, p.fade));
         if (p.fade <= 0) {
@@ -205,13 +209,13 @@ export class DebrisField {
     let best: Loose | null = null;
     let bd = r;
     for (const p of this.pieces) {
-      if (!p.item || p.rest < 0.8) continue;
+      if ((!p.item && !p.carried) || p.rest < 0.8) continue;
       const t = p.body.translation();
       const id = `debris:${p.id}`;
       const d = Math.hypot(t.x - x, t.z - z) - (id === prefer ? 0.3 : 0);
       if (d < bd) {
         bd = d;
-        best = { id, carried: { kind: 'part', item: p.item }, x: t.x, y: t.y, z: t.z };
+        best = { id, carried: p.item ? { kind: 'part', item: p.item } : p.carried!, x: t.x, y: t.y, z: t.z };
       }
     }
     return best;
@@ -222,10 +226,10 @@ export class DebrisField {
     if (!id.startsWith('debris:')) return null;
     const n = Number(id.slice(7));
     const p = this.pieces.find((q) => q.id === n);
-    if (!p?.item) return null;
-    const item = p.item;
+    if (!p?.item && !p?.carried) return null;
+    const out: Carried = p.item ? { kind: 'part', item: p.item } : p.carried!;
     this.remove(p);
-    return { kind: 'part', item };
+    return out;
   }
 
   clear() {

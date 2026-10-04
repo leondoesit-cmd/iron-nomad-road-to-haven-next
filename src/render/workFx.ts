@@ -5,6 +5,7 @@ import { partModelKey } from '../sim/carry';
 import { shared } from './dispose';
 import type { Particles } from './particles';
 import { glowTexture, makeCarryModel } from './props';
+import { MARK_PX, Mark, compactLines, focusLines, makeTextSprite, type TagLine, type TextSprite } from './markers';
 
 /**
  * The look of working on a vehicle: a part lifted out of the hands to hover over its mount while the bolts go in,
@@ -14,7 +15,7 @@ import { glowTexture, makeCarryModel } from './props';
  */
 
 /** Where on a vehicle a job happens. */
-export type Site = 'hood' | 'wheel' | 'flank' | 'roof' | 'rear' | 'front' | 'gun' | 'under';
+export type Site = 'hood' | 'wheel' | 'flank' | 'roof' | 'rear' | 'front' | 'gun' | 'under' | 'cabin';
 
 /** Where each part slot is drawn. */
 export const SLOT_SITE: Record<string, Site> = {
@@ -35,6 +36,11 @@ export const SLOT_SITE: Record<string, Site> = {
   roof: 'roof',
   rear: 'rear',
   side: 'flank',
+  seatD: 'cabin',
+  seatP: 'cabin',
+  seatR: 'cabin',
+  steer: 'cabin',
+  dash: 'cabin',
 };
 
 /** Sparks and glow by part quality: common, uncommon, rare. */
@@ -86,10 +92,9 @@ interface Label {
 /** The mount markers shown to a player holding a tool or a part over their own vehicle. */
 interface Focus {
   group: THREE.Group;
-  dots: THREE.Sprite[];
-  ring: THREE.Sprite;
-  label: THREE.Sprite;
-  canvas: HTMLCanvasElement | null;
+  dots: Mark[];
+  ring: Mark;
+  label: TextSprite | null;
   text: string;
   ok: boolean;
   seen: number;
@@ -106,7 +111,7 @@ export interface FocusTarget {
 
 /** A floating text block that stays while something keeps asking for it (an inspect tag, a socket prompt). */
 interface Tag {
-  sprite: THREE.Sprite;
+  label: TextSprite;
   text: string;
   seen: number;
   /** 0..1 fade in and out. */
@@ -121,22 +126,32 @@ export interface GhostAnchor {
   quat: THREE.Quaternion;
   /** Full size along the box's own x, y and z. */
   size: [number, number, number];
+  /** A wheel is drawn as a drum on its x axis, anything else as a box. */
+  shape?: 'box' | 'drum';
 }
 
 interface Ghost {
   group: THREE.Group;
-  boxes: { edges: THREE.LineSegments; fill: THREE.Mesh }[];
-  edgeMat: THREE.LineBasicMaterial;
-  fillMat: THREE.MeshBasicMaterial;
+  /** Outline of each socket box: one line set seen through everything, faintly, and one at full strength where it is in view. */
+  boxes: THREE.LineSegments[];
+  /** [in view, behind things] */
+  edgeMat: [THREE.LineBasicMaterial, THREE.LineBasicMaterial];
   state: GhostState;
+  shapes: string;
   seen: number;
   a: number;
 }
 
 const GHOST_RGB: Record<GhostState, number> = { idle: 0xf2f1e8, aimed: 0x8cf08c, blocked: 0xff8a6a };
 const edgeGeo = shared(new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)));
-const fillGeo = shared(new THREE.BoxGeometry(1, 1, 1));
+const drumFill = new THREE.CylinderGeometry(0.5, 0.5, 1, 28).rotateZ(Math.PI / 2);
+const drumEdge = shared(new THREE.EdgesGeometry(drumFill, 40));
+/** An outline is thin and crisp: strong where it is in view, a hint of it where it is behind the bodywork. No fill. */
+const GHOST_EDGE = 0.95;
+const GHOST_BEHIND = 0.22;
 const ease = (k: number) => 1 - (1 - k) * (1 - k);
+/** Colours of the mount dots and the ring: amber to do, red when this cannot be done here. */
+const FOCUS_RGB = { dot: 0xfff2c8, ok: 0xffcc52, bad: 0xff5a42 };
 const GLOW_MATS = new Map<number, THREE.SpriteMaterial>();
 
 function glowMat(mk: number) {
@@ -147,55 +162,6 @@ function glowMat(mk: number) {
     GLOW_MATS.set(mk, m);
   }
   return m;
-}
-
-let RING_TEX: THREE.CanvasTexture | null = null;
-/** A hollow ring with a soft glow, for marking the mount you are working at. */
-function ringTexture(): THREE.Texture {
-  if (RING_TEX) return RING_TEX;
-  const c = document.createElement('canvas');
-  c.width = c.height = 128;
-  const g = c.getContext('2d')!;
-  const grad = g.createRadialGradient(64, 64, 20, 64, 64, 62);
-  grad.addColorStop(0, 'rgba(255,255,255,0)');
-  grad.addColorStop(0.62, 'rgba(255,255,255,0.12)');
-  grad.addColorStop(0.78, 'rgba(255,255,255,1)');
-  grad.addColorStop(0.88, 'rgba(255,255,255,0.25)');
-  grad.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 128, 128);
-  RING_TEX = new THREE.CanvasTexture(c);
-  return RING_TEX;
-}
-
-let DOT_MAT: THREE.SpriteMaterial | null = null;
-const RING_MATS = new Map<boolean, THREE.SpriteMaterial>();
-function dotMat() {
-  return (DOT_MAT ??= shared(new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(1, 0.95, 0.8), transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false })));
-}
-function ringMat(ok: boolean) {
-  let m = RING_MATS.get(ok);
-  if (!m) {
-    m = shared(new THREE.SpriteMaterial({ map: ringTexture(), color: ok ? new THREE.Color(1, 0.8, 0.32) : new THREE.Color(1, 0.3, 0.25), transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
-    RING_MATS.set(ok, m);
-  }
-  return m;
-}
-
-/** Draw a callout onto a canvas: bold outlined text, centred. */
-function paintLabel(c: HTMLCanvasElement, text: string, css: string) {
-  const g = c.getContext('2d');
-  if (!g) return;
-  g.clearRect(0, 0, c.width, c.height);
-  g.font = '700 40px "Barlow Condensed", "Arial Narrow", sans-serif';
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.lineWidth = 8;
-  g.strokeStyle = 'rgba(10,8,6,0.9)';
-  g.lineJoin = 'round';
-  g.strokeText(text, 256, 50);
-  g.fillStyle = css;
-  g.fillText(text, 256, 50);
 }
 
 export class WorkFx {
@@ -359,81 +325,65 @@ export class WorkFx {
     let f = this.focuses.get(key);
     if (!f) {
       const group = new THREE.Group();
-      const ring = new THREE.Sprite(ringMat(true));
-      ring.renderOrder = 48;
-      const label = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthTest: false, depthWrite: false, fog: false }));
-      label.renderOrder = 51;
-      group.add(ring, label);
+      const ring = new Mark('ring', MARK_PX.ring, FOCUS_RGB.ok, 48);
+      group.add(ring.group);
       this.root.add(group);
-      f = { group, dots: [], ring, label, canvas: null, text: '', ok: true, seen: 0, on: 0 };
+      f = { group, dots: [], ring, label: null, text: '', ok: true, seen: 0, on: 0 };
       this.focuses.set(key, f);
     }
     f.seen = 0;
     while (f.dots.length < mounts.length) {
-      const d = new THREE.Sprite(dotMat());
-      d.renderOrder = 47;
-      f.group.add(d);
+      const d = new Mark('dot', MARK_PX.dot, FOCUS_RGB.dot, 46);
+      f.group.add(d.group);
       f.dots.push(d);
     }
     f.dots.forEach((d, i) => {
       d.visible = i < mounts.length && !(target && mounts[i].distanceToSquared(target.pos) < 0.01);
-      if (d.visible) d.position.copy(mounts[i]);
+      if (d.visible) d.setPos(mounts[i]);
     });
-    f.ring.visible = f.label.visible = !!target;
-    if (!target) return;
-    f.ring.position.copy(target.pos);
+    f.ring.visible = !!target;
+    if (!target) {
+      if (f.label) f.label.sprite.visible = false;
+      return;
+    }
+    f.ring.setPos(target.pos);
     if (f.ok !== target.ok) {
       f.ok = target.ok;
-      f.ring.material = ringMat(target.ok);
+      f.ring.setColor(target.ok ? FOCUS_RGB.ok : FOCUS_RGB.bad);
     }
-    f.label.position.set(target.pos.x, target.pos.y + 0.6, target.pos.z);
-    const text = `${target.css}|${target.text}`;
-    if (text !== f.text && typeof document !== 'undefined') {
+    const lines = focusLines(target.text, target.css);
+    const text = lines.map((l) => `${l.css ?? ''}|${l.text}`).join('\n');
+    if (text !== f.text) {
       f.text = text;
-      if (!f.canvas) {
-        f.canvas = document.createElement('canvas');
-        f.canvas.width = 512;
-        f.canvas.height = 96;
-        const tex = new THREE.CanvasTexture(f.canvas);
-        tex.colorSpace = THREE.SRGBColorSpace;
-        (f.label.material as THREE.SpriteMaterial).map = tex;
-        (f.label.material as THREE.SpriteMaterial).needsUpdate = true;
-      }
-      paintLabel(f.canvas, target.text, target.css);
-      const m = (f.label.material as THREE.SpriteMaterial).map;
-      if (m) m.needsUpdate = true;
-      f.label.scale.set(2.6, 0.49, 1);
+      f.label?.dispose();
+      f.label = makeTextSprite(lines, 51);
+      if (f.label) f.group.add(f.label.sprite);
+    }
+    if (f.label) {
+      f.label.sprite.visible = true;
+      f.label.sprite.position.set(target.pos.x, target.pos.y + 0.12, target.pos.z);
     }
   }
 
   private dropFocus(key: number) {
     const f = this.focuses.get(key);
     if (!f) return;
-    const m = f.label.material as THREE.SpriteMaterial;
-    m.map?.dispose();
-    m.dispose();
+    f.label?.dispose();
+    f.ring.dispose();
+    for (const d of f.dots) d.dispose();
     f.group.removeFromParent();
     this.focuses.delete(key);
   }
 
   // ------------------------------------------------------------------ labels
 
-  /** A callout that rises from a point and fades. Needs a canvas, so it does nothing outside a browser. */
+  /** A callout that rises from a point and fades: one short line. Needs a canvas, so it does nothing outside a browser. */
   label(text: string, css: string, at: THREE.Vector3) {
-    if (typeof document === 'undefined') return;
-    const c = document.createElement('canvas');
-    c.width = 512;
-    c.height = 96;
-    paintLabel(c, text, css);
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false });
-    const sprite = new THREE.Sprite(mat);
-    sprite.scale.set(2.6, 0.49, 1);
-    sprite.position.copy(at);
-    sprite.renderOrder = 50;
-    this.root.add(sprite);
-    this.labels.push({ sprite, t: 0, life: 2, y0: at.y, rise: 0.9 });
+    const t = makeTextSprite(compactLines([{ text, css }], 34), 50);
+    if (!t) return;
+    t.sprite.position.copy(at);
+    this.root.add(t.sprite);
+    this.labels.push({ sprite: t.sprite, t: 0, life: 2, y0: at.y, rise: 0.9 });
   }
 
   // ------------------------------------------------------------------ tags and ghosts
@@ -452,51 +402,29 @@ export class WorkFx {
    * A block of text hanging in the world at `at`, kept alive by calling this every tick: the part you are looking at,
    * the socket you are about to fill. Each line is white caps; `hot` lines are tinted. Stops showing when the calls stop.
    */
-  tag(id: string, lines: { text: string; css?: string }[], at: THREE.Vector3) {
+  tag(id: string, lines: TagLine[], at: THREE.Vector3) {
     if (typeof document === 'undefined') return;
-    const text = lines.map((l) => `${l.css ?? ''}|${l.text}`).join('\n');
+    const two = compactLines(lines);
+    const text = two.map((l) => `${l.css ?? ''}|${l.text}`).join('\n');
     let t = this.tags.get(id);
     if (!t || t.text !== text) {
+      const a = t?.a ?? 0;
       if (t) this.dropTag(id);
-      const c = document.createElement('canvas');
-      const lh = 46;
-      c.width = 640;
-      c.height = lh * lines.length + 16;
-      const g = c.getContext('2d');
-      if (!g) return;
-      g.font = '700 38px "Barlow Condensed", "Arial Narrow", sans-serif';
-      g.textAlign = 'center';
-      g.textBaseline = 'middle';
-      g.lineJoin = 'round';
-      lines.forEach((l, i) => {
-        const y = 8 + lh * i + lh / 2;
-        g.lineWidth = 7;
-        g.strokeStyle = 'rgba(10,8,6,0.92)';
-        g.strokeText(l.text.toUpperCase(), 320, y);
-        g.fillStyle = l.css ?? '#f4f1e6';
-        g.fillText(l.text.toUpperCase(), 320, y);
-      });
-      const tex = new THREE.CanvasTexture(c);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false, opacity: 0 });
-      const sprite = new THREE.Sprite(mat);
-      sprite.scale.set(3.2, (3.2 * c.height) / c.width, 1);
-      sprite.renderOrder = 60;
-      this.root.add(sprite);
-      t = { sprite, text, seen: 0, a: 0 };
+      const label = makeTextSprite(two, 60);
+      if (!label) return;
+      this.root.add(label.sprite);
+      t = { label, text, seen: 0, a };
       this.tags.set(id, t);
     }
-    t.sprite.position.copy(at);
+    // Callers hang it 0.9 m over the part; with its own constant screen size it sits closer and stays out of the way.
+    t.label.sprite.position.set(at.x, at.y - 0.45, at.z);
     t.seen = 0;
   }
 
   private dropTag(id: string) {
     const t = this.tags.get(id);
     if (!t) return;
-    const m = t.sprite.material as THREE.SpriteMaterial;
-    m.map?.dispose();
-    m.dispose();
-    t.sprite.removeFromParent();
+    t.label.dispose();
     this.tags.delete(id);
   }
 
@@ -506,36 +434,36 @@ export class WorkFx {
    */
   ghost(id: string, anchors: GhostAnchor[], state: GhostState) {
     let g = this.ghosts.get(id);
-    if (!g || g.boxes.length !== anchors.length) {
+    const shapes = anchors.map((a) => a.shape ?? 'box').join();
+    if (!g || g.shapes !== shapes) {
       if (g) this.dropGhost(id);
       const group = new THREE.Group();
-      const edgeMat = new THREE.LineBasicMaterial({ color: GHOST_RGB[state], transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false });
-      const fillMat = new THREE.MeshBasicMaterial({ color: GHOST_RGB[state], transparent: true, opacity: 0, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
-      const boxes = anchors.map(() => {
-        const edges = new THREE.LineSegments(edgeGeo, edgeMat);
-        const fill = new THREE.Mesh(fillGeo, fillMat);
-        edges.renderOrder = 55;
-        fill.renderOrder = 54;
-        group.add(edges, fill);
-        return { edges, fill };
-      });
+      const mk = (front: boolean) => new THREE.LineBasicMaterial({ color: GHOST_RGB[state], transparent: true, opacity: 0, depthTest: front, depthWrite: false, fog: false });
+      const edgeMat: [THREE.LineBasicMaterial, THREE.LineBasicMaterial] = [mk(true), mk(false)];
+      const boxes: THREE.LineSegments[] = [];
+      for (const a of anchors) {
+        const geo = a.shape === 'drum' ? drumEdge : edgeGeo;
+        const behind = new THREE.LineSegments(geo, edgeMat[1]);
+        const front = new THREE.LineSegments(geo, edgeMat[0]);
+        behind.renderOrder = 54;
+        front.renderOrder = 55;
+        group.add(behind, front);
+        boxes.push(behind, front);
+      }
       this.root.add(group);
-      g = { group, boxes, edgeMat, fillMat, state, seen: 0, a: 0 };
+      g = { group, boxes, edgeMat, state, shapes, seen: 0, a: 0 };
       this.ghosts.set(id, g);
     }
     if (g.state !== state) {
       g.state = state;
-      g.edgeMat.color.setHex(GHOST_RGB[state]);
-      g.fillMat.color.setHex(GHOST_RGB[state]);
+      for (const m of g.edgeMat) m.color.setHex(GHOST_RGB[state]);
     }
     anchors.forEach((a, i) => {
-      const b = g!.boxes[i];
-      for (const o of [b.edges, b.fill]) {
+      for (const o of [g!.boxes[i * 2], g!.boxes[i * 2 + 1]]) {
         o.position.copy(a.pos);
         o.quaternion.copy(a.quat);
         o.scale.set(a.size[0], a.size[1], a.size[2]);
       }
-      b.fill.visible = state !== 'idle';
     });
     g.seen = 0;
   }
@@ -543,8 +471,7 @@ export class WorkFx {
   private dropGhost(id: string) {
     const g = this.ghosts.get(id);
     if (!g) return;
-    g.edgeMat.dispose();
-    g.fillMat.dispose();
+    for (const m of g.edgeMat) m.dispose();
     g.group.removeFromParent();
     this.ghosts.delete(id);
   }
@@ -556,16 +483,17 @@ export class WorkFx {
     for (const [id, t] of this.tags) {
       t.seen += dt;
       t.a = t.seen > 0.12 ? Math.max(0, t.a - dt * 6) : Math.min(1, t.a + dt * 8);
-      (t.sprite.material as THREE.SpriteMaterial).opacity = t.a;
+      (t.label.sprite.material as THREE.SpriteMaterial).opacity = t.a;
       if (t.a <= 0 && t.seen > 0.12) this.dropTag(id);
     }
     for (const [id, g] of this.ghosts) {
       g.seen += dt;
       g.a = g.seen > 0.12 ? Math.max(0, g.a - dt * 6) : Math.min(1, g.a + dt * 8);
       g.group.visible = g.a > 0.02;
-      const pulse = 0.75 + 0.25 * Math.sin(this.clock * 6);
-      g.edgeMat.opacity = 0.85 * g.a * (g.state === 'idle' ? 1 : pulse);
-      g.fillMat.opacity = 0.24 * g.a * pulse;
+      // Waiting outlines sit still and a little dim; the one in reach breathes, gently.
+      const pulse = g.state === 'idle' ? 0.7 : 0.88 + 0.12 * Math.sin(this.clock * 4);
+      g.edgeMat[0].opacity = GHOST_EDGE * g.a * pulse;
+      g.edgeMat[1].opacity = GHOST_BEHIND * g.a * pulse;
       if (g.a <= 0 && g.seen > 0.12) this.dropGhost(id);
     }
     for (const [key, h] of this.hovers) {
@@ -624,9 +552,14 @@ export class WorkFx {
         continue;
       }
       f.on = Math.min(1, f.on + dt * 8);
-      const pulse = 0.85 + Math.sin(this.clock * 6) * 0.1;
-      f.ring.scale.setScalar(pulse * f.on);
-      for (const d of f.dots) d.scale.setScalar((0.34 + Math.sin(this.clock * 3 + d.position.x * 3) * 0.04) * f.on);
+      // A subtle breath on the ring, and the dots out of step with one another.
+      f.ring.k = 1 + Math.sin(this.clock * 5) * 0.06;
+      f.ring.setAlpha(f.ring.visible ? f.on : 0);
+      f.dots.forEach((d, i) => {
+        d.k = 1 + Math.sin(this.clock * 3 + i * 1.7) * 0.08;
+        if (d.visible) d.setAlpha(f.on * 0.95);
+      });
+      if (f.label) (f.label.sprite.material as THREE.SpriteMaterial).opacity = f.on;
     }
     for (let i = this.labels.length - 1; i >= 0; i--) {
       const l = this.labels[i];

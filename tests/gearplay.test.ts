@@ -105,7 +105,8 @@ describe('what you wear changes what hurts', () => {
     p.hp = p.maxHp;
     p.hurt(20, 0, 0, 'bite');
     const light = p.maxHp - p.hp;
-    expect(light).toBeCloseTo(20 * (1 - 0.07), 5);
+    // The heroes set out bareheaded (the helmet rides in the bag), so the starter jacket's 3% is all the armour there is.
+    expect(light).toBeCloseTo(20 * (1 - 0.03), 5);
     p.hp = p.maxHp;
     p.invuln = 0;
     equip(p, 'b_riot');
@@ -637,7 +638,7 @@ describe('carrying a hand across a delve', () => {
 
 describe('the gear sim and the campaign agree', () => {
   it('two scavengers never share an item', () => {
-    const c = new Campaign(['A', 'B']);
+    const c = new Campaign();
     const a = c.players[0].gear;
     const b = c.players[1].gear;
     expect(a.belt[0]).not.toBe(b.belt[0]);

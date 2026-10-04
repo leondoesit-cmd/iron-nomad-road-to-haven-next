@@ -29,6 +29,10 @@ const STRUCTURAL: Record<AmmoKind, Partial<Record<Surface, number>>> = {
   rifle: { glass: 1, sheet: 1.2, plaster: 1, wood: 1 },
   sniper: { glass: 1, sheet: 1, plaster: 0.9, wood: 0.9 },
   turret: { glass: 1, sheet: 1.1, plaster: 1, wood: 1 },
+  carbine: { glass: 1, sheet: 0.7, plaster: 0.4, wood: 0.35 },
+  battle: { glass: 1, sheet: 1.1, plaster: 0.9, wood: 0.9 },
+  lever: { glass: 1, sheet: 0.8, plaster: 0.5, wood: 0.45 },
+  bolt: { glass: 0.6, sheet: 0.1, plaster: 0.2, wood: 0.15 },
 };
 
 export function structuralMul(ammo: AmmoKind, surface: Surface): number {

@@ -1,4 +1,5 @@
 import { carPanes } from '../render/carModels';
+import { SPECS, restHeight } from '../render/carSpecs';
 import { rotateByQuat } from '../physics/vehicle';
 import { blastGlassDamage, crashGlassDamage, glassDamage, hitPane, newPane, shardCount, type CarPane, type GlassHow, type PaneStage, type PaneState } from '../sim/glass';
 import type { Vehicle } from './vehicle';
@@ -35,6 +36,7 @@ export class CarGlass {
       this.state.set(sp.key, p);
       this.show(sp, p);
     }
+    this.followPanels();
   }
 
   private restorePane(p: PaneState, stage: PaneStage) {
@@ -50,6 +52,29 @@ export class CarGlass {
     if (p.stage === 3) set.shatter(sp.key);
     else if (p.stage > 0) set.crack(sp.key, p.stage, sp.c);
     else set.mend(sp.key);
+  }
+
+  /** A hatchback's rear glass is part of its tailgate: it swings open with the tailgate on the roof hinge. */
+  followPanels() {
+    const set = this.v.visual.panes;
+    if (!set || this.v.def.id !== 'hatch') return;
+    const torn = !!this.v.bodywork?.gonePanels().trunk;
+    if (torn) {
+      for (const sp of this.specs) if (sp.kind === 'rear') set.hide(sp.key, true);
+      return;
+    }
+    const k = this.v.swing.trunk;
+    const angle = this.v.def.id === 'hatch' ? 1.3 : 1.15;
+    const e = k * k * (3 - 2 * k) * angle;
+    const sp = SPECS.hatch;
+    const g0 = restHeight(this.v.def);
+    const pivot: V3 = [0, sp.roof + 0.02 - g0, sp.rwTop];
+    for (const p of this.specs) {
+      if (p.kind === 'rear') {
+        set.hide(p.key, false);
+        set.pose(p.key, pivot, e);
+      }
+    }
   }
 
   get count() {
@@ -92,9 +117,26 @@ export class CarGlass {
 
   private world(sp: CarPane): { c: V3; n: V3; u: V3; w: V3 } {
     const v = this.v;
-    const c = v.body.toWorld(sp.c[0], sp.c[1], sp.c[2]);
+    let localC = sp.c;
+    let localN = sp.n;
+    if (sp.kind === 'rear' && v.def.id === 'hatch' && v.swing.trunk > 0.001) {
+      const k = v.swing.trunk;
+      const angle = 1.3;
+      const e = k * k * (3 - 2 * k) * angle;
+      const spec = SPECS.hatch;
+      const g0 = restHeight(v.def);
+      const py = spec.roof + 0.02 - g0;
+      const pz = spec.rwTop;
+      const dy = sp.c[1] - py;
+      const dz = sp.c[2] - pz;
+      const cos = Math.cos(e);
+      const sin = Math.sin(e);
+      localC = [sp.c[0], py + dy * cos - dz * sin, pz + dy * sin + dz * cos];
+      localN = [sp.n[0], sp.n[1] * cos - sp.n[2] * sin, sp.n[1] * sin + sp.n[2] * cos];
+    }
+    const c = v.body.toWorld(localC[0], localC[1], localC[2]);
     const q = v.body.body.rotation();
-    const n = rotateByQuat(q, sp.n[0], sp.n[1], sp.n[2]);
+    const n = rotateByQuat(q, localN[0], localN[1], localN[2]);
     // Across the glass (level) and up it, the way PaneSet lays them out.
     let ux = sp.n[2];
     let uz = -sp.n[0];

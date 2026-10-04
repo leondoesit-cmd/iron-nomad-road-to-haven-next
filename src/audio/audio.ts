@@ -1,15 +1,18 @@
 import { clamp } from '../core/math';
 import { SampleLibrary } from './samples';
 import { SpatialAudioEngine, type SpatialListener, type OcclusionTester } from './spatial';
-import { RadioAudioEngine } from './radio';
+import { RadioAudioEngine, isBrowserTtsSupported, cleanTextForSpeech } from './radio';
 import { VehicleAudioEngine, type EngineParams } from './engineAudio';
 import { FoleyEngine } from './foley';
+
+export { isBrowserTtsSupported, cleanTextForSpeech };
 
 export type SoundId =
   | 'pistol'
   | 'shotgun'
   | 'mg'
   | 'sniper'
+  | 'bolt'
   | 'boom'
   | 'crash'
   | 'hit'
@@ -54,6 +57,8 @@ export type EngineState = EngineParams;
 export interface PlayOptions {
   occluded?: boolean | number;
   indoor?: boolean;
+  /** 0 to 1: dull the sound with a low-pass, as a suppressor does to a gunshot (1 is a thick pillow). */
+  muffle?: number;
 }
 
 /**
@@ -93,6 +98,7 @@ export class AudioEngine {
   musicVolume = 0.55;
   indoor = false;
   solo = false;
+  ttsEnabled = true;
 
   // Subsystems
   samples: SampleLibrary | null = null;
@@ -193,6 +199,8 @@ export class AudioEngine {
     this.spatial.setSolo(this.solo);
 
     this.radio = new RadioAudioEngine(ctx, this.samples);
+    this.radio.setTtsEnabled(this.ttsEnabled);
+    this.radio.setVolume(this.muted ? 0 : this.volume);
     this.vehicleAudio = new VehicleAudioEngine(ctx, this.samples, this.spatial);
     this.foley = new FoleyEngine(ctx, this.samples);
 
@@ -203,6 +211,7 @@ export class AudioEngine {
   setVolume(v: number) {
     this.volume = v;
     if (this.master) this.master.gain.value = this.muted ? 0 : v;
+    if (this.radio) this.radio.setVolume(this.muted ? 0 : v);
   }
 
   setMusicVolume(v: number) {
@@ -213,6 +222,12 @@ export class AudioEngine {
   setMuted(m: boolean) {
     this.muted = m;
     if (this.master) this.master.gain.value = m ? 0 : this.volume;
+    if (this.radio) this.radio.setVolume(m ? 0 : this.volume);
+  }
+
+  setTtsEnabled(enabled: boolean) {
+    this.ttsEnabled = enabled;
+    if (this.radio) this.radio.setTtsEnabled(enabled);
   }
 
   setSolo(s: boolean) {
@@ -281,17 +296,22 @@ export class AudioEngine {
 
   /**
    * Plays a procedural contextual radio bark with authentic PTT key-in,
-   * procedural speech cadence formant synthesis, compression, and squelch tail.
+   * built-in browser speech synthesis (or procedural fallback), compression, and squelch tail.
    */
-  playRadioChatter(text: string, vol = 1) {
-    if (!this.ctx || this.muted || !this.radio) return;
-    this.duck(1.5, 0.5);
+  playRadioChatter(text: string, vol = 1): number {
+    if (!this.ctx || this.muted || !this.radio) return 0;
     // Route radio chatter through both player buses
     const out = this.ctx.createGain();
     out.gain.value = 1.0;
     out.connect(this.buses[0] || this.sfx);
     if (!this.solo && this.buses[1]) out.connect(this.buses[1]);
-    this.radio.playRadioChatter(text, out, vol);
+    const duration = this.radio.playRadioChatter(text, out, vol);
+    this.duck(Math.max(1.5, duration), 0.45);
+    return duration;
+  }
+
+  stopRadioChatter() {
+    this.radio?.stop();
   }
 
   /**
@@ -409,7 +429,14 @@ export class AudioEngine {
     const t0 = ctx.currentTime;
     const out = ctx.createGain();
     out.gain.value = clamp(v, 0, 1.8);
-    out.connect(dest);
+    if (opts.muffle && opts.muffle > 0) {
+      // Everything the voice plays goes through a low-pass: the high crack of a shot is what a suppressor takes away.
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 6500 - 5600 * clamp(opts.muffle, 0, 1);
+      lp.Q.value = 0.5;
+      out.connect(lp).connect(dest);
+    } else out.connect(dest);
 
     // Hybrid Foley Handlers
     switch (id) {
@@ -428,6 +455,13 @@ export class AudioEngine {
           this.burst(out, t0, 'bandpass', 1900, 0.9, 0.9, 0.002, 0.11);
           this.tone(out, t0, 'triangle', 190, 55, 0.7, 0.002, 0.09);
         }
+        break;
+
+      case 'bolt':
+        // A crossbow: the string's twang, a soft thump of the limbs, and the bolt's hiss. Nowhere near a gunshot.
+        this.tone(out, t0, 'triangle', 320, 140, 0.35, 0.002, 0.12);
+        this.burst(out, t0, 'lowpass', 900, 0.6, 0.35, 0.002, 0.07);
+        this.burst(out, t0 + 0.01, 'bandpass', 2600, 1.2, 0.12, 0.02, 0.14);
         break;
 
       case 'boom':
@@ -723,6 +757,7 @@ export class AudioEngine {
     if (this.vehicleAudio) {
       this.vehicleAudio.silenceEngines();
     }
+    this.radio?.stop();
   }
 
   // ---------------------------------------------------------------- Wind

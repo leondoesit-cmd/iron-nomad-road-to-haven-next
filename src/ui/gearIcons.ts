@@ -1,4 +1,4 @@
-import { WEAR_SLOTS, gearDef, hexColor, type GearDef, type WearSlot } from '../data/gear';
+import { WEAR_SLOTS, gearDef, hasGear, hexColor, type AttachSlot, type GearDef, type GunModel, type WearSlot } from '../data/gear';
 import { identityOf } from '../render/outfit';
 import type { Loadout } from '../sim/gear';
 
@@ -239,6 +239,34 @@ function gun(m: string): string {
       return P('M16 14 H45 V18 H16Z', STEEL_DK) + P('M16 18 H45 V21 H16Z', STEEL) + P('M26 21 H38 V26 H26Z', WOOD) + P('M3 22 L16 18 V27 L8 38 Q3 40 3 35Z', WOOD) + R(14, 17, 7, 9, STEEL_DK, 1) + L('M3 22 L16 18', WOOD_DK, 1);
     case 'rifle':
       return P('M2 22 L14 18 V27 L7 38 Q2 40 2 35Z', WOOD) + P('M14 17 H44 V21 H14Z', STEEL_DK) + P('M14 21 H30 V26 H14Z', STEEL) + P('M30 21 H44 V23 H30Z', STEEL) + R(18, 11, 14, 5, BLK, 2) + C(19, 13.5, 2.4, '#5d7587') + C(31, 13.5, 2, '#5d7587') + P('M20 26 H25 V35 H21Z', BLK);
+    case 'compact':
+      return P('M10 16 H34 V23 H10Z', STEEL) + R(9, 15, 11, 3, STEEL_DK, 1) + P('M12 23 H21 L18 37 H11Z', BLK) + P('M21 23 H27 V27 Q24 29 21 27Z', BLK) + L('M34 19 H38', INK, 2) + L('M14 19 H30', shade(STEEL, 0.3), 1);
+    case 'cannon':
+      return P('M20 13 H44 V21 H20Z', STEEL) + L('M24 17 H42', INK, 1) + C(17, 19, 8.5, STEEL_DK) + C(17, 19, 2.2, INK) + C(17, 12.6, 2.2, INK) + C(23, 22, 2.2, INK) + P('M6 13 L10 9 H14 V19 H8Z', STEEL) + P('M6 25 L14 25 L18 40 L8 42 L5 29Z', WOOD_DK) + L('M26 12 H44', shade(STEEL, 0.3), 1.2);
+    case 'mp':
+      return P('M7 15 H33 V23 H7Z', STEEL_DK) + R(33, 17, 9, 3, STEEL, 1) + P('M19 23 H25 V44 H18Z', BLK) + P('M8 23 H15 L13 35 H7Z', WOOD_DK) + R(10, 12, 12, 3, STEEL, 1) + L('M10 19 H30', shade(STEEL_DK, 0.35), 1);
+    case 'smg2':
+      return P('M9 15 H35 V24 H9Z', STEEL_DK) + P('M35 17 H44 V22 H35Z', STEEL) + P('M18 24 H24 V42 H17Z', BLK) + P('M10 24 H16 L14 35 H9Z', BLK) + L('M9 17 H3 V25 H9', STEEL, 1.8) + R(10, 11.5, 22, 3, STEEL, 1) + L('M12 19 H32', shade(STEEL_DK, 0.35), 1);
+    case 'carbine':
+      return P('M2 22 L12 19 V28 L6 36 Q2 38 2 33Z', WOOD) + P('M12 17 H38 V23 H12Z', STEEL_DK) + P('M24 17.5 H38 V23 H24Z', WOOD) + L('M38 19.5 H46', STEEL, 2) + P('M17 23 H22 Q25 31 21 41 L16 39 Q18 31 17 23Z', BLK) + L('M12 17 H24', shade(STEEL_DK, 0.4), 1.2);
+    case 'ar':
+      return P('M2 21 L12 19 V27 L5 33 H2Z', BLK) + P('M12 16.5 H33 V23 H12Z', STEEL_DK) + P('M26 17 H40 V22.5 H26Z', STEEL) + L('M40 19.5 H46', INK, 2) + P('M17 23 H22 L24 39 H19Z', BLK) + P('M10 23 H15 L13 31 H9Z', BLK) + L('M12 15 H36', shade(STEEL_DK, 0.4), 1.4);
+    case 'br':
+      return P('M2 22 L14 18 V28 L7 37 Q2 39 2 34Z', WOOD) + P('M14 16.5 H36 V23.5 H14Z', STEEL_DK) + P('M30 17.5 H40 V22.5 H30Z', WOOD) + L('M40 20 H46', INK, 2) + P('M20 23.5 H26 V40 H20Z', BLK) + L('M14 15.5 H34', shade(STEEL_DK, 0.4), 1.4);
+    case 'dmr':
+      return P('M2 20 L12 18 V28 L6 33 H2Z', BLK) + P('M12 16.5 H30 V23.5 H12Z', STEEL_DK) + P('M30 17.5 H42 V23 H30Z', STEEL) + L('M42 20.2 H47', INK, 2.4) + P('M17 23.5 H22 V38 H17Z', BLK) + L('M12 15.5 H32', shade(STEEL_DK, 0.4), 1.4);
+    case 'sniper':
+      return P('M1 21 L12 18 V29 L5 35 H1Z', '#4a5240') + P('M12 17 H32 V24 H12Z', STEEL_DK) + P('M32 18.5 H46 V22.5 H32Z', STEEL) + L('M46 20.5 H47.5', INK, 2.6) + C(21, 15.5, 1.8, STEEL) + L('M21 15.5 H25', INK, 1.4) + P('M18 24 H24 V30 H18Z', BLK) + L('M12 16 H30', shade(STEEL_DK, 0.4), 1.2);
+    case 'lever':
+      return P('M2 22 L12 19 V28 L6 36 Q2 38 2 33Z', WOOD) + P('M12 17 H28 V24 H12Z', '#9a7a3a') + P('M28 17.5 H46 V21 H28Z', STEEL_DK) + P('M26 21 H44 V24 H26Z', STEEL) + L('M14 24 Q18 34 24 28', INK, 2) + L('M14 24 Q18 33 24 28', '#9a7a3a', 1.2) + P('M26 24 H40 V27 H26Z', WOOD);
+    case 'crossbow':
+      return R(3, 21, 36, 5, WOOD, 1.5) + L('M36 23 Q41 11 46 7', INK, 3.4) + L('M36 23 Q41 11 46 7', STEEL_DK, 1.8) + L('M36 24 Q41 36 46 40', INK, 3.4) + L('M36 24 Q41 36 46 40', STEEL_DK, 1.8) + L('M46 7 L33 23.5 L46 40', '#e8e0c4', 1) + L('M10 21 H40', STEEL, 2) + P('M8 26 H14 L13 36 H7Z', BLK);
+    case 'combat':
+      return P('M2 21 L12 18 V29 L5 33 H2Z', BLK) + P('M12 15 H29 V23 H12Z', STEEL_DK) + P('M29 15.5 H46 V18.5 H29Z', STEEL) + P('M29 18.5 H44 V21.5 H29Z', STEEL_DK) + P('M29 21.5 H40 V25 H29Z', BLK) + P('M12 23 H17 L15 32 H11Z', BLK) + L('M12 14 H28', shade(STEEL_DK, 0.4), 1.2);
+    case 'coach':
+      return P('M3 22 L16 19 V28 L8 37 Q3 38 3 33Z', WOOD) + P('M16 15 H46 V19 H16Z', STEEL_DK) + P('M16 19 H46 V23 H16Z', STEEL) + P('M26 23 H36 V27 H26Z', WOOD) + R(14, 17, 6, 8, BLK, 1) + L('M18 14 L21 12', INK, 2.2);
+    case 'lmg':
+      return P('M2 20 L12 18 V29 L5 34 H2Z', BLK) + P('M12 14.5 H34 V25 H12Z', STEEL_DK) + P('M34 17 H43 V22 H34Z', STEEL) + L('M43 19.5 H47', INK, 2.4) + R(15, 25, 15, 12, '#4a5236', 2) + L('M18 28 H27 M18 32 H27', '#6a7452', 1) + L('M32 22 L38 33 M34 22 L40 33', STEEL, 1.6) + L('M12 13 H32', shade(STEEL_DK, 0.4), 1.4) + P('M9 25 H13 L12 31 H8Z', BLK);
     default:
       return R(8, 16, 30, 8, STEEL);
   }
@@ -260,6 +288,15 @@ function melee(m: string): string {
     case 'axe':
       g = P('M22 6 H27 L28 44 H21Z', WOOD) + P('M21 7 Q8 6 5 19 Q14 21 21 19Z', '#b8bcc0') + P('M5 19 Q8 6 21 7', 'none') + L('M8 16 Q13 13 20 12', '#e8eaec', 1.2) + R(20, 5, 9, 4, STEEL_DK, 1);
       break;
+    case 'pipe':
+      g = P('M21 3 H27 V41 H21Z', '#8a9096') + L('M23 6 V38', '#c4c8cc', 1.2) + R(20, 36, 8, 8, '#2a2622', 2) + L('M20 40 H28', '#4a4440', 1) + R(20, 2, 8, 3, STEEL_DK, 1);
+      break;
+    case 'sledge':
+      g = P('M22.5 12 H25.5 V44 H22.5Z', WOOD) + R(10, 3, 28, 12, '#7a7e82', 2) + R(8, 4, 4, 10, '#b8bcc0', 1) + R(36, 4, 4, 10, '#b8bcc0', 1) + L('M14 6 H34', '#b8bcc0', 1.2) + R(21, 38, 6, 6, '#2a2622', 2);
+      break;
+    case 'katana':
+      g = P('M23.5 2 Q28 14 26.5 29 H21 Q21 14 23.5 2Z', '#d4d8dc') + L('M24.5 6 Q25 16 24 27', '#8a9096', 1.2) + R(17, 29, 14, 3, '#3a3224', 1.5) + P('M21 32 H27 L27.5 45 H20.5Z', '#2a2630') + L('M21 35 L27 38 M21 39 L27 42', '#8a2a2a', 1.2);
+      break;
     default:
       g = R(21, 6, 6, 36, STEEL);
   }
@@ -280,6 +317,138 @@ function tool(t: string): string {
     default:
       return R(10, 10, 28, 28, STEEL);
   }
+}
+
+// ------------------------------------------------------------------------------------------- attachments
+
+const LENS = '#5d8fb8';
+const RED = '#e8321e';
+const RUBBER = '#26262a';
+
+/** One add-on drawn alone in the 48 box, lying along the gun (muzzle to the right). The same drawing is shrunk onto the gun's own icon. */
+function modPic(look: string): string {
+  const slots = (n: number, x: number, y: number, h: number, dx: number, w = 1.2) => Array.from({ length: n }, (_, i) => L(`M${x + i * dx} ${y} v${h}`, INK, w)).join('');
+  switch (look) {
+    case 'dot':
+      return R(13, 31, 22, 4, STEEL_DK, 1) + R(14, 18, 20, 13, '#2e3236', 3) + R(31, 20, 4, 9, LENS, 1) + C(33, 24.5, 1.2, RED) + L('M16 22 H28', shade('#2e3236', 0.3), 1);
+    case 'reflex':
+      return R(12, 32, 24, 4, STEEL_DK, 1) + R(13, 14, 3, 18, '#2e3236', 1) + R(32, 14, 3, 18, '#2e3236', 1) + R(14, 14, 20, 3, '#2e3236', 1) + R(29, 17, 2, 14, 'rgba(120,180,230,0.55)', 0) + C(30, 24, 1.2, RED);
+    case 'holo':
+      return R(11, 32, 26, 4, STEEL_DK, 1) + R(12, 13, 24, 19, '#2e3236', 3) + R(32, 15, 3, 15, LENS, 1) + R(13, 15, 3, 15, LENS, 1) + C(33.5, 22.5, 1.3, RED) + L('M16 13 H32', shade('#2e3236', 0.35), 1);
+    case 'pdot':
+      return R(14, 30, 20, 4, STEEL_DK, 1) + R(17, 20, 14, 10, '#2e3236', 2) + R(28, 21.5, 3, 7, LENS, 1) + C(29.5, 25, 1, RED);
+    case 'scope':
+      return R(14, 30, 5, 5, STEEL_DK, 1) + R(29, 30, 5, 5, STEEL_DK, 1) + R(6, 19, 34, 11, '#2a2d31', 4) + P('M32 16 H42 V33 H32Z', STEEL_DK) + C(41, 24.5, 5.5, LENS) + R(2, 21, 6, 7, STEEL_DK, 2) + R(21, 14, 5, 5, STEEL, 1);
+    case 'scope4':
+      return R(12, 30, 5, 6, STEEL_DK, 1) + R(30, 30, 5, 6, STEEL_DK, 1) + R(4, 19, 38, 11, '#2a2d31', 4) + P('M32 14 H43 V35 H32Z', STEEL_DK) + C(42, 24.5, 7, LENS) + C(42, 24.5, 3, '#9ac4e4') + R(1, 20.5, 6, 8, STEEL_DK, 2) + R(18, 14, 6, 5, STEEL, 1) + L('M10 24 H30', shade('#2a2d31', 0.3), 1);
+    case 'scope8':
+      return R(10, 31, 5, 6, STEEL_DK, 1) + R(32, 31, 5, 6, STEEL_DK, 1) + R(2, 19, 42, 12, '#24272b', 4) + P('M31 11 H45 V39 H31Z', STEEL_DK) + C(44, 25, 10, LENS) + C(44, 25, 5, '#9ac4e4') + R(0, 21, 5, 8, STEEL_DK, 2) + R(17, 13, 7, 6, STEEL, 1) + R(25, 16, 5, 4, STEEL, 1) + L('M8 25 H29', shade('#24272b', 0.3), 1);
+    case 'supp_s':
+      return R(3, 21, 6, 8, STEEL, 1) + R(8, 17, 34, 16, '#1c1d20', 4) + slots(5, 14, 19, 12, 5.5) + L('M10 21 H40', shade('#1c1d20', 0.4), 1);
+    case 'supp_l':
+      return R(2, 22, 5, 6, STEEL, 1) + R(6, 15, 40, 20, '#1c1d20', 5) + slots(6, 12, 17, 16, 6) + L('M8 19 H44', shade('#1c1d20', 0.4), 1.2) + R(41, 15, 5, 20, STEEL_DK, 1);
+    case 'can_s':
+      return R(3, 21, 6, 8, STEEL, 1) + R(8, 17, 32, 16, '#7a4a2e', 3) + L('M16 17 V33 M24 17 V33 M32 17 V33', '#4a2a18', 1.6) + L('M10 21 H38', '#a86a44', 1);
+    case 'can_l':
+      return R(2, 22, 5, 6, STEEL, 1) + R(6, 15, 38, 20, '#7a4a2e', 3) + L('M14 15 V35 M24 15 V35 M34 15 V35', '#4a2a18', 1.8) + R(6, 22, 38, 4, '#5c6266', 1) + L('M8 19 H42', '#a86a44', 1);
+    case 'comp':
+      return R(4, 21, 6, 8, STEEL, 1) + R(10, 17, 24, 16, STEEL_DK, 3) + slots(3, 16, 18, 14, 6, 2) + L('M12 21 H32', shade(STEEL_DK, 0.4), 1);
+    case 'comp2':
+      return R(4, 21, 6, 8, STEEL, 1) + R(10, 16, 30, 18, STEEL_DK, 3) + slots(4, 16, 18, 14, 6, 2.2) + L('M12 20 H38', shade(STEEL_DK, 0.4), 1) + C(40, 25, 3, INK);
+    case 'brake':
+      return R(4, 21, 6, 8, STEEL, 1) + R(10, 14, 28, 22, '#2a2d31', 2) + R(15, 21, 4, 8, INK, 1) + R(24, 21, 4, 8, INK, 1) + R(32, 21, 4, 8, INK, 1) + L('M12 18 H36', shade('#2a2d31', 0.4), 1);
+    case 'hider':
+      return R(3, 21, 6, 8, STEEL, 1) + R(9, 18, 22, 14, STEEL_DK, 3) + P('M31 18 L44 15 V19 L35 22Z', STEEL) + P('M31 32 L44 35 V31 L35 28Z', STEEL) + L('M36 18 V32', INK, 1);
+    case 'choke':
+      return R(5, 19, 8, 12, STEEL, 1) + R(12, 14, 20, 22, '#2a2d31', 3) + R(30, 18, 6, 14, STEEL_DK, 2) + C(36, 25, 3.5, INK) + L('M16 18 H28', shade('#2a2d31', 0.4), 1);
+    case 'bar_s':
+      return R(10, 22, 28, 5, STEEL, 1.5) + R(36, 20, 5, 9, STEEL_DK, 1) + L('M12 24 H34', shade(STEEL, 0.4), 1);
+    case 'bar_h':
+      return R(4, 20, 38, 8, STEEL_DK, 2) + L('M10 21.5 H40 M10 26.5 H40', shade(STEEL_DK, 0.45), 1.4) + R(40, 18, 5, 12, STEEL, 2) + C(44, 24, 1.8, INK);
+    case 'bar_m':
+      return R(3, 21, 40, 6, '#a8acb2', 2) + L('M6 22.5 H40', '#e8eaec', 1) + R(40, 19, 6, 10, STEEL_DK, 1.5) + C(44.5, 24, 1.6, INK) + L('M12 21 V27 M26 21 V27', STEEL_DK, 1.4);
+    case 'bar_f':
+      return R(2, 18, 44, 12, '#3a3d41', 3) + L('M6 21 H44 M6 24 H44 M6 27 H44', '#8a9096', 1.3) + R(44, 17, 3, 14, STEEL_DK, 1) + C(46, 24, 1.4, INK);
+    case 'bar_c':
+      return R(3, 21, 40, 6, STEEL, 1.5) + R(8, 17, 16, 14, STEEL_DK, 2) + L('M12 20 V28 M16 20 V28 M20 20 V28', INK, 1) + R(41, 20, 5, 8, STEEL_DK, 1) + C(45, 24, 1.4, INK);
+    case 'bar_r':
+      return R(3, 21, 42, 6, STEEL, 1.5) + L('M6 22.5 H42', shade(STEEL, 0.4), 1) + R(42, 19, 4, 10, STEEL_DK, 1) + C(45, 24, 1.4, INK);
+    case 'bar_g':
+      return R(3, 18, 42, 6, STEEL, 1.5) + R(3, 24, 42, 6, STEEL_DK, 1.5) + R(41, 17, 5, 14, STEEL_DK, 1) + C(44, 21, 1.4, INK) + C(44, 27, 1.4, INK);
+    case 'limbs':
+      return L('M4 24 H26', WOOD_DK, 4) + L('M26 24 Q36 24 44 8', INK, 4) + L('M26 24 Q36 24 44 8', STEEL_DK, 2.4) + L('M26 24 Q36 24 44 40', INK, 4) + L('M26 24 Q36 24 44 40', STEEL_DK, 2.4) + C(41, 10, 3, STEEL) + C(41, 38, 3, STEEL) + L('M44 8 L30 24 L44 40', '#e8e0c4', 1);
+    case 'grip':
+      return R(11, 8, 26, 7, STEEL_DK, 1.5) + R(19, 14, 10, 28, RUBBER, 3) + L('M21 20 H27 M21 25 H27 M21 30 H27 M21 35 H27', shade(RUBBER, 0.35), 1.1);
+    case 'grip_a':
+      return R(10, 9, 28, 7, STEEL_DK, 1.5) + `<g transform="rotate(-28 24 28)">${R(19, 14, 10, 28, RUBBER, 3)}${L('M21 20 H27 M21 25 H27 M21 30 H27', shade(RUBBER, 0.35), 1.1)}</g>`;
+    case 'bipod':
+      return R(8, 12, 32, 7, STEEL_DK, 1.5) + L('M18 19 L10 42 M30 19 L38 42', INK, 3.6) + L('M18 19 L10 42 M30 19 L38 42', STEEL, 1.8) + R(7, 41, 7, 3, INK, 1) + R(35, 41, 7, 3, INK, 1);
+    case 'mag_ext':
+      return P('M16 3 H32 V8 L33 44 H15 L16 8Z', '#2a2c30') + L('M18 12 H31 M18 18 H31 M18 24 H31 M18 30 H31 M18 36 H31', shade('#2a2c30', 0.35), 1.2) + R(14, 42, 20, 3, STEEL_DK, 1);
+    case 'mag_q':
+      return P('M17 3 H31 V10 L32 34 H16 L17 10Z', '#2a2c30') + P('M13 33 H35 L36 42 H12Z', STEEL_DK) + R(15, 38, 18, 3, RUBBER, 1) + L('M19 12 H29 M19 18 H29 M19 24 H29', shade('#2a2c30', 0.35), 1.2);
+    case 'drum':
+      return C(24, 26, 15, '#2a2c30') + C(24, 26, 9, STEEL_DK) + C(24, 26, 3, INK) + R(19, 4, 10, 8, '#2a2c30', 2) + L('M13 26 H35 M24 15 V37', shade(STEEL_DK, 0.3), 1);
+    case 'loader':
+      return [0, 1, 2, 3, 4, 5].map((i) => C(24 + Math.cos((i * Math.PI) / 3) * 10, 25 + Math.sin((i * Math.PI) / 3) * 10, 3.4, '#c9a24a')).join('') + C(24, 25, 4, STEEL_DK) + L('M24 21 V6', STEEL, 3);
+    case 'tube':
+      return R(2, 21, 40, 7, STEEL_DK, 2) + R(40, 19, 5, 11, STEEL, 1) + L('M6 23.5 H38', shade(STEEL_DK, 0.4), 1) + R(14, 19, 3, 11, STEEL, 1);
+    case 'saddle':
+      return R(14, 6, 20, 36, '#4a3626', 3) + [0, 1, 2, 3].map((i) => R(18, 10 + i * 8, 12, 6, '#b02a1c', 1.5) + R(18, 10 + i * 8, 12, 2, '#d9a521', 0.5)).join('') + L('M14 12 H34', '#2a2018', 1);
+    case 'crank':
+      return C(22, 25, 13, STEEL_DK) + C(22, 25, 4, INK) + L('M22 25 L38 12', STEEL, 3) + C(38, 12, 3.2, RUBBER) + L('M12 25 H32 M22 15 V35', shade(STEEL_DK, 0.3), 1.2);
+    case 'butt':
+      return R(14, 6, 12, 36, RUBBER, 4) + R(24, 14, 10, 20, STEEL_DK, 2) + L('M17 12 V36 M21 12 V36', shade(RUBBER, 0.4), 1.2);
+    case 'butt2':
+      return R(10, 8, 14, 36, RUBBER, 4) + R(22, 6, 22, 9, '#2a2c2e', 3) + R(22, 18, 8, 18, STEEL_DK, 2) + L('M13 14 V38 M17 14 V38', shade(RUBBER, 0.4), 1.2);
+    case 'stock_p':
+      return L('M42 14 L10 16 M42 30 L10 32', INK, 3.4) + L('M42 14 L10 16 M42 30 L10 32', STEEL, 1.6) + R(6, 12, 6, 24, RUBBER, 2) + L('M42 14 V30', STEEL, 2);
+    case 'stock_s':
+      return L('M42 14 L10 12 M42 32 L10 36', INK, 3.4) + L('M42 14 L10 12 M42 32 L10 36', STEEL, 1.6) + R(6, 10, 6, 28, RUBBER, 2) + L('M26 13 V34', STEEL, 1.6);
+    case 'stock_h':
+      return P('M44 14 L12 8 Q6 8 6 14 V36 Q6 42 12 42 L44 32Z', '#2a2c30') + R(4, 8, 7, 34, RUBBER, 3) + L('M14 16 H38 M14 24 H38 M14 32 H38', shade('#2a2c30', 0.3), 1.1);
+    case 'stock_t':
+      return P('M44 16 L12 12 Q6 12 6 18 V34 Q6 40 12 40 L44 30Z', '#2a2c30') + R(11, 6, 24, 8, '#3a3d41', 3) + R(4, 12, 7, 28, RUBBER, 3) + L('M14 22 H38 M14 30 H38', shade('#2a2c30', 0.3), 1.1);
+    case 'laser':
+      return R(10, 15, 24, 18, '#2a2d31', 3) + R(32, 20, 7, 8, '#4a4d52', 1) + C(37, 24, 2.6, RED) + L('M40 24 H47', RED, 1.4) + L('M14 20 H30', shade('#2a2d31', 0.4), 1) + R(12, 33, 18, 4, STEEL_DK, 1);
+    case 'torch':
+      return R(8, 14, 26, 20, '#2a2d31', 4) + P('M32 11 L42 8 V40 L32 37Z', STEEL_DK) + E(41, 24, 2.4, 10, '#fff6c4') + L('M12 19 H30', shade('#2a2d31', 0.4), 1) + R(12, 34, 18, 4, STEEL_DK, 1);
+    case 'combo':
+      return R(6, 12, 28, 24, '#2a2d31', 4) + P('M32 9 L42 6 V32 L32 30Z', STEEL_DK) + E(40, 19, 2.2, 8, '#fff6c4') + R(32, 33, 7, 8, '#4a4d52', 1) + C(37, 37, 2.2, RED) + L('M10 17 H28', shade('#2a2d31', 0.4), 1) + R(10, 36, 18, 4, STEEL_DK, 1);
+    default:
+      return R(10, 18, 28, 12, STEEL);
+  }
+}
+
+/** Where on a gun's own picture each slot's add-on sits, by the kind of gun: handguns, sub-machine guns, long guns, shotguns, the crossbow. */
+type IconSpot = Record<AttachSlot, [number, number]>;
+const SPOTS: Record<string, IconSpot> = {
+  hand: { optic: [22, 10], muzzle: [44, 18], barrel: [38, 18], under: [28, 28], mag: [15, 40], stock: [4, 19], rail: [31, 27] },
+  smg: { optic: [20, 9], muzzle: [44, 18], barrel: [38, 18], under: [32, 29], mag: [19, 43], stock: [4, 19], rail: [34, 27] },
+  long: { optic: [27, 11], muzzle: [46, 20], barrel: [40, 20], under: [37, 27], mag: [20, 41], stock: [5, 22], rail: [38, 25] },
+  shot: { optic: [30, 11], muzzle: [46, 18], barrel: [40, 18], under: [35, 27], mag: [32, 25], stock: [5, 24], rail: [22, 23] },
+  bow: { optic: [20, 17], muzzle: [43, 23], barrel: [40, 23], under: [24, 31], mag: [8, 26], stock: [4, 23], rail: [28, 28] },
+};
+const SPOT_OF: Record<GunModel, keyof typeof SPOTS> = {
+  pistol: 'hand', compact: 'hand', revolver: 'hand', cannon: 'hand', mp: 'hand', smg: 'smg', smg2: 'smg',
+  rifle: 'long', carbine: 'long', ar: 'long', br: 'long', dmr: 'long', sniper: 'long', lever: 'long', lmg: 'long',
+  sawn: 'shot', pump: 'shot', combat: 'shot', coach: 'shot', crossbow: 'bow',
+};
+
+/** What is fitted to a gun, shrunk onto its picture: stock and magazine behind, then the rail and underbarrel, the muzzle, and the optic on top. */
+function modsOnGun(model: GunModel, att: Partial<Record<AttachSlot, string>>): string {
+  const spot = SPOTS[SPOT_OF[model]];
+  const order: AttachSlot[] = ['stock', 'mag', 'under', 'rail', 'barrel', 'muzzle', 'optic'];
+  let out = '';
+  for (const slot of order) {
+    const id = att[slot];
+    const look = id && hasGear(id) ? gearDef(id).mod?.look : undefined;
+    if (!look) continue;
+    const [x, y] = spot[slot];
+    const k = slot === 'optic' ? 0.4 : slot === 'mag' || slot === 'stock' ? 0.34 : 0.32;
+    out += `<g transform="translate(${x} ${y}) scale(${k}) translate(-24 -24)">${modPic(look)}</g>`;
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------------------------------- things that are not gear
@@ -312,9 +481,10 @@ export function itemIcon(id: 'flare' | 'molotov' | 'charge' | 'horn' | 'medkit',
 
 // ------------------------------------------------------------------------------------------- public pictures
 
-/** A single item as a picture, drawn in the colours of the survivor who owns it. */
-export function gearIcon(d: GearDef, index = 0, cls = ''): string {
-  if (d.gun) return svg(gun(d.gun.model), cls);
+/** A single item as a picture, drawn in the colours of the survivor who owns it. A gun's fitted add-ons (`att`) are drawn on it. */
+export function gearIcon(d: GearDef, index = 0, cls = '', att?: Partial<Record<AttachSlot, string>>): string {
+  if (d.gun) return svg(gun(d.gun.model) + (att ? modsOnGun(d.gun.model, att) : ''), cls);
+  if (d.mod) return svg(modPic(d.mod.look), cls);
   if (d.melee) return svg(melee(d.melee.model), cls);
   if (d.tool) return svg(tool(d.tool), cls);
   const { style, c, c2 } = lookFor(d, index);

@@ -17,7 +17,7 @@ beforeAll(async () => {
 
 describe('solo campaign', () => {
   it('has one seat, one starting moped and one active build', () => {
-    const c = new Campaign(['Ash', 'Rook'], true);
+    const c = new Campaign(undefined, true);
     expect(c.solo).toBe(true);
     expect(c.count).toBe(1);
     expect(c.garage).toHaveLength(1);
@@ -34,7 +34,7 @@ describe('solo campaign', () => {
   });
 
   it('survives a save and load, and old saves without the flag load as two players', () => {
-    const c = new Campaign(['Ash', 'Rook'], true);
+    const c = new Campaign(undefined, true);
     c.day = 3;
     const back = Campaign.deserialize(JSON.parse(JSON.stringify(c.serialize())));
     expect(back.solo).toBe(true);
@@ -51,7 +51,7 @@ describe('solo campaign', () => {
   });
 
   it('does not make the garage assign a second vehicle or trim the only one', () => {
-    const c = new Campaign(['Ash', 'Rook'], true);
+    const c = new Campaign(undefined, true);
     c.settleActives();
     expect(c.garage).toHaveLength(1);
     expect(c.trimGarage()).toEqual([]);

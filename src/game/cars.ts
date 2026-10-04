@@ -3,10 +3,11 @@ import { modelKey } from '../render/workFx';
 import { prepareVehicleVisual } from '../render/vehicleModels';
 import { chassisDef } from '../data';
 import { sitePos } from './hauling';
-import { newPart, partName, type PartItem } from '../sim/parts';
+import { partName, type PartItem } from '../sim/parts';
 import { colorName } from '../sim/paint';
 import { rollCar, type CarStatus } from '../sim/cars';
-import { SALVAGE_STAGES, lootText, salvageLoot, type SalvageCtx, type SalvageKind } from '../sim/salvage';
+import { SALVAGE_STAGES, lootText, salvageLoot, stripBuild, type SalvageCtx, type SalvageKind } from '../sim/salvage';
+import { grantLoot } from './lootGrant';
 import { newAabbId, type Aabb, type CarSpawn } from '../world/layout';
 import type { VehicleBuild } from '../sim/garage';
 import type { Ctx } from './ctx';
@@ -50,7 +51,7 @@ export class CarField {
 
   add(spawn: CarSpawn) {
     if (this.states.has(spawn.id)) return;
-    const roll = rollCar(spawn.seed, { biome: this.ctx.biome, chassis: spawn.chassis, status: spawn.status });
+    const roll = rollCar(spawn.seed, { biome: this.ctx.biome, chassis: spawn.chassis, status: spawn.status, grade: spawn.grade, reach: spawn.reach });
     this.states.set(spawn.id, { spawn, build: roll.build, status: roll.status, salvaged: 0, x: spawn.x, y: spawn.y, z: spawn.z, yaw: spawn.yaw, live: null });
   }
 
@@ -238,7 +239,11 @@ export class CarField {
     return 'car';
   }
 
-  /** Strip one stage: take its loot and leave the car visibly worse. Returns the toast text. */
+  /**
+   * Strip one stage: take what is really on the car, and leave the car without it. Nothing abstract comes out: the parts that
+   * were fitted (as worn as they were), the oil and water in the sumps, and what was left in the cabin and boot. Parts go to
+   * the trucks, or onto the ground beside the car when the trucks are full. Returns the toast text.
+   */
   salvage(v: Vehicle, p: Player): string {
     const ctx = this.ctx;
     const stage = v.salvaged;
@@ -248,66 +253,50 @@ export class CarField {
       kind: this.kindOf(v),
       chassis: v.def.id,
       burnt: v.wreck,
-      fit: b ? { ...b.fit } : undefined,
-      tyres: b ? [...b.tyres] : undefined,
-      comp: b?.comp,
+      build: b ?? undefined,
       progress: ctx.gearProgress,
     };
     const loot = salvageLoot(stage, c);
-    const stocks = { ...loot.stocks };
-    if (Object.keys(stocks).length) ctx.addLoot(stocks, 'salvage');
-    if (loot.ammo) ctx.campaign.ammo += loot.ammo;
+    const site = sitePos(v, (['wheel', 'hood', 'flank', 'rear'] as const)[Math.min(3, stage)]);
+    // Parts first, then the cans and tins: what is left over from a full trunk lies beside the car.
     const kept: PartItem[] = [];
-    let scrapped = 0;
-    for (const it of loot.items) {
-      const r = ctx.campaign.addPart(it);
-      if (r.stored) kept.push(it);
-      else scrapped += r.scrap;
-    }
+    const left: PartItem[] = [];
+    for (const it of loot.items) (ctx.campaign.stowPart(it) ? kept : left).push(it);
+    const names = grantLoot(ctx, [...left.map((it) => ({ kind: 'part' as const, id: it.id, cond: it.cond })), ...loot.goods], site, p.pos);
     const oil = loot.oil > 0 ? ctx.campaign.stowOil(loot.oil) : 0;
     if (loot.water) ctx.campaign.stowWater(loot.water);
-    let text = lootText({ ...loot, items: kept, oil }, partName);
-    if (scrapped) text += `${text === 'Nothing worth taking' ? '' : ', '}${scrapped} Scrap (no room for the rest)`;
-    p.note(text, kept.length || scrapped ? 'good' : 'info');
+    let text = lootText({ ...loot, items: kept, goods: [], oil }, partName);
+    if (names.length) text = text === 'Nothing worth taking' ? names.join(', ') : `${text}, ${names.join(', ')}`;
+    p.note(text, names.length || kept.length || oil ? 'good' : 'info');
     if (loot.paint) {
       // A spray can rolls out of the glovebox and lands at the searcher's feet.
       ctx.loose?.drop(p.pos.x + Math.sin(p.yaw) * 1.3, p.pos.z + Math.cos(p.yaw) * 1.3, { kind: 'paint', color: loot.paint.color, charges: loot.paint.charges });
       p.note(`A spray can (${colorName(loot.paint.color)}): pick it up and paint a panel`, 'good');
     }
     {
-      const site = sitePos(v, (['wheel', 'hood', 'flank', 'rear'] as const)[Math.min(3, stage)]);
       if (loot.gear) ctx.dropGear(loot.gear, site.x, site.z);
+      loot.guns?.forEach((g, i) => ctx.dropGear(g, site.x + 0.8 + i * 0.7, site.z + 0.6));
       const hand = new THREE.Vector3(p.pos.x, p.pos.y + 1, p.pos.z);
       ctx.work.burst(site, 1, 0.9);
       if (kept.length) ctx.work.spill(kept.map(modelKey), site, hand);
       if (text !== 'Nothing worth taking') ctx.work.label(text, '#ffd27a', site.clone().add(new THREE.Vector3(0, 0.9, 0)));
     }
-    // What the car loses.
+    // What the car loses: exactly what was taken, and its mounts left bare.
     if (b) {
+      stripBuild(stage, b);
       if (stage === 0) {
-        // Every tyre is off: bare hubs.
-        b.tyres = b.tyres.map(() => newPart('tyre_none', 1));
         v.health.comp.tires = v.health.comp.tires.map(() => 0);
       } else if (stage === 1) {
-        for (const [slot, none] of [['gearbox', 'gbx_none'], ['exhaust', 'exh_none']] as const) b.fit[slot] = newPart(none, 1);
         v.health.comp.gearbox = 0;
-        // The engine is out: the bay is empty, not back to a factory motor that was never there.
-        b.fit.engine = newPart('eng_none', 1);
         v.health.comp.engine = 0;
         v.engineOn = false;
       } else if (stage === 2) {
-        for (const s of ['armor', 'weapon', 'utility', 'front', 'roof', 'rear', 'side'] as const) delete b.fit[s];
-        // And the radiator behind the grille comes out with the front end.
-        b.fit.cooling = newPart('rad_none', 1);
         v.health.comp.radiator = 0;
         v.health.comp.coolant = 0;
-        for (const [slot, none] of [['hood', 'hood_none'], ['doorL', 'door_none'], ['doorR', 'door_none'], ['suspension', 'sus_none'], ['brakes', 'brk_none']] as const) {
-          if ((v.def.slots ?? []).includes(slot)) b.fit[slot] = newPart(none, 1);
-        }
         v.health.hp = Math.min(v.health.hp, v.health.maxHp * 0.12);
         v.health.comp.plates = 0.1;
       }
-      if (stage <= 2) v.refit();
+      v.refit();
     }
     v.salvaged = stage + 1;
     const st = this.stateOf(v);

@@ -1,4 +1,4 @@
-import { hasPart, partDef, type BrakeSpec, type ExhaustSpec, type GearboxSpec, type PartSlot, type SuspensionSpec, type VehicleDef } from '../data';
+import { INTERIOR_STOCK, hasPart, isInteriorSlot, partDef, type BrakeSpec, type ExhaustSpec, type GearboxSpec, type PartSlot, type SuspensionSpec, type VehicleDef } from '../data';
 import { clamp } from '../core/math';
 import type { EngineEffects } from './engines';
 import type { Fit } from './parts';
@@ -32,6 +32,7 @@ export function factoryIdFor(def: VehicleDef, slot: PartSlot): string | undefine
   }
   if (slot === 'hood') return (def.slots ?? []).includes('hood') ? 'hood_std' : undefined;
   if (slot === 'doorL' || slot === 'doorR') return (def.slots ?? []).includes(slot) ? 'door_std' : undefined;
+  if (isInteriorSlot(slot)) return (def.slots ?? []).includes(slot) ? INTERIOR_STOCK[slot] : undefined;
   return undefined;
 }
 

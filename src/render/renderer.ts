@@ -46,6 +46,8 @@ export interface PlayerView {
   active: boolean;
   /** This view is a first-person camera: a taller field of view than the chase strip. */
   first?: boolean;
+  /** Magnification from a scope while aiming: the field of view is divided by it. 1 (or missing) is none. */
+  zoom?: number;
 }
 
 /** Horizontal FOV is fixed at 100 degrees; vertical is derived with a floor of 32 degrees. */
@@ -58,8 +60,8 @@ export function fovFor(aspect: number, hfovDeg = 100, vfovMinDeg = 32) {
 export const VERTICAL_SPLIT_VFOV = 66;
 
 /** FOV for a view: fixed horizontal FOV for the wide strips, a fixed vertical FOV for the left/right halves. */
-export function viewFov(aspect: number, layout: SplitLayout) {
-  const strip = fovFor(aspect);
+export function viewFov(aspect: number, layout: SplitLayout, hfovDeg = 100) {
+  const strip = fovFor(aspect, hfovDeg);
   return layout === 'vertical' ? Math.min(VERTICAL_SPLIT_VFOV, strip) : strip;
 }
 
@@ -109,7 +111,9 @@ export class GameRenderer {
   /** Same, called after each view has drawn, to put back whatever a before-hook hid. */
   onAfterView: ((i: number) => void)[] = [];
   /** Horizontal field of view of first-person views, degrees. */
-  fpHfov = 100;
+  fpHfov = 110;
+  /** Horizontal FOV of the chase camera, degrees. */
+  chaseHfov = 110;
   contextLost = false;
   onContextRestored: () => void = () => {};
   /** 0..1 fade to black applied in the composite (scene transitions). */
@@ -342,16 +346,29 @@ export class GameRenderer {
 
   private applyFov(v: PlayerView) {
     const layout = this.seats === 1 ? 'horizontal' : this.layout;
-    v.camera.fov = v.first ? firstPersonFov(v.camera.aspect, layout, this.fpHfov) : viewFov(v.camera.aspect, layout);
+    const fov = v.first ? firstPersonFov(v.camera.aspect, layout, this.fpHfov) : viewFov(v.camera.aspect, layout, this.chaseHfov);
+    // Magnifying narrows the view by the tangent, as a real optic does, rather than the angle.
+    const z = v.zoom ?? 1;
+    v.camera.fov = z > 1.001 ? (2 * Math.atan(Math.tan((fov * DEG) / 2) / z)) / DEG : fov;
     v.camera.updateProjectionMatrix();
   }
 
-  /** Switch a view between the chase strip and first person. Cheap to call every frame: it only rebuilds the projection on a change. */
-  setViewMode(i: number, first: boolean, hfov = this.fpHfov) {
+  /** Scope zoom for one view. Cheap to call every frame: the projection is rebuilt only when it has moved. */
+  setZoom(i: number, zoom: number) {
     const v = this.views[i];
-    if (!!v.first === first && this.fpHfov === hfov) return;
+    const z = Math.max(1, Math.round(zoom * 50) / 50);
+    if ((v.zoom ?? 1) === z) return;
+    v.zoom = z;
+    this.applyFov(v);
+  }
+
+  /** Switch a view between the chase strip and first person. Cheap to call every frame: it only rebuilds the projection on a change. */
+  setViewMode(i: number, first: boolean, hfov = this.fpHfov, chaseHfov = this.chaseHfov) {
+    const v = this.views[i];
+    if (!!v.first === first && this.fpHfov === hfov && this.chaseHfov === chaseHfov) return;
     v.first = first;
     this.fpHfov = hfov;
+    this.chaseHfov = chaseHfov;
     for (const o of this.views) this.applyFov(o);
   }
 
@@ -617,6 +634,8 @@ export class GameRenderer {
 
   private renderView(i: number) {
     const v = this.views[i];
+    // World markers size themselves in screen pixels of this view (a split-screen half is half as tall).
+    v.camera.userData.viewH = v.rect.h;
     this.sky.mesh.position.copy(v.camera.position);
     this.aimShadow(v);
     for (const cb of this.onBeforeView) cb(i, v.camera);

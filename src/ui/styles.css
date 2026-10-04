@@ -1621,6 +1621,12 @@ button:disabled {
 .ledger.inv.center .invbody {
   grid-template-columns: 1.3fr 1.3fr 1fr;
 }
+.invbody:has(> .invcol.hidewear) {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+}
+.invcol.hidewear {
+  display: none;
+}
 .invcol {
   display: flex;
   flex-direction: column;
@@ -2084,4 +2090,159 @@ button:disabled {
   float: right;
   font-size: 0.7em;
   padding: 0 8px;
+}
+
+/* A narrow window (a phone, or a split screen on a small display): the inventory takes the whole width and its columns stack, the body scrolling. */
+@media (max-width: 900px) {
+  .ledger.inv,
+  .ledger.inv.left,
+  .ledger.inv.center {
+    inset: 1.5% 1.5%;
+    font-size: 0.8em;
+  }
+  .invbody,
+  .ledger.inv.center .invbody,
+  .invbody:has(> .invcol.hidewear) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: max-content;
+    overflow-y: auto;
+    align-content: start;
+  }
+  .invcol {
+    overflow: visible;
+  }
+  .invbody:has(> .invcol.hidewear) .invcol.detail {
+    order: -1;
+  }
+  .ledger.inv .benchfoot {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .ledger.inv .invfoot {
+    flex-wrap: wrap;
+  }
+  .ledger.inv .invfoot button {
+    white-space: nowrap;
+  }
+}
+
+/* Weapon customisation: the add-on count on a gun's tile, the slot list and the add-on cards in the detail column. */
+.tile .modn {
+  position: absolute;
+  right: 3px;
+  bottom: 12px;
+  font-family: var(--mono);
+  font-size: 0.6em;
+  line-height: 1;
+  padding: 1px 3px;
+  background: rgba(63, 158, 60, 0.9);
+  color: #f3f8e8;
+  border-radius: 3px;
+}
+.invcol.detail .slotlist {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 3px;
+}
+.invcol.detail .slotrow {
+  display: grid;
+  grid-template-columns: 2.4em 6.2em 1fr;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  padding: 2px 6px;
+}
+.invcol.detail .slotrow .mini {
+  width: 2.4em;
+  height: 1.7em;
+  display: block;
+}
+.invcol.detail .slotrow .mini svg {
+  width: 100%;
+  height: 100%;
+}
+.invcol.detail .slotrow b {
+  font-weight: 700;
+  font-size: 0.82em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.invcol.detail .slotrow em {
+  font-style: normal;
+  font-size: 0.84em;
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.invcol.detail .slotrow.on {
+  outline: 2px solid #d98a1f;
+}
+.invcol.detail .slotrow.r2 em {
+  color: #2d7a2a;
+}
+.invcol.detail .slotrow.r3 em {
+  color: #b26a12;
+}
+.invcol.detail .cand {
+  display: grid;
+  grid-template-columns: 2.6em 1fr auto;
+  align-items: center;
+  gap: 2px 8px;
+  text-align: left;
+}
+.invcol.detail .cand .mini {
+  grid-row: 1 / span 2;
+  width: 2.6em;
+  height: 1.9em;
+}
+.invcol.detail .cand .mini svg {
+  width: 100%;
+  height: 100%;
+}
+.invcol.detail .deltas {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 1px 10px;
+}
+.invcol.detail .cand .deltas {
+  grid-column: 2 / span 2;
+  display: flex;
+}
+.invcol.detail .cand .deltas .stat {
+  font-size: 0.84em;
+  line-height: 1.3;
+  padding: 0 5px;
+  border-radius: 3px;
+}
+.invcol.detail .cand .deltas .stat.good {
+  background: rgba(45, 122, 42, 0.12);
+}
+.invcol.detail .cand .deltas .stat.badc {
+  background: rgba(168, 50, 31, 0.1);
+}
+.invcol.detail .cand {
+  padding: 5px 8px;
+  min-height: 3em;
+}
+.invcol.detail .cand b {
+  font-size: 0.95em;
+}
+.invcol.detail .slotrow {
+  min-height: 2.2em;
+}
+.invcol.detail .slotrow:focus-visible,
+.invcol.detail .cand:focus-visible,
+.invcol.detail .invacts button:focus-visible {
+  outline: 3px solid #1f6fd9;
+  outline-offset: 1px;
+}
+.invcol.detail .invacts.cands {
+  gap: 6px;
+}
+.invcol.detail .cand .pip {
+  position: static;
 }

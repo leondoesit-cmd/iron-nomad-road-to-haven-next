@@ -137,6 +137,8 @@ export class LedgerPanel {
       <div class="stockrow"><span>Radio fragments</span><b>${c.fragments.size}/4</b></div>
       <h3>Crafting</h3>
       <div class="card"><div class="btns">${craftBtns(RECIPES.filter((r) => !isDrug(r)))}</div></div>
+      <h3>Workbench</h3>
+      <div class="card"><div class="btns">${this.benchButtons()}</div><div class="mutedtxt">Scrap comes from breaking down spares you do not need (Garage tab) or a vehicle. Here it becomes hardware for repairs and rebuilds.</div></div>
       <h3>Still &amp; apothecary</h3>
       <div class="card"><div class="btns">${craftBtns(RECIPES.filter(isDrug))}</div><div class="mutedtxt">Taken from the belt on the road: tap the use button, hold it to choose. Mixing is on you.</div></div>
       ${hub?.features.includes('trade') ? `<h3>Trader</h3><div class="card"><div class="btns">${this.tradeButtons()}</div></div>` : ''}
@@ -211,6 +213,28 @@ export class LedgerPanel {
   }
 
   // ------------------------------------------------------------------ pieces
+
+  /** Scrap into hardware, anywhere, at a poor rate: the way a convoy that has stripped a few cars turns what it has into what it needs. */
+  private benchButtons() {
+    const offers: { id: string; label: string; cost: Cost; give: Partial<Record<StockId, number>> }[] = [
+      { id: 'parts', label: 'Machine 3 Parts', cost: { scrap: 6 }, give: { parts: 3 } },
+      { id: 'tech', label: 'Wire up 1 Tech', cost: { scrap: 10 }, give: { tech: 1 } },
+    ];
+    return offers
+      .map((o) =>
+        this.btn(
+          `bench-${o.id}`,
+          `${o.label} <span class="cost">${costText(o.cost)}</span>`,
+          () => {
+            if (!this.buyCost(o.cost)) return this.deny('Not enough Scrap');
+            for (const k of Object.keys(o.give) as StockId[]) this.c.stocks[k] += o.give[k] ?? 0;
+            this.ok(`${o.label}`);
+          },
+          canAfford(this.c.stocks, o.cost),
+        ),
+      )
+      .join('');
+  }
 
   private tradeButtons() {
     const offers: { id: string; label: string; cost: Cost; give: Partial<Record<StockId, number>> }[] = [

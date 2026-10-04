@@ -1,4 +1,4 @@
-import { GEAR, WEAR_SLOTS, gearDef, type GearDef, type WearSlot } from '../data';
+import { ATTACH_LABELS, GEAR, WEAR_SLOTS, gearDef, type AttachSlot, type GearDef, type WearSlot } from '../data';
 import { PLAYER_CSS } from '../render/palette';
 import { Btn, wasPressed } from '../input/intents';
 import { RARITY_NAMES } from '../sim/parts';
@@ -9,9 +9,12 @@ import {
   compareStats,
   describeStats,
   describeWeapon,
+  detachToBag,
   equipFromBag,
   findItem,
+  fitFromBag,
   giveItem,
+  gunByUid,
   itemAt,
   moveBelt,
   repairItem,
@@ -25,6 +28,7 @@ import {
   type GearItem,
   type Result,
 } from '../sim/gear';
+import { canFit, compareKits, describeMod, fitted, kitOf, kitWith, newMod, slotsOfGun, type KitLine } from '../sim/gunmods';
 import { MEDKIT_HEAL, UTILITIES, utilityName, type Player } from '../game/player';
 import { BLEED, STAMINA, wearLabel, wearOf } from '../sim/vitals';
 import type { Game } from '../game/game';
@@ -36,7 +40,7 @@ import { dollSvg, gearIcon, itemIcon, slotGlyph } from './gearIcons';
 
 type Act = (player: number) => void;
 
-const KIND_LABEL: Record<GearDef['kind'], string> = { wear: 'Worn', gun: 'Firearm', melee: 'Melee', tool: 'Tool' };
+const KIND_LABEL: Record<GearDef['kind'], string> = { wear: 'Worn', gun: 'Firearm', melee: 'Melee', tool: 'Tool', mod: 'Add-on' };
 const UTILITY_SHORT: Record<(typeof UTILITIES)[number], string> = { flare: 'Flare', molotov: 'Molotov', charge: 'Charge', horn: 'Horn' };
 
 const UTILITY_ICON = { flare: 'flare', molotov: 'molotov', charge: 'charge', horn: 'horn' } as const;
@@ -59,6 +63,9 @@ export class InventoryView {
   p: Player | null = null;
   /** The item shown in the detail column. */
   sel: string | null = null;
+  /** The gun whose customise panel is open (its uid), and the slot being looked at. */
+  custom: string | null = null;
+  cslot: AttachSlot | null = null;
   msg = '';
 
   constructor(private host: InventoryHost) {}
@@ -73,6 +80,8 @@ export class InventoryView {
   reset(p: Player) {
     this.p = p;
     this.sel = null;
+    this.custom = null;
+    this.cslot = null;
     this.msg = '';
   }
 
@@ -97,10 +106,42 @@ export class InventoryView {
   private scrap(uid: string) {
     const it = takeFromBag(this.loadout, uid);
     if (!it) return;
+    // A gun's add-ons come off first and go back in the bag while there is room; only what will not fit is broken down with it.
+    let kept = 0;
+    for (const f of fitted(it)) {
+      if (this.loadout.bag.length >= bagCap(this.loadout)) break;
+      this.loadout.bag.push(newMod(f.def.id));
+      delete it.att![f.slot];
+      kept++;
+    }
     const n = scrapOf(it);
     this.c.stocks.scrap += n;
     this.sel = null;
-    this.act({ ok: true, note: `Broke down the ${gearDef(it.id).name}: +${n} Scrap` });
+    this.custom = null;
+    this.act({ ok: true, note: `Broke down the ${gearDef(it.id).name}: +${n} Scrap${kept ? ` (${kept} add-on${kept > 1 ? 's' : ''} kept)` : ''}` });
+  }
+
+  /** Fit an add-on to a gun. Rounds that no longer fit the magazine go back to the stock. */
+  private fit(gunUid: string, modUid: string) {
+    const gun = gunByUid(this.loadout, gunUid);
+    const before = gun?.mag ?? 0;
+    const r = fitFromBag(this.loadout, gunUid, modUid);
+    if (r.ok && gun) this.c.ammo += Math.max(0, before - (gun.mag ?? 0));
+    this.act(r);
+  }
+
+  private detach(gunUid: string, slot: AttachSlot) {
+    const r = detachToBag(this.loadout, gunUid, slot);
+    if (r.ok && r.rounds) this.c.ammo += r.rounds;
+    this.act(r);
+  }
+
+  private openCustom(gunUid: string) {
+    this.custom = gunUid;
+    this.cslot = null;
+    this.msg = '';
+    this.host.audio.play('confirm');
+    this.host.rerender();
   }
 
   private give(uid: string) {
@@ -174,12 +215,16 @@ export class InventoryView {
     const on = this.sel === it.uid ? ' sel' : '';
     const hl = held ? ' held' : '';
     const mag = d.gun && it.mag !== undefined ? `<em class="cnt">${it.mag}</em>` : '';
+    const nmods = d.gun && it.att ? Object.keys(it.att).length : 0;
+    const mods = nmods ? `<b class="modn" title="${nmods} add-on${nmods > 1 ? 's' : ''} fitted">+${nmods}</b>` : '';
     const wear = (d.gun || d.melee) && wearOf(it.cond) < 0.995 ? `<u class="wear ${wearOf(it.cond) < 0.3 ? 'bad' : wearOf(it.cond) < 0.6 ? 'mid' : ''}" style="--w:${Math.round(wearOf(it.cond) * 100)}%"></u>` : '';
     return this.btn(
       id,
-      `<span class="ic">${gearIcon(d, this.p!.index)}</span><small>${label}</small>${mag}${wear}<i class="pip r${d.rarity}">${'◆'.repeat(d.rarity)}</i>`,
+      `<span class="ic">${gearIcon(d, this.p!.index, '', it.att)}</span><small>${label}</small>${mag}${mods}${wear}<i class="pip r${d.rarity}">${'◆'.repeat(d.rarity)}</i>`,
       () => {
         this.sel = it.uid;
+        this.custom = null;
+        this.cslot = null;
         this.msg = '';
         this.host.rerender();
       },
@@ -240,8 +285,9 @@ export class InventoryView {
     add('Spread', stats.steady, false);
 
 
+    // Customising a gun needs room for its slots and what each add-on changes: the doll steps aside and the detail column widens.
     return `
-        <section class="invcol">
+        <section class="invcol${this.custom ? ' hidewear' : ''}">
           <h3>Wearing</h3>
           ${doll}
           <div class="effects">${eff.length ? eff.join('') : '<span class="mutedtxt">No bonuses or penalties</span>'}</div>
@@ -294,12 +340,24 @@ export class InventoryView {
       return `<h3>Details</h3><div class="mutedtxt pad">Pick something to see what it does, and what you can do with it.<br><br>Wear things on your body for armour, stealth and room in the bag. Put weapons and tools on the belt: whatever is in hand is what the buttons use.</div>`;
     }
     const d = gearDef(it.id);
+    if (this.custom === it.uid && d.gun) return this.customHtml(it);
     const lines: string[] = [];
-    lines.push(`<div class="bigcard r${d.rarity}"><div class="bigic">${gearIcon(d, p.index)}</div><div><h3 class="rname r${d.rarity}">${escapeHtml(d.name)}</h3>`);
+    lines.push(`<div class="bigcard r${d.rarity}"><div class="bigic">${gearIcon(d, p.index, '', it.att)}</div><div><h3 class="rname r${d.rarity}">${escapeHtml(d.name)}</h3>`);
     lines.push(`<div class="sub2">${RARITY_NAMES[d.rarity].toUpperCase()} · ${d.slot ? GEAR.labels[d.slot].toUpperCase() : KIND_LABEL[d.kind].toUpperCase()}${spot.zone === 'bag' ? '' : ' · ' + (spot.zone === 'worn' ? 'WORN' : 'ON THE BELT')}</div></div></div>`);
     lines.push(`<p class="blurb">${escapeHtml(d.blurb)}</p>`);
     for (const l of describeStats(d.stats)) lines.push(`<div class="stat ${l.good ? 'good' : 'badc'}">${escapeHtml(l.text)}</div>`);
-    for (const l of describeWeapon(d)) lines.push(`<div class="stat">${escapeHtml(l)}</div>`);
+    for (const l of describeWeapon(d, it)) lines.push(`<div class="stat">${escapeHtml(l)}</div>`);
+    if (d.mod) {
+      for (const l of describeMod(d.mod)) lines.push(`<div class="stat ${l.good ? 'good' : 'badc'}">${escapeHtml(l.text)}</div>`);
+      const takers = GEAR.items.filter((g) => canFit(g.id, d.id)).map((g) => g.name);
+      lines.push(`<div class="gh">${escapeHtml(ATTACH_LABELS[d.mod.slot])} add-on · fits</div><div class="stat mutedtxt">${escapeHtml(takers.join(', '))}</div>`);
+    }
+    if (d.gun) {
+      const k = kitOf(it);
+      if (k.zoom > 1.01) lines.push(`<div class="stat">${k.zoom.toFixed(1)}x zoom when aiming</div>`);
+      const on = fitted(it);
+      if (on.length) lines.push(`<div class="gh">Fitted</div>` + on.map((f) => `<div class="stat">${escapeHtml(ATTACH_LABELS[f.slot])}: ${escapeHtml(f.def.name)}</div>`).join(''));
+    }
     if (d.gun || d.melee) {
       const c = wearOf(it.cond);
       lines.push(`<div class="stat ${c >= 0.6 ? 'good' : 'badc'}">${wearLabel(it.cond)} · ${Math.round(c * 100)}% condition${c < 0.3 && d.gun ? ' · jams' : c < 0.6 ? (d.gun ? ' · loose spread' : ' · dull edge') : ''}</div>`);
@@ -314,11 +372,20 @@ export class InventoryView {
     }
 
     const acts: string[] = [];
+    if (d.gun && slotsOfGun(d).length && spot.zone !== 'worn') acts.push(this.btn('a-cust', `Customise <em>${fitted(it).length}/${slotsOfGun(d).length}</em>`, () => this.openCustom(it.uid), true, '', 'Scopes, suppressors, barrels, magazines, stocks and lights'));
+    if (d.mod && spot.zone === 'bag') {
+      // Fit it to any gun that takes it: the one in hand first.
+      const guns = [L.belt[L.sel], ...L.belt, ...L.bag].filter((g, i, a): g is GearItem => !!g && !!gearDef(g.id).gun && a.indexOf(g) === i && canFit(g.id, it.id));
+      for (const g of guns) acts.push(this.btn(`a-fit${g.uid}`, `Fit to ${escapeHtml(gearDef(g.id).name)}${L.belt.includes(g) ? '' : ' <em>bag</em>'}`, () => this.fit(g.uid, it.uid)));
+      if (!guns.length) acts.push(`<div class="mutedtxt">${escapeHtml('Nothing you carry takes it. Find a gun with a ' + ATTACH_LABELS[d.mod.slot].toLowerCase() + ' slot for it.')}</div>`);
+    }
     const fix = repairPrice(it);
     if (fix > 0) acts.push(this.btn('a-repair', `Repair <em>${fix} Scrap</em>`, () => this.repair(it.uid), this.c.stocks.scrap >= fix, '', this.c.stocks.scrap >= fix ? 'Back to like-new' : `You have ${Math.floor(this.c.stocks.scrap)} Scrap`));
     if (spot.zone === 'bag') {
       if (d.kind === 'wear') acts.push(this.btn('a-equip', `Wear it`, () => this.act(equipFromBag(L, it.uid))));
-      else {
+      else if (d.kind === 'mod') {
+        /* Fitted from the buttons above. */
+      } else {
         acts.push(this.btn('a-equip', `Put it in hand`, () => this.act(equipFromBag(L, it.uid))));
         const slots = Array.from({ length: BELT_SIZE }, (_, i) => {
           const o = L.belt[i];
@@ -331,7 +398,7 @@ export class InventoryView {
         const room = this.c.players[1 - p.index].gear.bag.length < bagCap(them.gear);
         acts.push(this.btn('a-give', `Give to ${escapeHtml(them.name)}`, () => this.give(it.uid), room, '', room ? '' : 'Their bag is full'));
       }
-      acts.push(this.btn('a-scrap', `Break down <em>+${scrapOf(it)} Scrap</em>`, () => this.scrap(it.uid)));
+      acts.push(this.btn('a-scrap', `Break down <em>+${scrapOf({ ...it, att: undefined })} Scrap</em>`, () => this.scrap(it.uid)));
     } else if (spot.zone === 'worn') {
       acts.push(this.btn('a-off', 'Take it off', () => this.act(unequipWorn(L, spot.slot))));
     } else if (spot.zone === 'belt') {
@@ -350,6 +417,91 @@ export class InventoryView {
       acts.push(`<div class="mutedtxt">Move to belt slot:</div><div class="chips">${mv}</div>`);
     }
     return `${lines.join('')}<div class="invacts">${acts.join('')}</div>`;
+  }
+
+  // ------------------------------------------------------------------ customise
+
+  /** What a list of changes reads like: green for good, red for bad. */
+  private lines(ls: KitLine[]): string {
+    return `<span class="deltas">${ls.map((l) => `<span class="stat ${l.good ? 'good' : 'badc'}">${escapeHtml(l.text)}</span>`).join('')}</span>`;
+  }
+
+  /**
+   * The customise panel: the gun's slots, and for the one chosen, what is fitted and every add-on in the bag that fits it with
+   * what it would change. Every choice is a button, so the controller walks it like the rest of the screen.
+   */
+  private customHtml(it: GearItem): string {
+    const p = this.p!;
+    const L = this.loadout;
+    const d = gearDef(it.id);
+    const kit = kitOf(it);
+    const out: string[] = [];
+    out.push(`<h3>Customise ${this.btn('c-back', 'Done', () => this.closeCustom(), true, 'chipbtn sortbtn', 'Back to the details')}</h3>`);
+    out.push(`<div class="bigcard r${d.rarity}"><div class="bigic">${gearIcon(d, p.index, '', it.att)}</div><div><h3 class="rname r${d.rarity}">${escapeHtml(d.name)}</h3><div class="sub2">${kit.count} OF ${slotsOfGun(d).length} SLOTS FITTED</div></div></div>`);
+    for (const l of describeWeapon(d, it)) out.push(`<div class="stat">${escapeHtml(l)}</div>`);
+    if (kit.zoom > 1.01) out.push(`<div class="stat">${kit.zoom.toFixed(1)}x zoom when aiming</div>`);
+    out.push(`<div class="gh">Slots</div><div class="slotlist">`);
+    for (const slot of slotsOfGun(d)) {
+      const f = it.att?.[slot];
+      const fd = f ? gearDef(f) : null;
+      const on = this.cslot === slot ? ' on' : '';
+      out.push(
+        this.btn(
+          `cs:${slot}`,
+          `<span class="mini">${fd ? gearIcon(fd, p.index) : ''}</span><b>${escapeHtml(ATTACH_LABELS[slot])}</b><em>${fd ? escapeHtml(fd.name) : 'empty'}</em>`,
+          () => {
+            this.cslot = slot;
+            this.msg = '';
+            this.host.rerender();
+          },
+          true,
+          `slotrow${on}${fd ? ` r${fd.rarity}` : ''}`,
+        ),
+      );
+    }
+    out.push('</div>');
+
+    const slot = this.cslot && slotsOfGun(d).includes(this.cslot) ? this.cslot : null;
+    if (slot) {
+      const fid = it.att?.[slot];
+      out.push(`<div class="gh">${escapeHtml(ATTACH_LABELS[slot])}</div>`);
+      if (fid) {
+        const fd = gearDef(fid);
+        out.push(`<div class="stat">${escapeHtml(fd.name)}: ${this.lines(describeMod(fd.mod!))}</div>`);
+        const room = L.bag.length < bagCap(L);
+        const off = compareKits(kit, kitWith(it, slot, null));
+        out.push(`<div class="invacts">${this.btn('c-remove', `Take it off <em>to the bag</em>`, () => this.detach(it.uid, slot), room, '', room ? 'Back to the bag' : 'Your bag has no room')}</div>`);
+        if (off.length) out.push(`<div class="mutedtxt">Without it: ${this.lines(off)}</div>`);
+      }
+      const cands = L.bag.filter((b) => gearDef(b.id).mod?.slot === slot && canFit(it.id, b.id));
+      if (!cands.length) out.push(`<div class="mutedtxt pad">${fid ? 'Nothing else in your bag fits this slot.' : 'Nothing in your bag fits this slot. Add-ons turn up in gun shops, police and army caches, raiders kit and the odd locker.'}</div>`);
+      else {
+        out.push(`<div class="invacts cands">`);
+        for (const c of cands) {
+          const cd = gearDef(c.id);
+          const diff = compareKits(kit, kitWith(it, slot, c.id));
+          out.push(
+            this.btn(
+              `cand:${c.uid}`,
+              `<span class="mini">${gearIcon(cd, p.index)}</span><b>${escapeHtml(cd.name)}</b><i class="pip r${cd.rarity}">${'◆'.repeat(cd.rarity)}</i>${diff.length ? this.lines(diff) : '<span class="deltas"><span class="stat mutedtxt">no change</span></span>'}`,
+              () => this.fit(it.uid, c.uid),
+              true,
+              `cand r${cd.rarity}`,
+              fid ? `Swap for the ${gearDef(fid).name}` : 'Fit it',
+            ),
+          );
+        }
+        out.push('</div>');
+      }
+    } else out.push(`<div class="mutedtxt pad">Pick a slot to see what is fitted and what could go there. Each add-on lists what it changes before you fit it.</div>`);
+    return out.join('');
+  }
+
+  private closeCustom() {
+    this.custom = null;
+    this.cslot = null;
+    this.host.audio.play('confirm');
+    this.host.rerender();
   }
 }
 

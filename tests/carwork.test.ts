@@ -1,15 +1,14 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import * as THREE from 'three';
 import { initPhysics } from '../src/physics/physics';
 import { legById } from '../src/data';
 import { LegScene } from '../src/game/legScene';
-import { mountsOf, pickMount } from '../src/game/carwork';
+import { accessPointsOf } from '../src/render/accessPoints';
+import { openPanel, standAt } from './helpers/access';
 import { Btn } from '../src/input/intents';
 import { installPart, newBuild } from '../src/sim/garage';
 import { newPart } from '../src/sim/parts';
 import { fakeServices } from './helpers/sim';
 import type { Vehicle } from '../src/game/vehicle';
-import type { PartSlot } from '../src/data';
 
 // Working on a car with your hands: mounts light up, the wrench unbolts what is fitted, spares sit on the deck.
 vi.setConfig({ testTimeout: 90000 });
@@ -87,54 +86,40 @@ function ownCar(sc: LegScene, chassis = 'hatch'): Vehicle {
   return v;
 }
 
-/** Stand where the hands reach a mount: a little way off it, facing it. */
-function standAt(sc: LegScene, v: Vehicle, slot: PartSlot, index = 0) {
-  const p = sc.players[0];
-  pose(sc);
-  const m = mountsOf(v, p.pos).filter((q) => q.slot === slot)[index];
-  expect(m).toBeTruthy();
-  // Approach from the outside of the car so nothing is in the way.
-  const out = new THREE.Vector3(m.pos.x - v.position.x, 0, m.pos.z - v.position.z).normalize();
-  p.placeAt(m.pos.x + out.x * 0.7, m.pos.z + out.z * 0.7, Math.atan2(-out.x, -out.z));
-  return m;
-}
-
-describe('mount points', () => {
-  it('a car has a mount for each slot it takes, and a wheel at every corner', () => {
+describe('access points', () => {
+  it('a car has a point for every kind of job, and a wheel at every corner', () => {
     const { sc } = leg();
     const v = ownCar(sc);
-    const ms = mountsOf(v, sc.players[0].pos);
-    const slots = new Set(ms.map((m) => m.slot));
-    for (const s of ['engine', 'wheels', 'armor', 'rear', 'front']) expect(slots.has(s as PartSlot)).toBe(true);
-    expect(ms.filter((m) => m.slot === 'wheels').length).toBe(4);
+    const pts = accessPointsOf(v.def);
+    const spots = new Set(pts.map((q) => q.spot));
+    for (const s of ['hood', 'doorL', 'doorR', 'trunk', 'flap', 'wheel', 'under', 'roof', 'front', 'rear', 'flank']) expect(spots.has(s as never)).toBe(true);
+    expect(pts.filter((q) => q.spot === 'wheel').length).toBe(4);
     // All of them are on or beside the car, not scattered across the map.
-    for (const m of ms) expect(Math.hypot(m.pos.x - v.position.x, m.pos.z - v.position.z)).toBeLessThan(v.def.length);
-  });
-
-  it('the mount your hands are over is the one picked', () => {
-    const { sc } = leg();
-    const v = ownCar(sc);
-    const p = sc.players[0];
-    standAt(sc, v, 'engine');
-    expect(pickMount(p, v)?.mount.slot).toBe('engine');
-    expect(pickMount(p, v)?.near).toBe(true);
-    standAt(sc, v, 'wheels', 2);
-    const pick = pickMount(p, v);
-    expect(pick?.mount.slot).toBe('wheels');
-    expect(pick?.mount.index).toBe(2);
+    for (const q of pts) {
+      const [x, , z] = v.body.toWorld(q.x, q.y, q.z);
+      expect(Math.hypot(x - v.position.x, z - v.position.z)).toBeLessThan(v.def.length);
+    }
   });
 });
 
 describe('the wrench takes parts off by hand', () => {
-  it('hold A over a fitted engine: it comes off the car and into your arms', () => {
+  it('hold A over a fitted engine: the bonnet comes up first, then the engine comes off into your arms', () => {
     const { h, sc } = leg();
-    const v = ownCar(sc);
+    const v = ownCar(sc, 'sedan');
     const p = sc.players[0];
     installPart(v.build!, newPart('eng_v6', 0.8));
     v.syncFromBuild();
     p.equip = 'wrench';
-    standAt(sc, v, 'engine');
+    standAt(sc, v, 'hood');
     run(sc, 0.2);
+    // The bonnet is shut: the first step is to open it.
+    expect(p.prompt?.text).toMatch(/Open the bonnet/);
+    hold(h, sc, 0, Btn.A, 4);
+    expect(v.build!.fit.engine?.id).toBe('eng_v6');
+    hold(h, sc, 0, Btn.A, 1);
+    expect(v.open.hood).toBe(true);
+    run(sc, 1);
+    expect(v.swing.hood).toBeGreaterThan(0.95);
     expect(p.prompt?.text).toMatch(/Unbolt Tuned V6/);
     // Not yet: the hold has to be seen through.
     hold(h, sc, 0, Btn.A, 1);
@@ -155,14 +140,14 @@ describe('the wrench takes parts off by hand', () => {
     expect(p.carry).toBeNull();
   });
 
-  it('tyres come off all four wheels as one set', () => {
+  it('tyres come off all four wheels as one set, standing at one wheel', () => {
     const { h, sc } = leg();
     const v = ownCar(sc);
     const p = sc.players[0];
     installPart(v.build!, newPart('whl_mt', 1));
     v.syncFromBuild();
     p.equip = 'wrench';
-    standAt(sc, v, 'wheels', 1);
+    standAt(sc, v, 'wheel', 1);
     hold(h, sc, 0, Btn.A, 4);
     expect(v.build!.fit.wheels).toBeUndefined();
     expect(p.carry).toMatchObject({ kind: 'part' });
@@ -175,7 +160,7 @@ describe('the wrench takes parts off by hand', () => {
     p.carry = { kind: 'part', item: newPart('rr_box') };
     standAt(sc, v, 'front');
     run(sc, 0.1);
-    expect(p.prompt?.text).toMatch(/to the rear/i);
+    expect(p.prompt?.text).toMatch(/Go to the rear mount/i);
     hold(h, sc, 0, Btn.A, 4);
     expect(p.carry).not.toBeNull();
     expect(v.build!.fit.rear).toBeUndefined();
@@ -185,58 +170,88 @@ describe('the wrench takes parts off by hand', () => {
     expect(v.build!.fit.rear?.id).toBe('rr_box');
   });
 
-  it('swapping an engine in the field: off, then the new one on, each at the engine bay', () => {
+  it('swapping an engine in the field: open, off, stow in the boot, the new one on, shut', () => {
     const { h, sc, c } = leg();
     const v = ownCar(sc);
     const p = sc.players[0];
     installPart(v.build!, newPart('eng_i4', 0.7));
     v.syncFromBuild();
     p.equip = 'wrench';
-    standAt(sc, v, 'engine');
+    openPanel(v, 'hood');
+    standAt(sc, v, 'hood');
     hold(h, sc, 0, Btn.A, 5);
     expect(p.carry).toMatchObject({ kind: 'part' });
-    // Set the old one on the deck, pick up a better one and fit it.
+    // Walk it to the boot, lift the lid, and stow it.
+    standAt(sc, v, 'trunk');
+    tap(h, sc, 0, Btn.X);
+    expect(p.carry).not.toBeNull();
+    openPanel(v, 'trunk');
     tap(h, sc, 0, Btn.X);
     expect(p.carry).toBeNull();
     expect(c.inventory.map((i) => i.id)).toEqual(['eng_i4']);
+    // Fetch a better one, and fit it at the engine bay.
+    p.equip = 'gun';
     p.carry = { kind: 'part', item: newPart('eng_v8', 1) };
-    standAt(sc, v, 'engine');
+    standAt(sc, v, 'hood');
     hold(h, sc, 0, Btn.A, 5);
     expect(v.build!.fit.engine?.id).toBe('eng_v8');
+    // Hands free again: hold A at the bonnet to shut it.
+    hold(h, sc, 0, Btn.A, 1);
+    expect(v.open.hood).toBeFalsy();
   });
 });
 
-describe('the deck', () => {
-  it('a part stowed on a car rides on that car, in view, and is lifted off by hand', () => {
+describe('the boot', () => {
+  it('a part stowed on a car rides on that car, and comes out again with X at an open boot', () => {
     const { h, sc, c } = leg();
     const v = ownCar(sc);
     const p = sc.players[0];
     p.carry = { kind: 'part', item: newPart('whl_bl', 0.8) };
+    openPanel(v, 'trunk');
+    standAt(sc, v, 'trunk');
     tap(h, sc, 0, Btn.X);
     expect(p.carry).toBeNull();
     expect(c.inventory[0].on).toBe(v.build!.uid);
     run(sc, 1);
     const spots = v.deckSpots();
     expect(spots.filter((s) => s.kind === 'part').map((s) => s.id)).toEqual(['whl_bl']);
-    // Stand at the spare and take it back.
-    const at = spots.find((s) => s.kind === 'part')!.world;
-    const out = new THREE.Vector3(at.x - v.position.x, 0, at.z - v.position.z);
-    out.y = 0;
-    out.normalize();
-    p.placeAt(at.x + out.x * 0.7, at.z + out.z * 0.7, Math.atan2(-out.x, -out.z));
+    // At the boot, hands empty: the prompt offers to take it out, and X does.
+    standAt(sc, v, 'trunk');
     run(sc, 0.2);
-    expect(p.prompt?.text).toMatch(/Take .* off the/);
-    hold(h, sc, 0, Btn.A, 1.5);
+    expect(p.promptAlt?.text).toMatch(/Take .* out of the/);
+    tap(h, sc, 0, Btn.X);
     expect(p.carry).toMatchObject({ kind: 'part' });
     expect(c.inventory.length).toBe(0);
     run(sc, 1);
     expect(v.deckSpots().filter((s) => s.kind === 'part').length).toBe(0);
   });
 
+  it('a shut boot keeps the part in your arms and tells you to open it', () => {
+    const { h, sc, c } = leg();
+    const v = ownCar(sc);
+    const p = sc.players[0];
+    p.carry = { kind: 'part', item: newPart('whl_bl', 0.8) };
+    standAt(sc, v, 'trunk');
+    run(sc, 0.2);
+    expect(p.prompt?.text).toMatch(/Open the boot|Open the tailgate/);
+    tap(h, sc, 0, Btn.X);
+    expect(p.carry).not.toBeNull();
+    expect(c.inventory.length).toBe(0);
+    expect(p.notes.some((n) => /Open the (boot|tailgate)/.test(n.text))).toBe(true);
+    // Hold A: the lid opens with the part still in your arms, then X puts it in.
+    hold(h, sc, 0, Btn.A, 1);
+    expect(v.open.trunk).toBe(true);
+    tap(h, sc, 0, Btn.X);
+    expect(p.carry).toBeNull();
+    expect(c.inventory.length).toBe(1);
+  });
+
   it('spares stowed on the first car do not jump to the second when one is taken off', () => {
     const { h, sc, c } = leg();
     const v = ownCar(sc);
     const p = sc.players[0];
+    openPanel(v, 'trunk');
+    standAt(sc, v, 'trunk');
     for (const id of ['arm_sheet', 'whl_mt']) {
       p.carry = { kind: 'part', item: newPart(id, 1) };
       tap(h, sc, 0, Btn.X);

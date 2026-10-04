@@ -7,7 +7,7 @@ import { installPart, newBuild } from '../src/sim/garage';
 import { newPart } from '../src/sim/parts';
 import { OIL_CAN } from '../src/sim/oil';
 import { FUEL_CAN } from '../src/sim/carry';
-import { mountsOf } from '../src/game/carwork';
+import { openPanel, standAt } from './helpers/access';
 import { fakeServices } from './helpers/sim';
 import type { Vehicle } from '../src/game/vehicle';
 
@@ -137,10 +137,11 @@ describe('carrying parts, fuel and oil by hand', () => {
     const p = sc.players[0];
     p.carry = { kind: 'part', item: newPart('eng_v6', 0.9) };
     expect(c.inventory.length).toBe(0);
-    // A part goes on at its own mount: carry it round to the engine bay first.
-    v.syncVisual(1, DT);
-    const bay = mountsOf(v, p.pos).find((m) => m.slot === 'engine')!;
-    p.placeAt(bay.pos.x + Math.sin(v.yaw) * 0.7, bay.pos.z + Math.cos(v.yaw) * 0.7, v.yaw + Math.PI);
+    // A part goes on at its own mount: carry it round to the engine bay first, and lift the bonnet.
+    standAt(sc, v, 'hood');
+    run(sc, 0.2);
+    expect(p.prompt?.text).toMatch(/Open the bonnet/);
+    openPanel(v, 'hood');
     hold(h, sc, 0, Btn.A, 5);
     expect(p.carry).toBeNull();
     expect(v.build!.fit.engine?.id).toBe('eng_v6');
@@ -166,9 +167,11 @@ describe('carrying parts, fuel and oil by hand', () => {
 
   it('X at your car stows it for later; a full trunk refuses', () => {
     const { h, sc, c } = leg();
-    ownCar(sc);
+    const v = ownCar(sc, 'sedan');
     const p = sc.players[0];
     p.carry = { kind: 'part', item: newPart('whl_mt', 0.8) };
+    openPanel(v, 'trunk');
+    standAt(sc, v, 'trunk');
     tap(h, sc, 0, Btn.X);
     expect(p.carry).toBeNull();
     expect(c.inventory.map((it) => it.id)).toEqual(['whl_mt']);
@@ -202,6 +205,7 @@ describe('carrying parts, fuel and oil by hand', () => {
     const p = sc.players[0];
     v.fuel = v.tankMax - 3;
     p.carry = { kind: 'fuel', amount: FUEL_CAN };
+    standAt(sc, v, 'flap');
     hold(h, sc, 0, Btn.A, 3.5);
     expect(v.fuel).toBeCloseTo(v.tankMax, 1);
     expect(p.carry).toMatchObject({ kind: 'fuel' });
@@ -218,11 +222,14 @@ describe('carrying parts, fuel and oil by hand', () => {
     const p = sc.players[0];
     c.stocks.fuel = 0;
     p.carry = { kind: 'fuel', amount: FUEL_CAN };
+    openPanel(v, 'trunk');
+    standAt(sc, v, 'trunk');
     tap(h, sc, 0, Btn.X);
     expect(p.carry).toBeNull();
     expect(c.stocks.fuel).toBeCloseTo(FUEL_CAN, 5);
     v.fuel = 1;
     p.equip = 'jerrycan';
+    standAt(sc, v, 'flap');
     hold(h, sc, 0, Btn.A, 5);
     expect(v.fuel).toBeCloseTo(6, 1);
     expect(c.stocks.fuel).toBeCloseTo(0, 1);
@@ -236,17 +243,22 @@ describe('carrying parts, fuel and oil by hand', () => {
     const std = v.stats.sumpL / 3;
     v.health.comp.oil = 0.1;
     p.carry = { kind: 'oil', amount: OIL_CAN };
+    openPanel(v, 'hood');
+    standAt(sc, v, 'hood');
     hold(h, sc, 0, Btn.A, 3);
     expect(v.health.comp.oil).toBeCloseTo(Math.min(1, 0.1 + OIL_CAN / std), 2);
     expect(p.carry === null || p.carry.kind === 'oil').toBe(true);
     // Stow another can, then use the jerrycan tool to pour it in.
     p.carry = { kind: 'oil', amount: OIL_CAN };
     c.items.oil = 0;
+    openPanel(v, 'trunk');
+    standAt(sc, v, 'trunk');
     tap(h, sc, 0, Btn.X);
     expect(c.items.oil).toBeCloseTo(OIL_CAN, 5);
     p.carry = null;
     v.health.comp.oil = 0.15;
     p.equip = 'jerrycan';
+    standAt(sc, v, 'hood');
     hold(h, sc, 0, Btn.A, 3);
     expect(v.health.comp.oil).toBeCloseTo(Math.min(1, 0.15 + OIL_CAN / std), 2);
   });
@@ -268,11 +280,13 @@ describe('carrying parts, fuel and oil by hand', () => {
     expect(p.notes.some((n) => /Hands full/.test(n.text))).toBe(true);
   });
 
-  it('climbing into a car with full hands stows the load, or sets it down if there is no room', () => {
+  it('climbing into a car with full hands stows the load at an open boot, or sets it down if there is no room or no way in', () => {
     const { sc, c } = leg();
     const v = ownCar(sc);
     const p = sc.players[0];
     p.carry = { kind: 'part', item: newPart('whl_mt') };
+    openPanel(v, 'trunk');
+    standAt(sc, v, 'trunk');
     expect(p.tryEnter()).toBe(true);
     expect(p.carry).toBeNull();
     expect(c.inventory.map((it) => it.id)).toEqual(['whl_mt']);
@@ -280,11 +294,22 @@ describe('carrying parts, fuel and oil by hand', () => {
     p.exitVehicle(false);
     const d = v.doorPos(1);
     p.placeAt(d[0], d[2], v.yaw);
+    openPanel(v, 'trunk');
+    standAt(sc, v, 'trunk');
     while (c.inventory.length < c.inventoryCap) c.inventory.push(newPart('arm_sheet'));
     p.carry = { kind: 'part', item: newPart('whl_bl') };
     expect(p.tryEnter()).toBe(true);
     expect(p.carry).toBeNull();
-    expect(sc.loose!.nearest(d[0], d[2], 4)?.carried.kind).toBe('part'); // left beside the car
+    expect(sc.loose!.nearest(p.pos.x, p.pos.z, 4)?.carried.kind).toBe('part'); // left beside the car
+    // And with the boot shut there is nowhere to stow it at all.
+    run(sc, 1);
+    p.exitVehicle(false);
+    openPanel(v, 'trunk', false);
+    standAt(sc, v, 'trunk');
+    c.inventory.length = 0;
+    p.carry = { kind: 'part', item: newPart('whl_mt') };
+    expect(p.tryEnter()).toBe(true);
+    expect(c.inventory.length).toBe(0);
   });
 
   it('going down drops what you carry', () => {
@@ -326,30 +351,30 @@ describe('driving over loose things', () => {
 });
 
 describe('goods are taken by hand', () => {
-  it('holding A on foot takes the scrap and banks it', () => {
+  it('holding A on foot takes the ration tins and banks them', () => {
     const { h, sc, c } = leg();
     const v = ownCar(sc);
     const p = sc.players[0];
     p.placeAt(v.position.x + 12, v.position.z, 0);
-    const before = c.stocks.scrap;
-    (sc as unknown as { spawnPickup(s: object): void }).spawnPickup({ id: 'handscrap', kind: 'scrap', amount: 9, x: p.pos.x + 0.5, z: p.pos.z, y: p.pos.y });
+    const before = c.stocks.rations;
+    (sc as unknown as { spawnPickup(s: object): void }).spawnPickup({ id: 'handtins', kind: 'rations', amount: 2, x: p.pos.x + 0.5, z: p.pos.z, y: p.pos.y });
     run(sc, 1);
-    expect(c.stocks.scrap).toBe(before);
+    expect(c.stocks.rations).toBe(before);
     hold(h, sc, 0, Btn.A, 1);
-    expect(c.stocks.scrap).toBe(before + 9);
+    expect(c.stocks.rations).toBe(before + 2);
   });
 
-  it('scrap lying under the player stays put until it is taken', () => {
+  it('tins lying under the player stay put until they are taken', () => {
     const { sc, c } = leg();
     const p = sc.players[0];
-    const before = c.stocks.scrap;
-    const spawn = { id: 'testscrap', kind: 'scrap' as const, amount: 12, x: p.pos.x, z: p.pos.z, y: p.pos.y };
+    const before = c.stocks.rations;
+    const spawn = { id: 'testtins', kind: 'rations' as const, amount: 3, x: p.pos.x, z: p.pos.z, y: p.pos.y };
     (sc as unknown as { spawnPickup(s: typeof spawn): void }).spawnPickup(spawn);
     run(sc, 0.5);
-    expect(c.stocks.scrap).toBe(before);
-    expect(sc.loose!.nearestGoods(p.pos.x, p.pos.z, 3)?.label).toMatch(/Scrap/);
-    expect(sc.loose!.takeGoods('testscrap', p)).toBe(true);
-    expect(c.stocks.scrap).toBe(before + 12);
+    expect(c.stocks.rations).toBe(before);
+    expect(sc.loose!.nearestGoods(p.pos.x, p.pos.z, 3)?.label).toMatch(/Ration tins/);
+    expect(sc.loose!.takeGoods('testtins', p)).toBe(true);
+    expect(c.stocks.rations).toBe(before + 3);
     expect(sc.loose!.nearestGoods(p.pos.x, p.pos.z, 3)).toBeNull();
   });
 });

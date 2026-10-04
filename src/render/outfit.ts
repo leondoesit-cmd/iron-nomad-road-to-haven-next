@@ -206,13 +206,17 @@ export function drawFace(b: MeshBuilder, p: Piece<FaceStyle>, fallback: number) 
   }
 }
 
-/** The neck: a scarf and its tail for a bandana, a hose for a gas mask, nothing for the rest. */
-export function drawNeck(b: MeshBuilder, p: Piece<FaceStyle>, fallback: number) {
+/**
+ * The neck: a scarf and its tail for a bandana, a hose for a gas mask, nothing for the rest. A `lowered` bandana has been
+ * pulled down off the face and hangs in a point over the collar.
+ */
+export function drawNeck(b: MeshBuilder, p: Piece<FaceStyle>, fallback: number, lowered = false) {
   const c = p.c ?? fallback;
   if (p.style === 'bandana') {
     const scarf = S.cloth(c, 0.45);
     b.torus(0, 0.52, 0.01, 0.075, 0.035, scarf, Math.PI / 2, 0, 0, 8, 16);
     b.box(0.05, 0.43, -0.09, 0.07, 0.16, 0.02, scarf, 0.2, 0, 0.1);
+    if (lowered) b.add('cone6', 0, 0.46, 0.08, 0.15, 0.11, 0.04, scarf, Math.PI - 0.32, 0, 0);
   } else if (p.style === 'gasmask') {
     b.pipe(
       [
@@ -230,8 +234,8 @@ export function drawNeck(b: MeshBuilder, p: Piece<FaceStyle>, fallback: number) 
 
 // ------------------------------------------------------------------------------------------- body
 
-/** Sleeve colour for a body style, so the arms match the torso. */
-export function sleeveColor(p: Piece<BodyStyle>, fallback: number): number {
+/** Sleeve colour for a body style, so the arms match the torso. `own` is what a hero wears under the kit. */
+export function sleeveColor(p: Piece<BodyStyle>, fallback: number, own?: number): number {
   switch (p.style) {
     case 'jacket':
       return p.c ?? fallback;
@@ -239,14 +243,25 @@ export function sleeveColor(p: Piece<BodyStyle>, fallback: number): number {
     case 'plate':
       return p.c2 ?? 0x4a4636;
     case 'shirt':
-      return 0x6a6a60;
+      return own ?? 0x6a6a60;
     default:
       return p.c ?? fallback;
   }
 }
 
+/** A hero's own clothes, worn when nothing covers the body: a T-shirt, and a knit cardigan over it when they have one. */
+export interface OwnClothes {
+  shirt: number;
+  over?: number;
+}
+
+/** True when the arms come out of short sleeves: a hero in just a T-shirt. */
+export function shortSleeves(p: Piece<BodyStyle>, own?: OwnClothes): boolean {
+  return p.style === 'shirt' && !!own && own.over === undefined;
+}
+
 /** Torso covering: the garment itself, without the neck, the pack or the arms. */
-export function drawBody(b: MeshBuilder, p: Piece<BodyStyle>, fallback: number, trim: number) {
+export function drawBody(b: MeshBuilder, p: Piece<BodyStyle>, fallback: number, trim: number, own?: OwnClothes) {
   const c = p.c ?? fallback;
   const leather = S.leather(0x3b2a1e, 0.5);
   const buckle = S.metal(0x8a8478, 0.4);
@@ -271,7 +286,14 @@ export function drawBody(b: MeshBuilder, p: Piece<BodyStyle>, fallback: number, 
       break;
     }
     case 'shirt':
-      body(0x6a6a60);
+      if (own?.over !== undefined) {
+        // A chunky knit cardigan, zipped, its ribs running down the front; the T-shirt shows in the V at the neck.
+        body(own.over);
+        const rib = S.cloth(new THREE.Color(own.over).multiplyScalar(1.35).getHex(), 0.6);
+        for (const sx of [-1, 1]) for (const x of [0.045, 0.1, 0.15]) b.box(sx * x, 0.27, 0.121, 0.012, 0.34, 0.008, rib);
+        b.add('cone6', 0, 0.44, 0.115, 0.11, 0.13, 0.014, S.cloth(own.shirt, 0.5), Math.PI, 0, 0);
+        b.box(0, 0.24, 0.123, 0.008, 0.3, 0.006, S.metal(0x2a2a2a, 0.4));
+      } else body(own?.shirt ?? 0x6a6a60);
       break;
     case 'vest': {
       body(p.c2 ?? 0x4a4636);
@@ -333,8 +355,13 @@ export function drawHips(b: MeshBuilder, body: Piece<BodyStyle>, fallback: numbe
   }
 }
 
-/** Upper-arm cover: the sleeve plus whatever armour sits on it. */
-export function drawUpperArm(b: MeshBuilder, body: Piece<BodyStyle>, sleeve: Surf) {
+/** Upper-arm cover: the sleeve plus whatever armour sits on it. A short sleeve (`skin` given) stops halfway down. */
+export function drawUpperArm(b: MeshBuilder, body: Piece<BodyStyle>, sleeve: Surf, skin?: Surf) {
+  if (skin) {
+    b.limb(0, -0.02, 0, 0, -0.27, 0, 0.062, 0.052, skin, 10);
+    b.limb(0, -0.02, 0, 0, -0.13, 0, 0.069, 0.064, sleeve, 10);
+    return;
+  }
   b.limb(0, -0.02, 0, 0, -0.27, 0, 0.065, 0.054, sleeve, 10);
   if (body.style === 'riot') b.rbox(0, -0.15, 0, 0.13, 0.17, 0.13, 0.04, S.plastic(body.c ?? 0x262b30, 0.4));
 }
@@ -387,12 +414,13 @@ export function drawPack(b: MeshBuilder, p: Piece<PackStyle>) {
 
 // ------------------------------------------------------------------------------------------- hands
 
-export function drawHand(b: MeshBuilder, p: Piece<HandStyle>, sleeve: Surf, skin: Surf) {
+/** Forearm and hand. A `bare` forearm comes out of a short sleeve: skin to the wrist and no cuff. */
+export function drawHand(b: MeshBuilder, p: Piece<HandStyle>, sleeve: Surf, skin: Surf, bare = false) {
   const c = p.c ?? 0x2b2622;
   const glove = S.leather(c, 0.4);
   // The cuff of the sleeve and the forearm are the same for every glove.
-  b.limb(0, 0, 0, 0, -0.2, 0, 0.052, 0.044, sleeve, 10);
-  b.torus(0, -0.2, 0, 0.045, 0.014, sleeve, Math.PI / 2, 0, 0, 6, 12);
+  b.limb(0, 0, 0, 0, -0.2, 0, 0.052, 0.044, bare ? skin : sleeve, 10);
+  if (!bare) b.torus(0, -0.2, 0, 0.045, 0.014, sleeve, Math.PI / 2, 0, 0, 6, 12);
   switch (p.style) {
     case 'work':
       b.rbox(0, -0.27, 0.005, 0.07, 0.11, 0.05, 0.02, glove);

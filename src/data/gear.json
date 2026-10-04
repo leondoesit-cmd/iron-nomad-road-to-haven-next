@@ -206,32 +206,103 @@
     {
       "id": "w_pistol", "name": "9mm Pistol", "kind": "gun", "short": "9MM", "rarity": 1, "weight": 3, "scrap": 6, "starter": true,
       "blurb": "Twelve rounds and a bad attitude. Keeps up with whatever you throw at it.",
-      "gun": { "dmg": 27, "cd": 0.2, "mag": 12, "reload": 1.3, "spread": 0.03, "adsSpread": 0.008, "range": 75, "noise": 60, "model": "pistol", "sound": "pistol" }
+      "gun": { "dmg": 27, "cd": 0.2, "mag": 12, "reload": 1.3, "spread": 0.03, "adsSpread": 0.008, "range": 75, "noise": 60, "model": "pistol", "sound": "pistol", "slots": {"optic": ["pdot"], "muzzle": ["sup_h", "comp"], "barrel": ["bar_h"], "mag": ["mag_h"], "stock": ["stock_p"], "rail": ["rail"]} }
     },
     {
       "id": "w_revolver", "name": ".38 Revolver", "kind": "gun", "short": ".38", "rarity": 2, "weight": 5, "scrap": 10, "tags": ["waste", "raider"],
       "blurb": "Six slow, heavy rounds. One in the chest settles most arguments, and it punches through plate.",
-      "gun": { "dmg": 55, "cd": 0.52, "mag": 6, "reload": 2.2, "spread": 0.028, "adsSpread": 0.004, "range": 90, "noise": 72, "pierce": 0.3, "model": "revolver", "sound": "pistol" }
+      "gun": { "dmg": 55, "cd": 0.52, "mag": 6, "reload": 2.2, "spread": 0.028, "adsSpread": 0.004, "range": 90, "noise": 72, "pierce": 0.3, "model": "revolver", "sound": "pistol", "slots": {"optic": ["pdot"], "muzzle": ["comp"], "barrel": ["bar_h"], "mag": ["loader"], "rail": ["rail"]} }
     },
     {
       "id": "w_smg", "name": "Scrap SMG", "kind": "gun", "short": "SMG", "rarity": 2, "weight": 4, "scrap": 12, "tags": ["raider", "city"],
       "blurb": "Welded together from three other guns. Thirty rounds of noise, close in.",
-      "gun": { "dmg": 14, "cd": 0.085, "mag": 30, "reload": 1.9, "spread": 0.055, "adsSpread": 0.026, "range": 55, "noise": 64, "model": "smg", "sound": "mg" }
+      "gun": { "dmg": 14, "cd": 0.085, "mag": 30, "reload": 1.9, "spread": 0.055, "adsSpread": 0.026, "range": 55, "noise": 64, "model": "smg", "sound": "mg", "slots": {"optic": ["dot", "pdot"], "muzzle": ["sup_h", "comp"], "barrel": ["bar_c"], "under": ["grip"], "mag": ["mag_s"], "stock": ["stock_l"], "rail": ["rail"]} }
     },
     {
       "id": "w_sawn", "name": "Sawn-Off Shotgun", "kind": "gun", "short": "SAWN", "rarity": 2, "weight": 4, "scrap": 10, "tags": ["waste", "raider"],
       "blurb": "Two barrels and no manners. Devastating at arm's length, useless past a hallway.",
-      "gun": { "dmg": 9, "cd": 0.7, "mag": 2, "reload": 2.2, "spread": 0.085, "adsSpread": 0.06, "pellets": 8, "range": 24, "noise": 84, "model": "sawn", "sound": "shotgun" }
+      "gun": { "dmg": 9, "cd": 0.7, "mag": 2, "reload": 2.2, "spread": 0.085, "adsSpread": 0.06, "pellets": 8, "range": 24, "noise": 84, "model": "sawn", "sound": "shotgun", "slots": {"muzzle": ["choke"], "barrel": ["bar_g"], "mag": ["saddle"], "stock": ["butt"], "rail": ["rail"]} }
     },
     {
       "id": "w_pump", "name": "Pump Shotgun", "kind": "gun", "short": "PUMP", "rarity": 3, "weight": 2, "scrap": 18, "tags": ["vault", "raider"],
       "blurb": "Six shells and a proper stock. The sound alone clears a street.",
-      "gun": { "dmg": 10, "cd": 0.85, "mag": 6, "reload": 3.0, "spread": 0.06, "adsSpread": 0.035, "pellets": 8, "range": 32, "noise": 88, "model": "pump", "sound": "shotgun" }
+      "gun": { "dmg": 10, "cd": 0.85, "mag": 6, "reload": 3.0, "spread": 0.06, "adsSpread": 0.035, "pellets": 8, "range": 32, "noise": 88, "model": "pump", "sound": "shotgun", "slots": {"optic": ["dot"], "muzzle": ["choke"], "barrel": ["bar_g"], "under": ["grip"], "mag": ["tube", "saddle"], "stock": ["butt"], "rail": ["rail"]} }
     },
     {
       "id": "w_rifle", "name": "Hunting Rifle", "kind": "gun", "short": "RIFLE", "rarity": 3, "weight": 2, "scrap": 20, "tags": ["waste", "vault"],
       "blurb": "Bolt action and a worn scope. Reaches far, goes through armour, and the whole county hears it.",
-      "gun": { "dmg": 80, "cd": 0.9, "mag": 5, "reload": 2.6, "spread": 0.012, "adsSpread": 0.002, "range": 110, "noise": 90, "pierce": 0.5, "model": "rifle", "sound": "sniper" }
+      "gun": { "dmg": 80, "cd": 0.9, "mag": 5, "reload": 2.6, "spread": 0.012, "adsSpread": 0.002, "range": 110, "noise": 90, "pierce": 0.5, "model": "rifle", "sound": "sniper", "zoom": 1.4, "slots": {"optic": ["dot", "scope", "long"], "muzzle": ["sup_r", "brake"], "barrel": ["bar_r"], "under": ["bipod"], "mag": ["mag_b"], "stock": ["butt"], "rail": ["rail"]} }
+    },
+
+    {
+      "id": "w_compact", "name": "Compact 9mm", "kind": "gun", "short": "COMP", "rarity": 1, "weight": 5, "scrap": 4, "tags": ["city"],
+      "blurb": "Pocket-sized and quick to draw. Ten rounds, a short barrel, and not much reach.",
+      "gun": {"dmg": 21, "cd": 0.16, "mag": 10, "reload": 1.1, "spread": 0.038, "adsSpread": 0.012, "range": 55, "noise": 52, "model": "compact", "sound": "pistol", "slots": {"optic": ["pdot"], "muzzle": ["sup_h", "comp"], "mag": ["mag_h"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_cannon", "name": ".44 Hand Cannon", "kind": "gun", "short": "CANNON", "rarity": 3, "weight": 2, "scrap": 18, "tags": ["vault", "raider"],
+      "blurb": "Six rounds the size of your thumb. The recoil lifts your arm, the report lifts the neighbourhood.",
+      "gun": {"dmg": 80, "cd": 0.75, "mag": 6, "reload": 2.6, "spread": 0.03, "adsSpread": 0.005, "range": 85, "noise": 84, "pierce": 0.45, "model": "cannon", "sound": "pistol", "slots": {"optic": ["pdot", "dot"], "muzzle": ["comp"], "barrel": ["bar_h"], "mag": ["loader"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_mp", "name": "Machine Pistol", "kind": "gun", "short": "MPIST", "rarity": 2, "weight": 4, "scrap": 10, "tags": ["raider", "city"],
+      "blurb": "A pistol that forgot how to stop. Twenty rounds gone in a second and a half.",
+      "gun": {"dmg": 12, "cd": 0.06, "mag": 20, "reload": 1.6, "spread": 0.07, "adsSpread": 0.04, "range": 40, "noise": 62, "model": "mp", "sound": "mg", "slots": {"optic": ["pdot"], "muzzle": ["sup_h", "comp"], "mag": ["mag_s"], "stock": ["stock_p"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_smg2", "name": "Police SMG", "kind": "gun", "short": "PSMG", "rarity": 2, "weight": 3, "scrap": 13, "tags": ["city", "vault"],
+      "blurb": "Factory-made, folding stock, a clean rail. Steadier than the scrap one and still happy in a corridor.",
+      "gun": {"dmg": 16, "cd": 0.09, "mag": 32, "reload": 1.8, "spread": 0.045, "adsSpread": 0.02, "range": 60, "noise": 62, "model": "smg2", "sound": "mg", "slots": {"optic": ["dot", "pdot"], "muzzle": ["sup_h", "comp"], "barrel": ["bar_c"], "under": ["grip"], "mag": ["mag_s"], "stock": ["stock_l"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_carbine", "name": "Scrap Carbine", "kind": "gun", "short": "CARB", "rarity": 2, "weight": 4, "scrap": 14, "tags": ["raider", "waste"],
+      "blurb": "A hunting action rebuilt around a banana magazine. Not elegant, but it reaches out and hits.",
+      "gun": {"dmg": 26, "cd": 0.12, "mag": 20, "reload": 2.0, "spread": 0.04, "adsSpread": 0.01, "range": 85, "noise": 80, "pierce": 0.2, "model": "carbine", "sound": "mg", "slots": {"optic": ["dot", "scope"], "muzzle": ["sup_r", "brake"], "barrel": ["bar_c"], "under": ["grip"], "mag": ["mag_r"], "stock": ["stock_l"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_ar", "name": "Assault Rifle", "kind": "gun", "short": "AR", "rarity": 3, "weight": 2, "scrap": 22, "tags": ["vault", "raider"],
+      "blurb": "Thirty rounds, a long rail and a pedigree. The standard answer to most things.",
+      "gun": {"dmg": 32, "cd": 0.09, "mag": 30, "reload": 2.3, "spread": 0.045, "adsSpread": 0.012, "range": 100, "noise": 84, "pierce": 0.3, "model": "ar", "sound": "mg", "slots": {"optic": ["dot", "scope"], "muzzle": ["sup_r", "brake"], "barrel": ["bar_r"], "under": ["grip", "bipod"], "mag": ["mag_r"], "stock": ["stock_l"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_br", "name": "Battle Rifle", "kind": "gun", "short": "BATTLE", "rarity": 3, "weight": 2, "scrap": 22, "tags": ["vault"],
+      "blurb": "Heavier round, heavier hit. Twenty rounds you will want to place, not spray.",
+      "gun": {"dmg": 55, "cd": 0.22, "mag": 20, "reload": 2.6, "spread": 0.035, "adsSpread": 0.006, "range": 115, "noise": 88, "pierce": 0.5, "model": "br", "sound": "mg", "slots": {"optic": ["dot", "scope"], "muzzle": ["sup_r", "brake"], "barrel": ["bar_r"], "under": ["grip", "bipod"], "mag": ["mag_r"], "stock": ["stock_l", "butt"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_dmr", "name": "Marksman Rifle", "kind": "gun", "short": "DMR", "rarity": 3, "weight": 1.5, "scrap": 24, "tags": ["vault"],
+      "blurb": "Semi-automatic and accurate to the horizon. Built for a scope, and the scope is half the point.",
+      "gun": {"dmg": 68, "cd": 0.4, "mag": 10, "reload": 2.5, "spread": 0.02, "adsSpread": 0.003, "range": 130, "noise": 88, "pierce": 0.55, "model": "dmr", "sound": "sniper", "slots": {"optic": ["dot", "scope", "long"], "muzzle": ["sup_r", "brake"], "barrel": ["bar_r"], "under": ["bipod", "grip"], "mag": ["mag_r"], "stock": ["stock_l", "butt"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_sniper", "name": "Bolt Sniper", "kind": "gun", "short": "SNIPER", "rarity": 3, "weight": 1, "scrap": 30, "tags": ["vault"],
+      "blurb": "A long bolt action in a heavy chassis. One round, one problem solved, a mile of echo.",
+      "gun": {"dmg": 130, "cd": 1.25, "mag": 5, "reload": 3.2, "spread": 0.015, "adsSpread": 0.0012, "range": 160, "noise": 94, "pierce": 0.8, "model": "sniper", "sound": "sniper", "slots": {"optic": ["scope", "long"], "muzzle": ["sup_r", "brake"], "barrel": ["bar_r"], "under": ["bipod"], "mag": ["mag_b"], "stock": ["butt"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_lever", "name": "Lever-Action Rifle", "kind": "gun", "short": "LEVER", "rarity": 2, "weight": 3, "scrap": 14, "tags": ["waste"],
+      "blurb": "Eight rounds under the barrel and a brass receiver gone dark. Old, quick to cycle, fine at a hundred paces.",
+      "gun": {"dmg": 50, "cd": 0.5, "mag": 8, "reload": 3.2, "spread": 0.02, "adsSpread": 0.004, "range": 95, "noise": 82, "pierce": 0.25, "model": "lever", "sound": "sniper", "slots": {"optic": ["dot", "scope"], "muzzle": ["sup_r", "brake"], "barrel": ["bar_r"], "mag": ["tube"], "stock": ["butt"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_crossbow", "name": "Crossbow", "kind": "gun", "short": "XBOW", "rarity": 2, "weight": 3, "scrap": 12, "tags": ["waste"],
+      "blurb": "A bolt, a crank and almost no sound. Slow to reload and the bolt drops, but nothing hears it coming.",
+      "gun": {"dmg": 70, "cd": 1.1, "mag": 1, "reload": 2.3, "spread": 0.012, "adsSpread": 0.002, "range": 70, "noise": 6, "pierce": 0.3, "model": "crossbow", "sound": "bolt", "slots": {"optic": ["dot", "scope"], "barrel": ["bar_x"], "mag": ["mag_x"], "under": ["grip"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_combat", "name": "Combat Shotgun", "kind": "gun", "short": "CMBT", "rarity": 3, "weight": 2, "scrap": 20, "tags": ["vault", "city"],
+      "blurb": "Eight shells and a self-loading action. A hallway stops being a problem and starts being a crowd.",
+      "gun": {"dmg": 9, "cd": 0.32, "mag": 8, "reload": 3.4, "spread": 0.065, "adsSpread": 0.04, "pellets": 8, "range": 30, "noise": 88, "model": "combat", "sound": "shotgun", "slots": {"optic": ["dot"], "muzzle": ["choke"], "barrel": ["bar_g"], "under": ["grip"], "mag": ["tube", "saddle"], "stock": ["butt"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_coach", "name": "Coach Gun", "kind": "gun", "short": "COACH", "rarity": 2, "weight": 3, "scrap": 12, "tags": ["waste"],
+      "blurb": "Long double barrels and a hammer-fall you can hear in the next county. Tighter than a sawn-off, two shots only.",
+      "gun": {"dmg": 11, "cd": 0.75, "mag": 2, "reload": 2.0, "spread": 0.05, "adsSpread": 0.03, "pellets": 9, "range": 34, "noise": 86, "model": "coach", "sound": "shotgun", "slots": {"muzzle": ["choke"], "barrel": ["bar_g"], "mag": ["saddle"], "stock": ["butt"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_lmg", "name": "Light Machine Gun", "kind": "gun", "short": "LMG", "rarity": 3, "weight": 1, "scrap": 28, "tags": ["vault"],
+      "blurb": "A belt in a box. Seventy-five rounds, a long reload and a lot of suppression.",
+      "gun": {"dmg": 24, "cd": 0.075, "mag": 75, "reload": 4.8, "spread": 0.06, "adsSpread": 0.028, "range": 90, "noise": 86, "pierce": 0.25, "model": "lmg", "sound": "mg", "slots": {"optic": ["dot", "scope"], "muzzle": ["sup_r", "brake"], "barrel": ["bar_r"], "under": ["bipod", "grip"], "mag": ["mag_r"], "stock": ["stock_l", "butt"], "rail": ["rail"]}}
     },
 
     {
@@ -256,6 +327,22 @@
     },
 
     {
+      "id": "m_pipe", "name": "Lead Pipe", "kind": "melee", "short": "PIPE", "rarity": 1, "weight": 7, "scrap": 3, "tags": ["city"],
+      "blurb": "Heavy, ugly and always in reach. A dull thud that carries less than a bat.",
+      "melee": {"dmg": 40, "cd": 0.5, "reach": 1.9, "noise": 16, "model": "pipe"}
+    },
+    {
+      "id": "m_sledge", "name": "Sledgehammer", "kind": "melee", "short": "SLEDGE", "rarity": 3, "weight": 2, "scrap": 14, "tags": ["city", "vault"],
+      "blurb": "Both hands, slow swing, no second blow needed. It carries across the whole street.",
+      "melee": {"dmg": 105, "cd": 1.05, "reach": 2.1, "noise": 26, "model": "sledge"}
+    },
+    {
+      "id": "m_katana", "name": "Katana", "kind": "melee", "short": "KATANA", "rarity": 3, "weight": 2, "scrap": 16, "tags": ["vault"],
+      "blurb": "Somebody kept this oiled through everything. Quick, long, and quieter than it looks.",
+      "melee": {"dmg": 72, "cd": 0.4, "reach": 2.1, "noise": 8, "model": "katana"}
+    },
+
+    {
       "id": "t_wrench", "name": "Wrench", "kind": "tool", "short": "WRENCH", "tool": "wrench", "rarity": 1, "weight": 4, "scrap": 3, "starter": true,
       "blurb": "Repairs and opens the field workbench next to your vehicle."
     },
@@ -266,6 +353,292 @@
     {
       "id": "t_jerrycan", "name": "Jerrycan", "kind": "tool", "short": "CAN", "tool": "jerrycan", "rarity": 1, "weight": 4, "scrap": 3, "starter": true,
       "blurb": "Siphon fuel and top up tanks. Slows you down a little when held."
+    },
+
+    {
+      "id": "a_dot", "name": "Red Dot Sight", "kind": "mod", "short": "DOT", "rarity": 1, "weight": 6, "scrap": 3,
+      "blurb": "A glowing pip on a window of glass. Quick to find, tight to aim, no magnification.",
+      "mod": {"slot": "optic", "fam": "dot", "look": "dot", "ads": -0.12, "aimSpeed": 0.04}
+    },
+    {
+      "id": "a_reflex", "name": "Reflex Sight", "kind": "mod", "short": "REFLX", "rarity": 2, "weight": 5, "scrap": 5,
+      "blurb": "Wide window, thin frame. A touch of magnification and a steadier aim.",
+      "mod": {"slot": "optic", "fam": "dot", "look": "reflex", "zoom": 1.25, "ads": -0.18, "aimSpeed": 0.05}
+    },
+    {
+      "id": "a_holo", "name": "Holographic Sight", "kind": "mod", "short": "HOLO", "rarity": 3, "weight": 2, "scrap": 9,
+      "blurb": "A reticle that floats on the target. Fast to find, tight to hold, and the glass is clean.",
+      "mod": {"slot": "optic", "fam": "dot", "look": "holo", "zoom": 1.35, "ads": -0.25, "aimSpeed": 0.08, "sway": -0.05}
+    },
+    {
+      "id": "a_pdot", "name": "Pistol Micro Dot", "kind": "mod", "short": "PDOT", "rarity": 1, "weight": 5, "scrap": 3,
+      "blurb": "A tiny sight that sits on the slide. Tightens the aimed shot.",
+      "mod": {"slot": "optic", "fam": "pdot", "look": "pdot", "ads": -0.15, "aimSpeed": 0.02}
+    },
+    {
+      "id": "a_scope2", "name": "2x Scope", "kind": "mod", "short": "2X", "rarity": 1, "weight": 5, "scrap": 4,
+      "blurb": "Short and wide. Brings the target close without making the sights slow.",
+      "mod": {"slot": "optic", "fam": "scope", "look": "scope", "zoom": 1.7, "ads": -0.15, "aimSpeed": -0.04}
+    },
+    {
+      "id": "a_scope4", "name": "4x Scope", "kind": "mod", "short": "4X", "rarity": 2, "weight": 4, "scrap": 7,
+      "blurb": "A proper tube with an etched reticle. Reaches out well, and the barrel wander shows.",
+      "mod": {"slot": "optic", "fam": "scope", "look": "scope4", "zoom": 2.4, "ads": -0.22, "aimSpeed": -0.1, "sway": 0.08}
+    },
+    {
+      "id": "a_scope8", "name": "8x Sniper Scope", "kind": "mod", "short": "8X", "rarity": 3, "weight": 2, "scrap": 14,
+      "blurb": "A long tube and a big objective lens. Every wobble is magnified, so breathe and brace.",
+      "mod": {"slot": "optic", "fam": "long", "look": "scope8", "zoom": 4.2, "ads": -0.3, "aimSpeed": -0.2, "sway": 0.18}
+    },
+    {
+      "id": "a_sup_h", "name": "Pistol Suppressor", "kind": "mod", "short": "SUPP", "rarity": 2, "weight": 4, "scrap": 8,
+      "blurb": "A baffled can that swallows most of the crack. A little less speed, a little less reach.",
+      "mod": {"slot": "muzzle", "fam": "sup_h", "look": "supp_s", "noise": -0.7, "flash": -0.8, "vel": -0.06, "range": -0.1, "recoil": -0.05}
+    },
+    {
+      "id": "a_sup_hc", "name": "Oil-Filter Suppressor", "kind": "mod", "short": "CAN", "rarity": 1, "weight": 5, "scrap": 3,
+      "blurb": "Steel wool in a car part. Takes the edge off a shot. Not what you would call quiet.",
+      "mod": {"slot": "muzzle", "fam": "sup_h", "look": "can_s", "noise": -0.4, "flash": -0.5, "vel": -0.1, "range": -0.15}
+    },
+    {
+      "id": "a_sup_r", "name": "Rifle Suppressor", "kind": "mod", "short": "SUPR", "rarity": 3, "weight": 2, "scrap": 14,
+      "blurb": "Long, black and heavy. A rifle shot becomes a hard cough, and the sound stays at your feet.",
+      "mod": {"slot": "muzzle", "fam": "sup_r", "look": "supp_l", "noise": -0.62, "flash": -0.8, "vel": -0.05, "range": -0.08, "recoil": -0.08, "aimSpeed": -0.05}
+    },
+    {
+      "id": "a_sup_rc", "name": "Improvised Silencer", "kind": "mod", "short": "SILNC", "rarity": 1, "weight": 4, "scrap": 4,
+      "blurb": "A pipe, some baffles and optimism. Muffles a rifle a little, costs it more.",
+      "mod": {"slot": "muzzle", "fam": "sup_r", "look": "can_l", "noise": -0.3, "flash": -0.4, "vel": -0.1, "range": -0.12, "aimSpeed": -0.03}
+    },
+    {
+      "id": "a_comp", "name": "Compensator", "kind": "mod", "short": "COMP", "rarity": 1, "weight": 6, "scrap": 4,
+      "blurb": "Vents cut into the muzzle push the gas up and the barrel down.",
+      "mod": {"slot": "muzzle", "fam": "comp", "look": "comp", "recoil": -0.2, "noise": 0.04, "flash": 0.15}
+    },
+    {
+      "id": "a_comp2", "name": "Tuned Compensator", "kind": "mod", "short": "TCOMP", "rarity": 2, "weight": 4, "scrap": 7,
+      "blurb": "Machined ports, matched to the barrel. Flatter and tighter, a little louder.",
+      "mod": {"slot": "muzzle", "fam": "comp", "look": "comp2", "recoil": -0.3, "spread": -0.04, "noise": 0.05, "flash": 0.2}
+    },
+    {
+      "id": "a_brake", "name": "Muzzle Brake", "kind": "mod", "short": "BRAKE", "rarity": 2, "weight": 5, "scrap": 7,
+      "blurb": "Side-venting baffles that fight the kick. Louder, and the flash goes sideways.",
+      "mod": {"slot": "muzzle", "fam": "brake", "look": "brake", "recoil": -0.28, "noise": 0.05, "flash": 0.2}
+    },
+    {
+      "id": "a_flash", "name": "Flash Hider", "kind": "mod", "short": "HIDER", "rarity": 1, "weight": 5, "scrap": 4,
+      "blurb": "Four prongs that tear the flash apart. Kicks a little less too.",
+      "mod": {"slot": "muzzle", "fam": "brake", "look": "hider", "flash": -0.7, "recoil": -0.06, "noise": -0.04}
+    },
+    {
+      "id": "a_choke", "name": "Full Choke", "kind": "mod", "short": "CHOKE", "rarity": 2, "weight": 4, "scrap": 6,
+      "blurb": "Tightens the pattern. Pellets stay together farther down the street.",
+      "mod": {"slot": "muzzle", "fam": "choke", "look": "choke", "spread": -0.3, "range": 0.15}
+    },
+    {
+      "id": "a_choke1", "name": "Improved Choke", "kind": "mod", "short": "ICHOKE", "rarity": 1, "weight": 5, "scrap": 3,
+      "blurb": "A slightly tighter muzzle for a slightly tighter pattern.",
+      "mod": {"slot": "muzzle", "fam": "choke", "look": "choke", "spread": -0.15, "range": 0.08}
+    },
+    {
+      "id": "a_bar_h1", "name": "Long-Slide Barrel", "kind": "mod", "short": "LBAR", "rarity": 1, "weight": 5, "scrap": 4,
+      "blurb": "Two inches more steel. A little faster, a little more accurate, a little slower to bring up.",
+      "mod": {"slot": "barrel", "fam": "bar_h", "look": "bar_h", "range": 0.1, "spread": -0.06, "vel": 0.03, "aimSpeed": -0.03}
+    },
+    {
+      "id": "a_bar_h2", "name": "Match-Grade Pistol Barrel", "kind": "mod", "short": "MBAR", "rarity": 2, "weight": 4, "scrap": 7,
+      "blurb": "Tight tolerances and a proper crown. Noticeably tighter groups.",
+      "mod": {"slot": "barrel", "fam": "bar_h", "look": "bar_m", "range": 0.15, "spread": -0.12, "ads": -0.1, "vel": 0.05, "aimSpeed": -0.03}
+    },
+    {
+      "id": "a_bar_h3", "name": "Hammer-Forged Barrel", "kind": "mod", "short": "HBAR", "rarity": 3, "weight": 2, "scrap": 11,
+      "blurb": "Cold-forged from a single bar and hand-lapped. The best a handgun can be.",
+      "mod": {"slot": "barrel", "fam": "bar_h", "look": "bar_f", "dmg": 0.06, "range": 0.2, "spread": -0.18, "ads": -0.14, "vel": 0.08, "aimSpeed": -0.04}
+    },
+    {
+      "id": "a_bar_c1", "name": "Short Barrel", "kind": "mod", "short": "SBAR", "rarity": 1, "weight": 5, "scrap": 4,
+      "blurb": "Cut down for the corridor. Faster to the shoulder, less reach and more scatter.",
+      "mod": {"slot": "barrel", "fam": "bar_c", "look": "bar_s", "aimSpeed": 0.12, "range": -0.15, "spread": 0.1, "vel": -0.04}
+    },
+    {
+      "id": "a_bar_c2", "name": "Match Barrel", "kind": "mod", "short": "MBARC", "rarity": 2, "weight": 4, "scrap": 7,
+      "blurb": "A longer, truer barrel for SMGs and carbines. Reach and accuracy.",
+      "mod": {"slot": "barrel", "fam": "bar_c", "look": "bar_m", "range": 0.15, "spread": -0.12, "vel": 0.05, "aimSpeed": -0.03}
+    },
+    {
+      "id": "a_bar_c3", "name": "Heavy Barrel", "kind": "mod", "short": "HVBAR", "rarity": 3, "weight": 2, "scrap": 11,
+      "blurb": "Thick-walled and fluted. Heavier to point, much steadier to fire.",
+      "mod": {"slot": "barrel", "fam": "bar_c", "look": "bar_f", "range": 0.22, "spread": -0.2, "vel": 0.08, "recoil": -0.08, "aimSpeed": -0.1}
+    },
+    {
+      "id": "a_bar_r1", "name": "Lengthened Barrel", "kind": "mod", "short": "LRBAR", "rarity": 1, "weight": 5, "scrap": 5,
+      "blurb": "A longer tube for a rifle. More speed behind the round.",
+      "mod": {"slot": "barrel", "fam": "bar_r", "look": "bar_r", "range": 0.1, "spread": -0.06, "vel": 0.04, "aimSpeed": -0.04}
+    },
+    {
+      "id": "a_bar_r2", "name": "Match Rifle Barrel", "kind": "mod", "short": "MRBAR", "rarity": 2, "weight": 4, "scrap": 8,
+      "blurb": "Free-floated, with a target crown. Tight groups at a long way.",
+      "mod": {"slot": "barrel", "fam": "bar_r", "look": "bar_m", "range": 0.18, "spread": -0.14, "ads": -0.1, "vel": 0.07, "aimSpeed": -0.06}
+    },
+    {
+      "id": "a_bar_r3", "name": "Heavy Fluted Barrel", "kind": "mod", "short": "HFBAR", "rarity": 3, "weight": 2, "scrap": 13,
+      "blurb": "Stiff, cool and absurdly accurate. A pound of extra steel out front.",
+      "mod": {"slot": "barrel", "fam": "bar_r", "look": "bar_f", "dmg": 0.06, "range": 0.25, "spread": -0.2, "ads": -0.12, "vel": 0.1, "sway": -0.05, "aimSpeed": -0.12}
+    },
+    {
+      "id": "a_bar_g1", "name": "Long Barrel", "kind": "mod", "short": "LGBAR", "rarity": 1, "weight": 5, "scrap": 5,
+      "blurb": "A longer tube to keep the pellets together.",
+      "mod": {"slot": "barrel", "fam": "bar_g", "look": "bar_g", "spread": -0.1, "range": 0.1, "aimSpeed": -0.03}
+    },
+    {
+      "id": "a_bar_g2", "name": "Choked Barrel", "kind": "mod", "short": "CHBAR", "rarity": 2, "weight": 4, "scrap": 8,
+      "blurb": "Choke cut into the bore. A tight pattern straight from the tube.",
+      "mod": {"slot": "barrel", "fam": "bar_g", "look": "bar_m", "spread": -0.2, "range": 0.18, "aimSpeed": -0.04}
+    },
+    {
+      "id": "a_bar_g3", "name": "Heavy Tube", "kind": "mod", "short": "HTUBE", "rarity": 3, "weight": 2, "scrap": 12,
+      "blurb": "Thick wall, tapered choke. Tighter, harder-hitting and a bit more kick.",
+      "mod": {"slot": "barrel", "fam": "bar_g", "look": "bar_f", "dmg": 0.05, "spread": -0.28, "range": 0.25, "recoil": 0.05, "aimSpeed": -0.1}
+    },
+    {
+      "id": "a_bar_x1", "name": "Recurve Limbs", "kind": "mod", "short": "RCRV", "rarity": 2, "weight": 4, "scrap": 8,
+      "blurb": "Springier limbs for a faster bolt.",
+      "mod": {"slot": "barrel", "fam": "bar_x", "look": "limbs", "vel": 0.2, "dmg": 0.1, "range": 0.15}
+    },
+    {
+      "id": "a_bar_x2", "name": "Compound Limbs", "kind": "mod", "short": "CMPD", "rarity": 3, "weight": 2, "scrap": 13,
+      "blurb": "Cams and cables: a bolt that hits like a rifle. Slower to crank.",
+      "mod": {"slot": "barrel", "fam": "bar_x", "look": "limbs", "vel": 0.35, "dmg": 0.2, "range": 0.25, "reload": 0.1}
+    },
+    {
+      "id": "a_grip", "name": "Vertical Foregrip", "kind": "mod", "short": "VGRIP", "rarity": 1, "weight": 6, "scrap": 3,
+      "blurb": "A post to hold the front end down. Less climb, a little slower to bring up.",
+      "mod": {"slot": "under", "fam": "grip", "look": "grip", "recoil": -0.14, "sway": -0.06, "aimSpeed": -0.03}
+    },
+    {
+      "id": "a_grip_a", "name": "Angled Foregrip", "kind": "mod", "short": "AGRIP", "rarity": 2, "weight": 4, "scrap": 5,
+      "blurb": "Rests your thumb along the rail. Quick to point and gentler on the wrist.",
+      "mod": {"slot": "under", "fam": "grip", "look": "grip_a", "recoil": -0.08, "aimSpeed": 0.1, "sway": -0.03}
+    },
+    {
+      "id": "a_grip_e", "name": "Ergonomic Grip", "kind": "mod", "short": "EGRIP", "rarity": 3, "weight": 2, "scrap": 9,
+      "blurb": "Rubberised and contoured. Steady, controlled, quick.",
+      "mod": {"slot": "under", "fam": "grip", "look": "grip_a", "recoil": -0.16, "sway": -0.1, "aimSpeed": 0.05}
+    },
+    {
+      "id": "a_bipod", "name": "Bipod", "kind": "mod", "short": "BIPOD", "rarity": 2, "weight": 4, "scrap": 7,
+      "blurb": "Folding legs under the handguard. Kills the wander, slows the sights.",
+      "mod": {"slot": "under", "fam": "bipod", "look": "bipod", "recoil": -0.2, "sway": -0.3, "aimSpeed": -0.14}
+    },
+    {
+      "id": "a_mag_h", "name": "Extended Pistol Mag", "kind": "mod", "short": "XMAG", "rarity": 1, "weight": 5, "scrap": 4,
+      "blurb": "A longer stick for a pistol: half as many rounds again.",
+      "mod": {"slot": "mag", "fam": "mag_h", "look": "mag_ext", "mag": 0.5, "reload": 0.08}
+    },
+    {
+      "id": "a_mag_h2", "name": "Quick-Release Pistol Mag", "kind": "mod", "short": "QMAG", "rarity": 2, "weight": 3, "scrap": 6,
+      "blurb": "A flared well and a spring that kicks it out. A few more rounds, much faster to change.",
+      "mod": {"slot": "mag", "fam": "mag_h", "look": "mag_q", "mag": 0.25, "reload": -0.25}
+    },
+    {
+      "id": "a_mag_s", "name": "Extended SMG Mag", "kind": "mod", "short": "XMAGS", "rarity": 1, "weight": 5, "scrap": 5,
+      "blurb": "A stretched box magazine. Half again as many rounds.",
+      "mod": {"slot": "mag", "fam": "mag_s", "look": "mag_ext", "mag": 0.5, "reload": 0.08}
+    },
+    {
+      "id": "a_mag_sd", "name": "SMG Drum Magazine", "kind": "mod", "short": "DRUM", "rarity": 3, "weight": 2, "scrap": 10,
+      "blurb": "A big round drum. Two and a half times the rounds, slower to load and to point.",
+      "mod": {"slot": "mag", "fam": "mag_s", "look": "drum", "mag": 1.5, "reload": 0.35, "aimSpeed": -0.1}
+    },
+    {
+      "id": "a_mag_r", "name": "Extended Rifle Mag", "kind": "mod", "short": "XMAGR", "rarity": 1, "weight": 5, "scrap": 6,
+      "blurb": "A long curved magazine with half again the rounds.",
+      "mod": {"slot": "mag", "fam": "mag_r", "look": "mag_ext", "mag": 0.5, "reload": 0.1}
+    },
+    {
+      "id": "a_mag_rq", "name": "Quick-Draw Rifle Mag", "kind": "mod", "short": "QMAGR", "rarity": 2, "weight": 3, "scrap": 7,
+      "blurb": "Taped pairs in a clamp, or a better lip. Reloads much faster.",
+      "mod": {"slot": "mag", "fam": "mag_r", "look": "mag_q", "mag": 0.1, "reload": -0.25}
+    },
+    {
+      "id": "a_mag_rd", "name": "Beta C-Drum", "kind": "mod", "short": "CDRUM", "rarity": 3, "weight": 1, "scrap": 12,
+      "blurb": "A hundred-round twin-drum. A lot of fire, a slow reload, and heavy.",
+      "mod": {"slot": "mag", "fam": "mag_r", "look": "drum", "mag": 2.3, "reload": 0.4, "aimSpeed": -0.12}
+    },
+    {
+      "id": "a_mag_b", "name": "Extended Bolt Magazine", "kind": "mod", "short": "XMAGB", "rarity": 2, "weight": 4, "scrap": 7,
+      "blurb": "A box that holds three more rounds.",
+      "mod": {"slot": "mag", "fam": "mag_b", "look": "mag_ext", "magAdd": 3, "reload": 0.05}
+    },
+    {
+      "id": "a_loader", "name": "Speedloader", "kind": "mod", "short": "SLOAD", "rarity": 1, "weight": 5, "scrap": 4,
+      "blurb": "A ring of rounds that drop into the cylinder at once.",
+      "mod": {"slot": "mag", "fam": "loader", "look": "loader", "reload": -0.4}
+    },
+    {
+      "id": "a_loader_x", "name": "Extended Cylinder", "kind": "mod", "short": "XCYL", "rarity": 3, "weight": 2, "scrap": 9,
+      "blurb": "A cylinder with two more chambers, and a fast ring to fill it.",
+      "mod": {"slot": "mag", "fam": "loader", "look": "loader", "magAdd": 2, "reload": -0.2}
+    },
+    {
+      "id": "a_tube", "name": "Extended Tube", "kind": "mod", "short": "TUBE", "rarity": 2, "weight": 4, "scrap": 7,
+      "blurb": "A longer magazine tube under the barrel: three more shells.",
+      "mod": {"slot": "mag", "fam": "tube", "look": "tube", "magAdd": 3, "reload": 0.05}
+    },
+    {
+      "id": "a_saddle", "name": "Side-Saddle Shells", "kind": "mod", "short": "SADDLE", "rarity": 1, "weight": 5, "scrap": 4,
+      "blurb": "A carrier on the receiver with spare shells ready for the hand. Reloads quicker.",
+      "mod": {"slot": "mag", "fam": "saddle", "look": "saddle", "reload": -0.18}
+    },
+    {
+      "id": "a_mag_x", "name": "Cocking Aid", "kind": "mod", "short": "CRANK", "rarity": 1, "weight": 5, "scrap": 4,
+      "blurb": "A stirrup and a crank. Cocks the bow in half the effort.",
+      "mod": {"slot": "mag", "fam": "mag_x", "look": "crank", "reload": -0.35}
+    },
+    {
+      "id": "a_butt", "name": "Recoil Pad", "kind": "mod", "short": "PAD", "rarity": 1, "weight": 6, "scrap": 3,
+      "blurb": "A soft rubber butt. Takes some of the hit.",
+      "mod": {"slot": "stock", "fam": "butt", "look": "butt", "recoil": -0.1}
+    },
+    {
+      "id": "a_butt2", "name": "Gel Pad and Cheek Rest", "kind": "mod", "short": "CHEEK", "rarity": 2, "weight": 4, "scrap": 6,
+      "blurb": "A thick gel pad and an adjustable cheek piece. Gentler and steadier.",
+      "mod": {"slot": "stock", "fam": "butt", "look": "butt2", "recoil": -0.16, "sway": -0.08}
+    },
+    {
+      "id": "a_stock_p", "name": "Pistol Shoulder Stock", "kind": "mod", "short": "SHLDR", "rarity": 2, "weight": 4, "scrap": 7,
+      "blurb": "A wire stock that locks into the grip. Turns a pistol into something you can aim.",
+      "mod": {"slot": "stock", "fam": "stock_p", "look": "stock_p", "recoil": -0.28, "sway": -0.25, "ads": -0.12, "aimSpeed": -0.15}
+    },
+    {
+      "id": "a_stock_l1", "name": "Skeleton Stock", "kind": "mod", "short": "SKEL", "rarity": 1, "weight": 5, "scrap": 4,
+      "blurb": "A light folding frame. Very quick to the shoulder; it kicks a bit more.",
+      "mod": {"slot": "stock", "fam": "stock_l", "look": "stock_s", "aimSpeed": 0.15, "recoil": 0.06, "sway": 0.03}
+    },
+    {
+      "id": "a_stock_l2", "name": "Heavy Stock", "kind": "mod", "short": "HVSTK", "rarity": 2, "weight": 4, "scrap": 7,
+      "blurb": "A solid, weighted stock. Steady and gentle, slower to raise.",
+      "mod": {"slot": "stock", "fam": "stock_l", "look": "stock_h", "recoil": -0.2, "sway": -0.1, "aimSpeed": -0.1}
+    },
+    {
+      "id": "a_stock_l3", "name": "Tactical Stock", "kind": "mod", "short": "TACSTK", "rarity": 3, "weight": 2, "scrap": 10,
+      "blurb": "Adjustable length and cheek weld. Well balanced and well damped.",
+      "mod": {"slot": "stock", "fam": "stock_l", "look": "stock_t", "recoil": -0.2, "sway": -0.14, "ads": -0.05}
+    },
+    {
+      "id": "a_laser", "name": "Laser Sight", "kind": "mod", "short": "LASER", "rarity": 1, "weight": 5, "scrap": 4,
+      "blurb": "A red dot on the target wherever the barrel points. Much better from the hip.",
+      "mod": {"slot": "rail", "fam": "rail", "look": "laser", "hip": -0.25, "beam": "laser"}
+    },
+    {
+      "id": "a_torch", "name": "Weapon Light", "kind": "mod", "short": "LIGHT", "rarity": 1, "weight": 5, "scrap": 4,
+      "blurb": "A bright torch under the barrel. Lights what you are pointing at, for anyone to see.",
+      "mod": {"slot": "rail", "fam": "rail", "look": "torch", "beam": "torch"}
+    },
+    {
+      "id": "a_combo", "name": "Laser-Light Module", "kind": "mod", "short": "LL", "rarity": 2, "weight": 3, "scrap": 7,
+      "blurb": "A laser and a torch in one box. Quicker to aim, easier to see by.",
+      "mod": {"slot": "rail", "fam": "rail", "look": "combo", "hip": -0.2, "aimSpeed": 0.03, "beam": "both"}
     }
   ]
 }

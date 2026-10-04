@@ -54,6 +54,11 @@ export class Zombie {
   wireDps = 0;
   hesitating = false;
   active = false;
+  /** Something living it is hunting (an animal or a raider on foot), and how long it has been feeding on the kill. */
+  prey: { x: number; z: number; dead: boolean } | null = null;
+  preyKind: 'animal' | 'raider' | null = null;
+  preyCd = 0;
+  eatT = 0;
   /** Heading for a doorway because a wall is in the way. */
   routeT = 0;
   routeX = 0;
@@ -721,7 +726,9 @@ export class ZombieSystem {
           speed = 0;
           break;
         case 'wander':
-          speed = def.wander * 0.7;
+          speed = def.wander * 1.1;
+          if (zb.prey && !zb.prey.dead) speed = def.chase * 0.65;
+          else if (zb.eatT > 0) speed = 0;
           break;
         case 'investigate':
           speed = lerp(def.wander, def.chase, 0.45);
@@ -830,8 +837,10 @@ export class ZombieSystem {
     zb.lastX = zb.x;
     zb.lastZ = zb.z;
     // Animation drivers.
-    zb.stride = lerp(2.2, 11, clamp(spd / 5, 0, 1)) + (zb.state === 'dormant' ? -1.5 : 0);
+    zb.stride = spd < 0.2 ? 0.6 : lerp(3, 11, clamp(spd / 4, 0, 1));
     zb.chase = damp(zb.chase, zb.chasing ? 1 : 0, 4, dt);
+
+    if (zb.state === 'wander') this.feed(zb, dt);
 
     // ---- attack
     if (zb.chasing && zb.stun <= 0) this.attack(zb, dt);
@@ -843,7 +852,7 @@ export class ZombieSystem {
     const aggro = ctx.campaign.difficulty.aggro;
     const heard = this.hear(zb);
     const tgt = this.pickTarget(zb);
-    const sight = (zb.kind === 'stalker' ? 30 : 13) * aggro;
+    const sight = (zb.kind === 'stalker' ? 40 : 28) * aggro;
     // Friendly fire-support ring: stalkers hesitate within an armed, crewed vehicle's cover.
     zb.hesitating = false;
     if (zb.kind === 'stalker') {
@@ -862,7 +871,7 @@ export class ZombieSystem {
     const seesTarget = !!tgt && tgt.d < sight * notice * (tgt.vehicle ? 1.4 : tgt.player && tgt.player.crouch ? 0.5 : 1) && !ctx.obs.segmentBlocked(zb.x, zb.z, tgt.x, tgt.z, 1.1);
     switch (zb.state) {
       case 'dormant':
-        if (seesTarget && tgt && tgt.d < 4.5) this.startChase(zb, tgt);
+        if (seesTarget && tgt && tgt.d < 12) this.startChase(zb, tgt);
         else if (heard && heard.level * aggro >= 45) {
           zb.state = 'investigate';
           zb.tx = heard.x;
@@ -879,11 +888,20 @@ export class ZombieSystem {
           zb.tz = heard.z;
           zb.hasTarget = true;
           zb.stateT = 0;
-        } else if (!zb.hasTarget || zb.stateT > 4 + (zb.id % 5) || dist2(zb.x, zb.z, zb.tx, zb.tz) < 1) {
+        } else if (this.findPrey(zb, 0.05)) {
+          // Hunting something living.
+        } else if (zb.eatT > 0) {
+          // Feeding.
+        } else if (!zb.hasTarget || zb.stateT > 8 + (zb.id % 5) || dist2(zb.x, zb.z, zb.tx, zb.tz) < 1) {
           const a = Math.random() * 6.28;
-          const r = 3 + Math.random() * 10;
+          const r = 8 + Math.random() * 22;
           zb.tx = zb.homeX + Math.cos(a) * r;
           zb.tz = zb.homeZ + Math.sin(a) * r;
+          // The home drifts with them, so a group slowly roams the streets instead of milling in one spot.
+          if (Math.random() < 0.5) {
+            zb.homeX = zb.x;
+            zb.homeZ = zb.z;
+          }
           zb.hasTarget = true;
           zb.stateT = 0;
           // Stalkers prowl toward people on foot even when unaware.
@@ -941,6 +959,64 @@ export class ZombieSystem {
         }
         break;
       }
+    }
+  }
+
+  /** Idle dead go after animals and raiders on foot nearby. Returns true while it has live prey. */
+  private findPrey(zb: Zombie, dt: number): boolean {
+    const ctx = this.ctx;
+    if (zb.prey && !zb.prey.dead) {
+      zb.tx = zb.prey.x;
+      zb.tz = zb.prey.z;
+      zb.hasTarget = true;
+      if (Math.hypot(zb.prey.x - zb.x, zb.prey.z - zb.z) > 40) zb.prey = null;
+      else return true;
+    }
+    zb.preyCd -= dt;
+    if (zb.preyCd > 0 || zb.eatT > 0) return false;
+    zb.preyCd = 1 + Math.random();
+    let best: { x: number; z: number; dead: boolean } | null = null;
+    let kind: 'animal' | 'raider' = 'animal';
+    let bd = 22 * 22;
+    for (const a of ctx.wildlife.list) {
+      if (a.dead || a.flying) continue;
+      const d = (a.x - zb.x) ** 2 + (a.z - zb.z) ** 2;
+      if (d < bd) { bd = d; best = a; kind = 'animal'; }
+    }
+    for (const u of ctx.raiders.units) {
+      if (u.dead) continue;
+      const d = (u.x - zb.x) ** 2 + (u.z - zb.z) ** 2;
+      if (d < bd) { bd = d; best = u; kind = 'raider'; }
+    }
+    if (!best) return false;
+    zb.prey = best;
+    zb.preyKind = kind;
+    zb.tx = best.x;
+    zb.tz = best.z;
+    zb.hasTarget = true;
+    return true;
+  }
+
+  /** Bite whatever it has reached; once it drops, stay and feed for a while. */
+  private feed(zb: Zombie, dt: number) {
+    const ctx = this.ctx;
+    const pr = zb.prey;
+    if (pr && !pr.dead) {
+      if (Math.hypot(pr.x - zb.x, pr.z - zb.z) < zb.def.radius + 0.8) {
+        const dmg = zb.def.damage * zb.biteMult * dt;
+        if (zb.preyKind === 'animal') ctx.wildlife.damage(pr as never, dmg, { fromX: zb.x, fromZ: zb.z });
+        else ctx.raiders.damageInfantry(pr as never, dmg, -1);
+        zb.vx *= 0.3;
+        zb.vz *= 0.3;
+        if (pr.dead) zb.eatT = 6 + Math.random() * 6;
+      }
+    } else if (pr) {
+      zb.prey = null;
+      zb.eatT = zb.eatT || 6;
+    }
+    if (zb.eatT > 0) {
+      zb.eatT -= dt;
+      if (zb.eatT <= 0) zb.hasTarget = false;
     }
   }
 

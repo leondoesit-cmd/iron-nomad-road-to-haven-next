@@ -20,6 +20,8 @@ export interface DriveEnv {
   travelMult: number;
   /** Braking strength against the chassis' own (1 is stock): bigger brakes, or an engine that outruns small ones. */
   brakeMult: number;
+  /** Steering lock against the chassis' own (1 is stock): a quick wheel, or none on the column at all. */
+  steerMult?: number;
   /** Per-wheel flat flags. */
   flats?: boolean[];
   engineOn: boolean;
@@ -191,7 +193,7 @@ export class VehicleBody {
     // tyres can hold. Full lock at speed is what spins a vehicle out.
     const aLat = (p.wheelCount === 2 ? 17 : 14.5) * clamp(env.grip, 0.4, 1.2);
     const gripLock = Math.atan((this.wheelbase * aLat) / Math.max(av * av, 9));
-    const lock = Math.min(this.maxSteer, gripLock);
+    const lock = Math.min(this.maxSteer * (env.steerMult ?? 1), gripLock);
     const target = -input.steer * lock;
     // The wheel comes back to centre faster than it goes over, so a tap on the stick is a nudge and not a lurch.
     const returning = Math.abs(target) < Math.abs(this.steerAngle) || target * this.steerAngle < 0;

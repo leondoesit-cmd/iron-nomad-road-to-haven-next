@@ -35,6 +35,11 @@ interface Entry {
   cracks: THREE.Mesh[];
   /** Teeth left in the frame after it has gone. */
   teeth: THREE.Mesh | null;
+  /** Not shown for now (its panel is open). */
+  hidden?: boolean;
+  /** Dedicated group for this pane when it swings on a hinge. */
+  group?: THREE.Group;
+  sub?: THREE.Group;
 }
 
 const MAX_CRACKS = 5;
@@ -300,6 +305,31 @@ export class PaneSet {
    * The pane shows a stage (never going back down), with a web of cracks at `at` (a point in the set's frame, anywhere near
    * the glass: it is projected on to it) when the blow that did it landed on a known spot.
    */
+  /**
+   * Pose a pane on a pivot (e.g. a hatchback's rear window swinging with the tailgate).
+   * While posed, the pane keeps its own group rather than merging into the static mesh.
+   */
+  pose(key: string, pivot: V3, rotX: number) {
+    const e = this.entries.get(key);
+    if (!e) return;
+    if (!e.group) {
+      e.group = new THREE.Group();
+      e.sub = new THREE.Group();
+      e.group.add(e.sub);
+      this.group.add(e.group);
+      if (e.stage === 0) {
+        e.own = new THREE.Mesh(quadsGeometry([e]), paneMaterials().clear);
+        e.own.renderOrder = 1;
+        e.sub.add(e.own);
+      }
+      this.dirty = true;
+      this.flush();
+    }
+    e.group.position.set(pivot[0], pivot[1], pivot[2]);
+    e.group.rotation.x = rotX;
+    e.sub!.position.set(-pivot[0], -pivot[1], -pivot[2]);
+  }
+
   crack(key: string, stage: PaneStage, at?: V3) {
     const e = this.entries.get(key);
     if (!e || e.stage === 3) return;
@@ -307,11 +337,11 @@ export class PaneSet {
     if (stage > e.stage) {
       const was = e.stage;
       e.stage = stage;
-      if (was === 0) this.dirty = true;
+      if (was === 0 && !e.group) this.dirty = true;
       if (!e.own) {
         e.own = new THREE.Mesh(quadsGeometry([e]), paneMaterials().frost);
         e.own.renderOrder = 2;
-        this.group.add(e.own);
+        (e.sub ?? this.group).add(e.own);
       }
       e.own.material = stage >= 2 ? paneMaterials().crazed : paneMaterials().frost;
     }
@@ -336,7 +366,7 @@ export class PaneSet {
     m.rotateZ((Math.random() - 0.5) * 1.2);
     m.scale.set(size, size, 1);
     m.renderOrder = 3;
-    this.group.add(m);
+    (e.sub ?? this.group).add(m);
     e.cracks.push(m);
   }
 
@@ -346,11 +376,11 @@ export class PaneSet {
     if (!e || e.stage === 3) return;
     const wasWhole = e.stage === 0;
     e.stage = 3;
-    if (wasWhole) this.dirty = true;
+    if (wasWhole && !e.group) this.dirty = true;
     this.dropOwn(e);
     e.teeth = new THREE.Mesh(teethGeometry(e), paneMaterials().frost);
     e.teeth.renderOrder = 2;
-    this.group.add(e.teeth);
+    (e.sub ?? this.group).add(e.teeth);
     this.flush();
   }
 
@@ -360,8 +390,13 @@ export class PaneSet {
     if (!e) return;
     this.dropOwn(e);
     if (e.teeth) {
-      this.group.remove(e.teeth);
+      (e.sub ?? this.group).remove(e.teeth);
       e.teeth.geometry.dispose();
+    }
+    if (e.group) {
+      this.group.remove(e.group);
+      e.group = undefined;
+      e.sub = undefined;
     }
     this.entries.delete(key);
     this.dirty = true;
@@ -374,23 +409,46 @@ export class PaneSet {
     if (!e || e.stage === 0) return;
     this.dropOwn(e);
     if (e.teeth) {
-      this.group.remove(e.teeth);
+      (e.sub ?? this.group).remove(e.teeth);
       e.teeth.geometry.dispose();
       e.teeth = null;
     }
     e.stage = 0;
-    this.dirty = true;
+    if (e.sub) {
+      e.own = new THREE.Mesh(quadsGeometry([e]), paneMaterials().clear);
+      e.own.renderOrder = 1;
+      e.sub.add(e.own);
+    } else {
+      this.dirty = true;
+    }
     this.flush();
   }
 
   private dropOwn(e: Entry) {
+    const parent = e.sub ?? this.group;
     if (e.own) {
-      this.group.remove(e.own);
+      parent.remove(e.own);
       e.own.geometry.dispose();
       e.own = null;
     }
-    for (const m of e.cracks) this.group.remove(m);
+    for (const m of e.cracks) parent.remove(m);
     e.cracks.length = 0;
+  }
+
+  /**
+   * Hide a pane while the panel it is part of stands open (a hatchback's rear glass rides on its tailgate, which swings away
+   * while the pane itself is fixed in the merged mesh): its cracks and teeth go with it.
+   */
+  hide(key: string, hidden: boolean) {
+    const e = this.entries.get(key);
+    if (!e || !!e.hidden === hidden) return;
+    e.hidden = hidden;
+    if (e.group) e.group.visible = !hidden;
+    if (e.own) e.own.visible = !hidden;
+    if (e.teeth) e.teeth.visible = !hidden;
+    for (const m of e.cracks) m.visible = !hidden;
+    this.dirty = true;
+    this.flush();
   }
 
   /** Rebuild the merged mesh of whole panes if the set of them changed. */
@@ -402,7 +460,7 @@ export class PaneSet {
       this.merged.geometry.dispose();
       this.merged = null;
     }
-    const whole = [...this.entries.values()].filter((e) => e.stage === 0);
+    const whole = [...this.entries.values()].filter((e) => e.stage === 0 && !e.hidden && !e.group);
     if (!whole.length) return;
     this.merged = new THREE.Mesh(quadsGeometry(whole), paneMaterials().clear);
     this.merged.renderOrder = 1;
@@ -414,6 +472,10 @@ export class PaneSet {
     for (const e of this.entries.values()) {
       e.own?.geometry.dispose();
       e.teeth?.geometry.dispose();
+      if (e.group) {
+        this.group.remove(e.group);
+        e.group.clear();
+      }
     }
     this.merged?.geometry.dispose();
     this.merged = null;

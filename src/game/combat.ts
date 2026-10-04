@@ -42,6 +42,8 @@ export interface ShotOpts {
   headshots?: boolean;
   /** The round it fires. Default: a raider's for raiders, a mounted gun's from a vehicle, else a pistol's. */
   ammo?: AmmoKind;
+  /** Muzzle velocity as a share of the round's: a suppressor or a short barrel slows it, a long barrel speeds it. */
+  vel?: number;
 }
 
 /** A round in the air. */
@@ -146,7 +148,8 @@ export class Combat {
     const range = o.range ?? 90;
     const kind: AmmoKind = o.ammo ?? (o.side === 'raider' ? 'raider' : o.ownVehicle ? 'turret' : 'pistol');
     const spec = AMMO[kind];
-    if (o.assist) [dx, dy, dz] = this.assist(ox, oy, oz, dx, dy, dz, o.assist, spec.speed);
+    const speed = spec.speed * (o.vel ?? 1);
+    if (o.assist) [dx, dy, dz] = this.assist(ox, oy, oz, dx, dy, dz, o.assist, speed);
     if (o.spread) {
       const s = o.spread;
       const rx = (ctx.rng.next() - 0.5) * 2 * s;
@@ -166,7 +169,7 @@ export class Combat {
     dx /= l;
     dy /= l;
     dz /= l;
-    this.bullets.push({ x: ox, y: oy, z: oz, vx: dx * spec.speed, vy: dy * spec.speed, vz: dz * spec.speed, spec, kind, o, ox, oz, range, travelled: 0, dead: false });
+    this.bullets.push({ x: ox, y: oy, z: oz, vx: dx * speed, vy: dy * speed, vz: dz * speed, spec, kind, o, ox, oz, range, travelled: 0, dead: false });
     if (o.noise) ctx.sig.emit(ox, oz, o.noise * ctx.signatureMult, 'noise');
   }
 

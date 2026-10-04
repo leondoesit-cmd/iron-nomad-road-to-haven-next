@@ -48,6 +48,8 @@ export type SiteKind =
   | 'hubDustwell'
   | 'hubRustgate'
   | 'hubHaven'
+  // A lot in a city turned into a trade (see `LegLayoutImpl.addZone`).
+  | 'cityLot'
   // Lakeside places and the ways underground (see world/lakes.ts, world/delveSites.ts).
   | 'lakeDock'
   | 'islandShack'
@@ -188,6 +190,7 @@ const SITE_SPEC: Record<SiteKind, { off: [number, number]; radius: number }> = {
   hubDustwell: { off: [0, 0], radius: 62 },
   hubRustgate: { off: [0, 0], radius: 72 },
   hubHaven: { off: [0, 0], radius: 84 },
+  cityLot: { off: [0, 0], radius: 0 },
   lakeDock: { off: [0, 0], radius: 0 },
   islandShack: { off: [0, 0], radius: 0 },
   islandWreck: { off: [0, 0], radius: 0 },

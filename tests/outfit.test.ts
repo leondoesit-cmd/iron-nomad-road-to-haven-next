@@ -118,6 +118,6 @@ describe('what they hold', () => {
 
 describe('every item in the catalogue is wearable, holdable or a tool', () => {
   it('and the data agrees with itself', () => {
-    for (const g of GEAR.items) expect(['wear', 'gun', 'melee', 'tool']).toContain(gearDef(g.id).kind);
+    for (const g of GEAR.items) expect(['wear', 'gun', 'melee', 'tool', 'mod']).toContain(gearDef(g.id).kind);
   });
 });

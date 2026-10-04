@@ -1,9 +1,13 @@
-import { FIT_SLOTS, PARTS, PART_SLOTS, mountsFor, partDef, type FuelType, type ModuleSlot, type PartDef, type PartSlot, type PartStats, type VehicleDef } from '../data';
+import { FIT_SLOTS, PARTS, PART_SLOTS, isInteriorSlot, mountsFor, partDef, type FuelType, type ModuleSlot, type PartDef, type PartSlot, type PartStats, type VehicleDef } from '../data';
 import { clamp } from '../core/math';
 import type { Rng } from '../core/rng';
 import { coolingKw, engineEffects, engineLine, type BayLabel } from './engines';
 import { bodyOff, drivetrainEffects, gearTop } from './drivetrain';
 import { coolantLitres, oilRate, sumpLitres } from './fluids';
+import { cabinEffects, cabinGaps, cabinStatCounts } from './cabin';
+
+export { INTERIOR_SLOTS, isInteriorSlot } from '../data';
+export { cabinGaps, cabinPart, canRidePassenger, type CabinGaps } from './cabin';
 
 /**
  * A part you can carry: a catalogue entry plus how worn it is. Condition only matters for the parts that replace a
@@ -137,13 +141,25 @@ export interface Stats {
   sumpL: number;
   oilRate: number;
   coolantL: number;
+  /** Steering lock against the stock wheel (1 stock; tiny with no steering wheel). */
+  steerMult: number;
+  /** Gun spread for whoever shoots from the driver's seat (1 stock; worse sitting on the floor). */
+  seatSpread: number;
+  /** Metres the driver sits lower than a seat would put them. */
+  seatDrop: number;
+  /** Cabin parts that are not there: the steering wheel, a seat, the dashboard. */
+  noSteer: boolean;
+  noDriverSeat: boolean;
+  noPassengerSeat: boolean;
+  noRearSeat: boolean;
+  noDash: boolean;
 }
 
 const sum = (fit: Fit, k: keyof PartStats): number => {
   let t = 0;
   for (const slot of FIT_SLOTS) {
     const it = fit[slot];
-    if (it) t += partDef(it.id).stats[k] ?? 0;
+    if (it && cabinStatCounts(slot, k)) t += partDef(it.id).stats[k] ?? 0;
   }
   return t;
 };
@@ -177,6 +193,8 @@ export function effectiveStats(def: VehicleDef, fit: Fit, tyres?: Tyres): Stats 
   const off = bodyOff(def, fit);
   const spec = ef.spec;
   const sump = sumpLitres(spec.litres);
+  const cab = cabinEffects(def, fit, sum(fit, 'steer'));
+  const gaps = cabinGaps(def, fit);
   return {
     forceMult: Math.max(0.4, 1 + sum(fit, 'force')) * ef.force * dt.force * goneK,
     topSpeedMult: topMult,
@@ -185,7 +203,7 @@ export function effectiveStats(def: VehicleDef, fit: Fit, tyres?: Tyres): Stats 
     // A door that is not there stops nothing on that side.
     armorS: sum(fit, 'armorS') - 0.06 * off.doors,
     armorR: sum(fit, 'armorR'),
-    gripMult: (1 + sum(fit, 'grip') + tyreMean(tyres, wheels, 'grip')) * ef.grip * dt.grip * goneK,
+    gripMult: (1 + sum(fit, 'grip') + tyreMean(tyres, wheels, 'grip')) * ef.grip * dt.grip * goneK * cab.seatGrip,
     travelMult: (1 + sum(fit, 'travel') + tyreMean(tyres, wheels, 'travel')) * ef.travel * dt.travel,
     offroad: clamp((def.offroad ?? BASE_OFFROAD) + sum(fit, 'offroad') + tyreMean(tyres, wheels, 'offroad'), 0, 1),
     damageMult: 1 + sum(fit, 'dmg'),
@@ -222,6 +240,14 @@ export function effectiveStats(def: VehicleDef, fit: Fit, tyres?: Tyres): Stats 
     sumpL: sump,
     oilRate: oilRate(spec.litres, !!spec.blown, spec.fuel === 'diesel', sump),
     coolantL: coolantLitres(coolingKw(def, fit), spec.litres),
+    steerMult: cab.steerMult,
+    seatSpread: cab.spread,
+    seatDrop: cab.drop,
+    noSteer: gaps.steer,
+    noDriverSeat: gaps.seatD,
+    noPassengerSeat: gaps.seatP,
+    noRearSeat: gaps.seatR,
+    noDash: gaps.dash,
   };
 }
 
@@ -297,10 +323,14 @@ export function rollPart(rng: Rng, o: RollOpts = {}): PartItem {
   return newPart(s.id, s.cond);
 }
 
-/** Worth in Scrap when a part is broken down. */
+/**
+ * Worth in Scrap when a part is broken down. Scrap is only ever made this way: by deliberately breaking down a part you do
+ * not need (or a vehicle, or gear). It does not lie about in the world and nothing hands it out for stripping a car.
+ */
 export function scrapValue(it: PartItem): number {
   const d = partDef(it.id);
-  return Math.round(((d.cost.scrap ?? 0) * 0.4 + (d.cost.parts ?? 0) * 0.3) * (0.5 + 0.5 * it.cond));
+  // What it would cost to make, as Scrap: the metal, the machining and the rare bits, scaled by what is left of it.
+  return Math.max(1, Math.round(((d.cost.scrap ?? 0) * 0.6 + (d.cost.parts ?? 0) * 0.5 + (d.cost.tech ?? 0) * 1) * (0.5 + 0.5 * it.cond)));
 }
 
 // ---------------------------------------------------------------- descriptions
@@ -331,8 +361,22 @@ export function describePart(d: PartDef): string[] {
   }
   if (d.empty && (d.slot === 'hood' || d.slot === 'doorL' || d.slot === 'doorR')) return [`no ${d.slot === 'hood' ? 'bonnet' : 'door'}: the mount is bare`];
   if (d.empty && d.slot === 'wheels') return ['no tyre: a bare rim'];
+  if (d.empty && isInteriorSlot(d.slot)) return [EMPTY_CABIN_TEXT[d.id] ?? 'an empty mount'];
+  if (d.hold) {
+    const size = d.hold.max >= 4 ? 'large' : d.hold.max === 2 ? 'medium' : 'small';
+    const what = d.hold.only === 'cans' ? 'cans' : d.hold.only === 'tyres' ? 'a spare tyre' : `${size} loads`;
+    return [`holds ${what} secure at any speed (${d.hold.units} units)`, ...describeStats(d.stats)];
+  }
   return describeStats(d.stats);
 }
+
+/** What a stripped cabin mount costs you, in plain words. */
+export const EMPTY_CABIN_TEXT: Record<string, string> = {
+  seat_none: 'no seat: nobody can ride here, and a driver sits on the floor (worse grip and aim)',
+  bench_none: 'no rear seat: bare floor, room for a little cargo',
+  steer_none: 'no steering wheel: the steering barely turns; it still goes straight',
+  dash_none: 'no dashboard: the wiring hangs out and the lamps flicker',
+};
 
 /** A part's effects in plain words, best news first: "+17% power · +8% top speed · +10% fuel burn". */
 export function describeStats(st: PartStats): string[] {
@@ -357,6 +401,7 @@ export function describeStats(st: PartStats): string[] {
   add(st.plow, 'zombie plough');
   add(st.ram, 'ram damage');
   add(st.light, 'headlight');
+  add(st.steer, 'steering lock');
   if (st.spare) out.push('free tyre swaps');
   add(st.burn, 'fuel burn');
   add(st.sig, 'noise');

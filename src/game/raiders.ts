@@ -6,6 +6,9 @@ import { C } from '../render/palette';
 import { angleDiff, clamp, damp, dampAngle, wrapAngle } from '../core/math';
 import type { DriveInput } from '../physics/vehicle';
 import { gearDrop } from '../sim/gear';
+import { rollItem, type LootSpec } from '../sim/loot';
+import { grantLoot } from './lootGrant';
+import { rollGunLoot } from '../sim/gunLoot';
 import { stormSight } from '../sim/weather';
 import type { Ctx } from './ctx';
 import type { Player } from './player';
@@ -432,6 +435,17 @@ export class RaiderSystem {
     return best;
   }
 
+  /** A raider's own kit, rolled from the raider table: rounds, fuel, food, the odd part. Rounds are banked, cans lie beside the body. */
+  private kit(x: number, z: number, n: number) {
+    const ctx = this.ctx;
+    const specs: LootSpec[] = [];
+    for (let i = 0; i < n; i++) {
+      const s = rollItem('raider', ctx.rng, { progress: Math.min(1, 0.2 + ctx.gearProgress) });
+      if (s) specs.push(s);
+    }
+    if (specs.length) grantLoot(ctx, specs, { x, z });
+  }
+
   /** A raider's kit can survive them: it lies where they fell, for anyone to take. */
   private dropGear(x: number, z: number, src: 'raider' | 'wreck') {
     const ctx = this.ctx;
@@ -450,9 +464,10 @@ export class RaiderSystem {
       this.kills++;
       this.ctx.fx.blood(u.x, u.y + 1, u.z, 8);
       this.ctx.audio.play('zdie', u.x, u.z, 0.6);
-      if (Math.random() < 0.5) this.ctx.addLoot({ scrap: 4 + Math.floor(Math.random() * 5) }, 'raider');
+      // What a raider carried: a box of rounds, a can, a tin; named things, taken off the body.
+      if (Math.random() < 0.45) this.kit(u.x, u.z, 1);
+      if (Math.random() < 0.18) rollGunLoot('raider', Math.floor(Math.random() * 1e9), 0).forEach((g, i) => this.ctx.dropGear(g, u.x + 0.6 * i, u.z + 0.5));
       this.dropGear(u.x, u.z, 'raider');
-      if (Math.random() < 0.2) this.ctx.addLoot({ parts: 1 + Math.floor(Math.random() * 2) }, 'raider');
       return true;
     }
     if (u.state === 'approach') u.state = u.kind === 'sniper' ? 'snipe' : 'fire';
@@ -546,7 +561,8 @@ export class RaiderSystem {
     this.ctx.campaign.stats.raidersKilled++;
     this.kills++;
     const wagon = v.kind === 'wagon';
-    this.ctx.addLoot({ scrap: wagon ? 40 : 14 + Math.floor(Math.random() * 10), parts: wagon ? 10 : 2 }, 'wreck');
+    // The wreck itself is what is worth stripping (its engine, its plates, its gun mount); the crew's own kit is on the ground by it.
+    this.kit(v.position.x, v.position.z, wagon ? 3 : Math.random() < 0.5 ? 1 : 0);
     if (wagon) this.dropGear(v.position.x, v.position.z, 'wreck');
     const pilot = this.pilots.get(v);
     if (pilot) pilot.despawn = false;

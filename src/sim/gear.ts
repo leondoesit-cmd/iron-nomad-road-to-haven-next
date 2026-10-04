@@ -1,5 +1,6 @@
 import {
   GEAR,
+  ATTACH_SLOTS,
   STAT_KEYS,
   WEAR_SLOTS,
   gearDef,
@@ -8,12 +9,14 @@ import {
   type GearKind,
   type GearStats,
   type GunStats,
+  type AttachSlot,
   type MeleeStats,
   type WearSlot,
 } from '../data/gear';
 import { clamp } from '../core/math';
-import type { Rng } from '../core/rng';
+import { Rng } from '../core/rng';
 import { newUid } from './parts';
+import { cleanAtt, dressGun, fitMod, kitOf, newMod, roundsOver, stripMod, whyNot, type Attached } from './gunmods';
 import { foundCondition, repairCost, wearOf } from './vitals';
 
 /**
@@ -27,6 +30,8 @@ export interface GearItem {
   mag?: number;
   /** Weapon condition, 0 to 1. Missing means mint, so starter kit, old saves and armour need no value. */
   cond?: number;
+  /** Add-ons fitted to a gun, slot to item id (see `sim/gunmods.ts`). Travels with the gun like its magazine and wear. */
+  att?: Attached;
 }
 
 export interface Loadout {
@@ -214,6 +219,7 @@ export function equipFromBag(l: Loadout, uid: string, beltSlot?: number): Result
   if (i < 0) return no('That is not in your bag');
   const item = l.bag[i];
   const d = gearDef(item.id);
+  if (d.kind === 'mod') return fitBest(l, uid);
   if (d.kind === 'wear') {
     const slot = d.slot!;
     const old = l.worn[slot] ?? null;
@@ -291,6 +297,55 @@ export function giveItem(from: Loadout, to: Loadout, uid: string): Result {
   return ok(`Handed over the ${gearDef(it.id).name}`);
 }
 
+// ------------------------------------------------------------------ customising guns
+
+/** A gun anywhere in the kit (belt or bag) by uid. */
+export function gunByUid(l: Loadout, uid: string): GearItem | null {
+  const hit = [...l.belt, ...l.bag].find((x) => x?.uid === uid);
+  return hit && gearDef(hit.id).gun ? hit : null;
+}
+
+/** Fit an add-on from the bag onto a gun on the belt or in the bag. What was in that slot goes into the bag. */
+export function fitFromBag(l: Loadout, gunUid: string, modUid: string): Result {
+  const gun = gunByUid(l, gunUid);
+  const i = l.bag.findIndex((b) => b.uid === modUid);
+  if (!gun) return no('That is not a gun you are carrying');
+  if (i < 0) return no('That is not in your bag');
+  const mod = l.bag[i];
+  const why = whyNot(gun, mod);
+  if (why) return no(why);
+  const before = gun.mag ?? 0;
+  const r = fitMod(gun, mod);
+  if (!r.ok) return no(r.reason);
+  l.bag.splice(i, 1);
+  if (r.old) l.bag.splice(i, 0, r.old);
+  if (gun.mag !== undefined) gun.mag = Math.min(gun.mag, kitOf(gun).gun.mag);
+  return ok(r.note + (roundsOver(gun, before) ? ' (rounds beyond the new magazine came back out)' : ''));
+}
+
+/** Take an add-on off a gun into the bag. Refused when the bag is full. */
+export function detachToBag(l: Loadout, gunUid: string, slot: AttachSlot): Result & { rounds?: number } {
+  const gun = gunByUid(l, gunUid);
+  if (!gun) return no('That is not a gun you are carrying');
+  if (!gun.att?.[slot]) return no('Nothing fitted there');
+  if (l.bag.length >= bagCap(l)) return no('Your bag has no room for that');
+  const before = gun.mag ?? 0;
+  const it = stripMod(gun, slot);
+  if (!it) return no('Nothing fitted there');
+  l.bag.push(it);
+  return { ...ok(`Took the ${gearDef(it.id).name} off the ${gearDef(gun.id).name}`), rounds: roundsOver(gun, before) };
+}
+
+/** The quick action on an add-on: fit it to the gun in hand if that takes it, else any gun on the belt, else one in the bag. */
+export function fitBest(l: Loadout, modUid: string): Result {
+  const mod = l.bag.find((b) => b.uid === modUid);
+  if (!mod) return no('That is not in your bag');
+  const guns = [heldItem(l), ...l.belt, ...l.bag].filter((g): g is GearItem => !!g && !!gearDef(g.id).gun);
+  const target = guns.find((g) => !whyNot(g, mod));
+  if (!target) return no(guns.length ? `Nothing you carry takes the ${gearDef(mod.id).name}` : 'You carry no gun to fit it to');
+  return fitFromBag(l, target.uid, modUid);
+}
+
 /** Next hand slot in a direction, skipping empty ones. The utility slot counts only when `utilityOk`. */
 export function stepSel(l: Loadout, dir: 1 | -1, utilityOk: boolean): number {
   const n = BELT_SIZE + 1;
@@ -302,10 +357,11 @@ export function stepSel(l: Loadout, dir: 1 | -1, utilityOk: boolean): number {
   return l.sel;
 }
 
-/** Slots whose items can be taken off for scrap, and what that is worth. */
+/** What breaking an item down is worth: a worn weapon less, and a gun's fitted add-ons are broken down with it. */
 export function scrapOf(it: GearItem): number {
   const d = gearDef(it.id);
-  return isWeapon(d) ? Math.max(1, Math.round(d.scrap * (0.4 + 0.6 * wearOf(it.cond)))) : d.scrap;
+  const fitted = Object.values(it.att ?? {}).reduce((n, id) => n + (hasGear(id) ? gearDef(id).scrap : 0), 0);
+  return (isWeapon(d) ? Math.max(1, Math.round(d.scrap * (0.4 + 0.6 * wearOf(it.cond)))) : d.scrap) + fitted;
 }
 
 /** Scrap it takes to put a weapon back to mint (0 for anything that does not wear). */
@@ -323,7 +379,7 @@ export function repairItem(it: GearItem) {
 export function sortBag(l: Loadout) {
   const rank = (g: GearItem) => {
     const d = gearDef(g.id);
-    const k = d.kind === 'gun' ? 0 : d.kind === 'melee' ? 1 : d.kind === 'tool' ? 2 : 3 + WEAR_SLOTS.indexOf(d.slot!);
+    const k = d.kind === 'gun' ? 0 : d.kind === 'melee' ? 1 : d.kind === 'tool' ? 2 : d.kind === 'mod' ? 3 : 4 + WEAR_SLOTS.indexOf(d.slot!);
     return k * 10 - d.rarity;
   };
   l.bag = l.bag.map((g, i) => ({ g, i })).sort((a, b) => rank(a.g) - rank(b.g) || a.i - b.i).map((x) => x.g);
@@ -333,14 +389,20 @@ export function sortBag(l: Loadout) {
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object';
 
-function cleanItem(raw: unknown, seen: Set<string>): GearItem | null {
+function cleanItem(raw: unknown, seen: Set<string>, stray: GearItem[] = []): GearItem | null {
   if (!isObj(raw) || typeof raw.id !== 'string' || !hasGear(raw.id)) return null;
   const d = gearDef(raw.id);
   let uid = typeof raw.uid === 'string' && raw.uid ? raw.uid : '';
   if (!uid || seen.has(uid)) uid = newUid('g');
   seen.add(uid);
   const it: GearItem = { uid, id: raw.id };
-  if (d.gun) it.mag = typeof raw.mag === 'number' && Number.isFinite(raw.mag) ? clamp(Math.round(raw.mag), 0, d.gun.mag) : d.gun.mag;
+  if (d.gun) {
+    const att = cleanAtt(raw.id, raw.att, stray);
+    if (att) it.att = att;
+    // The magazine can only be as big as what is fitted now allows.
+    const cap = kitOf(it).gun.mag;
+    it.mag = typeof raw.mag === 'number' && Number.isFinite(raw.mag) ? clamp(Math.round(raw.mag), 0, cap) : cap;
+  }
   if (isWeapon(d) && typeof raw.cond === 'number' && Number.isFinite(raw.cond) && raw.cond < 1) it.cond = clamp(raw.cond, 0, 1);
   return it;
 }
@@ -353,9 +415,11 @@ export function sanitizeLoadout(raw: unknown): Loadout {
   if (!isObj(raw) || Array.isArray(raw) || !('worn' in raw || 'belt' in raw || 'bag' in raw)) return starterLoadout();
   const seen = new Set<string>();
   const l: Loadout = { worn: {}, belt: Array.from({ length: BELT_SIZE }, () => null), sel: 0, bag: [] };
+  /** Add-ons whose gun no longer takes them: they go back in the bag rather than vanish. */
+  const spare: GearItem[] = [];
   const w = isObj(raw.worn) ? raw.worn : {};
   for (const slot of WEAR_SLOTS) {
-    const it = cleanItem(w[slot], seen);
+    const it = cleanItem(w[slot], seen, spare);
     if (!it) continue;
     const d = gearDef(it.id);
     if (d.kind === 'wear' && d.slot === slot) l.worn[slot] = it;
@@ -364,20 +428,20 @@ export function sanitizeLoadout(raw: unknown): Loadout {
   const strays: GearItem[] = [];
   const belt = Array.isArray(raw.belt) ? raw.belt : [];
   for (let i = 0; i < BELT_SIZE; i++) {
-    const it = cleanItem(belt[i], seen);
+    const it = cleanItem(belt[i], seen, spare);
     if (!it) continue;
-    if (gearDef(it.id).kind === 'wear') strays.push(it);
+    if (gearDef(it.id).kind === 'wear' || gearDef(it.id).kind === 'mod') strays.push(it);
     else l.belt[i] = it;
   }
   for (const b of Array.isArray(raw.bag) ? raw.bag : []) {
-    const it = cleanItem(b, seen);
+    const it = cleanItem(b, seen, spare);
     if (it) l.bag.push(it);
   }
-  l.bag.push(...strays);
+  l.bag.push(...strays, ...spare);
   // Never leave somebody unarmed: pull a weapon off the bag, or hand out the starter pistol.
   if (!l.belt.some((b) => b && isWeapon(gearDef(b.id)))) {
-    const spare = l.bag.findIndex((b) => isWeapon(gearDef(b.id)));
-    const it = spare >= 0 ? l.bag.splice(spare, 1)[0] : newGear('w_pistol');
+    const loose = l.bag.findIndex((b) => isWeapon(gearDef(b.id)));
+    const it = loose >= 0 ? l.bag.splice(loose, 1)[0] : newGear('w_pistol');
     const free = l.belt.findIndex((b) => !b);
     const at = free >= 0 ? free : BELT_SIZE - 1;
     const bumped = l.belt[at];
@@ -442,10 +506,10 @@ export function compareStats(from: GearDef | null, to: GearDef | null): StatLine
   return out;
 }
 
-/** A weapon's headline numbers. */
-export function describeWeapon(d: GearDef): string[] {
+/** A weapon's headline numbers, with whatever is fitted to this one counted in. */
+export function describeWeapon(d: GearDef, it?: GearItem | null): string[] {
   if (d.gun) {
-    const g = d.gun;
+    const g = it?.att ? kitOf(it).gun : d.gun;
     const per = g.pellets && g.pellets > 1 ? `${g.dmg} × ${g.pellets}` : `${g.dmg}`;
     return [`${per} damage`, `${(1 / g.cd).toFixed(1)} shots/s`, `${g.mag} rounds · ${g.reload.toFixed(1)}s reload`, `${g.range} m range`];
   }
@@ -467,7 +531,7 @@ export interface GearRoll {
 }
 
 export function rollGearId(rng: Rng, o: GearRoll = {}): string {
-  const pool = GEAR.items.filter((g) => g.rarity >= (o.minR ?? 1) && g.rarity <= (o.maxR ?? 3) && (!o.kinds || o.kinds.includes(g.kind)) && (!o.slots || (g.slot && o.slots.includes(g.slot))));
+  const pool = GEAR.items.filter((g) => g.rarity >= (o.minR ?? 1) && g.rarity <= (o.maxR ?? 3) && (o.kinds ? o.kinds.includes(g.kind) : g.kind !== 'mod') && (!o.slots || (g.slot && o.slots.includes(g.slot))));
   const list = pool.length ? pool : GEAR.items;
   const w = list.map((g) => g.weight * (1 + (o.bias ?? 0) * (g.rarity - 1)) * (o.tags?.some((t) => g.tags?.includes(t)) ? 3 : 1));
   const total = w.reduce((a, b) => a + b, 0);
@@ -501,6 +565,31 @@ export interface DropCtx {
   biome?: string;
 }
 
+/** How a source dresses the guns it yields, and how often it turns up an add-on instead of a weapon. */
+const EMBELLISH: Record<GearSource, { odds: number; maxR: number; mod: number }> = {
+  search: { odds: 0.2, maxR: 1, mod: 0.05 },
+  chest: { odds: 0.5, maxR: 2, mod: 0.12 },
+  hoard: { odds: 0.8, maxR: 3, mod: 0.15 },
+  trunk: { odds: 0.25, maxR: 1, mod: 0.05 },
+  raider: { odds: 0.5, maxR: 2, mod: 0.08 },
+  wreck: { odds: 0.45, maxR: 2, mod: 0.12 },
+};
+
+/**
+ * What rides on a find: a gun comes with a few add-ons, and now and then the find is an add-on rather than a weapon. It is
+ * drawn from a stream seeded by the roll's own state and does not advance it, so every other find a seed makes is exactly what
+ * it was before there were add-ons.
+ */
+function embellish(it: GearItem, rng: Rng, src: GearSource, c: DropCtx): GearItem {
+  const e = EMBELLISH[src];
+  const r = new Rng((rng.state ^ 0x5bd1e995) >>> 0);
+  const prog = clamp(c.progress ?? 0, 0, 1);
+  const deep = src === 'search' && (c.depth ?? 0) >= 2;
+  if (r.chance(e.mod * (1 + prog) * (deep ? 2 : 1))) return newMod(rollGearId(r, { kinds: ['mod'], minR: src === 'hoard' ? 2 : 1, maxR: Math.min(3, e.maxR + (deep ? 1 : 0)), bias: prog }));
+  if (gearDef(it.id).gun) dressGun(it, r, { odds: e.odds * (1 + prog), maxR: e.maxR + (prog > 0.6 && e.maxR < 3 ? 1 : 0) });
+  return it;
+}
+
 /**
  * Whether a source yields a piece of gear this time, and which. Seeded by the caller from something that never
  * changes (a container's id), so reloading a chunk cannot reroll a find.
@@ -513,17 +602,17 @@ export function gearDrop(rng: Rng, src: GearSource, c: DropCtx = {}): GearItem |
   switch (src) {
     case 'search':
       if (!rng.chance([0.05, 0.1, 0.2][clamp(depth, 0, 2)] * (1 + prog * 0.5))) return null;
-      return rollGear(rng, { maxR: depth >= 2 ? 3 : 2, bias: prog, tags });
+      return embellish(rollGear(rng, { maxR: depth >= 2 ? 3 : 2, bias: prog, tags }), rng, src, c);
     case 'chest':
       if (!rng.chance(0.6)) return null;
-      return rollGear(rng, { maxR: tier >= 2 ? 3 : 2, bias: 0.5 + prog, tags: ['vault', ...tags] });
+      return embellish(rollGear(rng, { maxR: tier >= 2 ? 3 : 2, bias: 0.5 + prog, tags: ['vault', ...tags] }), rng, src, c);
     case 'hoard':
-      return rollGear(rng, { minR: 2, bias: 1.2 + prog, tags: ['vault'] });
+      return embellish(rollGear(rng, { minR: 2, bias: 1.2 + prog, tags: ['vault'] }), rng, src, c);
     case 'trunk':
-      return rng.chance(0.07 + prog * 0.05) ? rollGear(rng, { maxR: 2, bias: prog, tags }) : null;
+      return rng.chance(0.07 + prog * 0.05) ? embellish(rollGear(rng, { maxR: 2, bias: prog, tags }), rng, src, c) : null;
     case 'raider':
-      return rng.chance(0.1 + prog * 0.06) ? rollGear(rng, { maxR: 2, bias: 0.3 + prog, tags: ['raider'] }) : null;
+      return rng.chance(0.1 + prog * 0.06) ? embellish(rollGear(rng, { maxR: 2, bias: 0.3 + prog, tags: ['raider'] }), rng, src, c) : null;
     case 'wreck':
-      return rng.chance(0.6) ? rollGear(rng, { minR: 2, bias: 0.5 + prog, tags: ['raider'] }) : null;
+      return rng.chance(0.6) ? embellish(rollGear(rng, { minR: 2, bias: 0.5 + prog, tags: ['raider'] }), rng, src, c) : null;
   }
 }

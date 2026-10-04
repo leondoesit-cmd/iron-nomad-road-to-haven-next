@@ -1,5 +1,5 @@
-import { partDef, type FuelType, type PartSlot } from '../data';
-import { BAY_TEXT, type BayLabel } from './engines';
+import { isInteriorSlot, partDef, type FuelType, type PartSlot } from '../data';
+import { bayText, hoodState, type BayLabel } from './engines';
 import { fuelMismatch } from './fuel';
 import { type VehicleBuild, EMPTY_ID, defOf, statsOf } from './garage';
 import { effectiveStats, type Fit, type PartItem, type Tyres } from './parts';
@@ -40,6 +40,9 @@ export interface Forecast {
   armorBefore: number;
   grip: number;
   gripBefore: number;
+  /** Steering lock against the stock wheel, before and after (1 is stock). */
+  steer: number;
+  steerBefore: number;
   /** Litres of oil and of water the engine and its cooling system hold, before and after. */
   sumpL: number;
   sumpBefore: number;
@@ -84,7 +87,10 @@ export function forecastSwap(b: VehicleBuild, slot: PartSlot, item: PartItem | n
   else if (after.st.fuel !== before.st.fuel) notes.push(`Burns ${after.st.fuel} instead of ${before.st.fuel}`);
   if (after.heat.verdict === 'overheats') notes.push(VERDICT_TEXT.overheats);
   else if (after.heat.verdict === 'hot' && before.heat.verdict !== 'hot') notes.push(VERDICT_TEXT.hot);
-  if (slot === 'engine' && (after.st.bayLabel === 'cut' || after.st.bayLabel === 'tight')) notes.push(BAY_TEXT[after.st.bayLabel]);
+  if ((slot === 'engine' || slot === 'hood') && (after.st.bayLabel === 'cut' || after.st.bayLabel === 'tight' || after.st.bayLabel === 'snug')) {
+    notes.push(bayText(after.st.bayLabel, hoodState(fit)));
+  }
+  if (slot === 'hood' && item?.id === 'hood_cut') notes.push('A hole cut in the bonnet: it cannot be undone, and the rain gets in');
   if (!after.st.noDrive && after.st.strain > 1.05 && after.st.strain > before.st.strain + 0.02) notes.push(`The gearbox is overstrained (${after.st.strain.toFixed(1)}x): it will wear out. Fit a stronger one`);
   if (after.st.overload > 1.08 && after.st.overload > before.st.overload + 0.02) notes.push(`The springs are overloaded (${after.st.overload.toFixed(1)}x): it will sag and lose grip`);
   if (after.st.brakeMult < before.st.brakeMult - 0.12) notes.push('The brakes are not up to it: much longer stops');
@@ -96,6 +102,11 @@ export function forecastSwap(b: VehicleBuild, slot: PartSlot, item: PartItem | n
   if (after.st.hoodOff && !before.st.hoodOff) notes.push('No bonnet: the engine takes every hit and the rain');
   if (after.st.doorsOff > before.st.doorsOff) notes.push('No door: less armour on that side');
   if (after.st.tyresGone > before.st.tyresGone) notes.push('A bare wheel: almost no grip, and the rim chews up');
+  if (after.st.noSteer && !before.st.noSteer) notes.push('No steering wheel: the steering barely turns. It still goes straight');
+  if (after.st.noDriverSeat && !before.st.noDriverSeat) notes.push('No driver seat: you sit on the floor, with worse grip and aim');
+  if (after.st.noPassengerSeat && !before.st.noPassengerSeat) notes.push('No passenger seat: nobody can ride beside the driver');
+  if (after.st.noRearSeat && !before.st.noRearSeat) notes.push('No rear seat: bare floor, a little more room for cargo');
+  if (after.st.noDash && !before.st.noDash) notes.push('No dashboard: the lamps flicker and barely light the road');
   return {
     slot,
     powerKw: after.st.power,
@@ -120,6 +131,8 @@ export function forecastSwap(b: VehicleBuild, slot: PartSlot, item: PartItem | n
     armorBefore: before.st.armor,
     grip: after.st.gripMult,
     gripBefore: before.st.gripMult,
+    steer: after.st.steerMult,
+    steerBefore: before.st.steerMult,
     sumpL: after.st.sumpL,
     sumpBefore: before.st.sumpL,
     coolantL: after.st.coolantL,
@@ -137,5 +150,5 @@ export function currentFigures(b: VehicleBuild) {
 /** True when a part is worth the forecast line: anything that moves the numbers a driver feels. */
 export function forecastWorthy(item: PartItem): boolean {
   const d = partDef(item.id);
-  return ['engine', 'cooling', 'wheels', 'gearbox', 'suspension', 'brakes', 'exhaust', 'hood', 'doorL', 'doorR'].includes(d.slot);
+  return ['engine', 'cooling', 'wheels', 'gearbox', 'suspension', 'brakes', 'exhaust', 'hood', 'doorL', 'doorR'].includes(d.slot) || isInteriorSlot(d.slot);
 }

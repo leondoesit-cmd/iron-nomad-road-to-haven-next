@@ -107,6 +107,7 @@ export class ControlsMenu {
                 if (p) p.viewFirst = st().firstPerson[i];
               },
             })),
+            num('cfov', 'Field of view', () => st().chaseFov, (v) => (st().chaseFov = v), 5, 70, 130, (v) => `${Math.round(v)}°`),
             num('fov', 'First-person field of view', () => st().fpFov, (v) => (st().fpFov = v), 5, 70, 120, (v) => `${Math.round(v)}°`),
             ...perSeat('cr', 'Crouch', (i) => ({ value: () => (st().toggleCrouch[i] ? 'TOGGLE' : 'HOLD'), step: () => (st().toggleCrouch[i] = !st().toggleCrouch[i]) })),
           ];
@@ -177,7 +178,8 @@ export class ControlsMenu {
         const s = input.settings;
         s.invertLookY = [false, false];
         s.toggleCrouch = [true, true];
-        s.fpFov = 100;
+        s.fpFov = 110;
+        s.chaseFov = 110;
         s.firstPerson = [false, false];
         for (const p of g.scene?.players ?? []) p.viewFirst = false;
       }

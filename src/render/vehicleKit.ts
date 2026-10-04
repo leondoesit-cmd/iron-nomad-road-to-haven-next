@@ -49,6 +49,16 @@ export interface VehicleVisual {
   tails?: THREE.Mesh[];
   /** The car's windows, in the chassis frame. */
   panes?: PaneSet;
+  /** The cabin: floor, headliner, seats, dash, in a mesh of its own (see `interior.ts`). */
+  interior?: THREE.Mesh;
+  /** The engine bay under a bonnet that opens: hidden until the bonnet is up (see `bayMesh.ts`). */
+  bay?: THREE.Mesh;
+  /** The bay mesh stays drawn with the bonnet shut: a bonnet with a hole cut in it shows the engine standing through it. */
+  bayAlways?: boolean;
+  /** The steering wheel's rim, turned with the steering. */
+  steerWheel?: THREE.Object3D;
+  /** Sit an occupant in their seat, every frame after the pose; `drop` is how far a missing seat lets them sink. */
+  seat?: (who: 'driver' | 'passenger', h: Humanoid, drop: number) => void;
   smoke: THREE.Object3D;
   /** Where the second seat's occupant stands (bed gun post or passenger seat), in the chassis frame. */
   gunSeat: [number, number, number];

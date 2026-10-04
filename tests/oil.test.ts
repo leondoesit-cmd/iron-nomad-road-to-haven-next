@@ -134,7 +134,9 @@ describe('oil in the vehicle model', () => {
   });
 
   it('pulling an engine drains the sump into a can; a burnt-out car has none', () => {
-    const ctx = { seed: 123, kind: 'car' as const, chassis: 'sedan', burnt: false };
+    const car = newBuild('sedan', { seed: 5 });
+    car.comp.oil = 0.7;
+    const ctx = { seed: 123, kind: 'car' as const, chassis: 'sedan', burnt: false, build: car };
     const l = salvageLoot(1, ctx);
     expect(l.oil).toBeGreaterThanOrEqual(0.2);
     expect(l.oil).toBeLessThanOrEqual(0.5);

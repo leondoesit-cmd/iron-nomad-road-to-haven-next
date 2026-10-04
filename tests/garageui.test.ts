@@ -8,7 +8,7 @@ import { SPRAY_CHARGES } from '../src/sim/paint';
 
 /** A host with no DOM: buttons are strings, actions are kept so a test can "press" them. */
 function host(mode: 'ledger' | 'field' = 'ledger', builds?: VehicleBuild[]) {
-  const c = new Campaign(['Ash', 'Rook'], false);
+  const c = new Campaign(undefined, false);
   if (builds) {
     c.garage.push(...builds);
     c.players[0].vehicle = builds[0].uid;
@@ -55,7 +55,7 @@ describe('the garage shows what is really in each mount', () => {
     const { view } = host('ledger', [b]);
     const html = view.html();
     expect(html).toMatch(/5\.7 L V8/i);
-    expect(html).toMatch(/BONNET CUT/);
+    expect(html).toMatch(/CUT HOOD OR REMOVE/);
     expect(html).toMatch(/WILL OVERHEAT/);
   });
 

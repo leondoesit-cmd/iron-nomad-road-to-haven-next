@@ -1,4 +1,4 @@
-import { FIT_SLOTS, PARTS, chassisDef, mountsFor, partDef, type Cost, type FuelType, type PartSlot, type Stocks, type VehicleDef } from '../data';
+import { FIT_SLOTS, PARTS, chassisDef, isInteriorSlot, mountsFor, partDef, type Cost, type FuelType, type PartSlot, type Stocks, type VehicleDef } from '../data';
 import { clamp } from '../core/math';
 import { newHealth, type VehicleHealth } from './damage';
 import { OIL_CRITICAL, OIL_LOW } from './oil';
@@ -9,6 +9,7 @@ import { factoryIdFor } from './drivetrain';
 import { COOLANT_LOW } from './fluids';
 import { fuelMismatch } from './fuel';
 import type { PanelPaint } from './paint';
+import type { CargoEntry } from './cargo';
 
 /** The two player colours, repeated here so the sim stays free of render imports. */
 export const PLAYER_PAINT = [0xff8a1f, 0x2f9bff] as const;
@@ -58,6 +59,8 @@ export interface VehicleBuild {
   tank: FuelType;
   /** Dents, loose and missing parts, and the mud and blood on the paint. Absent on a clean, straight vehicle. */
   body?: BodySave;
+  /** What rides on the outside (roof, bed, racks): loose or held by a holder. Absent when there is none. See `sim/cargo.ts`. */
+  cargo?: CargoEntry[];
 }
 
 export function freshComp(def: VehicleDef): BuildComp {
@@ -162,6 +165,11 @@ export const EMPTY_ID: Partial<Record<PartSlot, string>> = {
   hood: 'hood_none',
   doorL: 'door_none',
   doorR: 'door_none',
+  seatD: 'seat_none',
+  seatP: 'seat_none',
+  seatR: 'bench_none',
+  steer: 'steer_none',
+  dash: 'dash_none',
 };
 
 /** Slots a part can be taken off and left empty: everything that has a factory part or a placeholder. */
@@ -271,6 +279,22 @@ export function installPart(b: VehicleBuild, item: PartItem, at?: PartSlot | num
   return { ok: true, removed, note };
 }
 
+/** What a bonnet becomes when it is cut. */
+export const CUT_HOOD_ID = 'hood_cut';
+
+/**
+ * Cut a hole in the bonnet so an engine that does not fit under it can stand through. It turns whatever whole bonnet is on
+ * into `hood_cut` (keeping its condition) and cannot be undone: the only way back is a different bonnet from somewhere else.
+ */
+export function cutHood(b: VehicleBuild): { ok: boolean; reason?: string } {
+  if (!slotsOf(defOf(b)).includes('hood')) return { ok: false, reason: 'No bonnet to cut' };
+  const cur = b.fit.hood;
+  if (cur?.id === CUT_HOOD_ID) return { ok: false, reason: 'The bonnet is already cut' };
+  if (cur && partDef(cur.id).empty) return { ok: false, reason: 'There is no bonnet to cut' };
+  b.fit.hood = cur ? { ...cur, id: CUT_HOOD_ID } : newPart(CUT_HOOD_ID, PARTS.stockCondition);
+  return { ok: true };
+}
+
 /** Pull a part off. Stock components under it are worn: they never come back better than STOCK. */
 export function removePart(b: VehicleBuild, slot: PartSlot): PartItem | null {
   const out = partInSlot(b, slot);
@@ -330,20 +354,30 @@ export function dismantleYield(b: VehicleBuild): { stocks: Partial<Stocks>; item
   // Fitted parts come back worn, and so do the factory ones: engine, radiator, gearbox, tyres and the rest are real parts.
   for (const slot of FIT_SLOTS) {
     const it = partInSlot(b, slot);
-    if (it) items.push(it);
+    // Factory seats, wheel and dash are not worth hauling out of a breaker's yard; only what was fitted comes back.
+    if (it && !(isInteriorSlot(slot) && partDef(it.id).stock)) items.push(it);
   }
   for (let i = 0; i < b.tyres.length; i++) {
     const t = tyreAt(b, i);
     if (t) items.push(t);
   }
+  // Whatever was riding on the roof or in the bed comes back too.
+  let fuel = 0;
+  for (const e of b.cargo ?? []) {
+    if (e.c.kind === 'part') items.push(e.c.item);
+    else if (e.c.kind === 'fuel' && e.c.fuel !== 'diesel') fuel += e.c.amount;
+  }
   const frac = 0.55 + 0.45 * b.hp;
-  return { stocks: { scrap: Math.round((6 + def.hp / 14 + def.tier * 4) * frac), parts: Math.round((2 + def.physics.mass / 260) * frac) }, items };
+  return { stocks: { scrap: Math.round((6 + def.hp / 14 + def.tier * 4) * frac), parts: Math.round((2 + def.physics.mass / 260) * frac), ...(fuel > 0 ? { fuel } : {}) }, items };
 }
 
 /** Rebuild a build onto a different chassis (the Tier chain). Parts that do not fit are returned. */
 export function rebuildOnto(b: VehicleBuild, chassis: string): PartItem[] {
   const def = chassisDef(chassis);
   const spill: PartItem[] = [];
+  // A new frame has none of the old one's roof or bed: what rode there comes back as parts.
+  for (const e of b.cargo ?? []) if (e.c.kind === 'part') spill.push(e.c.item);
+  delete b.cargo;
   for (const slot of Object.keys(b.fit) as PartSlot[]) {
     const it = b.fit[slot];
     if (!it) continue;
@@ -398,6 +432,10 @@ export function conditionSummary(b: VehicleBuild): string {
   if (st.noDrive) bits.push('no gearbox');
   if (st.hoodOff) bits.push('no bonnet');
   if (st.doorsOff) bits.push(st.doorsOff === 2 ? 'no doors' : 'a door off');
+  if (st.noSteer) bits.push('no steering wheel');
+  if (st.noDriverSeat) bits.push('no driver seat');
+  if (st.noPassengerSeat) bits.push('no passenger seat');
+  if (st.noDash) bits.push('no dashboard');
   if (st.tyresGone) bits.push(`${st.tyresGone} wheel${st.tyresGone > 1 ? 's' : ''} bare`);
   if (b.comp.oil < OIL_CRITICAL) bits.push('oil dry');
   else if (b.comp.oil < OIL_LOW) bits.push('low on oil');

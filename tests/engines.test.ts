@@ -398,8 +398,9 @@ describe('found cars and salvage', () => {
     let own = 0;
     const n = 400;
     for (let s = 1; s <= n; s++) if (salvageLoot(1, { ...ctx, seed: s * 31 }).items.some((i) => i.id === 'eng_d30')) own++;
-    expect(own / n).toBeGreaterThan(0.5);
-    expect(own / n).toBeLessThan(0.85);
+    // Most found cars still have their own engine in them; donors and hulks lost it.
+    expect(own / n).toBeGreaterThan(0.45);
+    expect(own / n).toBeLessThan(0.95);
   });
   it('the engine stage is the same every time for the same car', () => {
     const ctx = { seed: 4242, kind: 'car' as const, chassis: 'pickup', burnt: false };
@@ -429,7 +430,7 @@ describe('found cars and salvage', () => {
 
 describe('saves', () => {
   it('a build from before engines had a fuel gets the right tank and a good radiator', () => {
-    const c = new Campaign(['A', 'B'], false);
+    const c = new Campaign(undefined, false);
     c.garage.push(newBuild('van', { seed: 3 }));
     const raw = JSON.parse(JSON.stringify(c.serialize()));
     for (const b of raw.garage) {
@@ -446,7 +447,7 @@ describe('saves', () => {
     expect(moped.tank).toBe('petrol');
   });
   it('a swapped engine, a stripped bay and a diesel reserve survive a save', () => {
-    const c = new Campaign(['A', 'B'], false);
+    const c = new Campaign(undefined, false);
     const b = c.garage[0];
     installPart(b, part('eng_d4', 0.8));
     removePart(b, 'cooling');

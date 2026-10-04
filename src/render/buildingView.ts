@@ -544,10 +544,12 @@ export class BuildingView {
   }
 
   /**
-   * Cut the building away for a viewer: with the focus inside, the roof and every storey above theirs are hidden.
-   * Furniture is skipped for cameras far away.
+   * Cut the building away for a viewer. With the focus inside, every storey up to theirs stays (so the floors below
+   * show), and a storey above (or the roof) goes only if it would sit between the camera and them: the camera is
+   * over its floor, or inside the footprint. A third-person camera outside and level with the player sees the whole
+   * building. Furniture is skipped for cameras far away.
    */
-  setView(focus: { x: number; y: number; z: number } | null, camX: number, camZ: number) {
+  setView(focus: { x: number; y: number; z: number } | null, camX: number, camY: number, camZ: number) {
     const p = this.plan;
     let inside = false;
     let level = 0;
@@ -555,8 +557,10 @@ export class BuildingView {
       inside = true;
       level = Math.max(0, Math.min(p.levels - 1, Math.floor((focus.y - p.floorY + 0.4) / p.levelH)));
     }
-    if (this.roof) this.roof.visible = !inside;
-    this.levels.forEach((g, i) => (g.visible = !inside || i <= level));
+    const camIn = this.contains(camX, camZ, 0.3);
+    const blocks = (baseY: number) => camIn || camY > baseY - 0.3;
+    if (this.roof) this.roof.visible = !inside || !blocks(p.floorY + p.levels * p.levelH);
+    this.levels.forEach((g, i) => (g.visible = !inside || i <= level || !blocks(p.floorY + i * p.levelH)));
     const near = Math.hypot(camX - this.cx, camZ - this.cz) < 110 + this.radius;
     for (const m of this.insides) m.visible = near;
   }

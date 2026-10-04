@@ -141,13 +141,14 @@ export class Game {
     try {
       const raw = localStorage.getItem('ironnomad.settings');
       if (!raw) return;
-      const s = JSON.parse(raw) as { quality?: QualityPreset; ui?: number; layout?: 'horizontal' | 'vertical'; vol?: number; music?: number; mouse?: number; solo?: boolean; input?: unknown };
+      const s = JSON.parse(raw) as { quality?: QualityPreset; ui?: number; layout?: 'horizontal' | 'vertical'; vol?: number; music?: number; tts?: boolean; mouse?: number; solo?: boolean; input?: unknown };
       if (s.solo) this.setSolo(true);
       if (s.quality && QUALITY[s.quality]) this.R.setQuality(s.quality);
       if (s.ui) this.hud.setScale(s.ui);
       if (s.layout) this.R.setLayout(s.layout);
       if (s.vol !== undefined) this.audio.setVolume(s.vol);
       if (s.music !== undefined) this.audio.setMusicVolume(s.music);
+      if (s.tts !== undefined) this.audio.setTtsEnabled(s.tts);
       if (s.mouse) this.input.settings.mouseSens = s.mouse;
       // Control settings: bindings, sensitivities, view. Saved since the first version only kept the mouse speed.
       this.input.importSettings(s.input);
@@ -160,7 +161,7 @@ export class Game {
     try {
       localStorage.setItem(
         'ironnomad.settings',
-        JSON.stringify({ quality: this.R.quality, ui: this.hud.uiScale, layout: this.R.layout, vol: this.audio.volume, music: this.audio.musicVolume, mouse: this.input.settings.mouseSens, solo: this.solo, input: this.input.exportSettings() }),
+        JSON.stringify({ quality: this.R.quality, ui: this.hud.uiScale, layout: this.R.layout, vol: this.audio.volume, music: this.audio.musicVolume, tts: this.audio.ttsEnabled, mouse: this.input.settings.mouseSens, solo: this.solo, input: this.input.exportSettings() }),
       );
     } catch {
       /* ignore */
@@ -201,7 +202,7 @@ export class Game {
   newCampaign() {
     this.world = null;
     this.setSolo(this.solo);
-    this.campaign = new Campaign([this.overlays.callsign(0), this.overlays.callsign(1)], this.solo);
+    this.campaign = new Campaign(this.overlays.heroes(), this.solo);
     this.campaign.seed = (Math.random() * 1e6) | 0;
   }
 
@@ -451,7 +452,7 @@ export class Game {
   private startAttract() {
     this.disposeScene();
     this.setSolo(this.solo);
-    const c = new Campaign(['Ash', 'Rook'], this.solo);
+    const c = new Campaign(this.overlays.heroes(), this.solo);
     for (const [i, chassis] of (this.solo ? [[0, 'buggy']] : [[0, 'buggy'], [1, 'quad']]) as readonly (readonly [0 | 1, string])[]) {
       const b = newBuild(chassis, { paint: PLAYER_PAINT[i], seed: 40 + i });
       c.addVehicle(b, i);

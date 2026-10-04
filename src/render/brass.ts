@@ -5,7 +5,7 @@ import * as THREE from 'three';
  * floor with a ring, rolling to a stop and staying where they land. One instanced mesh for all of them.
  */
 
-export type ShellKind = 'pistol' | 'rifle' | 'hull';
+export type ShellKind = 'pistol' | 'rifle' | 'hull' | 'carbine' | 'magnum';
 
 interface Spec {
   /** Radius and length, metres. Drawn a little over life size so a case still reads from the chase camera. */
@@ -18,7 +18,11 @@ const SPEC: Record<ShellKind, Spec> = {
   pistol: { r: 0.0058, len: 0.022, color: [0.86, 0.62, 0.26] },
   rifle: { r: 0.0068, len: 0.05, color: [0.82, 0.58, 0.24] },
   hull: { r: 0.0115, len: 0.062, color: [0.62, 0.09, 0.07] },
+  // A short, slim rifle case (5.56) and a fat nickel-bright magnum case: each reads differently on the floor.
+  carbine: { r: 0.0057, len: 0.038, color: [0.8, 0.6, 0.28] },
+  magnum: { r: 0.0078, len: 0.034, color: [0.78, 0.78, 0.72] },
 };
+const KINDS: ShellKind[] = ['pistol', 'rifle', 'hull', 'carbine', 'magnum'];
 
 const GRAVITY = 9.81;
 const REST_BOUNCE = 0.42;
@@ -88,7 +92,7 @@ export class Brass {
     this.rest[i] = 0;
     this.bounces[i] = 0;
     this.age[i] = 0;
-    this.kind[i] = kind === 'pistol' ? 0 : kind === 'rifle' ? 1 : 2;
+    this.kind[i] = KINDS.indexOf(kind);
     this.pos[i * 3] = x;
     this.pos[i * 3 + 1] = y;
     this.pos[i * 3 + 2] = z;
@@ -115,7 +119,7 @@ export class Brass {
       if (!this.used[i]) continue;
       top = i + 1;
       this.age[i] += dt;
-      const sp = SPEC[this.kind[i] === 0 ? 'pistol' : this.kind[i] === 1 ? 'rifle' : 'hull'];
+      const sp = SPEC[KINDS[this.kind[i]]];
       let fade = 1;
       if (this.age[i] > LIFE) {
         fade = 1 - (this.age[i] - LIFE) / FADE;

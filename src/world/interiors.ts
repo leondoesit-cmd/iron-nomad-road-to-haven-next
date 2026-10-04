@@ -1,6 +1,7 @@
 import { Rng, hash2 } from '../core/rng';
 import type { DrugId } from '../sim/drugs';
-import type { Stocks } from '../data';
+import { rollGunLoot } from '../sim/gunLoot';
+import { fits, GUN_ODDS, gunStashFor, rollItem, rollLoot, specFoot, specSize, SIZE_H, type GunStash, type ItemSize, type LootContext, type LootSpec, type LootTag } from '../sim/loot';
 import type { Aabb } from './layout';
 
 /**
@@ -17,7 +18,7 @@ export const T_EXT = 0.3;
 export const T_INT = 0.16;
 export const DOOR_W = 0.95;
 
-export type Look = 'house' | 'store' | 'barn' | 'warehouse' | 'motel' | 'shack';
+export type Look = 'house' | 'store' | 'barn' | 'warehouse' | 'motel' | 'shack' | 'garage' | 'dealership' | 'tyreshop';
 export type FloorMat = 'wood' | 'tile' | 'lino' | 'concrete' | 'carpet' | 'dirt';
 export type RoomRole = 'living' | 'kitchen' | 'bedroom' | 'bath' | 'hall' | 'storage' | 'sales' | 'office' | 'lobby' | 'barn' | 'shed' | 'workshop' | 'room';
 export type Side = 'w' | 'e' | 's' | 'n';
@@ -71,6 +72,10 @@ export type FurnKind =
   | 'toilet' | 'vanity' | 'tub'
   | 'desk' | 'deskchair' | 'filing' | 'locker' | 'safe'
   | 'gondola' | 'checkout' | 'cooler' | 'rack' | 'pallet' | 'crate' | 'barrel' | 'haybale' | 'workbench' | 'stall' | 'woodstove' | 'footlocker' | 'shelf'
+  /** The trades: an engine on its stand, heavy parts shelving, a wall rack of tyres, a stack of tyres on the floor, a roller tool chest. */
+  | 'enginestand' | 'partsshelf' | 'tyrerack' | 'tyrestack' | 'toolchest'
+  /** A wall rack of guns in a gun shop, a police station or an armoury: three tiers, each holds one gun lying on it. */
+  | 'gunrack'
   | 'rubble' | 'tipped';
 
 export interface Furn {
@@ -85,8 +90,12 @@ export interface Furn {
   h: number;
   seed: number;
   solid: boolean;
-  /** Searchable: what is inside and what the player is told. */
-  loot?: Partial<Stocks>;
+  /** Searchable (a closed locker, fridge or chest): the named things inside, and what the player is told. */
+  items?: LootSpec[];
+  /** Guns inside (a police locker, a gun shop's safe): rolled from the weapons table when searched. */
+  guns?: GunStash;
+  /** Surface slots (see `furnSlots`) that hold a loose item: the model leaves that spot clear instead of drawing clutter over it. */
+  used?: number[];
   /** Drugs among the loot. */
   drugs?: Partial<Record<DrugId, number>>;
   label?: string;
@@ -135,6 +144,43 @@ export interface BuildingPlan {
   roof: 'intact' | 'partial' | 'gone';
   /** Ground-floor room centres where the dead may be waiting. */
   lairs: { x: number; z: number }[];
+  /** What the place is for, which decides what lies in it (a garage holds engines, a pharmacy pills). */
+  use: LootContext;
+  /** Loose things lying on the furniture and the floor, each on something that justifies it. */
+  items: PlanItem[];
+  /** Where a car stands inside: the bays of a garage, the floor of a showroom. */
+  bays: { x: number; z: number; yaw: number }[];
+  /** Guns laid out on the racks and counters of an armed place, each a gun of `rollGunLoot(context, seed, depth)[index]`. */
+  guns: PlanGun[];
+}
+
+/** One gun on display: which of a seeded roll it is, and exactly where and how it lies. `y` is above the floor of its level. */
+export interface PlanGun {
+  context: GunStash['context'];
+  seed: number;
+  depth: 0 | 1 | 2;
+  index: number;
+  level: number;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  furn: number;
+}
+
+/** One loose item in a building: what it is and exactly where and how it lies. `y` is above the floor of its level. */
+export interface PlanItem {
+  spec: LootSpec;
+  level: number;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  tilt?: [number, number];
+  /** The piece of furniture it lies on or beside (an index into `furn`), and whether it is on it or on the floor beside it. */
+  furn: number;
+  mode: 'on' | 'beside';
+  context: LootContext;
 }
 
 export interface PlanInput {
@@ -150,6 +196,12 @@ export interface PlanInput {
   /** 0..1: how battered it is. */
   wear: number;
   roof: 'gable' | 'shed' | 'flat' | 'none';
+  /** What the place is for, when the look does not say (a store that is a pharmacy, a warehouse that is a depot). */
+  use?: LootContext;
+  /** How far from the start of the map, 0 to 1: better kit lies further out. */
+  reach?: number;
+  /** Cars standing inside (garage bays, showroom). */
+  cars?: number;
 }
 
 const PALETTE: Record<string, number[]> = {
@@ -177,7 +229,6 @@ const SIDE_YAW: Record<Side, number> = { w: Math.PI / 2, e: -Math.PI / 2, s: 0, 
 
 interface AgainstOpts {
   solid?: boolean;
-  loot?: Partial<Stocks>;
   label?: string;
   depth?: 0 | 1 | 2;
   gap?: number;
@@ -198,10 +249,20 @@ class Builder {
   root: Rect;
   lairs: { x: number; z: number }[] = [];
   roofState: BuildingPlan['roof'] = 'intact';
+  /** What the place is for, and how far out it is (see `PlanInput`). */
+  use: LootContext;
+  reach: number;
+  items: PlanItem[] = [];
+  guns: PlanGun[] = [];
+  bays: { x: number; z: number; yaw: number }[] = [];
+  /** The floor a parked car needs kept clear. */
+  bayKeep: Rect[] = [];
 
   constructor(public inp: PlanInput) {
+    this.use = inp.use ?? DEFAULT_USE[inp.look];
+    this.reach = inp.reach ?? 0.3;
     this.rng = new Rng(inp.seed * 2654435761);
-    this.levelH = inp.look === 'barn' ? 6.4 : inp.look === 'warehouse' ? 5.6 : inp.look === 'store' ? 3.2 : inp.look === 'shack' ? 2.5 : inp.look === 'motel' ? 2.7 : 2.8;
+    this.levelH = inp.look === 'barn' ? 6.4 : inp.look === 'warehouse' ? 5.6 : inp.look === 'garage' ? 4.6 : inp.look === 'dealership' ? 4.4 : inp.look === 'tyreshop' ? 4.0 : inp.look === 'store' ? 3.2 : inp.look === 'shack' ? 2.5 : inp.look === 'motel' ? 2.7 : 2.8;
     this.root = { x0: inp.x0 + T_EXT, x1: inp.x1 - T_EXT, z0: inp.z0 + T_EXT, z1: inp.z1 - T_EXT };
     for (let l = 0; l < inp.floors; l++) this.keep.push([]);
   }
@@ -367,6 +428,7 @@ class Builder {
       this.keep[s.level].push(this.stairKeep(s));
       if (this.keep[s.level + 1]) this.keep[s.level + 1].push(this.stairKeep(s));
     }
+    for (const k of this.bayKeep) this.keep[0].push(k);
   }
 
   stairRect(s: Stair): Rect {
@@ -455,12 +517,12 @@ class Builder {
       z = room.z1 - gap - d / 2;
       x = c;
     }
-    return this.put(level, room, { kind, level, x, z, yaw: SIDE_YAW[side], w, d, h, seed: this.rng.int(0, 999), solid: opts.solid ?? true, loot: opts.loot, label: opts.label, depth: opts.depth });
+    return this.put(level, room, { kind, level, x, z, yaw: SIDE_YAW[side], w, d, h, seed: this.rng.int(0, 999), solid: opts.solid ?? true, label: opts.label, depth: opts.depth });
   }
 
   /** Place an item anywhere in the room (centre, yaw free) if it fits. */
-  free(level: number, room: Room, kind: FurnKind, w: number, d: number, h: number, cx: number, cz: number, yaw: number, opts: { solid?: boolean; loot?: Partial<Stocks>; label?: string; depth?: 0 | 1 | 2 } = {}): Furn | null {
-    return this.put(level, room, { kind, level, x: cx, z: cz, yaw, w, d, h, seed: this.rng.int(0, 999), solid: opts.solid ?? true, loot: opts.loot, label: opts.label, depth: opts.depth });
+  free(level: number, room: Room, kind: FurnKind, w: number, d: number, h: number, cx: number, cz: number, yaw: number, opts: { solid?: boolean; label?: string; depth?: 0 | 1 | 2 } = {}): Furn | null {
+    return this.put(level, room, { kind, level, x: cx, z: cz, yaw, w, d, h, seed: this.rng.int(0, 999), solid: opts.solid ?? true, label: opts.label, depth: opts.depth });
   }
 
   private put(level: number, room: Room, f: Furn): Furn | null {
@@ -513,7 +575,7 @@ class Builder {
     return pts;
   }
 
-  private connected(level: number, room: Room): boolean {
+  connected(level: number, room: Room): boolean {
     const pts = this.roomPoints(level, room);
     if (pts.length < 1) return true;
     const R = 0.34;
@@ -540,9 +602,10 @@ class Builder {
         }
       }
     }
-    for (const o of this.furn) {
-      if (o.level !== level || !o.solid || o.h < 0.45) continue;
-      const r = furnRect(o);
+    // A car standing in a bay is as much in the way as a cabinet.
+    const obstacles: Rect[] = this.furn.filter((o) => o.level === level && o.solid && o.h >= 0.45).map(furnRect);
+    if (level === 0) obstacles.push(...this.bayKeep);
+    for (const r of obstacles) {
       if (r.x1 + R < room.x0 || r.x0 - R > room.x1 || r.z1 + R < room.z0 || r.z0 - R > room.z1) continue;
       const i0 = Math.max(0, Math.floor((r.x0 - R - room.x0) / C));
       const i1 = Math.min(nx - 1, Math.floor((r.x1 + R - room.x0) / C));
@@ -582,6 +645,19 @@ class Builder {
     return open >= free * 0.8;
   }
 
+  /** Is there floor for a thing to stand at (x, z), clear of furniture, doorways, stairs and the walls? */
+  floorFree(from: Furn, x: number, z: number): boolean {
+    const r: Rect = { x0: x - 0.34, x1: x + 0.34, z0: z - 0.34, z1: z + 0.34 };
+    const room = this.rooms.find((q) => q.level === from.level && x >= q.x0 && x <= q.x1 && z >= q.z0 && z <= q.z1);
+    if (!room || r.x0 < room.x0 + 0.1 || r.x1 > room.x1 - 0.1 || r.z0 < room.z0 + 0.1 || r.z1 > room.z1 - 0.1) return false;
+    if (this.keep[from.level].some((k) => rectOverlap(r, k))) return false;
+    for (const o of this.furn) {
+      if (o === from || o.level !== from.level || o.kind === 'rug') continue;
+      if (rectOverlap(r, furnRect(o), 0.02)) return false;
+    }
+    return true;
+  }
+
   /** The sides of a room that have a free stretch of wall, longest first, shuffled among near-equals. */
   wallsOf(room: Room): Side[] {
     const sides: Side[] = ['w', 'e', 's', 'n'];
@@ -604,47 +680,22 @@ class Builder {
   }
 }
 
-// ------------------------------------------------------------------------------------------ loot tables
+// ------------------------------------------------------------------------------------------ what lies where
 
 const pick = <T>(rng: Rng, arr: T[]) => arr[Math.floor(rng.next() * arr.length) % arr.length];
 
-function lootFor(rng: Rng, kind: FurnKind, wealth: number): Partial<Stocks> | undefined {
-  const r = rng.next();
-  // Rations and medicine are scarce; the building's scrap and parts are a supplement to what lies on the road.
-  const n = (lo: number, hi: number) => Math.max(1, Math.round((lo + (hi - lo) * rng.next() * wealth) * 0.5));
-  switch (kind) {
-    case 'fridge':
-      return r < 0.4 ? { rations: 1 } : { scrap: n(2, 4) };
-    case 'wardrobe':
-    case 'dresser':
-      return { scrap: n(4, 9), ...(r < 0.08 ? { medicine: 1 } : {}) };
-    case 'vanity':
-      return r < 0.55 ? { medicine: 1 } : { scrap: 2 };
-    case 'filing':
-    case 'desk':
-      return { scrap: n(3, 7), ...(r < 0.12 ? { tech: 1 } : {}) };
-    case 'locker':
-      return { parts: n(3, 7) + 1, ...(r < 0.4 ? { scrap: n(3, 6) } : {}) };
-    case 'workbench':
-      return { parts: n(5, 10) + 1, scrap: n(3, 6), ...(r < 0.2 ? { tech: 1 } : {}) };
-    case 'checkout':
-      return { scrap: n(6, 12), ...(r < 0.12 ? { tech: 1 } : {}) };
-    case 'cooler':
-      return r < 0.45 ? { rations: 1 } : { scrap: 2 };
-    case 'gondola':
-    case 'shelf':
-    case 'rack':
-      return r < 0.55 ? { scrap: n(4, 9) } : r < 0.67 ? { rations: 1 } : { parts: n(3, 6) };
-    case 'footlocker':
-      return { scrap: n(4, 8), parts: n(2, 5) };
-    case 'safe':
-      return { tech: 1 + (rng.chance(0.3) ? 1 : 0), scrap: n(8, 14), ...(r < 0.3 ? { medicine: 1 } : {}) };
-    case 'crate':
-      return { parts: n(2, 6), scrap: n(2, 5) };
-    default:
-      return undefined;
-  }
-}
+/** What a place is for when nothing says otherwise: the look of the building decides what lies in it. */
+const DEFAULT_USE: Record<Look, LootContext> = {
+  house: 'house',
+  store: 'shop',
+  barn: 'farm',
+  warehouse: 'warehouse',
+  motel: 'house',
+  shack: 'cache',
+  garage: 'garage',
+  dealership: 'dealership',
+  tyreshop: 'tyreshop',
+};
 
 const LABEL: Partial<Record<FurnKind, string>> = {
   fridge: 'the fridge',
@@ -654,16 +705,48 @@ const LABEL: Partial<Record<FurnKind, string>> = {
   filing: 'the filing cabinet',
   desk: 'the desk drawers',
   locker: 'the locker',
-  workbench: 'the workbench',
-  checkout: 'the till',
+  workbench: 'the workbench drawers',
   cooler: 'the cooler',
-  gondola: 'the shelves',
-  shelf: 'the shelves',
-  rack: 'the racking',
   footlocker: 'the footlocker',
   safe: 'the safe',
   crate: 'the crate',
+  toolchest: 'the tool chest',
 };
+
+/** The things that are closed containers: searched by hand. Everything else shows what is on it. */
+const CLOSED = new Set<FurnKind>(['fridge', 'wardrobe', 'dresser', 'vanity', 'filing', 'desk', 'locker', 'workbench', 'cooler', 'footlocker', 'safe', 'crate', 'toolchest']);
+
+/** What a closed container may hold, when it is not whatever the place sells. */
+const ONLY: Partial<Record<FurnKind, LootTag[]>> = {
+  fridge: ['food', 'water'],
+  cooler: ['food', 'water', 'med'],
+  vanity: ['med'],
+  filing: ['ammo', 'food'],
+  desk: ['ammo', 'food', 'med'],
+};
+
+/** What a piece of furniture is holding, by what the place is for and what the room it stands in is for. */
+function contextOf(b: Builder, f: Furn): LootContext {
+  const room = b.rooms.find((r) => r.level === f.level && f.x >= r.x0 - 0.01 && f.x <= r.x1 + 0.01 && f.z >= r.z0 - 0.01 && f.z <= r.z1 + 0.01);
+  const look = b.inp.look;
+  if (look === 'house' || look === 'motel') {
+    switch (room?.role) {
+      case 'kitchen':
+        return 'kitchen';
+      case 'bedroom':
+        return 'bedroom';
+      case 'bath':
+        return 'bathroom';
+      case 'office':
+        return 'office';
+      default:
+        return 'house';
+    }
+  }
+  if (room?.role === 'bath') return 'bathroom';
+  if (room?.role === 'office' && b.use !== 'police' && b.use !== 'military') return 'office';
+  return b.use;
+}
 
 /** What might be tucked away in a piece of furniture. A roll off the furniture's own position, so the build stays as it was. */
 function drugsFor(f: Furn): Partial<Record<DrugId, number>> | undefined {
@@ -679,8 +762,6 @@ function drugsFor(f: Furn): Partial<Record<DrugId, number>> | undefined {
       return r < 0.08 ? { weed: 1 } : undefined;
     case 'wardrobe':
       return r < 0.06 ? { weed: 1 } : undefined;
-    case 'checkout':
-      return r < 0.1 ? { alcohol: 1 } : undefined;
     case 'safe':
       return r < 0.3 ? { alcohol: 1 } : r < 0.45 ? { adrenaline: 1 } : r < 0.53 ? { lsd: 1 } : undefined;
     default:
@@ -688,13 +769,275 @@ function drugsFor(f: Furn): Partial<Record<DrugId, number>> | undefined {
   }
 }
 
+/** A safe or a footlocker holds more than the building's trade: the cache table. */
+function ctxFor(ctx: LootContext, f: Furn): LootContext {
+  return f.kind === 'safe' && ctx !== 'police' && ctx !== 'military' ? 'cache' : ctx;
+}
+
+/** A closed container that may be worth a search: what is inside is rolled from its context and its own seed. */
 function searchable(b: Builder, f: Furn | null, wealth: number, depth: 0 | 1 | 2 = 0, chance = 1) {
-  if (!f || !b.rng.chance(chance)) return f;
-  f.loot = lootFor(b.rng, f.kind, wealth);
+  void wealth;
+  if (!f || !CLOSED.has(f.kind) || !b.rng.chance(chance)) return f;
+  const ctx = contextOf(b, f);
+  f.depth = f.kind === 'safe' ? 2 : f.kind === 'locker' || f.kind === 'workbench' || f.kind === 'footlocker' || f.kind === 'toolchest' ? 1 : depth;
+  const base = (Math.imul(b.inp.seed | 0, 2654435761) ^ Math.imul(Math.round(f.x * 100), 374761393) ^ Math.imul(Math.round(f.z * 100), 668265263) ^ f.level) | 0;
+  for (let t = 0; t < 4 && !f.items?.length; t++) f.items = rollLoot(ctxFor(ctx, f), base + t * 7919, f.depth, { progress: b.reach, only: ONLY[f.kind] });
   f.drugs = drugsFor(f);
   f.label = LABEL[f.kind];
-  f.depth = f.kind === 'safe' ? 2 : f.kind === 'locker' || f.kind === 'workbench' || f.kind === 'footlocker' ? 1 : depth;
+  // Where guns belong (a gun shop, a police station, a bunker, now and then a home) a closed container may hold some.
+  const g = gunStashFor(ctx, f.kind, f.depth);
+  if (g && hash2(Math.round(f.x * 10), Math.round(f.z * 10), b.inp.seed + 17) < (GUN_ODDS[g.context] ?? 0)) f.guns = { ...g, seed: base };
   return f;
+}
+
+// ------------------------------------------------------------------------------------------ surfaces
+
+/**
+ * A place on a piece of furniture where one thing can lie: a spot on a bench top, a shelf board, a rack bay, an engine stand.
+ * `x`, `z` and `y` are in the furniture's frame (origin on the floor at the middle of the footprint, +z the front); `w` and
+ * `d` are the free surface there, `cap` the biggest thing it can take, and `board` which shelf it is (so the model can leave
+ * the spot clear). A `floor` slot is on the floor in front of the furniture, where a thing leans against it.
+ */
+export interface FurnSlot {
+  board: number;
+  x: number;
+  z: number;
+  y: number;
+  w: number;
+  d: number;
+  cap: ItemSize;
+  only?: LootTag[];
+  floor?: boolean;
+}
+
+/** The biggest size whose model stands under this much clearance. */
+function capFor(clear: number): ItemSize {
+  const sizes: ItemSize[] = ['large', 'medium', 'small', 'tiny'];
+  return sizes.find((s) => SIZE_H[s] + 0.02 <= clear) ?? 'tiny';
+}
+
+const slot = (board: number, x: number, z: number, y: number, w: number, d: number, cap: ItemSize, extra: Partial<FurnSlot> = {}): FurnSlot => ({ board, x, z, y, w, d, cap, ...extra });
+
+/** Shelf boards: the spacing the model draws (`shelf` in render/furniture.ts) and the tops of its boards. */
+export function shelfBoards(h: number): { y: number; clear: number }[] {
+  const n = Math.max(3, Math.round(h / 0.45));
+  const sp = (h - 0.2) / (n - 1);
+  const out: { y: number; clear: number }[] = [];
+  for (let i = 0; i < n - 1; i++) out.push({ y: 0.12 + i * sp + 0.015, clear: sp - 0.03 });
+  return out;
+}
+
+/** Tops of the three tiers of a parts shelf (`partsshelf` in render/furniture.ts) and the clearance above each. */
+export const PARTS_SHELF = [{ y: 0.12, clear: 0.8 }, { y: 0.87, clear: 0.65 }, { y: 1.52, clear: 0.55 }];
+/** Tiers of a tyre rack. */
+export const TYRE_RACK = [{ y: 0.14, clear: 0.7 }, { y: 0.86, clear: 0.7 }];
+
+/** Tops of the three tiers of a gun rack. */
+export const GUN_RACK = [0.5, 0.9, 1.3];
+
+/** Where a gun can lie on this piece of furniture: the tiers of a gun rack, the till counter of an armed shop. Heading is the gun's own (barrel along the furniture's width). */
+export function gunSpots(f: Furn): { x: number; y: number; z: number; yaw: number }[] {
+  if (f.kind === 'gunrack') return GUN_RACK.map((y, i) => ({ x: f.x, y: y + 0.03, z: f.z, yaw: f.yaw + Math.PI / 2 + (i % 2 ? 0 : Math.PI) }));
+  if (f.kind === 'checkout' || f.kind === 'counter') {
+    const sl = furnSlots(f)[0];
+    if (!sl) return [];
+    const w = slotWorld(f, sl);
+    return [{ x: w.x, y: sl.y, z: w.z, yaw: f.yaw + Math.PI / 2 + 0.25 }];
+  }
+  return [];
+}
+
+export function furnSlots(f: Furn): FurnSlot[] {
+  const { w, d, h } = f;
+  switch (f.kind) {
+    case 'workbench':
+      return w >= 1.7 ? [slot(0, -w * 0.28, 0.04, h, 0.7, d - 0.12, 'large'), slot(0, w * 0.14, 0.04, h, 0.7, d - 0.12, 'large')] : [slot(0, -w * 0.12, 0.04, h, 0.62, d - 0.12, 'medium')];
+    case 'counter': {
+      const wide = w >= 1.5;
+      return wide ? [slot(0, -w / 2 + 0.4, 0.05, 0.92, 0.6, d - 0.1, 'small'), slot(0, w / 2 - 0.4, 0.05, 0.92, 0.6, d - 0.1, 'small')] : [slot(0, 0, 0.05, 0.92, Math.min(0.5, w - 0.1), d - 0.1, 'small')];
+    }
+    case 'checkout':
+      return [slot(0, w * 0.36, 0.05, 1.045, 0.44, d - 0.2, 'small')];
+    case 'table':
+      return [slot(0, 0, 0, h, Math.min(0.6, w - 0.2), Math.min(0.5, d - 0.2), 'small')];
+    case 'dresser':
+      return [slot(0, w * 0.22, 0, h + 0.04, 0.3, 0.3, 'tiny')];
+    case 'nightstand':
+      return [slot(0, -0.1, 0, h, 0.2, 0.2, 'tiny')];
+    case 'vanity':
+      return [slot(0, w * 0.32, 0.02, 0.84, 0.2, 0.2, 'tiny', { only: ['med'] })];
+    case 'coffeetable':
+      return [slot(0, -w * 0.2, 0, h, 0.4, 0.3, 'small')];
+    case 'shelf': {
+      const out: FurnSlot[] = [];
+      const two = w >= 1.1;
+      shelfBoards(h).forEach((bd, i) => {
+        for (const x of two ? [-w * 0.25, w * 0.25] : [0]) out.push(slot(i, x, 0, bd.y, Math.min(0.5, w * 0.4), d - 0.08, capFor(bd.clear)));
+      });
+      return out;
+    }
+    case 'partsshelf': {
+      const out: FurnSlot[] = [];
+      PARTS_SHELF.forEach((bd, i) => {
+        for (const x of [-w * 0.24, w * 0.24]) out.push(slot(i, x, 0, bd.y, w * 0.44, d - 0.08, capFor(bd.clear)));
+      });
+      return out;
+    }
+    case 'gondola': {
+      const out: FurnSlot[] = [];
+      for (let i = 0; i < 3; i++) {
+        const y = 0.22 + i * 0.4 + 0.0125;
+        for (const x of [-w * 0.3, 0, w * 0.3]) for (const z of [-0.17, 0.17]) out.push(slot(i, x, z, y, 0.4, 0.22, i === 2 ? 'small' : 'tiny'));
+      }
+      return out;
+    }
+    case 'rack': {
+      const out: FurnSlot[] = [];
+      const bays = Math.max(1, Math.round(w / 1.8));
+      const sp = (h - 0.3) / 3;
+      for (let l = 0; l < 2; l++) for (let i = 0; i < bays; i++) out.push(slot(l, -w / 2 + ((i + 0.5) * w) / bays, 0, 0.2 + l * sp + 0.045, Math.min(1.0, w / bays - 0.2), d - 0.2, 'large'));
+      return out;
+    }
+    case 'pallet':
+      return [slot(0, 0, 0, 0.145, w - 0.2, d - 0.2, 'large')];
+    case 'crate':
+      return [slot(0, 0, 0, h, w - 0.2, d - 0.2, 'medium')];
+    case 'barrel':
+      return [slot(0, 0, 0, h + 0.015, 0.36, 0.36, 'small', { only: ['fuel', 'oil', 'water'] })];
+    case 'enginestand':
+      return [slot(0, 0, 0, h, w - 0.06, d - 0.06, 'large', { only: ['engine'] })];
+    case 'tyrerack': {
+      const out: FurnSlot[] = [];
+      TYRE_RACK.forEach((bd, k) => {
+        for (let c = 0; c < 3; c++) out.push(slot(k, -w / 2 + ((c + 0.5) * w) / 3, 0, bd.y, w / 3 - 0.1, d - 0.2, 'medium', { only: ['tyre'] }));
+      });
+      return out;
+    }
+    case 'tyrestack':
+      return [slot(0, 0, d / 2 + 0.42, 0, 0.7, 0.4, 'medium', { only: ['tyre'], floor: true })];
+    default:
+      return [];
+  }
+}
+
+/** Does this thing fit on this surface: low enough for the clearance, and no bigger than the free board it stands on? */
+export function fitsSlot(spec: LootSpec, s: FurnSlot): boolean {
+  if (!fits(specSize(spec), s.cap)) return false;
+  const foot = specFoot(spec);
+  const fw = foot.turn ? foot.d : foot.w;
+  const fd = foot.turn ? foot.w : foot.d;
+  return fw <= s.w + 0.02 && fd <= s.d + 0.02;
+}
+
+/** Where a slot is in the world: furniture at (x, z) turned by `yaw`, the slot at (lx, lz) in its frame. */
+export function slotWorld(f: Furn, s: FurnSlot): { x: number; z: number } {
+  const c = Math.cos(f.yaw);
+  const n = Math.sin(f.yaw);
+  return { x: f.x + s.x * c + s.z * n, z: f.z - s.x * n + s.z * c };
+}
+
+/** How likely a loose thing lies on each surface, by what the place is for. */
+function slotChance(f: Furn, ctx: LootContext): number {
+  switch (f.kind) {
+    case 'enginestand':
+      return 0.92;
+    case 'tyrerack':
+      return 0.8;
+    case 'tyrestack':
+      return 0.7;
+    case 'partsshelf':
+      return 0.5;
+    case 'workbench':
+      return ctx === 'garage' ? 0.85 : ctx === 'farm' ? 0.7 : 0.4;
+    case 'pallet':
+      return 0.55;
+    case 'rack':
+      return 0.5;
+    case 'crate':
+      return 0.3;
+    case 'barrel':
+      return 0.4;
+    case 'shelf':
+      return ctx === 'pharmacy' || ctx === 'clinic' ? 0.5 : ctx === 'cache' || ctx === 'house' ? 0.28 : 0.3;
+    case 'gondola':
+      return ctx === 'pharmacy' || ctx === 'clinic' ? 0.4 : 0.14;
+    case 'counter':
+      return 0.4;
+    case 'checkout':
+      return 0.3;
+    case 'table':
+      return ctx === 'kitchen' ? 0.35 : 0.12;
+    case 'dresser':
+    case 'nightstand':
+      return ctx === 'bedroom' ? 0.25 : 0.08;
+    case 'vanity':
+      return 0.45;
+    case 'coffeetable':
+      return 0.06;
+    default:
+      return 0;
+  }
+}
+
+/** The most loose things a building of each look holds: a house keeps a few, a garage a bench full. */
+const MAX_ITEMS: Record<Look, number> = { house: 5, store: 9, barn: 8, warehouse: 18, motel: 6, shack: 4, garage: 14, dealership: 10, tyreshop: 12 };
+
+/**
+ * Put loose things on the furniture that justifies them: engines on their stands, tyres on the rack, parts on the bench and
+ * the shelving, cans on the drums, tins on the kitchen counter, pills by the sink. Each is drawn from the context of the
+ * furniture, sized to fit the surface, set down at a fixed heading. A separate random stream, so the layout of the rooms
+ * is what it was.
+ */
+function placeItems(b: Builder) {
+  const rng = new Rng((Math.imul(b.inp.seed | 0, 2246822519) ^ 0x1007) >>> 0);
+  const cap = MAX_ITEMS[b.inp.look];
+  const slack = 1 - b.inp.wear * 0.3;
+  for (let fi = 0; fi < b.furn.length && b.items.length < cap; fi++) {
+    const f = b.furn[fi];
+    const slots = furnSlots(f);
+    if (!slots.length) continue;
+    const ctx = contextOf(b, f);
+    const p = slotChance(f, ctx) * slack;
+    if (p <= 0) continue;
+    for (let si = 0; si < slots.length && b.items.length < cap; si++) {
+      const sl = slots[si];
+      if (!rng.chance(p)) continue;
+      const depth = (f.kind === 'enginestand' || f.kind === 'partsshelf' || f.kind === 'rack' ? 1 : 0) as 0 | 1;
+      let spec: LootSpec | null = null;
+      for (let t = 0; t < 5 && !spec; t++) {
+        const s = rollItem(ctx, rng, { progress: b.reach, depth, cap: sl.cap, only: sl.only });
+        if (!s) break;
+        if (fitsSlot(s, sl)) spec = s;
+      }
+      if (!spec) continue;
+      const { x, z } = slotWorld(f, sl);
+      if (sl.floor && !b.floorFree(f, x, z)) continue;
+      const foot = specFoot(spec);
+      const room = Math.max(0.04, Math.min(0.3, ((sl.w - (foot.turn ? foot.d : foot.w)) / Math.max(0.2, foot.w)) * 0.5));
+      const yaw = f.yaw + (foot.turn ? Math.PI / 2 : 0) + (rng.chance(0.5) ? 0 : Math.PI) + (rng.next() - 0.5) * 2 * room;
+      b.items.push({ spec, level: f.level, x, y: sl.y, z, yaw, tilt: sl.floor ? [-0.24, 0] : undefined, furn: fi, mode: sl.floor ? 'beside' : 'on', context: ctx });
+      (f.used ??= []).push(si);
+    }
+  }
+}
+
+/**
+ * Lay the stock of an armed place out where it can be seen: guns on the wall racks, one on the till counter. What each rack
+ * shows is `rollGunLoot` of its own seed, so the same building always shows the same guns; the scene rolls it again and takes
+ * `index`. A separate pass after the room layout, so it never moves furniture.
+ */
+function placeGuns(b: Builder) {
+  const use = b.use;
+  if (use !== 'gun_shop' && use !== 'police' && use !== 'military') return;
+  const depth: 0 | 1 | 2 = use === 'gun_shop' ? 1 : 0;
+  b.furn.forEach((f, fi) => {
+    if (f.kind !== 'gunrack' && f.kind !== 'checkout' && f.kind !== 'counter') return;
+    if (f.kind !== 'gunrack' && (f.level !== 0 || f.used?.includes(0))) return;
+    const spots = gunSpots(f);
+    const seed = (Math.imul(b.inp.seed | 0, 2654435761) ^ Math.imul(Math.round(f.x * 100), 374761393) ^ Math.imul(Math.round(f.z * 100), 668265263) ^ 0x6a5) | 0;
+    const n = rollGunLoot(use, seed, depth).length;
+    for (let i = 0; i < Math.min(n, spots.length); i++) b.guns.push({ context: use, seed, depth, index: i, level: f.level, ...spots[i], furn: fi });
+  });
 }
 
 // ------------------------------------------------------------------------------------------ furnishing by role
@@ -1038,6 +1381,14 @@ function genStore(b: Builder) {
     searchable(b, f, 1, 0, 0.6);
   }
   if (rng.chance(0.5)) b.free(0, salesRoom, 'crate', 0.8, 0.8, 0.6, salesRoom.x0 + 1, salesRoom.z1 - 1, rng.range(0, 3), { solid: true });
+  // A police station or a gun shop keeps its guns in lockers, a footlocker and a safe.
+  if (b.use === 'police' || b.use === 'gun_shop' || b.use === 'military') {
+    for (let i = 0; i < 3; i++) searchable(b, b.try(0, salesRoom, ['locker'], 0.5, 0.5, 1.8, {}, [backSide, 'n', 's']), 1, 1, 1);
+    searchable(b, b.try(0, salesRoom, ['footlocker'], 0.9, 0.5, 0.45, {}, [backSide, 'n', 's']), 1, 1, 1);
+    // Wall racks with the shop's stock laid out on them, for anyone to see before they take it.
+    for (let i = 0; i < (b.use === 'gun_shop' ? 3 : 2); i++) b.try(0, salesRoom, ['gunrack'], 1.5, 0.3, 1.7, {}, [backSide, 'n', 's']);
+    for (const r of rooms) if (r.role === 'office' || r.role === 'storage') searchable(b, b.try(0, r, ['safe'], 0.55, 0.55, 0.55), 1.2, 2, 1);
+  }
   for (const r of rooms) if (r !== salesRoom) furnishRoom(b, r, 1);
   for (const r of rooms) b.lairs.push({ x: (r.x0 + r.x1) / 2, z: (r.z0 + r.z1) / 2 });
 }
@@ -1211,6 +1562,175 @@ function genWarehouse(b: Builder) {
   for (const r of rooms) if (r !== hall && r.role === 'office') b.lairs.push({ x: (r.x0 + r.x1) / 2, z: (r.z0 + r.z1) / 2 });
 }
 
+// ------------------------------------------------------------------------------------------ the trades
+
+/** A car stands here: the floor under it is kept clear of furniture. `along` is the way it points on x, `len` and `wid` its box. */
+function carBay(b: Builder, room: Room, cx: number, cz: number, nose: 1 | -1, len = 5.2, wid = 2.9): boolean {
+  const rect: Rect = { x0: cx - len / 2, x1: cx + len / 2, z0: cz - wid / 2, z1: cz + wid / 2 };
+  // Half a metre clear of every doorway's apron, and of the stairs, so a person can get round it.
+  if (b.keep[0].some((k) => rectOverlap(rect, k, 0.5))) return false;
+  b.bays.push({ x: cx, z: cz, yaw: nose > 0 ? Math.PI / 2 : -Math.PI / 2 });
+  b.bayKeep.push(rect);
+  // A car that would cut a doorway off from the rest of the room is not parked there.
+  if (b.connected(0, room)) return true;
+  b.bays.pop();
+  b.bayKeep.pop();
+  return false;
+}
+
+/**
+ * A car on a workshop floor: just inside the gate and to one side of it, or, in a deeper hall, in line with it beyond the
+ * gate's clear apron. Tries a few spots and takes the first that leaves every doorway reachable.
+ */
+function workshopBay(b: Builder, hall: Room, gate: Opening | null) {
+  const door = b.inp.door;
+  const gz = gate ? (gate.a + gate.b) / 2 : (hall.z0 + hall.z1) / 2;
+  const mid = (hall.z0 + hall.z1) / 2;
+  const zs = [Math.max(hall.z0 + 1.6, Math.min(hall.z1 - 1.6, gz > mid ? gz - 3.9 : gz + 3.9)), mid, Math.max(hall.z0 + 1.6, Math.min(hall.z1 - 1.6, gz > mid ? gz - 2.4 : gz + 2.4))];
+  for (const inset of [3.9, 6.2]) {
+    if (hall.x1 - hall.x0 < inset * 2 + 0.6) continue;
+    const x = door > 0 ? hall.x1 - inset : hall.x0 + inset;
+    for (const z of zs) {
+      if (z - 1.45 < hall.z0 + 0.1 || z + 1.45 > hall.z1 - 0.1) continue;
+      // Before the apron of the gate the car would block the way in: only beside it.
+      if (inset < 5 && Math.abs(z - gz) < 3.2) continue;
+      if (carBay(b, hall, x, z, door > 0 ? -1 : 1)) return true;
+    }
+  }
+  return false;
+}
+
+/** Furniture against a side of a room, trying the sides in turn. */
+const tryAll = (b: Builder, room: Room, kind: FurnKind, w: number, d: number, h: number, sides: Side[], tries = 3, opts: AgainstOpts = {}) => {
+  let n = 0;
+  for (let i = 0; i < tries; i++) if (b.try(0, room, [kind], w, d, h, opts, sides)) n++;
+  return n;
+};
+
+/**
+ * A garage: a workshop hall with a car on the floor half taken apart, benches, parts shelving, engine stands, stacks of
+ * tyres, oil drums and a tool chest, and a back office with a toilet. The loot is the trade's own: engines on their
+ * stands, the parts on the bench and the shelves.
+ */
+function genGarage(b: Builder) {
+  const { inp, rng } = b;
+  b.addExterior(0);
+  const doorSide: Side = inp.door > 0 ? 'e' : 'w';
+  const backSide: Side = inp.door > 0 ? 'w' : 'e';
+  const offD = 3.2;
+  const corner = rng.chance(0.5);
+  const offRect: Rect = { x0: b.root.x0, x1: b.root.x1, z0: corner ? b.root.z0 : b.root.z1 - offD, z1: corner ? b.root.z0 + offD : b.root.z1 };
+  const hallRect: Rect = { ...b.root, z0: corner ? b.root.z0 + offD : b.root.z0, z1: corner ? b.root.z1 : b.root.z1 - offD };
+  const wall = b.addWall(0, 'x', corner ? b.root.z0 + offD : b.root.z1 - offD, b.root.x0, b.root.x1);
+  const offices = b.subdivide(0, offRect, 2, 1.5);
+  b.doorsFor([wall], []);
+  const rooms: Room[] = [];
+  offices.sort((p, q) => q.x1 - q.x0 - (p.x1 - p.x0)).forEach((r, i) => rooms.push(b.addRoom(0, r, i === 0 ? 'office' : 'bath', i === 0 ? 'carpet' : 'tile', i === 0 ? 'plain' : 'bath')));
+  const hall = b.addRoom(0, hallRect, 'workshop', 'concrete', 'industrial');
+  rooms.push(hall);
+  const gate = b.frontDoor(0, hall, 'gate', 3.6);
+  const rear = b.extWall(0, backSide);
+  if (rng.chance(0.5)) b.open(rear, (hall.z0 + hall.z1) / 2 + rng.range(-2, 2), 3.4, 'gate');
+  else b.open(rear, (hall.z0 + hall.z1) / 2 + rng.range(-2, 2), DOOR_W, 'door');
+  for (const side of ['n', 's'] as Side[]) {
+    const w = b.extWall(0, side);
+    for (let x = hall.x0 + 2; x < hall.x1 - 1.5; x += 4.2) b.open(w, x, 1.5, 'window', { sill: 2.5, head: 3.7, glass: pick(rng, ['intact', 'broken', 'broken'] as const) });
+  }
+  b.windows(0, rooms.filter((r) => r !== hall), { chance: 0.7, width: 1.1 });
+  // The car in the bay, nose to the back wall, in line with the gate it came in by.
+  b.noteAllDoors();
+  workshopBay(b, hall, gate);
+  b.noteAllDoors();
+  tryAll(b, hall, 'workbench', rng.pick([1.8, 2.2]), 0.75, 0.95, [backSide, 'n', 's'], 2);
+  tryAll(b, hall, 'partsshelf', 1.8, 0.55, 2.1, [corner ? 's' : 'n', corner ? 'n' : 's', backSide], 3);
+  tryAll(b, hall, 'enginestand', 0.95, 0.65, 0.5, [backSide, 'n', 's'], 2);
+  tryAll(b, hall, 'tyrestack', 0.75, 0.75, 1.0, [backSide, doorSide, 'n', 's'], 2);
+  const chest = b.try(0, hall, ['toolchest'], 0.7, 0.5, 1.1, {}, [backSide, 'n', 's']);
+  searchable(b, chest, 1, 1, 1);
+  for (let i = 0; i < 3; i++) b.try(0, hall, ['barrel'], 0.6, 0.6, 0.85, {}, [backSide, 'n', 's', doorSide]);
+  searchable(b, b.try(0, hall, ['locker'], 0.5, 0.5, 1.8, {}, [backSide, 'n', 's']), 1, 1, 0.8);
+  for (const r of rooms) if (r !== hall && r.role !== 'bath') furnishRoom(b, r, 1);
+  for (const r of rooms) if (r.role === 'bath') furnishRoom(b, r, 1);
+  b.lairs.push({ x: (hall.x0 + hall.x1) / 2, z: (hall.z0 + hall.z1) / 2 });
+}
+
+/**
+ * A tyre shop: one hall with the wall racks full of tyres, stacks on the floor, a counter with the till, a bench with the
+ * tyre machine, and sometimes a car up on the floor with its wheels off.
+ */
+function genTyreShop(b: Builder) {
+  const { inp, rng } = b;
+  b.addExterior(0);
+  const doorSide: Side = inp.door > 0 ? 'e' : 'w';
+  const backSide: Side = inp.door > 0 ? 'w' : 'e';
+  const hall = b.addRoom(0, b.root, 'workshop', 'concrete', 'industrial');
+  const gate = b.frontDoor(0, hall, 'gate', 3.2);
+  b.open(b.extWall(0, backSide), (hall.z0 + hall.z1) / 2 + rng.range(-1.5, 1.5), DOOR_W, 'door');
+  for (const side of ['n', 's'] as Side[]) {
+    const w = b.extWall(0, side);
+    for (let x = hall.x0 + 2; x < hall.x1 - 1.5; x += 4) b.open(w, x, 1.4, 'window', { sill: 2.3, head: 3.5, glass: pick(rng, ['intact', 'broken', 'broken'] as const) });
+  }
+  b.noteAllDoors();
+  if (rng.chance(0.6)) workshopBay(b, hall, gate);
+  b.noteAllDoors();
+  tryAll(b, hall, 'tyrerack', 2.4, 0.9, 2.3, [backSide, 'n', 's'], 4);
+  tryAll(b, hall, 'tyrestack', 0.75, 0.75, 1.0, [backSide, 'n', 's', doorSide], 3);
+  b.try(0, hall, ['counter'], 2.0, 0.6, 0.92, {}, ['n', 's', doorSide]);
+  searchable(b, b.try(0, hall, ['workbench'], 1.8, 0.75, 0.95, {}, [backSide, 'n', 's']), 1, 1, 0.8);
+  b.try(0, hall, ['barrel'], 0.6, 0.6, 0.85, {}, [backSide, 'n', 's']);
+  b.lairs.push({ x: (hall.x0 + hall.x1) / 2, z: (hall.z0 + hall.z1) / 2 });
+}
+
+/**
+ * A car dealership: a showroom with a glass front and a few cars on the floor, a sales desk, and a back strip with an
+ * office and the parts room (shelving, a counter, a rack of tyres).
+ */
+function genDealership(b: Builder) {
+  const { inp, rng } = b;
+  b.addExterior(0);
+  const doorSide: Side = inp.door > 0 ? 'e' : 'w';
+  const backSide: Side = inp.door > 0 ? 'w' : 'e';
+  // The parts room and the office are a strip along the back wall (full depth), the showroom takes the front.
+  const stripW = Math.min(4.6, (b.root.x1 - b.root.x0) * 0.32);
+  const stripRect: Rect = inp.door > 0 ? { ...b.root, x1: b.root.x0 + stripW } : { ...b.root, x0: b.root.x1 - stripW };
+  const showRect: Rect = inp.door > 0 ? { ...b.root, x0: b.root.x0 + stripW } : { ...b.root, x1: b.root.x1 - stripW };
+  const wall = b.addWall(0, 'z', inp.door > 0 ? b.root.x0 + stripW : b.root.x1 - stripW, b.root.z0, b.root.z1);
+  const parts = b.subdivide(0, stripRect, 2, 2.2);
+  b.doorsFor([wall], []);
+  const rooms: Room[] = [];
+  parts.sort((p, q) => q.z1 - q.z0 - (p.z1 - p.z0)).forEach((r, i) => rooms.push(b.addRoom(0, r, i === 0 ? 'storage' : 'office', i === 0 ? 'concrete' : 'carpet', 'plain')));
+  const show = b.addRoom(0, showRect, 'sales', 'tile', 'plain');
+  rooms.push(show);
+  const gate = b.frontDoor(0, show, 'gate', 3.8);
+  // The glass front: wide panes along the road wall either side of the way in.
+  const front = b.extWall(0, doorSide);
+  for (let z = show.z0 + 1.6; z < show.z1 - 1.2; z += 2.9) b.open(front, z, 2.4, 'window', { sill: 0.3, head: 2.9, glass: pick(rng, ['intact', 'broken', 'broken', 'boarded'] as const) });
+  for (const side of ['n', 's'] as Side[]) {
+    const w = b.extWall(0, side);
+    for (let x = show.x0 + 1.4; x < show.x1 - 1; x += 3.4) b.open(w, x, 1.8, 'window', { sill: 0.5, head: 2.8, glass: pick(rng, ['intact', 'broken', 'broken'] as const) });
+  }
+  b.windows(0, rooms.filter((r) => r !== show), { chance: 0.6, width: 1.1 });
+  // The showroom floor: two or three cars, angled a little the way a showroom does it.
+  void gate;
+  b.noteAllDoors();
+  const nCars = Math.max(1, Math.min(inp.cars ?? 3, Math.floor((show.z1 - show.z0 - 1.0) / 3.7)));
+  // Beyond the apron of the way in, nose to the glass.
+  const fx = inp.door > 0 ? show.x1 - 6.4 : show.x0 + 6.4;
+  for (let k = 0; k < nCars; k++) carBay(b, show, fx, show.z0 + 1.9 + ((k + 0.5) * (show.z1 - show.z0 - 3.8)) / nCars, inp.door > 0 ? 1 : -1, 5.0, 2.7);
+  b.noteAllDoors();
+  const sales = b.try(0, show, ['desk'], 1.6, 0.75, 0.75, {}, [backSide, 'n', 's']);
+  if (sales) b.free(0, show, 'deskchair', 0.5, 0.5, 0.9, sales.x + Math.sin(sales.yaw) * 0.85, sales.z + Math.cos(sales.yaw) * 0.85, sales.yaw + 3.14 + rng.range(-0.5, 0.5), { solid: false });
+  b.try(0, show, ['armchair'], 0.85, 0.85, 0.85, {}, [backSide, 'n', 's']);
+  for (const r of rooms) {
+    if (r.role === 'storage') {
+      tryAll(b, r, 'partsshelf', 1.8, 0.55, 2.1, ['w', 'e', 's', 'n'], 3);
+      b.try(0, r, ['counter'], 1.8, 0.6, 0.92, {}, ['w', 'e', 's', 'n']);
+      b.try(0, r, ['tyrerack'], 2.4, 0.9, 2.3, {}, ['w', 'e', 's', 'n']);
+    } else furnishRoom(b, r, 1);
+  }
+  for (const r of rooms) b.lairs.push({ x: (r.x0 + r.x1) / 2, z: (r.z0 + r.z1) / 2 });
+}
+
 // ------------------------------------------------------------------------------------------ damage
 
 function weather(b: Builder) {
@@ -1271,8 +1791,19 @@ export function generatePlan(inp: PlanInput): BuildingPlan {
     case 'shack':
       genShack(b);
       break;
+    case 'garage':
+      genGarage(b);
+      break;
+    case 'tyreshop':
+      genTyreShop(b);
+      break;
+    case 'dealership':
+      genDealership(b);
+      break;
   }
   weather(b);
+  placeItems(b);
+  placeGuns(b);
   return {
     x0: inp.x0,
     x1: inp.x1,
@@ -1292,6 +1823,10 @@ export function generatePlan(inp: PlanInput): BuildingPlan {
     wells: b.wells,
     roof: b.roofState,
     lairs: b.lairs,
+    use: b.use,
+    items: b.items,
+    bays: b.bays,
+    guns: b.guns,
   };
 }
 
