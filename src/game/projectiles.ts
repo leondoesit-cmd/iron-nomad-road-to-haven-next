@@ -203,6 +203,7 @@ export class Projectiles {
         ctx.zombies.burnArea(b.x, b.z, b.r, 24, dt, b.owner?.index ?? -1);
         ctx.wildlife.burnArea(b.x, b.z, b.r, 24, dt, b.owner?.index ?? -1);
         ctx.raiders.burnArea(b.x, b.z, b.r, 18, dt);
+        ctx.travellers.burnArea(b.x, b.z, b.r, 18, dt, b.owner?.index ?? -1);
         if (b.tick <= 0) {
           b.tick = 0.5;
           for (const pl of ctx.players) {

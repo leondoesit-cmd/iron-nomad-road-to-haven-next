@@ -13,6 +13,10 @@ import { MERCS } from '../data';
 import { applyLoyalty, type Merc } from '../sim/loyalty';
 import { selectEnding, leaning, type EndingId } from '../sim/endings';
 import { PLAYER_CSS } from '../render/palette';
+import { LABEL, canAfford, costText, whole } from '../sim/resources';
+import { barkKey, buyLot, canHelp, sellLot, type TradeResult } from '../sim/travellers';
+import { requestCostText } from '../game/travellerFx';
+import type { Traveller } from '../game/travellers';
 import type { Game } from '../game/game';
 import type { CampScene } from '../game/campScene';
 import type { QualityPreset } from '../render/renderer';
@@ -518,6 +522,98 @@ export class Overlays {
       onDone: (choice, overridden) => done(resolveEffects(enc.choices[choice].effects, rng), overridden),
     });
     void ENCOUNTERS;
+  }
+
+  /**
+   * Someone on the road is asking for help. It is the same shared vote as a Roadside Encounter (agree, or the Lead decides),
+   * with the traveller's own words in it.
+   */
+  showRequest(tv: Traveller, done: (helped: boolean, overridden: boolean) => void) {
+    const g = this.game;
+    const kind = tv.request;
+    if (!kind) return done(false, false);
+    const cost = requestCostText(tv);
+    const can = canHelp(g.campaign.stocks, kind);
+    const rng = new Rng(g.campaign.seed + tv.id * 17);
+    this.vote({
+      kind: 'encounter',
+      title: t(`trav.ask.${kind}.title`),
+      text: t('trav.say', { who: tv.name, line: t(`trav.ask.${kind}.${tv.attitude}`) }),
+      choices: [{ label: t(`trav.ask.${kind}.give`, { cost }), sub: can ? undefined : escapeHtml(t('trav.note.cant', { cost })) }, { label: t('trav.ask.no') }],
+      lead: g.campaign.lead,
+      result: (i) => t('trav.say', { who: tv.name, line: t(barkKey(rng, i === 0 && can ? 'thanks' : `refused.${tv.attitude}`)) }),
+      onDone: (choice, overridden) => done(choice === 0, overridden),
+    });
+  }
+
+  /**
+   * A trader's cart. Either player can buy and sell with the shared stores, in Scrap; every press is one lot, and the
+   * panel stays open until someone walks on.
+   */
+  showTrade(tv: Traveller, done: () => void) {
+    const g = this.game;
+    const stock = tv.stock;
+    if (!stock) return done();
+    this.clear();
+    const c = g.campaign;
+    const rng = new Rng(g.campaign.seed + tv.id * 29);
+    let msg = t(barkKey(rng, 'trade.open'));
+    const acts = new Map<string, () => void>();
+    const btn = (id: string, label: string, act: () => void, enabled: boolean) => {
+      acts.set(id, act);
+      return `<button data-fid="${id}" ${enabled ? '' : 'disabled'}>${label}</button>`;
+    };
+    const verdict = (r: TradeResult, ok: string) => {
+      if (r === 'ok') {
+        g.audio.play('confirm');
+        msg = ok;
+      } else {
+        g.audio.play('deny');
+        msg = t(r === 'poor' ? 'trav.trade.poor' : r === 'sold' ? 'trav.trade.sold' : r === 'broke' ? 'trav.trade.broke' : 'trav.trade.short');
+      }
+      render();
+    };
+    const leave = () => {
+      g.audio.play('click');
+      done();
+    };
+    const render = () => {
+      const keys = g.focus.keys();
+      acts.clear();
+      const buys = stock.buy
+        .map((o, i) => {
+          const what = t(`trav.offer.${o.id}`);
+          return btn(`b${i}`, `${escapeHtml(what)} <span class="cost">${o.left > 0 ? costText(o.cost) : escapeHtml(t('trav.trade.sold'))}</span>`, () => verdict(buyLot(stock, c.stocks, i), t('trav.trade.bought', { what })), o.left > 0 && canAfford(c.stocks, o.cost));
+        })
+        .join('');
+      const sells = stock.sell
+        .map((o, i) => {
+          const what = t(`trav.offer.sell.${o.id}`);
+          const pay = o.pay.scrap ?? 0;
+          return btn(`s${i}`, `${escapeHtml(what)} <span class="cost">+${costText(o.pay)}</span>`, () => verdict(sellLot(stock, c.stocks, i), t('trav.trade.sellDone', { what, pay })), canAfford(c.stocks, o.take) && stock.purse >= pay);
+        })
+        .join('');
+      const have = (['scrap', 'rations', 'fuel', 'medicine', 'parts', 'tech'] as const).map((k) => `${LABEL[k]} ${k === 'fuel' ? c.stocks[k].toFixed(1) : whole(c.stocks[k])}`).join(' · ');
+      this.root.innerHTML = `<div class="enc panel paper" style="width:min(820px,95%)"><h2>${escapeHtml(t('trav.trade.title', { who: tv.name }))}</h2>
+        <p>${escapeHtml(t('trav.trade.text', { line: msg }))}</p>
+        <div class="mutedtxt">${escapeHtml(have)}</div>
+        <h3 style="margin-top:8px">${escapeHtml(t('trav.trade.buy'))}</h3><div class="card"><div class="btns">${buys}</div></div>
+        <h3 style="margin-top:8px">${escapeHtml(t('trav.trade.sell'))}</h3><div class="card"><div class="btns">${sells}</div><div class="mutedtxt" style="margin-top:4px">${escapeHtml(t('trav.trade.purse', { n: stock.purse }))}</div></div>
+        <div class="btnrow" style="margin-top:12px"><button data-fid="walk">${escapeHtml(t('trav.trade.walk'))}</button></div></div>`;
+      this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));
+      const items: FocusItem[] = [];
+      this.root.querySelectorAll<HTMLElement>('[data-fid]').forEach((el) => {
+        const id = el.dataset.fid!;
+        if (id === 'walk') return items.push({ el, press: leave });
+        const act = acts.get(id);
+        if (act) items.push({ el, press: () => act(), disabled: (el as HTMLButtonElement).disabled });
+      });
+      g.focus.setItems(items, keys);
+    };
+    render();
+    g.focus.onCancel = leave;
+    g.focus.cursor = [0, 0];
+    g.focus.active = true;
   }
 
   /** `siteIds` and `hubId` are given in the open world, where the choices depend on where the convoy stopped. */

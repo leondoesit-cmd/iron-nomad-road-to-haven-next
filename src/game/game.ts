@@ -15,6 +15,7 @@ import { CampScene } from './campScene';
 import { DelveScene, carryOf } from './delveScene';
 import type { DelveSite } from '../world/delveSites';
 import { applyEncounterEffects } from './encounterFx';
+import { resolveTravellerRequest } from './travellerFx';
 import { saveCampaign, loadCampaign } from '../save/save';
 import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { Workbench } from '../ui/garage';
@@ -365,6 +366,31 @@ export class Game {
         this.phase = 'leg';
         this.overlays.hideAll();
       });
+      return;
+    }
+    if (r.type === 'traveller' && this.scene instanceof LegScene) {
+      const sc = this.scene;
+      const tv = sc.travellers.byId(r.id);
+      if (!tv) return sc.resumeAfterTalk();
+      this.phase = 'vote';
+      sc.paused = true;
+      const finish = () => {
+        sc.paused = false;
+        sc.resumeAfterTalk();
+        this.phase = 'leg';
+        this.overlays.hideAll();
+      };
+      if (r.mode === 'trade') {
+        this.overlays.showTrade(tv, () => {
+          sc.travellers.endTalk(tv);
+          finish();
+        });
+      } else {
+        this.overlays.showRequest(tv, (helped, overridden) => {
+          resolveTravellerRequest(sc, tv, helped, overridden);
+          finish();
+        });
+      }
       return;
     }
     if ((r.type === 'dusk' || r.type === 'haven') && this.scene instanceof LegScene) {

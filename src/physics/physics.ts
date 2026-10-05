@@ -14,21 +14,25 @@ export const G = {
   BUILD: 0x0020,
   /** Furniture: solid to people and vehicles, invisible to the camera. */
   FURN: 0x0040,
+  /** Loose props (tyres, drums): dynamic bodies that vehicles and people can shove. */
+  LOOSE: 0x0080,
 } as const;
 
 export const groups = (member: number, filter: number) => ((member & 0xffff) << 16) | (filter & 0xffff);
 
 export const GROUPS = {
   /** Terrain, buildings, barricades. */
-  static: groups(G.STATIC, G.VEHICLE | G.PLAYER | G.PROP),
+  static: groups(G.STATIC, G.VEHICLE | G.PLAYER | G.PROP | G.LOOSE),
   /** Chassis: collides with static, other vehicles, players and props. */
-  vehicle: groups(G.VEHICLE, G.STATIC | G.VEHICLE | G.PLAYER | G.PROP | G.BUILD | G.FURN),
+  vehicle: groups(G.VEHICLE, G.STATIC | G.VEHICLE | G.PLAYER | G.PROP | G.BUILD | G.FURN | G.LOOSE),
   /** Capsule: collides with static, vehicles and built structures. */
-  player: groups(G.PLAYER, G.STATIC | G.VEHICLE | G.BUILD | G.FURN),
-  furn: groups(G.FURN, G.VEHICLE | G.PLAYER),
+  player: groups(G.PLAYER, G.STATIC | G.VEHICLE | G.BUILD | G.FURN | G.LOOSE),
+  furn: groups(G.FURN, G.VEHICLE | G.PLAYER | G.LOOSE),
   prop: groups(G.PROP, G.STATIC | G.VEHICLE),
   /** Camp structures (blocking elements). */
-  build: groups(G.BUILD, G.VEHICLE | G.PLAYER),
+  build: groups(G.BUILD, G.VEHICLE | G.PLAYER | G.LOOSE),
+  /** Loose props: solid to the ground, buildings, furniture, vehicles, people and each other; wheel rays ignore them so tyres ride over. */
+  loose: groups(G.LOOSE, G.STATIC | G.VEHICLE | G.PLAYER | G.FURN | G.BUILD | G.LOOSE),
   /** What wheel rays can hit: the ground, built things, and parts that have come off a vehicle and lie in the road. */
   wheelRays: groups(0xffff, G.STATIC | G.BUILD | G.PROP),
 };
@@ -44,6 +48,8 @@ export const FIXED_STEP = 1 / 60;
 export class PhysicsWorld {
   world: RAPIER.World;
   private pending: (() => void)[] = [];
+  /** What a collider is made of (a ballistics Surface name), by handle, for things that are not boxes of the world: props, stones. */
+  surfaces = new Map<number, string>();
 
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -96,6 +102,12 @@ export class PhysicsWorld {
     return m.shape === 'hull' || !m.indices ? this.addStaticHull(m.vertices, collisionGroups) : this.addStaticTrimesh(m.vertices, m.indices, collisionGroups);
   }
 
+  /** Note what a collider is made of, so a bullet that hits it knows. Returns the collider for chaining. */
+  tag<T extends Collider | null>(c: T, surface: string): T {
+    if (c) this.surfaces.set(c.handle, surface);
+    return c;
+  }
+
   /** Static convex hull of world-space vertices (x,y,z triples), or null when they are degenerate. */
   addStaticHull(vertices: Float32Array, collisionGroups = GROUPS.static): Collider | null {
     const desc = RAPIER.ColliderDesc.convexHull(vertices);
@@ -116,6 +128,7 @@ export class PhysicsWorld {
   }
 
   removeCollider(c: Collider) {
+    this.surfaces.delete(c.handle);
     this.world.removeCollider(c, false);
   }
 

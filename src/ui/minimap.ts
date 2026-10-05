@@ -335,7 +335,7 @@ export class MapPainter {
       const x = P.x(b.x, b.z);
       const y = P.y(b.x, b.z);
       if (o.rim > 0 && Math.hypot(x - P.px, y - P.py) > o.rim) continue;
-      g.fillStyle = b.kind === 'foe' ? '#ff4a3a' : b.kind === 'crew' ? '#7ddc7a' : '#c9b48a';
+      g.fillStyle = b.kind === 'foe' ? '#ff4a3a' : b.kind === 'crew' ? '#7ddc7a' : b.kind === 'folk' ? '#e6ecf5' : '#c9b48a';
       g.strokeStyle = 'rgba(0,0,0,0.7)';
       g.beginPath();
       g.arc(x, y, o.labels ? 3 : 2.4, 0, Math.PI * 2);

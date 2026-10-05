@@ -1,6 +1,6 @@
 import { bind } from '../sim/vitals';
 import * as THREE from 'three';
-import { ENEMIES, VEHICLES, boatDef, partDef, t, type LegDef } from '../data';
+import { ENEMIES, TRAVELLERS, VEHICLES, boatDef, partDef, t, type LegDef } from '../data';
 import { ChunkSource, type ChunkData } from '../world/chunkgen';
 import { CHUNK, groundHeight, heightAt, roadX, surfaceAt, waterAt as terrainWater, type Surface } from '../world/terrain';
 import type { Aabb, PickupSpawn, ScavContainer, ScavZone } from '../world/layout';
@@ -210,6 +210,16 @@ export class LegScene extends Scene {
     this.src.layout.ambushes.forEach((spec) => this.ambushes.push({ spec, state: this.memory?.ambushDone.has(spec.id) ? 'done' : 'idle', tries: 0, waiting: [], t: 0 }));
     this.gangCamps = new GangCamps(this, this.src.layout.gangCamps, this.gangKilled, this.mapSeen);
     this.raiders.onAlarm = (camp) => this.campAlarm(camp);
+    // People on the road keep clear of the gangs' yards and of anything solid, and open the game's screens to talk.
+    this.travellers.canWalk = (x, z) => !this.src.layout.blockedAt(x, z, 1.2) && !this.gangCamps.nearStanding(x, z, TRAVELLERS.rules.campClear);
+    this.travellers.onRumour = (x, z) => this.gangCamps.rumour(x, z);
+    this.travellers.onOffer = (o) => {
+      if (this.pendingResult || this.paused) return false;
+      this.pendingResult = true;
+      this.travellers.busy = true;
+      this.onResult({ type: 'traveller', mode: o.mode, id: o.id });
+      return true;
+    };
     this.src.layout.zones.forEach((zone) => this.zones.push({ zone, noise: 0, horde: 0, fired: this.training || !!this.memory?.zoneFired.has(zone.id) }));
     this.buildMines();
     this.registerDelves();
@@ -524,6 +534,7 @@ export class LegScene extends Scene {
     this.root.add(view.group);
     view.group.updateMatrixWorld(true);
     this.chunks.set(key, view);
+    this.looseProps.add(String(key), data.props);
     for (const a of data.aabbs) if (!a.physOnly) this.obs.add(a);
     // Pickups
     for (const p of data.pickups) {
@@ -563,6 +574,7 @@ export class LegScene extends Scene {
       for (const c of zone.containers) this.removeContainerView(c.id);
     }
     view.dispose();
+    this.looseProps.release(String(key));
     this.chunks.delete(key);
     this.landscape.setLoaded(view.data.cx, view.data.cz, false);
   }
@@ -1317,6 +1329,12 @@ export class LegScene extends Scene {
     this.pendingResult = false;
   }
 
+  /** A conversation with someone on the road is over. */
+  resumeAfterTalk() {
+    this.pendingResult = false;
+    this.travellers.busy = false;
+  }
+
   /** Planned city legs: name Founders' Square, the Great Synagogue and each named street the first time a player is in it. */
   private updatePlaces() {
     const L = this.src.layout;
@@ -1589,6 +1607,8 @@ export class LegScene extends Scene {
       this.wildlife.ambient(dt, this.biome, this.leg.theme ?? 'dust', this.leg.index);
       this.updateAmbushes(dt);
       this.gangCamps.update(dt);
+      // Not in the title demo (it holds `pendingResult` so nothing can open a screen there).
+      if (!this.pendingResult) this.travellers.ambient(dt);
       this.updateEncounters();
       this.updateTips();
     }
@@ -1756,6 +1776,7 @@ export class LegScene extends Scene {
     }
     for (const v of this.vehicles) if (v.faction === 'raider' && !v.wreck) pins.push({ x: v.position.x, z: v.position.z, kind: 'ambush', label: '' });
     for (const g of this.gangCamps.pins()) pins.push({ x: g.x, z: g.z, kind: 'threat', label: g.label });
+    for (const h of this.travellers.helpPins()) pins.push({ x: h.x, z: h.z, kind: 'encounter', label: h.label });
     for (const p of this.pings) pins.push({ x: p.x, z: p.z, kind: 'ping', label: '' });
     if (this.training) pins.push(...this.trainingPins);
     // Lakes and ways down only show once you are within a few hundred metres.

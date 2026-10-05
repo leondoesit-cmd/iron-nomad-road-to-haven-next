@@ -58,6 +58,31 @@ export class GangCamps {
     return !!this.camps.find((c) => c.spec.id === id)?.cleared;
   }
 
+  /**
+   * A camp the convoy has not yet come near, for someone on the road to tell them about: the nearest unbroken one within
+   * reach of (x, z). It goes on the map as though it had been seen.
+   */
+  rumour(x: number, z: number, reach = 1500): { gang: string; x: number; z: number } | null {
+    let best: CampState | null = null;
+    let bd = reach;
+    for (const c of this.camps) {
+      if (c.cleared || this.seen.has(`g${c.spec.id}`)) continue;
+      const d = Math.hypot(c.spec.x - x, c.spec.z - z);
+      if (d < bd) {
+        bd = d;
+        best = c;
+      }
+    }
+    if (!best) return null;
+    this.seen.add(`g${best.spec.id}`);
+    return { gang: GANGS[best.spec.gang].name, x: best.spec.x, z: best.spec.z };
+  }
+
+  /** Is (x, z) within `r` metres of a camp that still stands? */
+  nearStanding(x: number, z: number, r: number): boolean {
+    return this.camps.some((c) => !c.cleared && Math.hypot(c.spec.x - x, c.spec.z - z) < r);
+  }
+
   /** Pins for the compass and map: camps the convoy has seen and not yet broken. */
   pins(): { x: number; z: number; label: string }[] {
     const out: { x: number; z: number; label: string }[] = [];

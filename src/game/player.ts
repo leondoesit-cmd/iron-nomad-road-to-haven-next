@@ -117,7 +117,7 @@ const JUMP_BUFFER = 0.12;
 const BODY_R = 0.3;
 /** Seconds the use button is held before the drug belt opens. */
 const BELT_HOLD = 0.35;
-const RAY_STATIC = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
+const RAY_STATIC = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN | G.LOOSE);
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
@@ -353,7 +353,9 @@ export class Player implements Pilot {
     this.kcc.setMaxSlopeClimbAngle((55 * Math.PI) / 180);
     this.kcc.setMinSlopeSlideAngle((60 * Math.PI) / 180);
     this.kcc.enableSnapToGround(0.35);
-    this.kcc.setApplyImpulsesToDynamicBodies(false);
+    // Walking into a loose prop (a tyre, a drum) shoves it, with a person's weight behind it.
+    this.kcc.setApplyImpulsesToDynamicBodies(true);
+    this.kcc.setCharacterMass(70);
     this.cam.occlude = (from, dir, maxDist) => {
       const r = ctx.P.raycast(from.x, from.y, from.z, dir.x, dir.y, dir.z, maxDist, groups(0xffff, G.STATIC | G.BUILD));
       return r ? r.toi : Infinity;
@@ -1632,6 +1634,8 @@ export class Player implements Pilot {
     if (ar) dist = Math.min(dist, ar.dist);
     const ir = ctx.raiders.infantryRayTest(ox, oy, oz, _v.x, _v.y, _v.z, dist);
     if (ir) dist = Math.min(dist, ir.dist);
+    const tr = ctx.travellers.rayTest(ox, oy, oz, _v.x, _v.y, _v.z, dist);
+    if (tr) dist = Math.min(dist, tr.dist);
     // Ignore the player's own body: skip hits closer than the camera-to-player distance.
     const toPlayer = Math.hypot(this.pos.x - ox, this.pos.z - oz);
     if (dist < toPlayer * 0.9 && dist < 80) dist = Math.max(dist, toPlayer + 1);
@@ -2100,7 +2104,7 @@ export class Player implements Pilot {
     const f = s.yaw;
     const hx = this.pos.x + Math.sin(f) * 1.0;
     const hz = this.pos.z + Math.cos(f) * 1.0;
-    const hits = (ctx.zombies.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.wildlife.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.raiders.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel) ?? 0);
+    const hits = (ctx.zombies.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.wildlife.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.raiders.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel) ?? 0) + (ctx.travellers.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel) ?? 0);
     this.smashGlass(hx, hz, s.reach, s.dmg);
     ctx.phantoms.onSwing(this, hx, hz);
     if (hits <= 0) return;

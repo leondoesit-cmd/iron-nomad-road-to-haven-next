@@ -23,6 +23,7 @@ import type { Aabb } from '../world/layout';
 import type { Zombie } from './zombies';
 import type { Animal } from './wildlife';
 import type { Infantry } from './raiders';
+import type { Traveller } from './travellers';
 
 export interface ShotOpts {
   side: 'convoy' | 'raider';
@@ -74,9 +75,10 @@ type Hit =
   | { t: 'zombie'; dist: number; zombie: Zombie; head: boolean }
   | { t: 'infantry'; dist: number; unit: Infantry; head: boolean }
   | { t: 'animal'; dist: number; animal: Animal }
+  | { t: 'traveller'; dist: number; unit: Traveller; head: boolean }
   | { t: 'player'; dist: number; player: Player };
 
-const RAY_FILTER = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
+const RAY_FILTER = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN | G.LOOSE);
 /** The thickest slab a round is measured through. Anything more is a wall to the other side of the world. */
 const MAX_SLAB = 2.5;
 /** How far through a hollow box (a shipping container) a round is followed to find its far skin. */
@@ -194,6 +196,8 @@ export class Combat {
     const trace = o.tracer !== false && Math.random() < TRACER[kind].chance;
     this.bullets.push({ x: ox, y: oy, z: oz, vx: dx * spec.speed, vy: dy * spec.speed, vz: dz * spec.speed, spec, kind, o, ox, oz, range, travelled: 0, dead: false, trace, skipped: false });
     if (o.noise) ctx.sig.emit(ox, oz, o.noise * ctx.signatureMult, 'noise');
+    // Everyone within earshot on the road heard that.
+    ctx.travellers.heardShot(ox, oz);
   }
 
   /** Fly every round in the air one tick. */
@@ -321,6 +325,11 @@ export class Combat {
         best = { t: 'infantry', dist: inf.dist, unit: inf.unit, head: inf.head };
         bestD = inf.dist;
       }
+      const trv = ctx.travellers.rayTest(ox, oy, oz, dx, dy, dz, bestD);
+      if (trv && trv.dist < bestD) {
+        best = { t: 'traveller', dist: trv.dist, unit: trv.unit, head: trv.head };
+        bestD = trv.dist;
+      }
     } else {
       const pl = this.playerRay(ox, oy, oz, dx, dy, dz, bestD);
       if (pl && pl.dist < bestD) best = { t: 'player', dist: pl.dist, player: pl.player };
@@ -364,6 +373,15 @@ export class Combat {
         thickRun = 0.7;
         break;
       }
+      case 'traveller': {
+        const dmg = o.damage * frac * (h.head && o.headshots ? 2 : 1);
+        ctx.travellers.damage(h.unit, dmg, owner, { x: b.ox, z: b.oz });
+        ctx.gore.flesh(x, y, z, dx, dy, dz, dmg / Math.max(1, h.unit.def.hp));
+        this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
+        after = throughFlesh(spec, speed);
+        thickRun = 0.7;
+        break;
+      }
       case 'animal': {
         const a = h.animal;
         const dmg = o.damage * frac * (1 - a.def.armor * (1 - (o.pierce ?? 0)));
@@ -395,12 +413,19 @@ export class Combat {
         } else if (o.side === 'raider') {
           ctx.structureHit?.(h.handle, o.damage * frac * ctx.campaign.difficulty.damage);
         }
-        const box = v ? null : this.boxAt(h.x, h.y, h.z);
+        const tagged = v ? undefined : (ctx.P.surfaces.get(h.handle) as Surface | undefined);
+        // A tagged collider (a prop, a stone) is its own thing: not the box of the world that happens to stand beside it.
+        const box = v || tagged ? null : this.boxAt(h.x, h.y, h.z);
         const boxThin = box ? Math.min(box.maxX - box.minX, box.maxZ - box.minZ) : 0;
-        const surface: Surface = v ? 'car' : box ? surfaceOfBox(box.kind, boxThin, box.mat) : h.ny > 0.6 ? 'dirt' : 'stone';
+        const surface: Surface = v ? 'car' : tagged ? tagged : box ? surfaceOfBox(box.kind, boxThin, box.mat) : h.ny > 0.6 ? 'dirt' : 'stone';
         const info = SURFACES[surface];
         // Round things (rocks, tanks, pillars) are boxed roughly, so a mark put on the box would hang in the air beside them.
-        const exact = !box || !ROUGH_KINDS.has(box.kind);
+        const exact = tagged ? true : !box || !ROUGH_KINDS.has(box.kind);
+        // A loose prop (a drum, a tyre) is shoved by the round's momentum.
+        if (!v) {
+          const body = ctx.P.world.getCollider(h.handle)?.parent();
+          if (body && body.isDynamic()) body.applyImpulseAtPoint({ x: dx * spec.mass * speed, y: dy * spec.mass * speed, z: dz * spec.mass * speed }, { x: h.x, y: h.y, z: h.z }, true);
+        }
         ctx.gore.impact(surface, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dz, (speed / spec.speed) * (o.damage / 30), { moving: !!v, size: spec.hole, heavy: spec.hole >= 0.15, mark: exact });
         // How far through it goes is worked out before the blow is dealt: a pane that breaks or a wall that gives way is
         // not there to be measured afterwards, and the round should carry on through it.
@@ -550,6 +575,7 @@ export class Combat {
     ctx.zombies.blast(x, z, radius, damage, o.owner?.index ?? -1);
     ctx.wildlife.blast(x, z, radius, damage, o.owner?.index ?? -1);
     ctx.raiders.blast(x, z, radius, damage, o.owner?.index ?? -1, o.side !== 'raider');
+    ctx.travellers.blast(x, z, radius, damage, o.owner?.index ?? -1);
     for (const v of ctx.vehicles) {
       if (v.wreck) continue;
       const d = Math.hypot(v.position.x - x, v.position.z - z);
