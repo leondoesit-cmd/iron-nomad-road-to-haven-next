@@ -165,7 +165,7 @@ describe('what a round takes off a zombie', () => {
     let any = 0;
     for (let i = 0; i < 12; i++) {
       const zb = Z.spawn('walker', 0, 1, false);
-      Z.meleeHit(p as never, 0, 1, 0, 2, 85, cutOf('axe'));
+      Z.meleeHit(p as never, 0, 1, 0, 2, 85, undefined, cutOf('axe'));
       if (zb.wounds.mask) any++;
     }
     expect(any).toBeGreaterThan(8);
@@ -176,7 +176,7 @@ describe('what a round takes off a zombie', () => {
     const { Z, cut } = world([p]);
     for (let i = 0; i < 6; i++) {
       const zb = Z.spawn('walker', 0, 1, false);
-      Z.meleeHit(p as never, 0, 1, 0, 2, 48, cutOf('bat'));
+      Z.meleeHit(p as never, 0, 1, 0, 2, 48, undefined, cutOf('bat'));
       expect(zb.wounds.mask).toBe(0);
     }
     expect(cut.length).toBe(0);
@@ -257,7 +257,7 @@ describe('animals lose parts when shot', () => {
     let any = 0;
     for (let i = 0; i < 12; i++) {
       const hog = W.spawn('boar', 0, 1);
-      W.meleeHit(p as never, 0, 1, 0, 2, 58, cutOf('machete'));
+      W.meleeHit(p as never, 0, 1, 0, 2, 58, undefined, cutOf('machete'));
       if (hog.wounds.mask) any++;
     }
     expect(any).toBeGreaterThan(3);

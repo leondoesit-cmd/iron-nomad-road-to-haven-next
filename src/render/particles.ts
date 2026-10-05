@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { atmoUniforms } from './atmosphere';
 import { GLOBALS } from './materials';
 import { smokeTexture } from './proctex';
+import type { MuzzleFx } from '../sim/weaponfx';
 
 const vert = /* glsl */ `
 attribute float aSize;
@@ -36,7 +37,7 @@ void main() {
   vec2 uv = vec2( c.x * k - c.y * s, c.x * s + c.y * k ) + 0.5;
   vec4 t = texture2D( tPuff, uv );
   // Fade sprites that get right up to the lens instead of filling the screen.
-  float a = mix( smoothstep( 1.0, 0.25, length( c ) * 2.0 ), t.a, uLit ) * vColor.a * smoothstep( 0.4, 2.2, vDepth );
+  float a = mix( smoothstep( 1.0, 0.25, length( c ) * 2.0 ), t.a, uLit ) * vColor.a * smoothstep( 0.18, 0.9, vDepth );
   if ( a < 0.004 ) discard;
   vec3 col = vColor.rgb * mix( vec3( 1.0 ), uLight * ( 0.7 + t.r * 0.45 ), uLit );
   gl_FragColor = vec4( col, a );
@@ -196,8 +197,9 @@ export class Particles {
     this.smoke.emit(x + (Math.random() - 0.5) * 0.3, y, z + (Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.6, 1.8 + Math.random(), (Math.random() - 0.5) * 0.6, 1.8, 0.4, 2.2, 0.08, 0.08, 0.08, 0.6, -0.5, 0.6);
   }
 
-  fire(x: number, y: number, z: number, scale = 1) {
-    this.glow.emit(x + (Math.random() - 0.5) * 0.4 * scale, y, z + (Math.random() - 0.5) * 0.4 * scale, (Math.random() - 0.5) * 0.8, 1.6 + Math.random() * 1.4, (Math.random() - 0.5) * 0.8, 0.55 + Math.random() * 0.3, 0.8 * scale, 0.1, 1.0, 0.55, 0.15, 0.9, -1, 1.0);
+  /** A flame sprite. `deep` makes it a darker red-orange, for the body of a fire that would otherwise wash out pale against a bright sky. */
+  fire(x: number, y: number, z: number, scale = 1, deep = false) {
+    this.glow.emit(x + (Math.random() - 0.5) * 0.4 * scale, y, z + (Math.random() - 0.5) * 0.4 * scale, (Math.random() - 0.5) * 0.8, 1.6 + Math.random() * 1.4, (Math.random() - 0.5) * 0.8, 0.55 + Math.random() * 0.3, 0.8 * scale, 0.1, 1.0, deep ? 0.3 : 0.55, deep ? 0.05 : 0.15, deep ? 0.7 : 0.9, -1, 1.0);
   }
 
   spark(x: number, y: number, z: number, n = 6, speed = 6) {
@@ -247,6 +249,51 @@ export class Particles {
     this.glow.emit(x, y, z, 0, 0, 0, 0.07, size, size * 0.4, 1, 0.85, 0.4, 1, 0, 0);
   }
 
+  /**
+   * A gun going off, thrown down the line of the barrel: a hot core, a tongue of flame strung along the muzzle's heading,
+   * burning grains flung out of it and a wisp of smoke that stays behind. A shotgun is a bigger, longer, smokier version.
+   */
+  muzzle(x: number, y: number, z: number, dx: number, dy: number, dz: number, m: MuzzleFx) {
+    const [r, g, b] = m.tint;
+    this.glow.emit(x, y, z, dx * 1.5, dy * 1.5, dz * 1.5, 0.06, m.flash, m.flash * 0.35, 1, 0.95, 0.75, 1, 0, 0);
+    this.glow.emit(x + dx * 0.08, y + dy * 0.08, z + dz * 0.08, 0, 0, 0, 0.08, m.flash * 1.5, m.flash * 0.5, r, g * 0.8, b * 0.6, 0.55, 0, 0);
+    for (let i = 0; i < m.cone; i++) {
+      const t = (i + 0.5) / m.cone;
+      const d = m.reach * t;
+      const w = (1 - t * 0.6) * m.flash * 0.55;
+      this.glow.emit(x + dx * d + (Math.random() - 0.5) * 0.06, y + dy * d + (Math.random() - 0.5) * 0.06, z + dz * d + (Math.random() - 0.5) * 0.06, dx * 6, dy * 6, dz * 6, 0.05 + Math.random() * 0.04, w, w * 0.3, r, g * (1 - t * 0.35), b * (1 - t * 0.6), 0.9 - t * 0.35, 0, 0);
+    }
+    for (let i = 0; i < m.sparks; i++) {
+      const k = 6 + Math.random() * 12;
+      this.glow.emit(x + dx * 0.1, y + dy * 0.1, z + dz * 0.1, dx * k + (Math.random() - 0.5) * 5, dy * k + (Math.random() - 0.2) * 4, dz * k + (Math.random() - 0.5) * 5, 0.18 + Math.random() * 0.2, 0.07, 0.015, 1, 0.78, 0.35, 1, 12, 1.2);
+    }
+    // Powder smoke: a drift of puffs thrown out along the barrel that swell and hang in the air for a couple of seconds, greyer
+    // than the dust so it reads against a bright sky.
+    for (let i = 0; i < m.smoke * 2; i++) {
+      const k = 0.6 + Math.random() * 2.6;
+      const d = 0.15 + 0.12 * i;
+      this.smoke.emit(x + dx * d, y + dy * d, z + dz * d, dx * k + (Math.random() - 0.5) * 0.6, dy * k + 0.25 + Math.random() * 0.35, dz * k + (Math.random() - 0.5) * 0.6, 1.4 + Math.random() * 1.2, 0.18 + m.flash * 0.12, 0.9 + m.flash * 0.6, 0.44, 0.44, 0.47, 0.66, -0.2, 1.4);
+    }
+    // A fatter cloud that stays near the muzzle.
+    this.smoke.emit(x + dx * 0.25, y + dy * 0.25, z + dz * 0.25, dx * 0.5, 0.2, dz * 0.5, 2.2 + Math.random() * 0.8, 0.25 + m.flash * 0.2, 1.3 + m.flash * 0.8, 0.48, 0.48, 0.5, 0.46, -0.12, 1.0);
+  }
+
+  /** A thin wisp curling off a hot barrel or an open breech in the seconds after a shot. */
+  wisp(x: number, y: number, z: number, strength = 1) {
+    this.smoke.emit(x + (Math.random() - 0.5) * 0.02, y, z + (Math.random() - 0.5) * 0.02, (Math.random() - 0.5) * 0.12, 0.3 + Math.random() * 0.25, (Math.random() - 0.5) * 0.12, 1.1 + Math.random() * 0.9, 0.04 + 0.03 * strength, 0.22 + 0.12 * strength, 0.62, 0.62, 0.64, 0.2 + 0.12 * strength, -0.15, 1.1);
+  }
+
+  /** Embers and a lick of flame thrown out along the ground from where a burning bottle bursts. */
+  fireSplash(x: number, y: number, z: number, radius: number) {
+    for (let i = 0; i < 26; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = (1.5 + Math.random() * 4.5) * (radius / 3.6);
+      this.glow.emit(x, y + 0.2, z, Math.cos(a) * s, 0.8 + Math.random() * 2.2, Math.sin(a) * s, 0.45 + Math.random() * 0.45, 0.9 + Math.random() * 0.6, 0.15, 1, 0.45 + Math.random() * 0.25, 0.1, 0.95, 2, 1.4);
+    }
+    for (let i = 0; i < 8; i++) this.blackSmoke(x + (Math.random() - 0.5) * radius, y + 0.3, z + (Math.random() - 0.5) * radius);
+    this.flash(x, y + 0.5, z, radius * 1.1);
+  }
+
   explosion(x: number, y: number, z: number, size = 1) {
     for (let i = 0; i < 18; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -262,12 +309,14 @@ export class Particles {
   }
 }
 
-/** Short-lived bullet tracers. */
+/** Short-lived bullet tracers: a hot head and a tail that dims, and the whole streak fades out over its life. */
 export class Tracers {
   mesh: THREE.LineSegments;
   private pos: Float32Array;
   private col: Float32Array;
+  private base: Float32Array;
   private life: Float32Array;
+  private max: Float32Array;
   private n: number;
   private next = 0;
   private geo: THREE.BufferGeometry;
@@ -276,7 +325,9 @@ export class Tracers {
     this.n = n;
     this.pos = new Float32Array(n * 6);
     this.col = new Float32Array(n * 6);
+    this.base = new Float32Array(n * 6);
     this.life = new Float32Array(n);
+    this.max = new Float32Array(n).fill(0.09);
     this.geo = new THREE.BufferGeometry();
     this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
     this.geo.setAttribute('color', new THREE.BufferAttribute(this.col, 3).setUsage(THREE.DynamicDrawUsage));
@@ -285,19 +336,27 @@ export class Tracers {
     this.mesh.renderOrder = 6;
   }
 
-  add(ax: number, ay: number, az: number, bx: number, by: number, bz: number, r = 1, g = 0.85, b = 0.45) {
+  add(ax: number, ay: number, az: number, bx: number, by: number, bz: number, r = 1, g = 0.85, b = 0.45, life = 0.09) {
     const i = this.next;
     this.next = (this.next + 1) % this.n;
     this.pos.set([ax, ay, az, bx, by, bz], i * 6);
-    this.col.set([r, g, b, r * 0.3, g * 0.3, b * 0.3], i * 6);
-    this.life[i] = 0.09;
+    this.base.set([r * 0.25, g * 0.25, b * 0.25, r, g, b], i * 6);
+    this.col.set(this.base.subarray(i * 6, i * 6 + 6), i * 6);
+    this.life[i] = life;
+    this.max[i] = life;
   }
 
   update(dt: number) {
     for (let i = 0; i < this.n; i++) {
       if (this.life[i] > 0) {
         this.life[i] -= dt;
-        if (this.life[i] <= 0) this.pos.fill(0, i * 6, i * 6 + 6);
+        if (this.life[i] <= 0) {
+          this.pos.fill(0, i * 6, i * 6 + 6);
+          this.col.fill(0, i * 6, i * 6 + 6);
+        } else {
+          const f = this.life[i] / this.max[i];
+          for (let k = 0; k < 6; k++) this.col[i * 6 + k] = this.base[i * 6 + k] * f;
+        }
       }
     }
     (this.geo.attributes.position as THREE.BufferAttribute).needsUpdate = true;

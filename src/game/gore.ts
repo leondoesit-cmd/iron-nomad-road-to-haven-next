@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { G, groups } from '../physics/physics';
 import { SURFACES, type Surface, type Zone } from '../sim/ballistics';
-import { Brass, type ShellKind } from '../render/brass';
+import { Brass, type MagKind, type ShellKind } from '../render/brass';
 import { CELL, Decals } from '../render/decals';
 import { roadLift } from '../render/chunkview';
 import { Gibs } from '../render/gibs';
@@ -75,6 +75,12 @@ export class Gore {
       ring: (x, _y, z, loud) => {
         if (loud > 0.06) ctx.audio.play('shell', x, z, 0.12 + loud * 0.2);
       },
+      clunk: (x, _y, z, loud) => {
+        if (loud > 0.08) {
+          ctx.audio.play('thud', x, z, 0.1 + loud * 0.25);
+          ctx.audio.play('tink', x, z, 0.08 + loud * 0.15);
+        }
+      },
     });
     this.gibs = new Gibs({
       floorAt,
@@ -96,7 +102,7 @@ export class Gore {
   attach(root: THREE.Object3D) {
     root.add(this.decals.mesh);
     root.add(this.marks.mesh);
-    root.add(this.brass.mesh);
+    for (const m of this.brass.meshes) root.add(m);
     root.add(this.gibs.group);
   }
 
@@ -470,6 +476,11 @@ export class Gore {
       rz * out + fz * back + vz * 0.5 + (Math.random() - 0.5) * 0.6,
       kind,
     );
+  }
+
+  /** An empty magazine falls out of a gun at (x, y, z): it drops with a little of the hand's push and tumbles to the floor. */
+  dropMag(kind: MagKind, x: number, y: number, z: number, vx = 0, vz = 0) {
+    this.brass.dropMag(x, y, z, vx * 0.5 + (Math.random() - 0.5) * 0.5, -0.3 - Math.random() * 0.4, vz * 0.5 + (Math.random() - 0.5) * 0.5, kind);
   }
 
   // ------------------------------------------------------------------ per tick

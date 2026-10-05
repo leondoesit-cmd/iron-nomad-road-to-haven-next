@@ -4,6 +4,7 @@ import { clamp, damp, dist2, lerp, wrapAngle } from '../core/math';
 import type { Aabb } from '../world/layout';
 import type { Animal } from './wildlife';
 import { armDamageMult, damageFraction, legSpeedMult, limbsGone, maskOf, massOf, newWounds, staggerSpeed, wound, zoneOf, type AmmoSpec, type Wounds, type Zone } from '../sim/ballistics';
+import { MELEE, knockFor, type MeleeFeel } from '../sim/weaponfx';
 import type { ZombieRenderer } from '../render/zombieRender';
 import type { Ctx } from './ctx';
 import type { Player } from './player';
@@ -406,8 +407,11 @@ export class ZombieSystem {
     this.kill(zb, killer);
   }
 
-  /** `cut` is how well the weapon takes limbs off (see `cutOf`): an axe or a machete takes an arm or a leg off a walker in a stroke. */
-  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number, cut = 0) {
+  /**
+   * A swing of a weapon: everything in front of the player and within reach takes the blow, up to what the weapon can cleave
+   * through. Each body is shoved back (a heavy one moves less) and staggered. `cut` is how well the weapon takes limbs off (see `cutOf`). Returns how many it landed on.
+   */
+  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number, feel: MeleeFeel = MELEE.fist, cut = 0): number {
     let hit = 0;
     for (const zb of this.list) {
       if (zb.dead) continue;
@@ -423,16 +427,18 @@ export class ZombieSystem {
       zb.lastHit = { dx: ux, dz: uz, power: (dmg * k * Math.max(0.3, cut)) / zb.def.hp };
       const killed = this.damage(zb, dmg * k, { fromX: p.pos.x, fromZ: p.pos.z, killer: p.index });
       if (cut > 0) this.cutOff(zb, ux, uz, dmg * k, cut, killed, p.index);
-      zb.vx += (dx / (d || 1)) * 4;
-      zb.vz += (dz / (d || 1)) * 4;
-      zb.stun = Math.max(zb.stun, 0.35);
+      const push = knockFor(feel, massOf(zb.def.scale));
+      zb.vx += (dx / (d || 1)) * push;
+      zb.vz += (dz / (d || 1)) * push;
+      zb.stun = Math.max(zb.stun, feel.stun);
       hit++;
-      if (hit >= 2) break;
+      if (hit >= feel.cleave) break;
     }
     if (hit) {
       this.ctx.fx.blood(hx, p.pos.y + 1.1, hz, 4);
       this.ctx.audio.play('thud', hx, hz, 0.7);
     }
+    return hit;
   }
 
   /** A blade lands somewhere on the body, at random: an arm, a leg, now and then the head. Takes off what it cut through. */

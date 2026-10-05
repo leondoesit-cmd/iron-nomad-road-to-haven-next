@@ -204,7 +204,7 @@ describe('what is in hand', () => {
 
   it('a melee weapon on the belt is a hand of its own, with its own name and reach', () => {
     const { h, sc, p } = scene();
-    const hit = vi.spyOn(sc.zombies, 'meleeHit').mockImplementation(() => {});
+    const hit = vi.spyOn(sc.zombies, 'meleeHit').mockImplementation(() => 0);
     equip(p, 'm_machete', 3);
     expect(p.equip).toBe('melee');
     expect(p.heldName()).toBe('Machete');
@@ -222,7 +222,7 @@ describe('what is in hand', () => {
 
   it('a melee weapon does not fire the gun, and swings no faster than its pace', () => {
     const { h, sc, p } = scene();
-    const hit = vi.spyOn(sc.zombies, 'meleeHit').mockImplementation(() => {});
+    const hit = vi.spyOn(sc.zombies, 'meleeHit').mockImplementation(() => 0);
     const shoot = vi.spyOn(sc.combat, 'shoot');
     equip(p, 'm_axe', 3);
     h.intents[0].device = 'pad';
@@ -236,7 +236,7 @@ describe('what is in hand', () => {
 
   it('bare hands with a tool out still swing for the old 35 (plus gloves)', () => {
     const { h, sc, p } = scene();
-    const hit = vi.spyOn(sc.zombies, 'meleeHit').mockImplementation(() => {});
+    const hit = vi.spyOn(sc.zombies, 'meleeHit').mockImplementation(() => 0);
     p.gear.sel = 1;
     p.syncEquip();
     expect(p.equip).toBe('wrench');
@@ -250,6 +250,8 @@ describe('what is in hand', () => {
     h.intents[0].heldTime[Btn.RB] = 0.1;
     sc.tick(DT);
     h.intents[0].released = 0;
+    // The blow lands as the arm comes down, not on the click.
+    run(sc, 0.2);
     expect(hit).toHaveBeenCalled();
     expect(hit.mock.calls[0][5]).toBeCloseTo(35 * 1.05, 5);
     expect(hit.mock.calls[0][4]).toBeCloseTo(1.9, 5);
@@ -271,9 +273,10 @@ describe('guns', () => {
     expect(shoot).toHaveBeenCalledTimes(1);
     expect(shoot.mock.calls[0][6]).toMatchObject({ damage: 27, noise: 60, range: 75, pierce: undefined });
     shoot.mockClear();
-    p.fireCd = 0;
     equip(p, 'w_revolver', 3);
     expect(p.equip).toBe('gun');
+    // Bringing the revolver up takes a moment; this test is about its numbers.
+    p.fireCd = 0;
     fire(h, sc);
     expect(shoot).toHaveBeenCalledTimes(1);
     expect(shoot.mock.calls[0][6]).toMatchObject({ damage: 55, noise: 72, range: 90, pierce: 0.3 });
@@ -321,10 +324,10 @@ describe('guns', () => {
   it('fast gloves shorten the reload', () => {
     const { h, sc, c, p } = scene();
     c.ammo = 40;
-    p.mag = 1;
+    p.mag = 0;
     equip(p, 'g_tac');
     tap(h, sc, 0, Btn.X);
-    // 1.3 s less 20%.
+    // 1.3 s less 20% (an empty gun: no round in it to save the slide).
     expect(p.reloadT).toBeLessThan(1.1);
     expect(p.reloadT).toBeGreaterThan(0.9);
   });

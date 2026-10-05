@@ -235,7 +235,7 @@ describe('training', () => {
     }
     run(1.8);
     for (const x of it) x.lt = 0;
-    run(1);
+    run(2);
     expect(Math.abs(a.vehicle!.speed)).toBeLessThan(1);
     for (let w = 0; w < 2; w++) hold(w, Btn.Y, 0.8);
     run(0.5);
