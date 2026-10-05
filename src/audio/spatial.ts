@@ -116,7 +116,9 @@ export class SpatialAudioEngine {
       p.distanceModel = 'inverse';
       p.refDistance = refDist;
       p.maxDistance = 180;
-      p.rolloffFactor = 1.1;
+      // Distance falloff is already applied by the gain node above; a second inverse-distance curve in the panner
+      // made everything past a few metres vanish, so the panner only supplies direction.
+      p.rolloffFactor = 0;
       p.coneInnerAngle = 360;
 
       const t0 = ctx.currentTime;

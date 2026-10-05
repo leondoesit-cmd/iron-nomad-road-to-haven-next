@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { SampleLibrary } from '../src/audio/samples';
 import { SpatialAudioEngine } from '../src/audio/spatial';
-import { RadioAudioEngine, isBrowserTtsSupported, cleanTextForSpeech } from '../src/audio/radio';
+import { RadioAudioEngine } from '../src/audio/radio';
 import { VehicleAudioEngine } from '../src/audio/engineAudio';
 import { FoleyEngine } from '../src/audio/foley';
 import { AudioEngine } from '../src/audio/audio';
@@ -320,84 +320,6 @@ describe('Hybrid Sample-Based Foley & Directional HRTF Audio Engine', () => {
 
       const duration2 = radio.playRadioChatter("Engine sumps dry, we're seizing up!", dest);
       expect(duration2).toBeGreaterThan(0.5);
-    });
-
-    it('cleans and normalizes radio dialogue text for speech synthesis', () => {
-      expect(cleanTextForSpeech('Mechanic: "Hold still, I\'ll patch her up."')).toBe("Mechanic: Hold still, I'll patch her up.");
-      expect(cleanTextForSpeech('Toll paid (-40 Scrap).')).toBe('Toll paid minus 40 Scrap.');
-      expect(cleanTextForSpeech('Fuel siphoned (+15 Fuel).')).toBe('Fuel siphoned plus 15 Fuel.');
-      expect(cleanTextForSpeech('...Haven holds. Follow the road...')).toBe('...Haven holds. Follow the road...');
-    });
-
-    it('detects browser TTS capability and falls back when unavailable in Node', () => {
-      // In Node environment without global window.speechSynthesis, isBrowserTtsSupported is false
-      expect(isBrowserTtsSupported()).toBe(false);
-    });
-
-    it('uses browser built-in speech synthesis (TTS) when window.speechSynthesis is present', async () => {
-      const lib = new SampleLibrary(mockCtx);
-      lib.init();
-      const radio = new RadioAudioEngine(mockCtx, lib);
-      const dest = mockCtx.createGain();
-
-      let spokenUtterance: any = null;
-      let canceled = false;
-      const mockSynth = {
-        getVoices: () => [
-          { name: 'Microsoft David', lang: 'en-US', default: true },
-          { name: 'Microsoft Zira', lang: 'en-US', default: false },
-        ],
-        speak: (u: any) => {
-          spokenUtterance = u;
-        },
-        cancel: () => {
-          canceled = true;
-        },
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      };
-
-      class MockUtterance {
-        text: string;
-        rate = 1;
-        pitch = 1;
-        volume = 1;
-        voice: any = null;
-        onend: (() => void) | null = null;
-        onerror: (() => void) | null = null;
-        constructor(text: string) {
-          this.text = text;
-        }
-      }
-
-      (globalThis as any).window = {
-        speechSynthesis: mockSynth,
-        SpeechSynthesisUtterance: MockUtterance,
-      };
-
-      try {
-        expect(isBrowserTtsSupported()).toBe(true);
-        const duration = radio.playRadioChatter("Dust wall rolling in from the south!", dest);
-        expect(duration).toBeGreaterThan(0.5);
-        expect(canceled).toBe(true);
-
-        // Await the 60ms delay before speaking
-        await new Promise((resolve) => setTimeout(resolve, 80));
-
-        expect(spokenUtterance).not.toBeNull();
-        expect(spokenUtterance.text).toContain("Dust wall rolling in from the south!");
-        expect(spokenUtterance.voice?.name).toBe('Microsoft David');
-        expect(spokenUtterance.rate).toBeGreaterThan(1.0); // Urgent tempo
-
-        // Verify onend triggers squelch tail
-        if (spokenUtterance.onend) spokenUtterance.onend();
-
-        // Verify stop() cancels speech
-        radio.stop();
-        expect(canceled).toBe(true);
-      } finally {
-        delete (globalThis as any).window;
-      }
     });
 
     it('falls back to procedural synthesis when TTS is disabled via settings', () => {

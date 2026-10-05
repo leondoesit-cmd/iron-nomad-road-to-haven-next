@@ -233,6 +233,7 @@ export class Overlays {
             break;
           case 'tts':
             g.audio.setTtsEnabled(!g.audio.ttsEnabled);
+            g.saveSettings();
             break;
           case 'rm1':
             st.rumble[0] = !st.rumble[0];

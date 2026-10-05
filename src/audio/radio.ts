@@ -1,146 +1,74 @@
 import { clamp } from '../core/math';
 import type { SampleLibrary } from './samples';
+import { TTSEngine } from './tts';
 
 /**
- * Checks whether the browser's built-in Web Speech API (speechSynthesis)
- * is available in the current environment.
- */
-export function isBrowserTtsSupported(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    'speechSynthesis' in window &&
-    Boolean(window.speechSynthesis) &&
-    typeof (window as unknown as { SpeechSynthesisUtterance?: unknown }).SpeechSynthesisUtterance !== 'undefined' &&
-    typeof window.speechSynthesis.speak === 'function'
-  );
-}
-
-/**
- * Normalizes game text strings for speech synthesis:
- * - Expands (-40 Scrap) to "minus 40 Scrap"
- * - Expands (+10 Fuel) to "plus 10 Fuel"
- * - Cleans typographical quotes and formatting marks
- */
-export function cleanTextForSpeech(raw: string): string {
-  return raw
-    .replace(/\(-(\d+)\s*([^)]*)\)/gi, 'minus $1 $2')
-    .replace(/\(\+(\d+)\s*([^)]*)\)/gi, 'plus $1 $2')
-    .replace(/[«»"“”]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/**
- * Procedural Voice Barks & Walkie-Talkie Radio Chatter Engine.
+ * Contextual Voice Barks & Walkie-Talkie Radio Chatter Engine.
  * Features:
- * - Built-in browser Text-To-Speech (Web Speech API) integration for authentic spoken dialogue
  * - Authentic walkie-talkie bandpass filtering (420Hz HP - 2900Hz LP, 1.8kHz presence peak)
  * - Analog transistor diode saturation (WaveShaper)
  * - Heavy RF dynamics compression (12:1, fast attack)
  * - Tactical PTT mic clicks, CTCSS chirps, Roger beeps, and squelch tail static bursts
- * - Procedural formant-synthesized voice chatter fallback when TTS is unavailable or disabled
+ * - In-browser SpeechSynthesis TTS with speaker variation and radio carrier immersion
+ * - Procedural formant-synthesized voice chatter syllables fallback when TTS is unsupported
  */
 export class RadioAudioEngine {
   ctx: AudioContext;
   samples: SampleLibrary;
-  ttsEnabled = true;
-  masterVolume = 1;
+  tts: TTSEngine;
   private noiseBuf: AudioBuffer;
-  private voices: SpeechSynthesisVoice[] = [];
-  private voicesLoaded = false;
-  private activeUtterances = new Set<SpeechSynthesisUtterance>();
-  private activeChains = new Set<{
-    carrierStatic: AudioBufferSourceNode;
-    output: GainNode;
-  }>();
+  private masterVolume = 0.7;
+  private muted = false;
+  ttsEnabled = true;
+  voiceMode: 'tts' | 'synth' | 'off' = 'tts';
 
-  constructor(ctx: AudioContext, samples: SampleLibrary) {
+  private activeTransmission: {
+    finish: () => void;
+    timeoutId?: ReturnType<typeof setTimeout> | undefined;
+    chain: { input: GainNode; output: GainNode; carrierStatic: AudioBufferSourceNode };
+  } | null = null;
+
+  constructor(ctx: AudioContext, samples: SampleLibrary, tts?: TTSEngine) {
     this.ctx = ctx;
     this.samples = samples;
+    this.tts = tts || new TTSEngine();
     const len = ctx.sampleRate * 2;
     this.noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
     const d = this.noiseBuf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  }
 
-    this.initVoices();
+  setVolume(v: number) {
+    this.masterVolume = v;
+  }
+
+  setMuted(m: boolean) {
+    this.muted = m;
+    if (m) {
+      this.cancelActiveTransmission();
+    }
   }
 
   setTtsEnabled(enabled: boolean) {
     this.ttsEnabled = enabled;
-    if (!enabled) this.stop();
-  }
-
-  setVolume(vol: number) {
-    this.masterVolume = clamp(vol, 0, 1);
-    if (this.masterVolume <= 0) this.stop();
-  }
-
-  /**
-   * Immediately stops any active TTS utterances and active radio carrier hiss.
-   */
-  stop() {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch {
-        /* ignore */
-      }
-    }
-    this.activeUtterances.clear();
-    for (const chain of this.activeChains) {
-      try {
-        chain.output.gain.setValueAtTime(0.0001, this.ctx.currentTime);
-        chain.carrierStatic.stop(this.ctx.currentTime);
-      } catch {
-        /* ignore */
-      }
-    }
-    this.activeChains.clear();
-  }
-
-  private initVoices() {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    const load = () => {
-      try {
-        const v = window.speechSynthesis.getVoices();
-        if (v && v.length > 0) {
-          this.voices = v;
-          this.voicesLoaded = true;
-        }
-      } catch {
-        /* ignore */
-      }
-    };
-    load();
-    if (typeof window.speechSynthesis.addEventListener === 'function') {
-      window.speechSynthesis.addEventListener('voiceschanged', load);
-    } else if ('onvoiceschanged' in window.speechSynthesis) {
-      (window.speechSynthesis as unknown as { onvoiceschanged: () => void }).onvoiceschanged = load;
+    this.tts.enabled = enabled;
+    if (!enabled) {
+      this.cancelActiveTransmission();
     }
   }
 
-  private pickVoice(): SpeechSynthesisVoice | null {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
-    if (!this.voicesLoaded || this.voices.length === 0) {
-      try {
-        this.voices = window.speechSynthesis.getVoices() || [];
-        if (this.voices.length > 0) this.voicesLoaded = true;
-      } catch {
-        /* ignore */
-      }
+  cancelActiveTransmission() {
+    if (this.activeTransmission) {
+      this.activeTransmission.finish();
+      this.activeTransmission = null;
     }
-    if (this.voices.length === 0) return null;
+    this.tts.cancel();
+  }
 
-    // Filter English voices
-    const en = this.voices.filter((v) => v.lang && v.lang.toLowerCase().startsWith('en'));
-    const pool = en.length > 0 ? en : this.voices;
-
-    // Prefer clear tactical/dispatcher voices
-    const match = pool.find((v) => /guy|david|daniel|mark|george|alex|male|natural/i.test(v.name));
-    if (match) return match;
-
-    const def = pool.find((v) => v.default);
-    return def || pool[0] || null;
+  estimateDuration(text: string): number {
+    const words = text.split(/\s+/).filter((w) => w.length > 0);
+    // Average speech rate with radio PTT switch overhead
+    return Math.max(0.8, words.length * 0.35 + 0.5);
   }
 
   /** Builds the authentic walkie-talkie / CB radio DSP filter chain. */
@@ -218,18 +146,20 @@ export class RadioAudioEngine {
 
   /**
    * Plays a contextual radio bark with authentic PTT key-in,
-   * built-in browser speech synthesis (or procedural fallback), compression, and squelch tail.
+   * in-browser speech synthesis (or procedural fallback), compression, and squelch tail.
    */
   playRadioChatter(text: string, dest: AudioNode, vol = 1): number {
     const ctx = this.ctx;
     const t0 = ctx.currentTime;
+
+    // Cancel active transmission to avoid overlapping comms
+    this.cancelActiveTransmission();
+
     const chain = this.createRadioChain(dest);
     chain.output.gain.setValueAtTime(vol * 0.9, t0);
 
     // Start RF carrier
     chain.carrierStatic.start(t0);
-    const chainRef = { carrierStatic: chain.carrierStatic, output: chain.output };
-    this.activeChains.add(chainRef);
 
     // 1. PTT Mic Click-In (Tactical switch + squelch chirp)
     if (this.samples.micClickIn) {
@@ -241,124 +171,104 @@ export class RadioAudioEngine {
       pttIn.start(t0);
     }
 
-    const words = text.split(/\s+/).filter((w) => w.length > 0);
-    const isUrgent = text.includes('!') || /horde|seiz|run|wall|strike|ambush/i.test(text);
+    const estDuration = this.estimateDuration(text);
+    const useTTS = this.voiceMode === 'tts' && this.tts.hasSupport && this.ttsEnabled && !this.muted;
 
-    if (this.ttsEnabled && isBrowserTtsSupported()) {
-      return this.speakWithBrowserTts(text, chain, chainRef, t0, vol, words, isUrgent);
-    } else {
-      return this.playProceduralChatter(text, chain, chainRef, t0, vol, words, isUrgent);
+    if (useTTS) {
+      let finished = false;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+      const finishTransmission = () => {
+        if (finished) return;
+        finished = true;
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = undefined;
+        }
+
+        const tTail = ctx.currentTime;
+        // PTT Mic Click-Out & Squelch Tail (Roger Beep + Static Tail)
+        if (this.samples.micClickOut) {
+          const pttOut = ctx.createBufferSource();
+          pttOut.buffer = this.samples.micClickOut;
+          const g = ctx.createGain();
+          g.gain.value = 0.9;
+          pttOut.connect(g).connect(chain.input);
+          pttOut.start(tTail);
+        }
+
+        const stopTime = tTail + 0.12;
+        try {
+          chain.carrierStatic.stop(stopTime);
+        } catch {}
+
+        chain.output.gain.setValueAtTime(vol * 0.9, stopTime - 0.02);
+        chain.output.gain.linearRampToValueAtTime(0.0001, stopTime);
+
+        if (this.activeTransmission === current) {
+          this.activeTransmission = null;
+        }
+      };
+
+      timeoutId = setTimeout(finishTransmission, Math.max(1200, (estDuration + 2.5) * 1000));
+      const current = { finish: finishTransmission, timeoutId, chain };
+      this.activeTransmission = current;
+
+      const effectiveVol = clamp(vol * (this.muted ? 0 : this.masterVolume), 0, 1);
+      this.tts.speak(text, {
+        volume: effectiveVol,
+        onEnd: () => finishTransmission(),
+        onError: () => finishTransmission(),
+      });
+
+      return estDuration;
     }
+
+    // Fallback when TTS is unsupported (e.g. Node/Vitest test environment) or 'synth' mode
+    if (this.voiceMode === 'synth' || !this.tts.hasSupport) {
+      return this.playSynthSyllables(text, chain, t0, vol);
+    }
+
+    // Voice mode 'off': silent radio carrier & mic clicks only
+    const tailStart = t0 + estDuration - 0.08;
+    if (this.samples.micClickOut) {
+      const pttOut = ctx.createBufferSource();
+      pttOut.buffer = this.samples.micClickOut;
+      const g = ctx.createGain();
+      g.gain.value = 0.9;
+      pttOut.connect(g).connect(chain.input);
+      pttOut.start(tailStart);
+    }
+
+    const totalDur = tailStart - t0 + 0.12;
+    try {
+      chain.carrierStatic.stop(t0 + totalDur);
+    } catch {}
+
+    chain.output.gain.setValueAtTime(vol * 0.9, t0 + totalDur - 0.02);
+    chain.output.gain.linearRampToValueAtTime(0.0001, t0 + totalDur);
+
+    return totalDur;
   }
 
-  /** Built-in browser TTS speech synthesis with authentic radio squelch framing. */
-  private speakWithBrowserTts(
+  /**
+   * Procedural formant voice chatter syllables fallback (used when TTS is unsupported
+   * such as headless test suites, or explicitly configured).
+   */
+  playSynthSyllables(
     text: string,
     chain: { input: GainNode; output: GainNode; carrierStatic: AudioBufferSourceNode },
-    chainRef: { carrierStatic: AudioBufferSourceNode; output: GainNode },
     t0: number,
-    vol: number,
-    words: string[],
-    isUrgent: boolean,
-  ): number {
-    const ctx = this.ctx;
-    const cleanText = cleanTextForSpeech(text);
-    const speechSec = Math.max(0.8, words.length * 0.32);
-    const totalEstDur = speechSec + 0.35;
-
-    // Stop previous utterance
-    try {
-      window.speechSynthesis.cancel();
-    } catch {
-      /* ignore */
-    }
-    this.activeUtterances.clear();
-
-    const UtteranceClass =
-      (typeof window !== 'undefined' && (window as unknown as { SpeechSynthesisUtterance?: new (text: string) => SpeechSynthesisUtterance }).SpeechSynthesisUtterance) ||
-      (typeof globalThis !== 'undefined' && (globalThis as unknown as { SpeechSynthesisUtterance?: new (text: string) => SpeechSynthesisUtterance }).SpeechSynthesisUtterance);
-    if (!UtteranceClass) return 0;
-
-    const utter = new UtteranceClass(cleanText);
-    const voice = this.pickVoice();
-    if (voice) utter.voice = voice;
-
-    utter.rate = isUrgent ? 1.12 : 1.05;
-    utter.pitch = isUrgent ? 1.06 : /mechanic/i.test(text) ? 0.92 : 0.98;
-    utter.volume = clamp(vol * this.masterVolume, 0, 1);
-
-    let ended = false;
-    let safetyTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const finish = () => {
-      if (ended) return;
-      ended = true;
-      if (safetyTimer) {
-        clearTimeout(safetyTimer);
-        safetyTimer = null;
-      }
-      this.activeUtterances.delete(utter);
-      this.activeChains.delete(chainRef);
-
-      const tailStart = ctx.currentTime + 0.04;
-      if (this.samples.micClickOut) {
-        const pttOut = ctx.createBufferSource();
-        pttOut.buffer = this.samples.micClickOut;
-        const g = ctx.createGain();
-        g.gain.value = 0.9;
-        pttOut.connect(g).connect(chain.input);
-        pttOut.start(tailStart);
-      }
-
-      const tailDur = 0.16;
-      chain.output.gain.setValueAtTime(vol * 0.9, tailStart + tailDur - 0.04);
-      chain.output.gain.linearRampToValueAtTime(0.0001, tailStart + tailDur);
-      try {
-        chain.carrierStatic.stop(tailStart + tailDur);
-      } catch {
-        /* already stopped */
-      }
-    };
-
-    utter.onend = () => finish();
-    utter.onerror = () => finish();
-
-    // Prevent Chromium garbage-collection bug
-    this.activeUtterances.add(utter);
-
-    // Speak after brief 60ms delay so mic click-in begins first
-    setTimeout(() => {
-      if (ended) return;
-      try {
-        window.speechSynthesis.speak(utter);
-      } catch {
-        finish();
-      }
-    }, 60);
-
-    // Safety timeout in case browser drops onend
-    safetyTimer = setTimeout(() => {
-      finish();
-    }, Math.max(3000, (speechSec + 2.5) * 1000));
-
-    return totalEstDur;
-  }
-
-  /** Procedural formant-synthesized voice chatter syllables matching text cadence. */
-  private playProceduralChatter(
-    _text: string,
-    chain: { input: GainNode; output: GainNode; carrierStatic: AudioBufferSourceNode },
-    chainRef: { carrierStatic: AudioBufferSourceNode; output: GainNode },
-    t0: number,
-    vol: number,
-    words: string[],
-    isUrgent: boolean,
+    vol = 1,
   ): number {
     const ctx = this.ctx;
     const speechStart = t0 + 0.06;
+    const words = text.split(/\s+/).filter((w) => w.length > 0);
     let curTime = speechStart;
 
+    const isUrgent = text.includes('!') || /horde|seiz|run|wall|strike|ambush/i.test(text);
     const baseF0 = isUrgent ? 135 : 110;
+
     const formants: Record<string, [number, number, number]> = {
       a: [730, 1250, 2450],
       e: [530, 1840, 2550],
@@ -435,14 +345,12 @@ export class RadioAudioEngine {
     }
 
     const totalDur = tailStart - t0 + 0.12;
-    chain.carrierStatic.stop(t0 + totalDur);
+    try {
+      chain.carrierStatic.stop(t0 + totalDur);
+    } catch {}
 
     chain.output.gain.setValueAtTime(vol * 0.9, t0 + totalDur - 0.02);
     chain.output.gain.linearRampToValueAtTime(0.0001, t0 + totalDur);
-
-    setTimeout(() => {
-      this.activeChains.delete(chainRef);
-    }, (totalDur + 0.1) * 1000);
 
     return totalDur;
   }
