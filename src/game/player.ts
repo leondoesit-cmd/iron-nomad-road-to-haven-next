@@ -29,7 +29,7 @@ import { carryModelKey, carrySlow, type Carried } from '../sim/carry';
 import { UTILITY_SLOT, damageTaken, effectiveGun, effectiveMelee, heldItem, statsOf, stepSel, type EffectiveGun, type GearItem, type HurtKind, type Loadout, type Resolved } from '../sim/gear';
 import type { MeleeStats } from '../data';
 import { OIL_LOW, pourOil } from '../sim/oil';
-import { wrenchCandidate } from './carwork';
+import { cycleMount, wrenchCandidate } from './carwork';
 import { COOLANT_LOW, WATER_CAN, WATER_RESERVE_MAX, pourWater } from '../sim/fluids';
 import { TANK_DREGS, addReserve, planDrain, reserveOf, takeReserve } from '../sim/fuel';
 import { dropCarry, guide, sitePos, haulCandidate, haulKey, haulPrompt, pryCandidate, returnCarry, stashBeforeEntering } from './hauling';
@@ -1743,6 +1743,8 @@ export class Player implements Pilot {
     if (!cand && !this.carry && this.equip === 'wrench') cand = wrenchCandidate(this, () => this.repairCandidate()) ?? this.repairCandidate();
     else if (!cand && !this.carry && this.equip === 'crowbar') cand = this.salvageCandidate() ?? pryCandidate(this);
     else if (!cand && !this.carry && this.equip === 'jerrycan') cand = this.fuelCandidate();
+    // A quick tap of A with the wrench (not a hold) moves to the next mount stacked under your hands: engine, then the gun on top.
+    if (this.equip === 'wrench' && !this.carry && wasReleased(it, Btn.A) && it.releasedAfter[Btn.A] < 0.25 && cycleMount(this)) ctx.audio.play('pickup', this.pos.x, this.pos.z, 0.35);
     // X with the wrench: open the field workbench for a convoy vehicle.
     if (this.equip === 'wrench' && !this.carry && wasPressed(it, Btn.X) && !this.action) {
       const bv = this.nearestVehicle(3.8, (q) => (q.faction === 'convoy' || q.faction === 'neutral') && !!q.build && !q.wreck && q.kind !== 'crew');
