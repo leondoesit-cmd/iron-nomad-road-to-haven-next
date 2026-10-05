@@ -173,11 +173,25 @@ describe('what a hit does to a body', () => {
     expect(zoneOf(0.65, 0.24, 1.5)).toBe('torso');
   });
 
-  it('pistol rounds never take a limb; shotgun pellets and rifle rounds do', () => {
+  it('one pistol round never takes a limb, a few on the same one do; shotgun pellets take it in three and a rifle round in one', () => {
     const hp = 45;
     const w = newWounds();
-    for (let i = 0; i < 20; i++) wound(w, 'armL', 27, AMMO.pistol.gore, hp, false, 0.3);
+    expect(wound(w, 'armL', 27, AMMO.pistol.gore, hp, false, 0.3).off).toEqual([]);
     expect(w.mask).toBe(0);
+    expect(wound(w, 'armL', 27, AMMO.pistol.gore, hp, false, 0.3).off).toEqual(['armL']);
+    // A pistol round to the body, however many, takes nothing with it.
+    const body = newWounds();
+    for (let i = 0; i < 20; i++) wound(body, 'torso', 27, AMMO.pistol.gore, hp, false, 0.3);
+    expect(body.mask).toBe(0);
+    // An SMG needs more rounds than a pistol, as each is lighter.
+    const smg = newWounds();
+    let rounds = 0;
+    while (!smg.mask && rounds < 50) {
+      wound(smg, 'legR', 14, AMMO.smg.gore, hp, false, 0.3);
+      rounds++;
+    }
+    expect(rounds).toBeGreaterThan(2);
+    expect(rounds).toBeLessThan(8);
     const w2 = newWounds();
     let off = 0;
     for (let i = 0; i < 3; i++) off += wound(w2, 'armR', 9, AMMO.pellet.gore, hp, false, 0.3).off.length;
@@ -454,15 +468,18 @@ describe('gore', () => {
     expect(sc.gore.gibs.counts().chunk).toBeGreaterThan(0);
   });
 
-  it('a pistol never takes a limb', () => {
+  it('a pistol takes no limb in one round, but a limb that keeps being hit comes off', () => {
     const { sc, p } = scene();
     const { zb, from } = target(sc, p, 6);
     zb.hp = 5000;
+    sc.combat.shoot(from.x, from.y, from.z, 0.04, -0.02, 1, { side: 'convoy', damage: 27, range: 60, ammo: 'pistol', tracer: false });
+    run(sc, 0.15);
+    expect(zb.wounds.mask).toBe(0);
     for (let i = 0; i < 12; i++) {
       sc.combat.shoot(from.x, from.y, from.z, 0.04, -0.02, 1, { side: 'convoy', damage: 27, range: 60, ammo: 'pistol', tracer: false });
       run(sc, 0.15);
     }
-    expect(zb.wounds.mask).toBe(0);
+    expect(zb.wounds.mask).not.toBe(0);
   });
 
   it('a headshot with a heavy round takes the head and kills; the body falls the way the shot went', () => {
