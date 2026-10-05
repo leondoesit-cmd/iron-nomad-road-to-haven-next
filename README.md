@@ -14,7 +14,7 @@ the blueprint puts in "Beta" and "Final" is listed under [What is not in the sli
 npm install
 npm run dev          # http://127.0.0.1:5174  (or $PORT)
 npm run build        # typecheck + production bundle in dist/
-npm test             # about 1250 unit and simulation tests (Vitest)
+npm test             # about 1550 unit and simulation tests (Vitest)
 ```
 
 `?training` starts the training lessons (see [Learning the game](#learning-the-game)). `?leg=W` starts a fresh run in the open world (it is what New Convoy does). Any other leg id (`?leg=L3P`, `?leg=L2C`...) starts a fresh run
@@ -227,7 +227,7 @@ src/
   world/     deterministic terrain, leg layout (city grid, set pieces) and per-chunk content; `plans/` has authored city layouts
   render/    renderer and HDR post chain, sky and atmosphere, materials and procedural textures, terrain and road shaders,
              facades, chunk meshes, far landscape, ground cover, models (vehicles, people and their outfits, zombies, props), particles, camera
-  game/      scene runtime, entities (player, vehicle, zombies, raiders, crew), combat, leg scene, camp scene, game loop,
+  game/      scene runtime, entities (player, vehicle, zombies, raiders, crew, wildlife, travellers), combat, leg scene, camp scene, game loop,
              the training director (`tutorial.ts`)
   ui/        HUD, shared-cursor focus UI, overlays (title, votes, report), the Dawn Ledger, the inventory, the illustrated guide
              and training cards (`guide.ts`, `guideArt.ts`, `coach.ts`), styles
@@ -298,6 +298,20 @@ A camp is a ring of torn fence round a fire, with tents, tarped wrecks, barrels 
 - **On the map.** A camp is drawn on the minimap, the whole-leg map and the compass (as a threat, labelled with the gang's name) once the convoy has come within about 420 m of it, and stays there until it is broken. The radio names a gang the first time you come near one of its camps.
 
 Code: placement and dressing in `world/gangCamps.ts` (called from `Layout.raiderCamps`), the `tent` and `campfire` props in `render/props.ts`, sentry behaviour in `game/raiders.ts` (`Infantry.post`, `guardNotices`, `guardStep`, `alertCamp`), and the runtime in `game/gangCamps.ts`. Tests: `tests/gangcamps.test.ts`.
+
+### Travellers on the road
+
+The roads of the open world are not empty. Every so often someone turns up out of sight and walks one: a **pilgrim** or two bound north, a **drifter**, a **scavenger** with a frame pack and a crowbar, a **courier** at a run, a **hunter** with a rifle across the arm, and now and then a **trader** hauling a handcart. About one party an in-game minute and a half, fewer at night and in a dust storm, never more than three at once and never in a city or in training, and none set out within 200 m of a gang camp that still stands. They walk the shoulder, mostly toward whoever is leading, and vanish again once they are far behind or the road runs out where nobody can see.
+
+They are neutral. A trader always is. The rest mostly are too, but each rolls an attitude: **neutral** (just getting on with it), **rude** (shouts at traffic, brushes you off) or **wary** (stops to watch you, keeps their distance until they have made up their mind). A few, never a trader, are **asking for help**: a pilgrim short of food or a fever medicine, a drifter with a dry jerrycan, someone lost. They show on the compass as a `?` once you are within about 160 m, and on the minimap as a pale dot.
+
+- **Talk.** Walk up on foot and hold A (not with a gun up, not while carrying something): the prompt names who you are talking to. Small talk is a line over the radio-style subtitle; a neutral stranger sometimes lets slip where a gang camp is, and puts it on your map. A courier has no time.
+- **Help.** Asking for help opens the same shared vote as a Roadside Encounter, with their own words in it (they put it rudely or warily if that is who they are). Helping costs stock (2 Rations, 1 Medicine, 3 Fuel; pointing a lost traveller to the highway is free) and earns Mercy, sometimes Trust and a little loyalty, and a few Scrap or Parts in thanks. Turning them away costs nothing, except Mercy where it is a fever. It never hands over the Encounter Lead.
+- **Trade.** The trader's cart is a panel of its own: a few lots for sale for Scrap, a few the trader will buy, a purse that runs dry. Prices wobble from one trader to the next and are usually a little worse than at a hub; what a trader pays is well under what a trader asks, so there is no profit in carrying goods between them.
+- **Get out of the way.** They step off the road for a vehicle coming at them, and rude ones swear at one going by. A gun pointed at them (aiming down the sights; having it out is not enough) makes them nervous, and nervous becomes running. Gunfire anywhere near sends the unarmed running and everyone who sees it with them. The hunter is the exception: warns first, and shoots back if a gun stays on them.
+- **Killing them** is murder. Shooting, running down or burning someone who was only walking costs Mercy and raises Notoriety (a trader costs twice that), the radio says so, and everyone nearby saw it. They had a little on them. Anyone who shot first is fair game, and costs nothing.
+
+Rules (who turns up, attitudes, suspicion, requests, the cart, a road walked as a polyline) are `sim/travellers.ts`, tuned in `data/travellers.json` with all their lines in `strings.en.json` (`trav.*`, and `validateData()` checks every key). The runtime is `game/travellers.ts` (spawn, minds, movement, hits), the effect of a request is `game/travellerFx.ts`, the cart is `render/handcart.ts`, and the two screens are `Overlays.showRequest` and `Overlays.showTrade`. Hits hook into the same places as raiders: `Combat.firstHit`, `Player.computeAim`, melee, blasts, fire and `plow`. Tests: `tests/travellers.test.ts`.
 
 ### Interiors
 

@@ -1610,6 +1610,8 @@ export class Player implements Pilot {
     if (ar) dist = Math.min(dist, ar.dist);
     const ir = ctx.raiders.infantryRayTest(ox, oy, oz, _v.x, _v.y, _v.z, dist);
     if (ir) dist = Math.min(dist, ir.dist);
+    const tr = ctx.travellers.rayTest(ox, oy, oz, _v.x, _v.y, _v.z, dist);
+    if (tr) dist = Math.min(dist, tr.dist);
     // Ignore the player's own body: skip hits closer than the camera-to-player distance.
     const toPlayer = Math.hypot(this.pos.x - ox, this.pos.z - oz);
     if (dist < toPlayer * 0.9 && dist < 80) dist = Math.max(dist, toPlayer + 1);
@@ -2076,7 +2078,7 @@ export class Player implements Pilot {
     const f = s.yaw;
     const hx = this.pos.x + Math.sin(f) * 1.0;
     const hz = this.pos.z + Math.cos(f) * 1.0;
-    const hits = (ctx.zombies.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.wildlife.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.raiders.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel) ?? 0);
+    const hits = (ctx.zombies.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.wildlife.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.raiders.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel) ?? 0) + (ctx.travellers.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel) ?? 0);
     this.smashGlass(hx, hz, s.reach, s.dmg);
     ctx.phantoms.onSwing(this, hx, hz);
     if (hits <= 0) return;

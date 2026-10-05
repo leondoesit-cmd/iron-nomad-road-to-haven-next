@@ -4,7 +4,7 @@ import { applyLoyalty } from '../sim/loyalty';
 import type { LegScene } from './legScene';
 
 /** Apply the outcome of a Roadside Encounter to the campaign and the running leg. */
-export function applyEncounterEffects(sc: LegScene, fx: ResolvedEffects, overridden: boolean) {
+export function applyEncounterEffects(sc: LegScene, fx: ResolvedEffects, overridden: boolean, opts: { keepLead?: boolean } = {}) {
   const c = sc.campaign;
   for (const id of STOCK_IDS) {
     const d = fx.stocks[id];
@@ -26,8 +26,8 @@ export function applyEncounterEffects(sc: LegScene, fx: ResolvedEffects, overrid
   }
   if (fx.ambush > 0) sc.spawnAmbush(fx.ambush);
   if (fx.zombies > 0) sc.spawnZombieGroup(fx.zombies);
-  // The lead alternates each encounter.
-  c.lead = c.lead === 0 ? 1 : 0;
+  // The lead alternates each encounter. A word with someone on the road is not one.
+  if (!opts.keepLead) c.lead = c.lead === 0 ? 1 : 0;
   const parts: string[] = [];
   for (const id of STOCK_IDS) {
     const d = fx.stocks[id];

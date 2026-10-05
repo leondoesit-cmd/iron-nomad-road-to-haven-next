@@ -23,6 +23,7 @@ import type { Aabb } from '../world/layout';
 import type { Zombie } from './zombies';
 import type { Animal } from './wildlife';
 import type { Infantry } from './raiders';
+import type { Traveller } from './travellers';
 
 export interface ShotOpts {
   side: 'convoy' | 'raider';
@@ -74,6 +75,7 @@ type Hit =
   | { t: 'zombie'; dist: number; zombie: Zombie; head: boolean }
   | { t: 'infantry'; dist: number; unit: Infantry; head: boolean }
   | { t: 'animal'; dist: number; animal: Animal }
+  | { t: 'traveller'; dist: number; unit: Traveller; head: boolean }
   | { t: 'player'; dist: number; player: Player };
 
 const RAY_FILTER = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN | G.LOOSE);
@@ -190,6 +192,8 @@ export class Combat {
     const trace = o.tracer !== false && Math.random() < TRACER[kind].chance;
     this.bullets.push({ x: ox, y: oy, z: oz, vx: dx * spec.speed, vy: dy * spec.speed, vz: dz * spec.speed, spec, kind, o, ox, oz, range, travelled: 0, dead: false, trace, skipped: false });
     if (o.noise) ctx.sig.emit(ox, oz, o.noise * ctx.signatureMult, 'noise');
+    // Everyone within earshot on the road heard that.
+    ctx.travellers.heardShot(ox, oz);
   }
 
   /** Fly every round in the air one tick. */
@@ -317,6 +321,11 @@ export class Combat {
         best = { t: 'infantry', dist: inf.dist, unit: inf.unit, head: inf.head };
         bestD = inf.dist;
       }
+      const trv = ctx.travellers.rayTest(ox, oy, oz, dx, dy, dz, bestD);
+      if (trv && trv.dist < bestD) {
+        best = { t: 'traveller', dist: trv.dist, unit: trv.unit, head: trv.head };
+        bestD = trv.dist;
+      }
     } else {
       const pl = this.playerRay(ox, oy, oz, dx, dy, dz, bestD);
       if (pl && pl.dist < bestD) best = { t: 'player', dist: pl.dist, player: pl.player };
@@ -354,6 +363,15 @@ export class Combat {
       case 'infantry': {
         const dmg = o.damage * frac * (h.head && o.headshots ? 2 : 1);
         ctx.raiders.damageInfantry(h.unit, dmg, owner);
+        ctx.gore.flesh(x, y, z, dx, dy, dz, dmg / Math.max(1, h.unit.def.hp));
+        this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
+        after = throughFlesh(spec, speed);
+        thickRun = 0.7;
+        break;
+      }
+      case 'traveller': {
+        const dmg = o.damage * frac * (h.head && o.headshots ? 2 : 1);
+        ctx.travellers.damage(h.unit, dmg, owner, { x: b.ox, z: b.oz });
         ctx.gore.flesh(x, y, z, dx, dy, dz, dmg / Math.max(1, h.unit.def.hp));
         this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
         after = throughFlesh(spec, speed);
@@ -553,6 +571,7 @@ export class Combat {
     ctx.zombies.blast(x, z, radius, damage, o.owner?.index ?? -1);
     ctx.wildlife.blast(x, z, radius, damage, o.owner?.index ?? -1);
     ctx.raiders.blast(x, z, radius, damage, o.owner?.index ?? -1, o.side !== 'raider');
+    ctx.travellers.blast(x, z, radius, damage, o.owner?.index ?? -1);
     for (const v of ctx.vehicles) {
       if (v.wreck) continue;
       const d = Math.hypot(v.position.x - x, v.position.z - z);

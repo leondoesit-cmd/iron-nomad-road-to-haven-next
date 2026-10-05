@@ -34,6 +34,7 @@ import { ObstacleIndex } from './obstacles';
 import { Player } from './player';
 import { Projectiles } from './projectiles';
 import { RaiderSystem } from './raiders';
+import { TravellerSystem } from './travellers';
 import { Vehicle, type Faction } from './vehicle';
 import type { VehicleBuild } from '../sim/garage';
 import { ZombieSystem } from './zombies';
@@ -108,6 +109,7 @@ export abstract class Scene implements Ctx {
   phantoms: PhantomSystem;
   wildlife: WildlifeSystem;
   raiders: RaiderSystem;
+  travellers: TravellerSystem;
   crew: CrewSystem;
   cars: CarField;
   debris = new DebrisField(this);
@@ -162,6 +164,7 @@ export abstract class Scene implements Ctx {
     this.playerFx = new PlayerFx(this.R);
     this.wildlife = new WildlifeSystem(this);
     this.raiders = new RaiderSystem(this);
+    this.travellers = new TravellerSystem(this);
     this.crew = new CrewSystem(this);
     this.cars = new CarField(this);
     this.projectiles = new Projectiles(this);
@@ -602,6 +605,7 @@ export abstract class Scene implements Ctx {
     for (const v of this.vehicles) v.update(dt);
     this.cars.update(dt);
     this.raiders.update(dt);
+    this.travellers.update(dt);
     this.zombies.update(dt);
     this.wildlife.update(dt);
     this.crew.update(dt);
@@ -616,6 +620,7 @@ export abstract class Scene implements Ctx {
     for (const v of this.vehicles) if (v.faction === 'convoy' || v.kind !== 'wagon') {
         this.zombies.plow(v, dt);
         this.wildlife.plow(v);
+        this.travellers.plow(v);
       }
     this.updateVehiclePlayerHits(dt);
     this.sigDecayT += dt;
@@ -986,6 +991,11 @@ export abstract class Scene implements Ctx {
       f.movers.push({ seat: p.index, x: v ? v.position.x : p.pos.x, z: v ? v.position.z : p.pos.z, yaw: v ? v.yaw : p.yaw, color: PLAYER_CSS[p.index] });
     }
     for (const v of this.vehicles) if (v.kind === 'crew' && !v.wreck) f.blips.push({ x: v.position.x, z: v.position.z, kind: 'crew' });
+    // People on the road are on the map once they are near: neutral, so they show whether or not foes do.
+    const rf = reach * reach;
+    this.travellers.forEachAlive((x, z) => {
+      if (f.blips.length < 80 && this.players.some((p) => p.state !== 'dead' && (x - (p.vehicle ? p.vehicle.position.x : p.pos.x)) ** 2 + (z - (p.vehicle ? p.vehicle.position.z : p.pos.z)) ** 2 <= rf)) f.blips.push({ x, z, kind: 'folk' });
+    });
     if (!foes) return;
     const r2 = reach * reach;
     const near = (x: number, z: number) => this.players.some((p) => p.state !== 'dead' && (x - (p.vehicle ? p.vehicle.position.x : p.pos.x)) ** 2 + (z - (p.vehicle ? p.vehicle.position.z : p.pos.z)) ** 2 <= r2);
@@ -1002,6 +1012,7 @@ export abstract class Scene implements Ctx {
     this.cars.clear();
     this.crew.clear();
     this.raiders.clearAll();
+    this.travellers.clearAll();
     this.projectiles.clear();
     this.combat.clear();
     this.gore.dispose();
@@ -1052,6 +1063,7 @@ export type SceneResult =
   | { type: 'legEnd' }
   | { type: 'campDone' }
   | { type: 'encounter'; id: string; spotId: string }
+  | { type: 'traveller'; mode: 'trade' | 'request'; id: number }
   | { type: 'dusk' }
   | { type: 'haven' }
   | { type: 'delveEnter'; site: DelveSite }
