@@ -4,7 +4,7 @@ import { ENEMIES, LEGS, MERCS, STRUCTURES, VEHICLES, t, type BuildElementDef, ty
 import { MeshBuilder, S } from '../render/builder';
 import { drum, heavyGun, plate, spareTyre } from '../render/parts';
 import { appendProp } from '../render/props';
-import { propCollisionMesh } from '../render/propCollision';
+import { PROP_DYNAMIC, instanceHullPoints, propCollisionMesh, propSurface } from '../render/propCollision';
 import type { PropSpawn } from '../world/layout';
 import { kitMaterial } from '../render/materials';
 import { CampArena, type CampLand } from '../render/campArena';
@@ -292,9 +292,10 @@ export class CampScene extends Scene {
       const spec: PropSpawn = city
         ? { kind: r.pick(['rubble', 'barrel', 'tires', 'dumpster']), x, y: 0, z, yaw: r.range(0, 6), scale: 1, seed: r.int(0, 99) }
         : { kind: r.pick(['rock', 'rock', 'bones', 'deadTree', 'tires']), x, y: 0, z, yaw: r.range(0, 6), scale: r.range(0.8, 1.8), seed: r.int(0, 99) };
-      appendProp(decor, spec);
+      if (PROP_DYNAMIC[spec.kind]) this.looseProps.add('camp', [spec]);
+      else appendProp(decor, spec);
       const cm = propCollisionMesh(spec);
-      if (cm) this.P.addPropCollider(cm, GROUPS.furn);
+      if (cm) this.P.tag(this.P.addPropCollider(cm, GROUPS.furn), propSurface(spec.kind));
     }
     const dm = new THREE.Mesh(decor.build(), kitMaterial());
     dm.castShadow = true;
@@ -303,6 +304,7 @@ export class CampScene extends Scene {
     // A fire ring for the hot camp, and ground cover everywhere else.
     arena.fireRing(0, 1.5);
     arena.scatter(solid, QUALITY[this.R.quality].scatter);
+    for (const im of arena.stones) for (let i = 0; i < im.count; i++) this.P.tag(this.P.addStaticHull(instanceHullPoints(im, i), GROUPS.furn), 'stone');
     arena.finish();
   }
 
@@ -518,7 +520,7 @@ export class CampScene extends Scene {
     if (def.blocks) {
       aabb = { id: newAabbId(), minX: x - hx, maxX: x + hx, minZ: z - hz, maxZ: z + hz, y0: 0, y1: sy, kind: 'barricade', breakable: 'flimsy', hp: def.hp, tint: 0 };
       this.obs.add(aabb);
-      collider = this.P.addStaticBox(x, sy / 2, z, hx, sy / 2, hz, 0, groups(G.BUILD, G.VEHICLE | G.PLAYER));
+      collider = this.P.addStaticBox(x, sy / 2, z, hx, sy / 2, hz, 0, groups(G.BUILD, G.VEHICLE | G.PLAYER | G.LOOSE));
     }
     const s: Structure = { id: newAabbId(), def, x, z, yaw, hp: def.hp, mesh, aabb, collider, owner, cd: 0, aim: 0, lit: false, spent: false, free };
     this.structures.push(s);

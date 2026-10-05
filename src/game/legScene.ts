@@ -1,6 +1,6 @@
 import { bind } from '../sim/vitals';
 import * as THREE from 'three';
-import { ENEMIES, VEHICLES, boatDef, partDef, t, type LegDef } from '../data';
+import { ENEMIES, TRAVELLERS, VEHICLES, boatDef, partDef, t, type LegDef } from '../data';
 import { ChunkSource, type ChunkData } from '../world/chunkgen';
 import { CHUNK, groundHeight, heightAt, normalAt, roadX, surfaceAt, waterAt as terrainWater, type Surface } from '../world/terrain';
 import type { Aabb, PickupSpawn, ScavContainer, ScavZone } from '../world/layout';
@@ -96,7 +96,6 @@ interface ZoneState {
   fired: boolean;
 }
 
-const STREAM_R = 2;
 /** Milliseconds of chunk work a tick may start: for the look-ahead, and for a chunk next to a player. */
 const STREAM_CALM_MS = 4;
 const STREAM_URGENT_MS = 10;
@@ -233,6 +232,16 @@ export class LegScene extends Scene {
     this.src.layout.ambushes.forEach((spec) => this.ambushes.push({ spec, state: this.memory?.ambushDone.has(spec.id) ? 'done' : 'idle', tries: 0, waiting: [], t: 0 }));
     this.gangCamps = new GangCamps(this, this.src.layout.gangCamps, this.gangKilled, this.mapSeen);
     this.raiders.onAlarm = (camp) => this.campAlarm(camp);
+    // People on the road keep clear of the gangs' yards and of anything solid, and open the game's screens to talk.
+    this.travellers.canWalk = (x, z) => !this.src.layout.blockedAt(x, z, 1.2) && !this.gangCamps.nearStanding(x, z, TRAVELLERS.rules.campClear);
+    this.travellers.onRumour = (x, z) => this.gangCamps.rumour(x, z);
+    this.travellers.onOffer = (o) => {
+      if (this.pendingResult || this.paused) return false;
+      this.pendingResult = true;
+      this.travellers.busy = true;
+      this.onResult({ type: 'traveller', mode: o.mode, id: o.id });
+      return true;
+    };
     this.src.layout.zones.forEach((zone) => this.zones.push({ zone, noise: 0, horde: 0, fired: this.training || !!this.memory?.zoneFired.has(zone.id) }));
     this.buildMines();
     this.registerDelves();
@@ -778,6 +787,7 @@ export class LegScene extends Scene {
     this.root.add(view.group);
     view.group.updateMatrixWorld(true);
     this.chunks.set(key, view);
+    this.looseProps.add(String(key), data.props);
     for (const a of data.aabbs) if (!a.physOnly) this.obs.add(a);
     // Pickups
     for (const p of data.pickups) {
@@ -818,6 +828,7 @@ export class LegScene extends Scene {
       for (const c of zone.containers) this.removeContainerView(c.id);
     }
     view.dispose();
+    this.looseProps.release(String(key));
     this.chunks.delete(key);
     this.landscape.setLoaded(view.data.cx, view.data.cz, false);
   }
@@ -838,6 +849,7 @@ export class LegScene extends Scene {
       }
       return best;
     };
+    const R = QUALITY[this.R.quality].stream;
     const t0 = performance.now();
     for (let unit = 0; unit < 6; unit++) {
       // Finish the nearest staged chunk, if there is one.
@@ -858,8 +870,8 @@ export class LegScene extends Scene {
       for (const p of points) {
         const pcx = Math.floor(p.x / CHUNK);
         const pcz = Math.floor(p.z / CHUNK);
-        for (let dx = -STREAM_R; dx <= STREAM_R; dx++) {
-          for (let dz = -STREAM_R; dz <= STREAM_R; dz++) {
+        for (let dx = -R; dx <= R; dx++) {
+          for (let dz = -R; dz <= R; dz++) {
             if (this.chunks.has(chunkKey(pcx + dx, pcz + dz))) continue;
             const d = dx * dx + dz * dz;
             if (d < wantD) {
@@ -904,10 +916,11 @@ export class LegScene extends Scene {
     }
     this.streamWork(pts, pts.slice(0, this.players.length));
     // Unload far chunks (hysteresis of one chunk).
+    const R = QUALITY[this.R.quality].stream;
     for (const [key, view] of this.chunks) {
       let near = false;
       for (const p of pts) {
-        if (Math.abs(view.data.cx - Math.floor(p.x / CHUNK)) <= STREAM_R + 1 && Math.abs(view.data.cz - Math.floor(p.z / CHUNK)) <= STREAM_R + 1) {
+        if (Math.abs(view.data.cx - Math.floor(p.x / CHUNK)) <= R + 1 && Math.abs(view.data.cz - Math.floor(p.z / CHUNK)) <= R + 1) {
           near = true;
           break;
         }
@@ -1620,6 +1633,12 @@ export class LegScene extends Scene {
     this.pendingResult = false;
   }
 
+  /** A conversation with someone on the road is over. */
+  resumeAfterTalk() {
+    this.pendingResult = false;
+    this.travellers.busy = false;
+  }
+
   /** Planned city legs: name Founders' Square, the Great Synagogue and each named street the first time a player is in it. */
   private updatePlaces() {
     const L = this.src.layout;
@@ -1894,6 +1913,8 @@ export class LegScene extends Scene {
       this.wildlife.ambient(dt, this.biome, this.leg.theme ?? 'dust', this.leg.index);
       this.updateAmbushes(dt);
       this.gangCamps.update(dt);
+      // Not in the title demo (it holds `pendingResult` so nothing can open a screen there).
+      if (!this.pendingResult) this.travellers.ambient(dt);
       this.updateEncounters();
       this.updateTips();
     }
@@ -1973,6 +1994,8 @@ export class LegScene extends Scene {
       let d = Infinity;
       for (const p of pts) d = Math.min(d, Math.hypot(p.x - cx, p.z - cz));
       view.setDetailDistance(Math.max(0, d - CHUNK * 0.71));
+      // Once its roads and props are in, the far stand-ins over this chunk step aside.
+      if (!view.pending) this.landscape.setBuilt(view.data.cx, view.data.cz);
     }
     void alpha;
   }
@@ -2056,6 +2079,7 @@ export class LegScene extends Scene {
     }
     for (const v of this.vehicles) if (v.faction === 'raider' && !v.wreck) pins.push({ x: v.position.x, z: v.position.z, kind: 'ambush', label: '' });
     for (const g of this.gangCamps.pins()) pins.push({ x: g.x, z: g.z, kind: 'threat', label: g.label });
+    for (const h of this.travellers.helpPins()) pins.push({ x: h.x, z: h.z, kind: 'encounter', label: h.label });
     for (const p of this.pings) pins.push({ x: p.x, z: p.z, kind: 'ping', label: '' });
     if (this.training) pins.push(...this.trainingPins);
     // Lakes and ways down only show once you are within a few hundred metres.

@@ -282,6 +282,10 @@ uniform sampler2D tMacroR;
 uniform vec3 cDust;
 uniform float uDust;
 ${WET_PARS}
+#ifdef TERRAIN_LOD
+uniform sampler2D tLoaded;
+uniform vec4 uLoadedRect;
+#endif
 `;
 
 const ROAD_COLOR = /* glsl */ `
@@ -323,7 +327,18 @@ const ROAD_AO = /* glsl */ `
 }
 `;
 
-export function makeRoadMaterial(biome: 'wasteland' | 'city'): THREE.MeshStandardMaterial {
+/** The far road ribbons (see farDetail) step aside wherever a detailed chunk is fully built. */
+const ROAD_LOD = /* glsl */ `
+#ifdef TERRAIN_LOD
+{
+  vec2 lc = ( vRWPos.xz - uLoadedRect.xy ) / uLoadedRect.zw;
+  if ( lc.x >= 0.0 && lc.y >= 0.0 && lc.x < 1.0 && lc.y < 1.0 && texture2D( tLoaded, lc ).g > 0.5 ) discard;
+}
+#endif
+`;
+
+/** Road material for a biome. `lod` makes the far variant, which is cut away over chunks drawn in detail. */
+export function makeRoadMaterial(biome: 'wasteland' | 'city', lod?: TerrainUniforms): THREE.MeshStandardMaterial {
   const rt = roadTextures(biome);
   const m = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
   const uniforms = {
@@ -336,18 +351,20 @@ export function makeRoadMaterial(biome: 'wasteland' | 'city'): THREE.MeshStandar
   };
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
+    if (lod) Object.assign(shader.uniforms, lod);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${ROAD_VERT_PARS}`)
       .replace('#include <project_vertex>', `${ROAD_VERT_MAIN}\n#include <project_vertex>`);
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\n${ROAD_FRAG_PARS}`)
-      .replace('#include <color_fragment>', ROAD_COLOR)
-      .replace('#include <roughnessmap_fragment>', ROAD_ROUGH)
-      .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = 0.0;')
-      .replace('#include <normal_fragment_maps>', ROAD_NORMAL)
-      .replace('#include <aomap_fragment>', ROAD_AO);
+    shader.fragmentShader = (lod ? '#define TERRAIN_LOD\n' : '') +
+      shader.fragmentShader
+        .replace('#include <common>', `#include <common>\n${ROAD_FRAG_PARS}`)
+        .replace('#include <color_fragment>', ROAD_LOD + ROAD_COLOR)
+        .replace('#include <roughnessmap_fragment>', ROAD_ROUGH)
+        .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = 0.0;')
+        .replace('#include <normal_fragment_maps>', ROAD_NORMAL)
+        .replace('#include <aomap_fragment>', ROAD_AO);
   };
-  m.customProgramCacheKey = () => 'road';
+  m.customProgramCacheKey = () => (lod ? 'road:lod' : 'road');
   return m;
 }
 

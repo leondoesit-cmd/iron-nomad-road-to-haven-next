@@ -4,6 +4,7 @@ import { Btn, NAV, heldFor, isHeld, wasPressed, wasReleased, type PlayerIntent }
 import { promptLabel } from '../input/input';
 import { ChaseCamera, type CamMode } from '../render/camera';
 import { Humanoid, type Held, type Palette } from '../render/humanoid';
+import { ViewModel } from '../render/viewmodel';
 import { identityOf, lookOf } from '../render/outfit';
 import { HERO_LOOKS } from '../render/heroLooks';
 import { makeCarryModel } from '../render/props';
@@ -22,9 +23,9 @@ import { BLEED, STAMINA, bind, bleedLabel, canSprint, jamChance, newBleed, newSt
 import { NEEDS, NEUTRAL_NEEDS, NEED_ACTS, canRelieve, isNeedAct, drink as drinkWater, eat as eatFood, needMods, reliefSeconds, relieve, tickNeeds, warnText, type NeedAct, type NeedEvent, type NeedMods, type Needs } from '../sim/needs';
 import { ammoForGun, cutOf } from '../sim/ballistics';
 import { HANDLING, kickVelocity, spring, stepSpring, swayAt, type Handling, type Spring } from '../sim/handling';
-import { ACCEL, READY, SPRINT_IN, SPRINT_OUT, WALL_BLOCK, REACH, approachVelocity, carryOf, drawLow, drawOf, landGait, newGait, newGaitOut, stepBlend, stepGait, strafeRoll, wallBlend } from '../sim/gait';
+import { ACCEL, READY, SPRINT_IN, SPRINT_OUT, WALL_BLOCK, REACH, approachVelocity, carryOf, drawLow, drawOf, landGait, leanTarget, newGait, newGaitOut, newLean, stepBlend, stepGait, stepLean, wallBlend } from '../sim/gait';
 import { DROPS_MAG, RELOAD_KIND, cycleRack, cycleTime, dropAt, newGunPose, reloadPose } from '../sim/weaponanim';
-import { MUZZLE, bloomAfterShot, bloomSettle, meleeFeel, reloadPlan, swingArc, type MeleeFeel } from '../sim/weaponfx';
+import { FLASH_SECS, MUZZLE, bloomAfterShot, bloomSettle, meleeFeel, reloadPlan, swingArc, type MeleeFeel } from '../sim/weaponfx';
 import type { ShellKind } from '../render/brass';
 import { GunBeam } from '../render/gunBeam';
 import { kitOf, lookKey, type GunKit } from '../sim/gunmods';
@@ -66,6 +67,8 @@ export interface Cand {
 
 /** Eye height above the feet on foot: standing, crouched, and treading water. */
 const EYE_STAND = 1.62;
+/** Seconds a shot holds the gun up in the aim and shows the muzzle flash at its start. */
+const MUZZLE_T = 0.12;
 const EYE_CROUCH = 1.18;
 const EYE_SWIM = 1.0;
 
@@ -124,7 +127,7 @@ const BODY_R = 0.3;
 const NO_DRIFT: readonly [number, number] = [0, 0];
 /** Seconds the use button is held before the drug belt opens. */
 const BELT_HOLD = 0.35;
-const RAY_STATIC = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
+const RAY_STATIC = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN | G.LOOSE);
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
@@ -132,6 +135,10 @@ const _v4 = new THREE.Vector3();
 const _v5 = new THREE.Vector3();
 const _v6 = new THREE.Vector3();
 const _camE = new THREE.Euler();
+
+/** How long the finger stays up, and the chance of it once a fight is over. */
+const FLIP_SECS = 2.2;
+const FLIP_CHANCE = 0.35;
 
 export class Player implements Pilot {
   readonly isPlayer = true;
@@ -147,6 +154,12 @@ export class Player implements Pilot {
   zoomNow = 1;
   /** Laser dot and torch cone for the gun in hand, made when a light is first fitted. */
   private beam: GunBeam | null = null;
+  /** The rude salute after a fight (see `stepFlip`): kills seen, time since the last, quiet so far, time left up, cooldown. */
+  private flipKills = -1;
+  private sinceKill = 99;
+  private quietT = 0;
+  private flipT = 0;
+  private flipCd = 0;
   /** Aim-down-sights as a spring: it comes up with the weight of the gun and can overshoot a hair. */
   private adsS: Spring = spring();
   /** What the last shots threw at the view. Each channel is its own spring, so it snaps up fast and settles. */
@@ -197,6 +210,9 @@ export class Player implements Pilot {
   private gaitOut = newGaitOut();
   /** Speed to the right of where the view faces (m/s), for leaning into a sidestep. */
   private strafeV = 0;
+  /** The body leans into a sidestep and a turn: the first-person view rolls with it and the rig tilts. */
+  readonly lean = newLean();
+  private leanYaw = 0;
   private _vel: [number, number] = [0, 0];
   /** How far the gun is carried low for a sprint (0 to 1), and how far a wall in front has pushed it up. `wallRaw` is the unsmoothed reading the trigger goes by. */
   sprintBlend = 0;
@@ -357,6 +373,8 @@ export class Player implements Pilot {
     this.human = new Humanoid(this.palette);
     this.eyeH = EYE_STAND * this.tall;
     ctx.root.add(this.human.root);
+    this.view = new ViewModel(this.outfit());
+    ctx.root.add(this.view.root);
     this.body = ctx.P.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, 1, 0));
     this.collider = ctx.P.world.createCollider(
       RAPIER.ColliderDesc.capsule((BODY_H - BODY_R * 2) / 2, BODY_R).setCollisionGroups(GROUPS.player).setTranslation(0, 0, 0),
@@ -367,7 +385,9 @@ export class Player implements Pilot {
     this.kcc.setMaxSlopeClimbAngle((55 * Math.PI) / 180);
     this.kcc.setMinSlopeSlideAngle((60 * Math.PI) / 180);
     this.kcc.enableSnapToGround(0.35);
-    this.kcc.setApplyImpulsesToDynamicBodies(false);
+    // Walking into a loose prop (a tyre, a drum) shoves it, with a person's weight behind it.
+    this.kcc.setApplyImpulsesToDynamicBodies(true);
+    this.kcc.setCharacterMass(70);
     this.cam.occlude = (from, dir, maxDist) => {
       const r = ctx.P.raycast(from.x, from.y, from.z, dir.x, dir.y, dir.z, maxDist, groups(0xffff, G.STATIC | G.BUILD));
       return r ? r.toi : Infinity;
@@ -413,6 +433,7 @@ export class Player implements Pilot {
     this.stats = statsOf(this.gear);
     this.palette = this.outfit();
     this.human.dress(this.palette);
+    this.view.dress(this.palette);
     this.syncEquip();
   }
 
@@ -1515,6 +1536,10 @@ export class Player implements Pilot {
     const speed = Math.hypot(this.hvx, this.hvz);
     stepGait(this.gait, dt, speed, sprinting, this.crouch, this.ads, this.grounded, this.gaitOut);
     this.strafeV = this.hvx * -Math.cos(this.aimYaw) + this.hvz * Math.sin(this.aimYaw);
+    // The body leans into a sidestep and into a turn of the view; in the air it carries on as it was.
+    const turn = clamp(wrapAngle(this.aimYaw - this.leanYaw) / Math.max(dt, 1e-4), -8, 8);
+    this.leanYaw = this.aimYaw;
+    stepLean(this.lean, this.grounded || this.swimming ? leanTarget(this.strafeV, turn, speed, sprinting, this.ads) : this.lean.roll, dt);
     const gun = this.equip === 'gun' && !this.carry;
     this.sprintBlend = stepBlend(this.sprintBlend, sprinting && gun ? 1 : 0, SPRINT_IN, SPRINT_OUT, dt);
     if (!gun) {
@@ -1758,6 +1783,8 @@ export class Player implements Pilot {
     if (ar) dist = Math.min(dist, ar.dist);
     const ir = ctx.raiders.infantryRayTest(ox, oy, oz, _v.x, _v.y, _v.z, dist);
     if (ir) dist = Math.min(dist, ir.dist);
+    const tr = ctx.travellers.rayTest(ox, oy, oz, _v.x, _v.y, _v.z, dist);
+    if (tr) dist = Math.min(dist, tr.dist);
     // Ignore the player's own body: skip hits closer than the camera-to-player distance.
     const toPlayer = Math.hypot(this.pos.x - ox, this.pos.z - oz);
     if (dist < toPlayer * 0.9 && dist < 80) dist = Math.max(dist, toPlayer + 1);
@@ -1918,7 +1945,7 @@ export class Player implements Pilot {
     }
     this.fireCd = 0.22;
     this.mag--;
-    this.muzzleT = 0.12;
+    this.muzzleT = MUZZLE_T;
     const gi = this.gunItem();
     if (gi) gi.cond = wearBy(gi.cond, WEAR.shot);
     this.throwKick(HANDLING.pistol, 0.5);
@@ -1962,7 +1989,7 @@ export class Player implements Pilot {
     }
     this.fireCd = gun.cd;
     this.mag--;
-    this.muzzleT = 0.12;
+    this.muzzleT = MUZZLE_T;
     const gi = this.gunItem();
     const spread =
       lerp(gun.spread, gun.adsSpread, Math.min(1, this.ads)) * (this.crouch ? 0.7 : 1) * (this.moveSpeed > 3 ? 1.6 : 1) * this.drugs.mods().spread * this.nm.spread * wearSpread(gi?.cond) * (this.stamina.winded ? 1.3 : 1) * (1 + this.bloom);
@@ -1990,7 +2017,7 @@ export class Player implements Pilot {
     const [vx, vy, vz] = this.gunPoint('muzzle', [mx, my, mz]);
     // A suppressed shot is dimmer, quieter and duller to the ear as well as to the Signature grid.
     ctx.fx.muzzle(vx, vy, vz, dx, dy, dz, mfx);
-    ctx.combat.muzzleLight(vx, vy, vz, mfx.light * Math.min(1, kit.flash));
+    ctx.combat.muzzleLight(vx, vy, vz, mfx.light * Math.min(1, kit.flash), dx, dy, dz);
     this.smokeT = Math.min(3.5, this.smokeT + 1.2 + (gun.pellets > 1 ? 0.8 : 0));
     this.human.flashK = kit.flash;
     ctx.audio.play(gun.sound === 'bolt' ? 'sniper' : gun.sound, mx, mz, 0.8 * (0.3 + 0.7 * Math.min(1.2, kit.quiet)), { occluded: 0, muffle: kit.quiet < 0.95 ? clamp((1 - kit.quiet) * 1.1, 0, 0.95) : 0 });
@@ -2055,6 +2082,8 @@ export class Player implements Pilot {
     stepSpring(this.lag.yaw, 0, 90, 0.55, dt);
     stepSpring(this.lag.pitch, 0, 90, 0.55, dt);
     if (this.state !== 'foot') {
+      stepLean(this.lean, 0, dt);
+      this.leanYaw = this.aimYaw;
       this.sprintBlend = damp(this.sprintBlend, 0, SPRINT_OUT, dt);
       this.wallBlend = damp(this.wallBlend, 0, 6, dt);
       this.wallRaw = 0;
@@ -2231,7 +2260,7 @@ export class Player implements Pilot {
     const f = s.yaw;
     const hx = this.pos.x + Math.sin(f) * 1.0;
     const hz = this.pos.z + Math.cos(f) * 1.0;
-    const hits = (ctx.zombies.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.wildlife.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.raiders.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel) ?? 0);
+    const hits = (ctx.zombies.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.wildlife.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.raiders.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel) ?? 0) + (ctx.travellers.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel) ?? 0);
     this.smashGlass(hx, hz, s.reach, s.dmg);
     ctx.phantoms.onSwing(this, hx, hz);
     if (hits <= 0) return;
@@ -2948,7 +2977,7 @@ export class Player implements Pilot {
       lookBack: this.lookBack,
       zoom: this.ads,
       eye,
-      kick: { pitch: this.kick.pitch.x + this.sway[1], yaw: this.kick.yaw.x + this.sway[0], roll: this.kick.roll.x + (first && this.state === 'foot' ? this.gaitOut.roll + strafeRoll(this.strafeV) : 0), back: this.kick.back.x },
+      kick: { pitch: this.kick.pitch.x + this.sway[1], yaw: this.kick.yaw.x + this.sway[0], roll: this.kick.roll.x + (first && this.state === 'foot' ? this.gaitOut.roll + this.lean.roll : 0), back: this.kick.back.x },
     });
     // Through a scope the view narrows: only on foot with a gun up, and back to normal the moment the sights come down.
     this.ctx.R.setZoom?.(this.index, this.state === 'foot' && this.equip === 'gun' && !this.showcase ? this.zoomNow : 1);
@@ -2986,6 +3015,10 @@ export class Player implements Pilot {
   }
 
   private _eye = new THREE.Vector3();
+  /** The owner's own first-person arms and weapon, and whether they are drawn this frame. */
+  readonly view: ViewModel;
+  private viewOn = false;
+  private _ownCam: THREE.PerspectiveCamera | null = null;
 
   /**
    * Where the first-person camera sits. On foot it is a fixed height over the feet, eased for crouching and swimming,
@@ -3008,21 +3041,35 @@ export class Player implements Pilot {
     const want = (this.swimming ? EYE_SWIM : this.crouch ? EYE_CROUCH : EYE_STAND) * this.tall;
     // Standing up and crouching take a moment: the head does not snap between heights.
     this.eyeH = damp(this.eyeH, want, 8, dt);
-    // A hair forward of the neck so the near plane stays clear of the shoulders. The head bobs and sways with the steps.
+    // A hair forward of the neck so the near plane stays clear of the shoulders. The head bobs and sways with the steps,
+    // and goes over to the side the body leans to.
     const g = this.gaitOut;
-    return e.set(target.x + Math.sin(this.aimYaw) * 0.08 - Math.cos(this.aimYaw) * g.x, target.y + this.eyeH + g.y, target.z + Math.cos(this.aimYaw) * 0.08 + Math.sin(this.aimYaw) * g.x);
+    const side = g.x - this.lean.roll * 0.35;
+    return e.set(target.x + Math.sin(this.aimYaw) * 0.08 - Math.cos(this.aimYaw) * side, target.y + this.eyeH + g.y, target.z + Math.cos(this.aimYaw) * 0.08 + Math.sin(this.aimYaw) * side);
   }
 
   /**
    * Hide what this seat's own first-person camera sits inside: the body on foot, the occupant in a seat.
    * Called just before the owner's view draws; `endOwnView` puts it back for the partner's view and the next frame.
    */
-  beginOwnView() {
+  beginOwnView(cam?: THREE.Camera) {
     if (!this.firstPerson) return;
     if (this.state === 'foot') {
-      this.human.setFirstPerson(true);
-      // The gun as this view will draw it: where its muzzle, port and magazine well really are.
-      this.human.capturePoints();
+      const arms = this.viewOn;
+      this.human.setFirstPerson(true, arms);
+      if (arms) {
+        if (!cam) {
+          // Not handed the view's camera: put one where this player's camera puts it.
+          cam = this._ownCam ??= new THREE.PerspectiveCamera();
+          this.cam.apply(this._ownCam);
+          cam.updateMatrixWorld();
+        }
+        this.view.place(cam);
+        this.view.root.visible = true;
+        this.view.muzzle(this.human.flash.amount);
+        // The gun as this view draws it: where its muzzle, port and magazine well really are.
+        this.view.capturePoints(this.human.points);
+      } else this.human.capturePoints();
     }
     const v = this.vehicle;
     const occ = this.state === 'driving' ? v?.visual.driver : this.state === 'gunner' ? v?.visual.passenger : null;
@@ -3035,6 +3082,7 @@ export class Player implements Pilot {
 
   endOwnView() {
     this.human.setFirstPerson(false);
+    this.view.root.visible = false;
     if (this.hiddenOcc) {
       this.hiddenOcc.root.visible = this.hiddenOccWas;
       this.hiddenOcc = null;
@@ -3062,8 +3110,6 @@ export class Player implements Pilot {
     h.gunSway[0] = this.sway[0] + clamp(this.lag.yaw.x, -0.08, 0.08) + this.gaitOut.armX;
     h.gunSway[1] = this.sway[1] + clamp(this.lag.pitch.x, -0.08, 0.08) + this.gaitOut.armY;
     if (this.syncGunPose(h, dt)) aim = Math.max(aim, 0.75);
-    this.syncSight(h);
-    h.fpAds = this.ads;
     h.gunKick = clamp(this.kick.pitch.x / 0.05, -0.4, 1.6);
     // First person: whatever is in hand is held up in front, where the camera can see it.
     if (this.firstPerson && !this.carry && weapon !== 'none') aim = Math.max(aim, 1);
@@ -3081,9 +3127,13 @@ export class Player implements Pilot {
       h.enter = Math.max(0.001, k);
     } else this.exitT = 0;
     this.syncWork(h, lying);
+    h.lean = this.lean.roll;
     h.update(dt, lying ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch, this.airVis);
-    h.muzzle(this.muzzleT > 0.05);
+    h.viewPitch = this.aimPitch;
+    // The flame is there for the first couple of frames after a shot.
+    h.muzzle(clamp((this.muzzleT - (MUZZLE_T - FLASH_SECS)) / FLASH_SECS, 0, 1));
     h.capturePoints();
+    this.syncViewArms(dt, lying);
     if (this.invuln > 0) h.root.visible = Math.floor(this.invuln * 12) % 2 === 0;
   }
 
@@ -3103,20 +3153,77 @@ export class Player implements Pilot {
     } else b.torch(false);
   }
 
-  /** In first person, aimed: tell the rig where the eye is and which way it looks, so it can line the sights up on that. */
-  private syncSight(h: Humanoid) {
-    const s = h.sight;
+  /**
+   * First person: pose the owner's own arms and weapon for this frame (see `ViewModel`). They are drawn whenever something is
+   * in hand, or a punch is thrown; a load in the arms, hands at work on a car and a greeting keep the rig's forearms instead.
+   */
+  private syncViewArms(dt: number, lying: boolean) {
+    const h = this.human;
+    this.viewOn = false;
+    if (!this.firstPerson || this.state !== 'foot' || lying || this.carry || this.five || this.workAt) return;
+    const m = this.view.motion;
     const gp = h.gunPose;
-    const on = this.firstPerson && this.state === 'foot' && this.equip === 'gun' && !this.carry;
-    s.k = on ? clamp(this.ads, 0, 1) * (1 - gp.low) * (1 - gp.high) * (1 - this.reloadBlend) : 0;
-    if (s.k <= 0) return;
-    const cp = Math.cos(this.aimPitch);
-    s.ex = this.cam.pos.x;
-    s.ey = this.cam.pos.y;
-    s.ez = this.cam.pos.z;
-    s.fx = Math.sin(this.aimYaw) * cp;
-    s.fy = Math.sin(this.aimPitch);
-    s.fz = Math.cos(this.aimYaw) * cp;
+    // Sights come down for a sprint, a draw, a wall and a reload.
+    m.ads = this.equip === 'gun' ? clamp(this.ads, 0, 1) * (1 - gp.low) * (1 - gp.high) * (1 - this.reloadBlend) : 0;
+    m.lagYaw = clamp(this.lag.yaw.x, -0.12, 0.12);
+    m.lagPitch = clamp(this.lag.pitch.x, -0.12, 0.12);
+    m.bobX = this.gaitOut.armX;
+    m.bobY = this.gaitOut.armY;
+    m.dip = this.gait.dip;
+    m.strafe = this.strafeV;
+    m.fwd = this.hvx * Math.sin(this.aimYaw) + this.hvz * Math.cos(this.aimYaw);
+    m.air = this.airVis;
+    m.crouch = this.crouch;
+    m.lean = this.lean.roll;
+    m.back = this.kick.back.x;
+    m.flip = this.stepFlip(dt);
+    this.view.pose(dt, h);
+    this.viewOn = this.view.active;
+  }
+
+  /**
+   * Now and then, when the last of the enemies near this player has gone down by their hand and the ground is quiet for a
+   * moment, the free hand comes off the weapon to give the dead the finger. Returns how far up the hand is, 0 to 1.
+   */
+  private stepFlip(dt: number): number {
+    const ctx = this.ctx;
+    const kills = ctx.zombies.killedByPlayer[this.index] + ctx.raiders.killedByPlayer[this.index];
+    if (this.flipKills >= 0 && kills > this.flipKills) this.sinceKill = 0;
+    this.flipKills = kills;
+    this.sinceKill += dt;
+    this.flipCd = Math.max(0, this.flipCd - dt);
+    if (this.flipT > 0) {
+      this.flipT = Math.max(0, this.flipT - dt);
+      // Up quickly, held, then down a little slower.
+      const age = FLIP_SECS - this.flipT;
+      return Math.min(1, age / 0.3, this.flipT / 0.45);
+    }
+    const busy = this.ads > 0.2 || this.reloadT > 0 || this.sprintBlend > 0.2 || this.drawT > 0;
+    if (this.sinceKill > 6 || this.flipCd > 0 || busy || this.hostileNear(28)) {
+      this.quietT = 0;
+      return 0;
+    }
+    this.quietT += dt;
+    if (this.quietT > 0.9) {
+      // One roll per quiet spell after a kill.
+      this.sinceKill = 99;
+      if (Math.random() < FLIP_CHANCE) {
+        this.flipT = FLIP_SECS;
+        this.flipCd = 40;
+      }
+    }
+    return 0;
+  }
+
+  /** Whether anything still fighting is within `r` metres: infected that are up, raiders on foot or in a car. */
+  private hostileNear(r: number): boolean {
+    const ctx = this.ctx;
+    const x = this.pos.x;
+    const z = this.pos.z;
+    for (const zb of ctx.zombies.list) if (!zb.dead && (zb.x - x) ** 2 + (zb.z - z) ** 2 < r * r && (zb.chasing || (zb.x - x) ** 2 + (zb.z - z) ** 2 < 100)) return true;
+    for (const u of ctx.raiders.units) if (!u.dead && (u.x - x) ** 2 + (u.z - z) ** 2 < r * r * 2.25) return true;
+    for (const v of ctx.vehicles) if (v.faction === 'raider' && !v.wreck && (v.position.x - x) ** 2 + (v.position.z - z) ** 2 < r * r * 4) return true;
+    return false;
   }
 
   /** Hand the rig how the gun is being handled this frame. Returns whether the gun must be up in front of the body. */
@@ -3184,6 +3291,7 @@ export class Player implements Pilot {
     this.human.root.removeFromParent();
     this.human.dispose();
     this.beam?.dispose();
+    this.view.dispose();
   }
 }
 

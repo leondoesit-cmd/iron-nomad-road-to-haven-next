@@ -572,7 +572,7 @@ describe('seeded gun loot', () => {
 
 describe('what you can see: the held model and the inventory icon', () => {
   const verts = (h: Humanoid) => {
-    const m = h.hand.children.find((c) => (c as { isMesh?: boolean }).isMesh && c !== h.flash) as THREE.Mesh | undefined;
+    const m = h.hand.children.find((c) => (c as { isMesh?: boolean }).isMesh && c !== h.flash.group) as THREE.Mesh | undefined;
     return m ? m.geometry.getAttribute('position').count : 0;
   };
 
@@ -588,7 +588,7 @@ describe('what you can see: the held model and the inventory icon', () => {
       expect(Object.keys(parseLooks(key)).length).toBe(Object.keys(att).length);
       h.setWeapon(g.gun!.model, key);
       expect(verts(h), g.id).toBeGreaterThan(bare);
-      const pos = (h.hand.children.find((c) => (c as { isMesh?: boolean }).isMesh && c !== h.flash) as THREE.Mesh).geometry.getAttribute('position');
+      const pos = (h.hand.children.find((c) => (c as { isMesh?: boolean }).isMesh && c !== h.flash.group) as THREE.Mesh).geometry.getAttribute('position');
       for (let i = 0; i < pos.array.length; i++) expect(Number.isFinite(pos.array[i]), g.id).toBe(true);
     }
   });
@@ -752,7 +752,7 @@ describe('add-ons in play', () => {
     arm(p, 'w_ar');
     sc.renderFrame(1, DT);
     const count = () => {
-      const m = p.human.hand.children.find((c) => (c as { isMesh?: boolean }).isMesh && c !== p.human.flash) as THREE.Mesh;
+      const m = p.human.hand.children.find((c) => (c as { isMesh?: boolean }).isMesh && c !== p.human.flash.group) as THREE.Mesh;
       return m.geometry.getAttribute('position').count;
     };
     const bare = count();

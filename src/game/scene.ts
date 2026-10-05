@@ -25,6 +25,7 @@ import type { Ctx, NoteKind } from './ctx';
 import { CrewSystem } from './crew';
 import { CarField } from './cars';
 import { DebrisField } from './debris';
+import { LooseProps } from './looseProps';
 import { TrackMarks } from '../render/trackMarks';
 import { clearShells } from '../render/shellCache';
 import { InteractRegistry } from './interact';
@@ -33,6 +34,7 @@ import { ObstacleIndex } from './obstacles';
 import { Player } from './player';
 import { Projectiles } from './projectiles';
 import { RaiderSystem } from './raiders';
+import { TravellerSystem } from './travellers';
 import { Vehicle, type Faction } from './vehicle';
 import type { VehicleBuild } from '../sim/garage';
 import { ZombieSystem } from './zombies';
@@ -107,9 +109,11 @@ export abstract class Scene implements Ctx {
   phantoms: PhantomSystem;
   wildlife: WildlifeSystem;
   raiders: RaiderSystem;
+  travellers: TravellerSystem;
   crew: CrewSystem;
   cars: CarField;
   debris = new DebrisField(this);
+  looseProps = new LooseProps(this);
   marks = new TrackMarks();
   vehicleByCollider = new Map<number, Vehicle>();
   interact = new InteractRegistry();
@@ -160,6 +164,7 @@ export abstract class Scene implements Ctx {
     this.playerFx = new PlayerFx(this.R);
     this.wildlife = new WildlifeSystem(this);
     this.raiders = new RaiderSystem(this);
+    this.travellers = new TravellerSystem(this);
     this.crew = new CrewSystem(this);
     this.cars = new CarField(this);
     this.projectiles = new Projectiles(this);
@@ -323,7 +328,7 @@ export abstract class Scene implements Ctx {
 
   /** A first-person camera sits inside its own player, so that player is hidden from that view only. */
   private beforeViewHook = (i: number) => {
-    this.players[i]?.beginOwnView();
+    this.players[i]?.beginOwnView(this.R.views[i].camera);
     // Whatever this player is seeing that is not there goes in just for their view.
     this.ghosts.mesh.visible = this.players[i] ? this.phantoms.render(i, this.ghosts, this.time) > 0 : false;
     if (this.players[i]) this.playerFx.beginView(i, this.R.views[i].camera);
@@ -600,6 +605,7 @@ export abstract class Scene implements Ctx {
     for (const v of this.vehicles) v.update(dt);
     this.cars.update(dt);
     this.raiders.update(dt);
+    this.travellers.update(dt);
     this.zombies.update(dt);
     this.wildlife.update(dt);
     this.crew.update(dt);
@@ -608,11 +614,13 @@ export abstract class Scene implements Ctx {
     this.gore.update(dt);
     this.groundGear?.update(dt);
     this.debris.update(dt);
+    this.looseProps.update();
     this.P.step();
     // Post-step gameplay systems.
     for (const v of this.vehicles) if (v.faction === 'convoy' || v.kind !== 'wagon') {
         this.zombies.plow(v, dt);
         this.wildlife.plow(v);
+        this.travellers.plow(v);
       }
     this.updateVehiclePlayerHits(dt);
     this.sigDecayT += dt;
@@ -734,6 +742,7 @@ export abstract class Scene implements Ctx {
     for (const p of this.players) p.syncVisual(alpha, dt);
     this.syncExtra(alpha, dt);
     this.debris.sync(alpha);
+    this.looseProps.sync(alpha);
     this.marks.update(dt);
     if (!this.idleCam) for (const p of this.players) p.renderCamera(alpha, dt);
     this.fx.setBudget(QUALITY[R.quality].particles);
@@ -750,7 +759,7 @@ export abstract class Scene implements Ctx {
       }
       v.active = true;
       p.cam.apply(v.camera);
-      R.setViewMode(i, p.firstPerson, this.input.settings.fpFov, this.input.settings.chaseFov);
+      R.setViewMode(i, p.firstPerson, this.input.settings.fpFov, this.input.settings.chaseFov, this.input.settings.fpLens);
       this.syncTrip(i, p, dt);
       v.focus.set(p.pos.x, p.pos.y, p.pos.z);
       if (p.vehicle) v.focus.set(p.vehicle.position.x, p.vehicle.position.y, p.vehicle.position.z);
@@ -982,6 +991,11 @@ export abstract class Scene implements Ctx {
       f.movers.push({ seat: p.index, x: v ? v.position.x : p.pos.x, z: v ? v.position.z : p.pos.z, yaw: v ? v.yaw : p.yaw, color: PLAYER_CSS[p.index] });
     }
     for (const v of this.vehicles) if (v.kind === 'crew' && !v.wreck) f.blips.push({ x: v.position.x, z: v.position.z, kind: 'crew' });
+    // People on the road are on the map once they are near: neutral, so they show whether or not foes do.
+    const rf = reach * reach;
+    this.travellers.forEachAlive((x, z) => {
+      if (f.blips.length < 80 && this.players.some((p) => p.state !== 'dead' && (x - (p.vehicle ? p.vehicle.position.x : p.pos.x)) ** 2 + (z - (p.vehicle ? p.vehicle.position.z : p.pos.z)) ** 2 <= rf)) f.blips.push({ x, z, kind: 'folk' });
+    });
     if (!foes) return;
     const r2 = reach * reach;
     const near = (x: number, z: number) => this.players.some((p) => p.state !== 'dead' && (x - (p.vehicle ? p.vehicle.position.x : p.pos.x)) ** 2 + (z - (p.vehicle ? p.vehicle.position.z : p.pos.z)) ** 2 <= r2);
@@ -1001,6 +1015,7 @@ export abstract class Scene implements Ctx {
     this.cars.clear();
     this.crew.clear();
     this.raiders.clearAll();
+    this.travellers.clearAll();
     this.projectiles.clear();
     this.combat.clear();
     this.gore.dispose();
@@ -1008,6 +1023,7 @@ export abstract class Scene implements Ctx {
     for (const v of this.vehicles) v.destroy();
     this.vehicles.length = 0;
     this.debris.clear();
+    this.looseProps.clear();
     this.marks.dispose();
     clearShells();
     this.players.length = 0;
@@ -1050,6 +1066,7 @@ export type SceneResult =
   | { type: 'legEnd' }
   | { type: 'campDone' }
   | { type: 'encounter'; id: string; spotId: string }
+  | { type: 'traveller'; mode: 'trade' | 'request'; id: number }
   | { type: 'dusk' }
   | { type: 'haven' }
   | { type: 'delveEnter'; site: DelveSite }

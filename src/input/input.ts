@@ -39,6 +39,8 @@ export interface Settings {
   fpFov: number;
   /** Horizontal field of view of the chase camera, degrees. */
   chaseFov: number;
+  /** How strongly the first-person view is drawn as a body camera sees it (barrel lens, colour fringes, dark rim), 0 to 1. */
+  fpLens: number;
   /** Which physical input drives which action, per device. */
   bindings: Bindings;
 }
@@ -53,8 +55,9 @@ export const defaultSettings = (): Settings => ({
   lookSens: [1, 1],
   keyTurn: 1,
   firstPerson: [false, false],
-  fpFov: 110,
+  fpFov: 100,
   chaseFov: 110,
+  fpLens: 0.7,
   bindings: defaultBindings(),
 });
 
@@ -401,6 +404,7 @@ export class InputManager {
       firstPerson: s.firstPerson,
       fpFov: s.fpFov,
       chaseFov: s.chaseFov,
+      fpLens: s.fpLens,
       bindings: exportBindings(s.bindings),
     };
   }
@@ -427,6 +431,7 @@ export class InputManager {
     s.keyTurn = num(r.keyTurn, 0.4, 2.5, s.keyTurn);
     s.fpFov = num(r.fpFov, 70, 120, s.fpFov);
     s.chaseFov = num(r.chaseFov, 70, 130, s.chaseFov);
+    s.fpLens = num(r.fpLens, 0, 1, s.fpLens);
     if (r.bindings) s.bindings = importBindings(r.bindings);
     this.bindingsChanged();
   }

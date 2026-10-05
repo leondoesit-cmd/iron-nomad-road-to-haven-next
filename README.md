@@ -14,7 +14,7 @@ the blueprint puts in "Beta" and "Final" is listed under [What is not in the sli
 npm install
 npm run dev          # http://127.0.0.1:5174  (or $PORT)
 npm run build        # typecheck + production bundle in dist/
-npm test             # about 1250 unit and simulation tests (Vitest)
+npm test             # about 1550 unit and simulation tests (Vitest)
 ```
 
 `?training` starts the training lessons (see [Learning the game](#learning-the-game)). `?leg=W` starts a fresh run in the open world (it is what New Convoy does). Any other leg id (`?leg=L3P`, `?leg=L2C`...) starts a fresh run
@@ -217,7 +217,7 @@ already taken swaps the two, so nothing is ever double-bound by accident and nob
 on the keyboard and mouse can be unbound with `Del` while binding; `Esc` (or `Start` on a pad) cancels, and `Esc`, `F1` to `F12`
 and the Alt and Meta keys are kept. Each tab has its look options (stick deadzone, look sensitivity, key turn speed, mouse
 sensitivity, invert look Y), and a *Camera & play* tab holds the view per seat, the first-person field of view (70 to 120
-degrees) and crouch as toggle or hold. Reset a tab to its defaults at any time. Everything is saved with the other settings,
+degrees), the bodycam lens strength and crouch as toggle or hold. Reset a tab to its defaults at any time. Everything is saved with the other settings,
 and the in-game Controls screen and the button prompts follow whatever you bind. The sticks and the D-pad menu navigation stay fixed.
 
 **Mouse / trackpad** (the Player 1 keyboard seat): click the game to capture the pointer, then move to aim with free
@@ -239,7 +239,7 @@ src/
   world/     deterministic terrain, leg layout (city grid, set pieces) and per-chunk content; `plans/` has authored city layouts
   render/    renderer and HDR post chain, sky and atmosphere, materials and procedural textures, terrain and road shaders,
              facades, chunk meshes, far landscape, ground cover, models (vehicles, people and their outfits, zombies, props), particles, camera
-  game/      scene runtime, entities (player, vehicle, zombies, raiders, crew), combat, leg scene, camp scene, game loop,
+  game/      scene runtime, entities (player, vehicle, zombies, raiders, crew, wildlife, travellers), combat, leg scene, camp scene, game loop,
              the training director (`tutorial.ts`)
   ui/        HUD, shared-cursor focus UI, overlays (title, votes, report), the Dawn Ledger, the inventory, the illustrated guide
              and training cards (`guide.ts`, `guideArt.ts`, `coach.ts`), styles
@@ -298,6 +298,8 @@ Roadside places (`world/terrain.ts` plans the sites, `world/settlements.ts` fill
 
 Buildings and landmarks are drawn by the far landscape for the whole leg (`render/landscape.ts`, `render/ruralView.ts`, `render/landmarks.ts`), so a gas station or a wind farm shows on the horizon long before its chunk streams in. Only their colliders stream.
 
+**Draw distance.** Each quality preset sets a view range (`QUALITY.draw`: 300 / 440 / 560 m) that pushes the fog out and thins the day haze, and how many chunks stream in full detail (`stream`: 2 rings on Low and Medium, 3 on High). Past the streamed chunks the far landscape also draws the paved roads as plain ribbons and the props that stand out (dead trees, big rocks, containers, poles, streetlights, pylons, tents, buses) as GPU instances of cheap stand-ins, one draw call per kind for the whole world (`render/farDetail.ts`). They step aside per chunk once that chunk is fully built: the far landscape's loaded-chunk mask has the ground in red and the finished chunk in green, read in the vertex shader (the instance folds to a point) and in the road's fragment shader. Each view's far plane follows the fog (`GameRenderer.fitFar`), because past the fog's end everything is horizon colour anyway; that culls more than the old fixed 2600 m plane did, so Medium draws fewer calls than before while seeing about a third further.
+
 ### Gang camps
 
 Raiders are not just buggies that turn up out of the dust. Three gangs hold the open world, each a stretch of country (the map is cut into squares, `gangAt` in `world/gangCamps.ts`): the **Rust Jackals** (red), the **Ash Choir** (orange) and the **Salt Kings** (green and white), defined in `data/gangs.ts`. Each keeps camps, some beside the roadside places off the highway and some out on their own in the open country (never in a city, a lake or on a slope, and kept well apart).
@@ -310,6 +312,20 @@ A camp is a ring of torn fence round a fire, with tents, tarped wrecks, barrels 
 - **On the map.** A camp is drawn on the minimap, the whole-leg map and the compass (as a threat, labelled with the gang's name) once the convoy has come within about 420 m of it, and stays there until it is broken. The radio names a gang the first time you come near one of its camps.
 
 Code: placement and dressing in `world/gangCamps.ts` (called from `Layout.raiderCamps`), the `tent` and `campfire` props in `render/props.ts`, sentry behaviour in `game/raiders.ts` (`Infantry.post`, `guardNotices`, `guardStep`, `alertCamp`), and the runtime in `game/gangCamps.ts`. Tests: `tests/gangcamps.test.ts`.
+
+### Travellers on the road
+
+The roads of the open world are not empty. Every so often someone turns up out of sight and walks one: a **pilgrim** or two bound north, a **drifter**, a **scavenger** with a frame pack and a crowbar, a **courier** at a run, a **hunter** with a rifle across the arm, and now and then a **trader** hauling a handcart. About one party an in-game minute and a half, fewer at night and in a dust storm, never more than three at once and never in a city or in training, and none set out within 200 m of a gang camp that still stands. They walk the shoulder, mostly toward whoever is leading, and vanish again once they are far behind or the road runs out where nobody can see.
+
+They are neutral. A trader always is. The rest mostly are too, but each rolls an attitude: **neutral** (just getting on with it), **rude** (shouts at traffic, brushes you off) or **wary** (stops to watch you, keeps their distance until they have made up their mind). A few, never a trader, are **asking for help**: a pilgrim short of food or a fever medicine, a drifter with a dry jerrycan, someone lost. They show on the compass as a `?` once you are within about 160 m, and on the minimap as a pale dot.
+
+- **Talk.** Walk up on foot and hold A (not with a gun up, not while carrying something): the prompt names who you are talking to. Small talk is a line over the radio-style subtitle; a neutral stranger sometimes lets slip where a gang camp is, and puts it on your map. A courier has no time.
+- **Help.** Asking for help opens the same shared vote as a Roadside Encounter, with their own words in it (they put it rudely or warily if that is who they are). Helping costs stock (2 Rations, 1 Medicine, 3 Fuel; pointing a lost traveller to the highway is free) and earns Mercy, sometimes Trust and a little loyalty, and a few Scrap or Parts in thanks. Turning them away costs nothing, except Mercy where it is a fever. It never hands over the Encounter Lead.
+- **Trade.** The trader's cart is a panel of its own: a few lots for sale for Scrap, a few the trader will buy, a purse that runs dry. Prices wobble from one trader to the next and are usually a little worse than at a hub; what a trader pays is well under what a trader asks, so there is no profit in carrying goods between them.
+- **Get out of the way.** They step off the road for a vehicle coming at them, and rude ones swear at one going by. A gun pointed at them (aiming down the sights; having it out is not enough) makes them nervous, and nervous becomes running. Gunfire anywhere near sends the unarmed running and everyone who sees it with them. The hunter is the exception: warns first, and shoots back if a gun stays on them.
+- **Killing them** is murder. Shooting, running down or burning someone who was only walking costs Mercy and raises Notoriety (a trader costs twice that), the radio says so, and everyone nearby saw it. They had a little on them. Anyone who shot first is fair game, and costs nothing.
+
+Rules (who turns up, attitudes, suspicion, requests, the cart, a road walked as a polyline) are `sim/travellers.ts`, tuned in `data/travellers.json` with all their lines in `strings.en.json` (`trav.*`, and `validateData()` checks every key). The runtime is `game/travellers.ts` (spawn, minds, movement, hits), the effect of a request is `game/travellerFx.ts`, the cart is `render/handcart.ts`, and the two screens are `Overlays.showRequest` and `Overlays.showTrade`. Hits hook into the same places as raiders: `Combat.firstHit`, `Player.computeAim`, melee, blasts, fire and `plow`. Tests: `tests/travellers.test.ts`.
 
 ### Interiors
 
@@ -416,12 +432,13 @@ On foot you move, and handle a gun, like a tactical shooter (`sim/gait.ts`, `sim
 - **A wall in the way pushes the gun up.** Within the gun's length of a wall the muzzle comes up and the gun is pulled in to the chest, sooner for a long gun; with the muzzle against the wall it cannot be fired.
 - **Every reload is a routine.** A pistol or SMG tips the gun, the hand goes to the belt for a fresh magazine and back, and the slide is racked; a revolver or break-action is opened muzzle up and snapped shut; a pump is canted over and takes a shell at a time (the hand goes to the pouch for each); a bolt rifle throws its bolt, takes rounds and runs it home. A pump or bolt is worked after every shot, and the case leaves at the end of the stroke.
 - **The gun has weight in the hands.** It lags behind a turn of the view and swings back, rocks with the steps and bucks back toward the shoulder with each shot.
-- **Iron sights are real.** Every gun has a rear and a front sight (a notch and a post with a pale dot; the rifle is aimed down its scope). In your own first-person view, aiming lines the sights up on the middle of the screen: the gun is turned and moved until the rear sight is on the line from your eye and the front post sits in the notch (`Humanoid.alignSights`, done on the hidden torso so the arms come with it). Its recoil and wander then play on top of that sight picture, so each shot kicks the sights off the line. From the hip the gun sits low and to the right, as before.
+- **Iron sights are real.** Every gun has a rear and a front sight (a notch and a post with a pale dot; the rifle is aimed down its scope, an open tube with a fine crosshair). In your own first-person view, aiming puts the rear sight on the line from your eye and the sight line straight down it, close in (a handgun at 0.38 m, a long gun at 0.27 m). Recoil then plays on top of that sight picture, so each shot kicks the sights off the line.
 - **Dropped magazines.** A pistol or SMG drops its empty magazine from the magazine well at the right moment of the reload (a short pistol magazine, a longer SMG one). It falls with a little of the hand's push, tumbles, clatters off the floor and stays where it lands. Revolvers and the sawn-off drop their empties as brass, and a pump or a bolt rifle drops none.
+- **The muzzle flash is a flame, not a ball** (`render/muzzleFlash.ts`). From in front a white-hot core with uneven petals, from the side a tongue of fire thrown out along the barrel with a bright bulb at the muzzle; each shot has its own shape and turn, it lasts a couple of frames (`FLASH_SECS`), fading and spreading as it goes, and each card fades as it turns edge-on so it never shows as a line. Sized per gun (`MUZZLE[gun].star`/`tongue`: a pistol's is about a hand across, a sawn-off's nearly three times that); the glow sprites round it are now a soft halo. The shot's light is gentle and sits out in front of the muzzle (`MUZZLE_LIGHT_POWER`, `MUZZLE_LIGHT_AHEAD`), so it lights the surroundings without blowing out the shooter; raiders throw the same flame from the gun in their hands.
 - **Smoke and shells come from the gun.** The flash, its light, the powder smoke and the ejected case start at the real muzzle and ejection port of the gun as it is drawn (in first person that means where you see it, not where the body is). Powder smoke is denser, greyer and hangs for a couple of seconds, a thin wisp curls off the barrel for a few seconds after a shot (longer after a shotgun) and off the breech as each case leaves; cases and magazines sit a little proud of the ground so they show on rough terrain, and sprites close to the lens no longer vanish.
-- **First person is a viewmodel now.** The forearms and hands come up from below the frame to a larger gun in the lower right, and come up and in behind the sights.
+- **First person is a body camera** (`render/viewmodel.ts`). Your own arms and weapon are drawn in the camera's space, so they sit in the same place on screen whichever way you look: two whole arms from shoulders below and behind the eye (a two-bone reach with a wrist, so the hands never leave the grips and the forearms run off the bottom of the frame), gloved hands closed round the grip with the thumbs laid forward along the frame, the support hand on the fore-end of a long gun. A handgun is held low in the middle in both hands, a long gun low with the stock in. On top of that the gun trails a turn of the view, rocks and cants with the steps, swings out against a sidestep, drops with a landing, breathes at rest, kicks back into the hands, goes low and across for a sprint, comes in to the chest for a reload (the support hand off to the belt) and up against a wall. Melee weapons are held up in the right hand and chopped over and across; bare hands jab. The body **leans** into a sidestep and into a turn of the view (harder on the move and in a sprint, hardly at all behind the sights), which rolls the view and tilts the survivor a partner sees (`leanTarget`/`stepLean` in `sim/gait.ts`). The **bodycam lens** (Control settings, *Camera & play*, 0 to 100 %, default 70 %) draws your first-person view through a wide barrel lens: the middle keeps its size, the rim takes in more and bends, with colour fringes and a darker rim (resampled with a Catmull-Rom filter, so the stretched middle does not band). A load in the arms, hands at work on a car and a greeting still use the third-person rig's forearms.
 
-Tests: `tests/bodycam.test.ts` (the gait, inertia, draw, wall, reload and rack rules; the rig's poses; the sights lined up on the eye for every gun and projected through the camera in a real scene; the magazine pool and the reload that drops it; effects starting at the drawn muzzle and port; and real scenes: speed ramps, the sprint carry blocking the trigger, drawing, a wall in front, animated reloads, the first-person eye).
+Tests: `tests/bodycam.test.ts` (the gait, inertia, draw, wall, reload and rack rules; the rig's poses; the sights lined up on the eye for every gun and projected through the camera in a real scene; the magazine pool and the reload that drops it; effects starting at the drawn muzzle and port; the first-person arms: hands on the grips, bones joined, arms running off the bottom of the frame, the same on screen at any pitch, the melee swing, the lean and the lens setting; and real scenes: speed ramps, the sprint carry blocking the trigger, drawing, a wall in front, animated reloads, the first-person eye, a sidestep leaning the view).
 
 
 ### Cars, parts and the garage
@@ -793,7 +810,11 @@ Everything on screen is generated in code at load time: no meshes, images or aud
 - **Pipeline**: both views render into one multisampled half-float target, then a bloom mip chain and a composite pass
   (ACES tone mapping, colour grading, a per-half vignette and film grain) draw to the canvas. Every post pass clamps its taps
   to the half a pixel belongs to, so one player's muzzle flash never glows into the other's view. The Low preset skips the
-  post chain and draws straight to the canvas.
+  post chain and draws straight to the canvas. With the post chain the canvas has the screen's own pixels (so the browser
+  never stretches the picture, which put faint regular lines through fine detail) while the scene is drawn at the quality's
+  resolution and the adaptive scale; the composite scales it up with a Catmull-Rom filter. The screen-space passes (AO,
+  scattered light, reflections) read the unfiltered depth buffer only at pixel centres: their half-resolution samples fall
+  between two depth pixels, and left to rounding the pick flipped in bands, darkening the ground in stripes.
 - **Light**: an analytic sky (sun glow, drifting clouds, stars and a moon) is captured into a cube map every second or so and
   prefiltered into the scene environment, so every surface is lit by, and reflects, the sky the player sees. three's fog
   chunks are replaced with distance fog plus a ground-hugging haze that scatters toward the sun (`render/atmosphere.ts`).

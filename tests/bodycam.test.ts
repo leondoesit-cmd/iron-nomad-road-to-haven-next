@@ -19,16 +19,21 @@ import {
   carryOf,
   drawLow,
   drawOf,
+  LEAN_MAX,
   landGait,
+  leanTarget,
   lowered,
   newGait,
   newGaitOut,
+  newLean,
   stepBlend,
   stepGait,
+  stepLean,
   stepRate,
-  strafeRoll,
   wallBlend,
 } from '../src/sim/gait';
+import { ViewModel } from '../src/render/viewmodel';
+import { defaultSettings, InputManager } from '../src/input/input';
 import { Brass } from '../src/render/brass';
 import { CYCLE_EJECT, DROPS_MAG, GUN_POINTS, RELOAD_KIND, curve, cycleRack, cycleTime, dropAt, newGunPose, reloadPose } from '../src/sim/weaponanim';
 import { fakeServices } from './helpers/sim';
@@ -225,11 +230,70 @@ describe('the view in time with the feet', () => {
     expect(dip(2).low).toBe(0);
   });
 
-  it('the head leans into a sidestep, a little', () => {
-    expect(Math.abs(strafeRoll(3.4))).toBeLessThan(0.015);
-    expect(Math.sign(strafeRoll(3))).toBe(-Math.sign(strafeRoll(-3)));
-    expect(strafeRoll(0)).toBeCloseTo(0, 12);
-    expect(Math.abs(strafeRoll(100))).toBeLessThanOrEqual(0.014);
+});
+
+describe('the body leans with the moves', () => {
+  it('leans into a sidestep, the way it is going, and stands straight when still', () => {
+    // Positive is a lean to the left: a step to the right leans right.
+    expect(leanTarget(3.4, 0, 3.4, false, 0)).toBeLessThan(-0.03);
+    expect(leanTarget(-3.4, 0, 3.4, false, 0)).toBeGreaterThan(0.03);
+    expect(leanTarget(0, 0, 0, false, 0)).toBeCloseTo(0, 12);
+  });
+
+  it('leans into a turn of the view, harder on the move, like running a curve', () => {
+    const still = leanTarget(0, 3, 0, false, 0);
+    const moving = leanTarget(0, 3, 4, false, 0);
+    expect(still).toBeGreaterThan(0);
+    expect(moving).toBeGreaterThan(still * 2);
+    expect(leanTarget(0, -3, 4, false, 0)).toBeCloseTo(-moving, 12);
+  });
+
+  it('leans harder in a sprint, hardly at all behind the sights, and never past the limit', () => {
+    expect(Math.abs(leanTarget(3, 0, 5, true, 0))).toBeGreaterThan(Math.abs(leanTarget(3, 0, 5, false, 0)));
+    expect(Math.abs(leanTarget(3, 0, 3, false, 1))).toBeLessThan(Math.abs(leanTarget(3, 0, 3, false, 0)) * 0.4);
+    expect(Math.abs(leanTarget(100, 100, 100, true, 0))).toBeLessThanOrEqual(LEAN_MAX);
+  });
+
+  it('swings into the lean over a few tenths of a second, a hair past, and settles', () => {
+    const l = newLean();
+    const want = -0.04;
+    let peak = 0;
+    let at = 0;
+    for (let i = 0; i < 120; i++) {
+      stepLean(l, want, DT);
+      if (i === 5) at = l.roll;
+      peak = Math.min(peak, l.roll);
+    }
+    // Not there at once, past it a little, and on it in the end.
+    expect(Math.abs(at)).toBeLessThan(Math.abs(want) * 0.6);
+    expect(peak).toBeLessThan(want);
+    expect(peak).toBeGreaterThan(want * 1.12);
+    expect(l.roll).toBeCloseTo(want, 4);
+  });
+
+  it('the survivor a partner sees leans over too', () => {
+    const h = new Humanoid(identityOf(0));
+    h.update(DT, 'stand', 3, 0, 0);
+    const upright = h.torso.rotation.z;
+    h.lean = -0.05;
+    h.update(DT, 'stand', 3, 0, 0);
+    // A lean to the right turns the torso about its forward axis the positive way.
+    expect(h.torso.rotation.z).toBeGreaterThan(upright + 0.03);
+  });
+
+  it('a sidestep in first person leans the view the way of the step', () => {
+    const { h, sc, p } = scene();
+    p.viewFirst = true;
+    stop(h);
+    runFor(sc, 0.5);
+    expect(Math.abs(p.lean.roll)).toBeLessThan(0.002);
+    h.intents[0].device = 'pad';
+    h.intents[0].move = [1, 0];
+    runFor(sc, 0.8);
+    expect(p.lean.roll).toBeLessThan(-0.02);
+    stop(h);
+    runFor(sc, 1.2);
+    expect(Math.abs(p.lean.roll)).toBeLessThan(0.004);
   });
 });
 
@@ -315,6 +379,8 @@ describe('reload routines', () => {
 describe('the arms follow the routine', () => {
   const posed = (set: (h: Humanoid) => void, weapon: 'pistol' | 'rifle' = 'pistol') => {
     const h = new Humanoid(identityOf(0));
+    // Every rig starts at its own moment of the breath; the same one here, so only the pose differs.
+    (h as unknown as { idleT: number }).idleT = 0;
     h.setWeapon(weapon);
     set(h);
     h.update(0.016, 'stand', 0, 0.75, 0, 0);
@@ -785,6 +851,30 @@ describe('the gun lags behind a turn of the view', () => {
 
 // ------------------------------------------------------------------ iron sights
 
+/** The owner's camera at the eye, looking level, up or down. */
+function eyeCam(pitch = 0) {
+  const cam = new THREE.PerspectiveCamera(66, 1.78, 0.1, 100);
+  cam.position.set(0, 1.62, 0.08);
+  cam.lookAt(0, 1.62 + Math.sin(pitch) * 10, 0.08 + Math.cos(pitch) * 10);
+  cam.updateMatrixWorld();
+  return cam;
+}
+
+/** The first-person arms posed with `model` in hand and the sights `k` of the way up, on a camera pitched by `pitch`. */
+function posed(model: Parameters<Humanoid['setWeapon']>[0], k: number, o: { pitch?: number; kick?: number } = {}) {
+  const h = new Humanoid(identityOf(0));
+  h.setWeapon(model);
+  h.gunKick = o.kick ?? 0;
+  const vm = new ViewModel(identityOf(0));
+  // The same moment of the breath every time.
+  (vm as unknown as { t: number }).t = 0;
+  vm.motion.ads = k;
+  vm.pose(0.016, h);
+  const cam = eyeCam(o.pitch ?? 0);
+  vm.place(cam);
+  return { h, vm, cam };
+}
+
 describe('aiming down the sights', () => {
   it('every gun has a sight line pointing down the barrel, with the muzzle beyond it', () => {
     for (const m of GUNS) {
@@ -806,53 +896,39 @@ describe('aiming down the sights', () => {
   });
 
   const sighted = (model: (typeof GUNS)[number], k: number, o: { pitch?: number; kick?: number } = {}) => {
-    const h = new Humanoid(identityOf(0));
-    h.setWeapon(model);
-    // The owner's eye, a hair forward of the neck, looking level or up or down.
+    const { vm, cam, h } = posed(model, k, o);
     const pitch = o.pitch ?? 0;
-    h.sight.k = k;
-    h.sight.ex = 0;
-    h.sight.ey = 1.62;
-    h.sight.ez = 0.08;
-    h.sight.fx = 0;
-    h.sight.fy = Math.sin(pitch);
-    h.sight.fz = Math.cos(pitch);
-    h.fpAds = k;
-    h.gunKick = o.kick ?? 0;
-    h.update(0.016, 'stand', 0, 1, 0, pitch);
-    h.setFirstPerson(true);
-    h.root.updateMatrixWorld(true);
-    const w = (h as unknown as { weapon: THREE.Mesh }).weapon;
+    const w = vm.weaponMesh!;
     const g = GUN_POINTS[model];
     const rear = w.localToWorld(new THREE.Vector3(...g.rear));
     const front = w.localToWorld(new THREE.Vector3(...g.front));
-    const eye = new THREE.Vector3(0, 1.62, 0.08);
+    const eye = cam.position.clone();
     const f = new THREE.Vector3(0, Math.sin(pitch), Math.cos(pitch));
     const off = (p: THREE.Vector3) => {
       const d = p.clone().sub(eye);
       return d.sub(f.clone().multiplyScalar(d.dot(f)));
     };
     const dir = front.clone().sub(rear).normalize();
-    return { rear: off(rear).length(), front: off(front).length(), angle: Math.acos(Math.min(1, dir.dot(f))), distance: rear.clone().sub(eye).dot(f), h };
+    return { rear: off(rear).length(), front: off(front).length(), angle: Math.acos(Math.min(1, dir.dot(f))), distance: rear.clone().sub(eye).dot(f), h, vm };
   };
 
   it('with the sights up, the rear and front sights sit on the line from the eye, for every gun', () => {
     for (const m of GUNS) {
       const r = sighted(m, 1);
-      expect(r.rear, m).toBeLessThan(0.006);
-      expect(r.front, m).toBeLessThan(0.012);
-      expect(r.angle, m).toBeLessThan(0.03);
-      // And in front of the eye, within arm's length, not behind the head or across the room.
-      expect(r.distance, m).toBeGreaterThan(0.2);
-      expect(r.distance, m).toBeLessThan(1.2);
+      expect(r.rear, m).toBeLessThan(0.002);
+      expect(r.front, m).toBeLessThan(0.004);
+      expect(r.angle, m).toBeLessThan(0.01);
+      // Close in front of the eye, as a body camera sees it: not at arm's full stretch, and clear of the near plane.
+      expect(r.distance, m).toBeGreaterThan(0.24);
+      expect(r.distance, m).toBeLessThan(0.45);
     }
   });
 
   it('looking up or down, the sights stay on the line', () => {
-    for (const pitch of [-0.5, 0.4]) {
+    for (const pitch of [-0.9, -0.5, 0.4, 0.9]) {
       const r = sighted('pistol', 1, { pitch });
-      expect(r.rear).toBeLessThan(0.008);
-      expect(r.angle).toBeLessThan(0.04);
+      expect(r.rear).toBeLessThan(0.002);
+      expect(r.angle).toBeLessThan(0.01);
     }
   });
 
@@ -865,16 +941,151 @@ describe('aiming down the sights', () => {
     expect(half.rear).toBeGreaterThan(up.rear);
   });
 
-  it('a shot kicks the sights off the line, and the kick comes off again', () => {
+  it('a shot kicks the sights off the line', () => {
     const still = sighted('pistol', 1);
     const kicked = sighted('pistol', 1, { kick: 1.2 });
     expect(kicked.rear + kicked.front).toBeGreaterThan(still.rear + still.front + 0.02);
   });
 
-  it('a partner who sees this survivor in third person sees the torso where it belongs', () => {
-    const r = sighted('pistol', 1);
-    r.h.setFirstPerson(false);
-    expect(r.h.torso.position.length()).toBe(0);
+  it('the first-person arms leave the survivor a partner sees alone', () => {
+    const h = new Humanoid(identityOf(0));
+    h.setWeapon('pistol');
+    h.update(DT, 'stand', 0, 1, 0, 0.4);
+    const before = h.torso.position.clone();
+    const rot = h.torso.rotation.x;
+    h.setFirstPerson(true, true);
+    // The whole survivor and the gun in hand are hidden from the owner's own view...
+    expect(h.hand.visible).toBe(false);
+    h.setFirstPerson(false);
+    // ...and come back exactly as they were.
+    expect(h.hand.visible).toBe(true);
+    expect(h.torso.position.distanceTo(before)).toBe(0);
+    expect(h.torso.rotation.x).toBe(rot);
+  });
+});
+
+describe('the first-person arms are whole and hold the weapon', () => {
+  type Rig = { upperR: THREE.Mesh; upperL: THREE.Mesh; foreR: THREE.Mesh; foreL: THREE.Mesh; handR: THREE.Mesh; handL: THREE.Mesh; gun: THREE.Group };
+  const rig = (vm: ViewModel) => vm as unknown as Rig;
+  const world = (m: THREE.Object3D, p = new THREE.Vector3()) => m.localToWorld(p.clone());
+  const down = (m: THREE.Object3D, len: number) => world(m, new THREE.Vector3(0, -len, 0));
+  const WEAPONS = [...GUNS, 'knife', 'bat', 'machete', 'axe', 'wrench', 'crowbar', 'flare'] as const;
+
+  it('every hand is on its grip: the firing hand on the grip, the support hand on the support grip', () => {
+    for (const m of GUNS) {
+      for (const k of [0, 1]) {
+        const { vm } = posed(m, k);
+        const r = rig(vm);
+        // The hand's frame has its origin in the middle of what it closes round.
+        const gripR = world(r.handR);
+        const want = r.gun.localToWorld(new THREE.Vector3(0, 0, 0));
+        expect(gripR.distanceTo(want), m).toBeLessThan(0.25);
+        // Both hands are within a short reach of the gun's own grip points (the support hand further along it).
+        const gunBox = new THREE.Box3().setFromObject(vm.weaponMesh!).expandByScalar(0.03);
+        expect(gunBox.containsPoint(gripR), `${m} right`).toBe(true);
+        expect(gunBox.containsPoint(world(r.handL)), `${m} left`).toBe(true);
+      }
+    }
+  });
+
+  it('the bones join up: shoulder to elbow to wrist to hand, with nothing stretched', () => {
+    for (const m of WEAPONS) {
+      const { vm } = posed(m, 0);
+      const r = rig(vm);
+      for (const [upper, fore, hand] of [
+        [r.upperR, r.foreR, r.handR],
+        [r.upperL, r.foreL, r.handL],
+      ] as const) {
+        // The upper arm ends at the elbow, the forearm at the wrist, and the wrist is where the hand's own wrist is.
+        expect(down(upper, 0.27).distanceTo(world(fore)), m).toBeLessThan(0.002);
+        expect(down(fore, 0.27).distanceTo(world(hand, new THREE.Vector3(0, 0.06, -0.036))), m).toBeLessThan(0.002);
+      }
+    }
+  });
+
+  it('the arms come up from below the frame, so the hands are never cut off in mid-air', () => {
+    // A handgun or a blade shows the firing hand; a long gun is held low with the stock in, and shows the support hand.
+    for (const [m, shown] of [
+      ['pistol', 'R'],
+      ['revolver', 'R'],
+      ['machete', 'R'],
+      ['smg', 'L'],
+      ['rifle', 'L'],
+      ['pump', 'L'],
+    ] as const) {
+      const { vm, cam } = posed(m, 0);
+      const r = rig(vm);
+      const ndc = (p: THREE.Vector3) => p.clone().project(cam);
+      // That hand is in the picture, low.
+      const hand = ndc(world(shown === 'R' ? r.handR : r.handL));
+      expect(Math.abs(hand.x), m).toBeLessThan(1);
+      expect(hand.y, m).toBeGreaterThan(-1);
+      expect(hand.y, m).toBeLessThan(0);
+      // Both shoulders are out of the picture, below or behind: the arms run off the bottom edge.
+      for (const up of [r.upperR, r.upperL]) {
+        const sh = world(up);
+        const local = cam.worldToLocal(sh.clone());
+        expect(local.z > -0.1 || Math.abs(ndc(sh).y) > 1 || Math.abs(ndc(sh).x) > 1, m).toBe(true);
+      }
+    }
+  });
+
+  it('the arms sit the same on screen looking up, level or down', () => {
+    const at = (pitch: number) => {
+      const { vm, cam } = posed('pistol', 0, { pitch });
+      return world(rig(vm).handR).project(cam);
+    };
+    const level = at(0);
+    for (const pitch of [-1.1, -0.5, 0.6, 1.1]) expect(at(pitch).distanceTo(level)).toBeLessThan(1e-6);
+  });
+
+  it('empty hands draw nothing; a punch draws the fist', () => {
+    const h = new Humanoid(identityOf(0));
+    const vm = new ViewModel(identityOf(0));
+    vm.pose(DT, h);
+    expect(vm.active).toBe(false);
+    h.swing = 0.6;
+    vm.pose(DT, h);
+    expect(vm.active).toBe(true);
+    expect(vm.weaponMesh).toBeNull();
+  });
+
+  it('a melee swing winds up, comes down across the body, and comes back to rest', () => {
+    const h = new Humanoid(identityOf(0));
+    h.setWeapon('machete');
+    const vm = new ViewModel(identityOf(0));
+    const tip = (swing: number) => {
+      h.swing = swing;
+      vm.pose(DT, h);
+      vm.place(eyeCam());
+      return vm.weaponMesh!.localToWorld(new THREE.Vector3(0, 0, 0.6));
+    };
+    const rest = tip(0);
+    const wound = tip(0.7);
+    const struck = tip(0.45);
+    // Up and back, then down and over to the left (the camera looks along +z here, so its left is +x).
+    expect(wound.y).toBeGreaterThan(rest.y);
+    expect(struck.y).toBeLessThan(rest.y - 0.15);
+    expect(struck.x).toBeGreaterThan(rest.x + 0.05);
+    // Back at rest (give or take a breath).
+    expect(tip(0).distanceTo(rest)).toBeLessThan(0.002);
+  });
+
+  it('a sidestep cants the gun and a turn of the view makes it trail', () => {
+    const base = posed('pistol', 0);
+    const q0 = rig(base.vm).gun.quaternion.clone();
+    const h = new Humanoid(identityOf(0));
+    h.setWeapon('pistol');
+    const vm = new ViewModel(identityOf(0));
+    vm.motion.strafe = 3;
+    for (let i = 0; i < 60; i++) vm.pose(DT, h);
+    expect(rig(vm).gun.quaternion.angleTo(q0)).toBeGreaterThan(0.05);
+    vm.motion.strafe = 0;
+    // Turning right the lag springs come out positive (see Player.updateHandling).
+    vm.motion.lagYaw = 0.06;
+    for (let i = 0; i < 60; i++) vm.pose(DT, h);
+    // Turning right, the gun is left behind: it sits to the left of where it was.
+    expect(rig(vm).gun.position.x).toBeLessThan(rig(base.vm).gun.position.x);
   });
 });
 
@@ -886,20 +1097,23 @@ describe('aiming down the sights in a real scene', () => {
     h.intents[0].device = 'pad';
     const centre = () => {
       sc.renderFrame(1, DT);
-      p.beginOwnView();
-      p.human.root.updateMatrixWorld(true);
       const cam = sc.R.views[0].camera;
       cam.updateMatrixWorld();
-      const w = (p.human as unknown as { weapon: THREE.Mesh }).weapon;
+      p.beginOwnView(cam);
+      const w = p.view.weaponMesh!;
       const g = GUN_POINTS.pistol;
       const rear = w.localToWorld(new THREE.Vector3(...g.rear)).project(cam);
       const front = w.localToWorld(new THREE.Vector3(...g.front)).project(cam);
+      const shown = p.view.root.visible;
       p.endOwnView();
-      return { rear, front };
+      return { rear, front, shown };
     };
     runFor(sc, 0.6);
     const hip = centre();
+    expect(hip.shown).toBe(true);
     expect(hip.rear.y).toBeLessThan(-0.15);
+    // Only the owner's view: put away again for the partner's.
+    expect(p.view.root.visible).toBe(false);
     h.intents[0].lt = 1;
     runFor(sc, 0.8);
     expect(p.ads).toBeGreaterThan(0.95);
@@ -908,6 +1122,95 @@ describe('aiming down the sights in a real scene', () => {
     expect(Math.hypot(ads.rear.x, ads.rear.y)).toBeLessThan(0.1);
     expect(Math.hypot(ads.front.x, ads.front.y)).toBeLessThan(0.12);
     h.intents[0].lt = 0;
+  });
+});
+
+describe('the flame at the muzzle', () => {
+  it('sits at the muzzle of the gun in hand, along the barrel, and only while a shot is fresh', () => {
+    for (const m of GUNS) {
+      const h = new Humanoid(identityOf(0));
+      h.setWeapon(m);
+      expect(h.flash.visible, m).toBe(false);
+      h.muzzle(1);
+      expect(h.flash.visible, m).toBe(true);
+      h.root.updateMatrixWorld(true);
+      const w = (h as unknown as { weapon: THREE.Mesh }).weapon;
+      const muzzle = w.localToWorld(new THREE.Vector3(...GUN_POINTS[m].muzzle));
+      expect(h.flash.group.getWorldPosition(new THREE.Vector3()).distanceTo(muzzle), m).toBeLessThan(0.01);
+      // Its own +z is the barrel's.
+      const along = new THREE.Vector3(0, 0, 1).transformDirection(h.flash.group.matrixWorld);
+      const barrel = new THREE.Vector3(0, 0, 1).transformDirection(w.matrixWorld);
+      expect(along.dot(barrel), m).toBeGreaterThan(0.999);
+      h.muzzle(0);
+      expect(h.flash.visible, m).toBe(false);
+    }
+  });
+
+  it('every shot has its own shape, and it fades and spreads as it goes', () => {
+    const h = new Humanoid(identityOf(0));
+    h.setWeapon('pistol');
+    const turns = new Set<number>();
+    for (let i = 0; i < 6; i++) {
+      h.muzzle(1);
+      turns.add(Math.round(h.flash.group.rotation.z * 1000));
+      h.muzzle(0);
+    }
+    expect(turns.size).toBeGreaterThan(3);
+    const parts = h.flash as unknown as { mat: THREE.ShaderMaterial; star: THREE.Mesh };
+    h.muzzle(1);
+    const hot = (parts.mat.uniforms.color.value as THREE.Color).r;
+    const size = parts.star.scale.x;
+    const turn = h.flash.group.rotation.z;
+    h.muzzle(0.3);
+    // Fading is the same shot: same shape, dimmer, a little bigger.
+    expect(h.flash.group.rotation.z).toBe(turn);
+    expect((parts.mat.uniforms.color.value as THREE.Color).r).toBeLessThan(hot * 0.5);
+    expect(parts.star.scale.x).toBeGreaterThan(size);
+  });
+
+  it('a melee weapon never flashes', () => {
+    const h = new Humanoid(identityOf(0));
+    h.setWeapon('machete');
+    h.muzzle(1);
+    expect(h.flash.visible).toBe(false);
+  });
+
+  it('in a real scene the flame shows for the first frame or two of a shot, in the owner\'s first-person view too', () => {
+    const { h, sc, p } = scene();
+    p.viewFirst = true;
+    stop(h);
+    runFor(sc, 0.4);
+    h.intents[0].device = 'pad';
+    h.intents[0].rt = 1;
+    p.fireCd = 0;
+    sc.tick(DT);
+    h.intents[0].rt = 0;
+    sc.renderFrame(1, DT);
+    const cam = sc.R.views[0].camera;
+    cam.updateMatrixWorld();
+    p.beginOwnView(cam);
+    const fpFlash = (p.view as unknown as { flash: { visible: boolean } }).flash.visible;
+    p.endOwnView();
+    expect(p.human.flash.visible).toBe(true);
+    expect(fpFlash).toBe(true);
+    runFor(sc, 4 / 60);
+    sc.renderFrame(1, DT);
+    expect(p.human.flash.visible).toBe(false);
+  });
+});
+
+describe('the bodycam lens', () => {
+  it('is on by default, saved with the settings, and kept within 0 to 1', () => {
+    expect(defaultSettings().fpLens).toBeGreaterThan(0);
+    const win = new EventTarget() as unknown as Window;
+    const im = new InputManager(win as never);
+    im.settings.fpLens = 0.3;
+    const saved = JSON.parse(JSON.stringify(im.exportSettings()));
+    const other = new InputManager(win as never);
+    other.importSettings(saved);
+    expect(other.settings.fpLens).toBeCloseTo(0.3, 9);
+    other.importSettings({ ...saved, fpLens: 7 });
+    expect(other.settings.fpLens).toBe(1);
   });
 });
 

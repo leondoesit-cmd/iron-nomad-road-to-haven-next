@@ -37,7 +37,7 @@ export interface MapBase {
 export interface MapBlip {
   x: number;
   z: number;
-  kind: 'foe' | 'crew' | 'wild';
+  kind: 'foe' | 'crew' | 'wild' | 'folk';
 }
 
 export interface MapMover {

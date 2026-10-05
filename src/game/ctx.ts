@@ -16,6 +16,7 @@ import type { ZombieSystem } from './zombies';
 import type { PhantomSystem } from './phantoms';
 import type { WildlifeSystem } from './wildlife';
 import type { RaiderSystem } from './raiders';
+import type { TravellerSystem } from './travellers';
 import type { CrewSystem } from './crew';
 import type { Combat } from './combat';
 import type { Gore } from './gore';
@@ -88,6 +89,8 @@ export interface Ctx {
   /** Herds, packs and flocks of wild animals. */
   wildlife: WildlifeSystem;
   raiders: RaiderSystem;
+  /** People walking the roads: traders, pilgrims, drifters. Neutral until they are given a reason not to be. */
+  travellers: TravellerSystem;
   crew: CrewSystem;
   vehicleByCollider: Map<number, Vehicle>;
   interact: InteractRegistry;

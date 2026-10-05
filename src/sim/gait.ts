@@ -208,7 +208,34 @@ export function landGait(g: Gait, fallSpeed: number): void {
   g.dipV -= clamp((fallSpeed - 3) / 14, 0, 1) * 2.4 + 0.3;
 }
 
-/** View roll from sidestepping: the head leans into the move. `strafe` is the speed to the right (m/s). */
-export function strafeRoll(strafe: number): number {
-  return clamp(-strafe * 0.0035, -0.014, 0.014);
+// ------------------------------------------------------------------ the body leans with the moves
+
+/** The body's lean, as the view's roll (radians, positive to the left) and how fast it is changing. */
+export interface Lean {
+  roll: number;
+  v: number;
+}
+
+export const newLean = (): Lean => ({ roll: 0, v: 0 });
+
+/** The most the body leans, radians: a hard sidestep in a sprint while whipping the view round. */
+export const LEAN_MAX = 0.08;
+
+/**
+ * How far the body wants to lean: into a sidestep (`strafe`, m/s to the right), into a turn of the view (`turn`, rad/s,
+ * positive to the left), more for a turn on the move, like running a curve, and in a sprint; braced behind the sights
+ * hardly at all. Positive is a lean to the left.
+ */
+export function leanTarget(strafe: number, turn: number, speed: number, sprinting: boolean, ads: number): number {
+  const moving = clamp(speed / 3.4, 0, 1.5);
+  const side = clamp(-strafe * 0.012, -0.05, 0.05);
+  const curve = clamp(turn * (0.004 + 0.009 * moving), -0.045, 0.045);
+  return clamp((side + curve) * (sprinting ? 1.25 : 1) * (1 - 0.65 * clamp01(ads)), -LEAN_MAX, LEAN_MAX);
+}
+
+/** Step the lean toward its target: a spring a little under critical, so it swings into a move and settles with a hair of overshoot. */
+export function stepLean(l: Lean, target: number, dt: number): void {
+  const w = 9;
+  l.v += (w * w * (target - l.roll) - 2 * 0.72 * w * l.v) * dt;
+  l.roll += l.v * dt;
 }

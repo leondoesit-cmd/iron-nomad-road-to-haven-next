@@ -8,6 +8,7 @@ import stringsJson from './strings.en.json';
 import partsJson from './parts.json';
 import boatsJson from './boats.json';
 import wildlifeJson from './wildlife.json';
+import travellersJson from './travellers.json';
 import { validateGear } from './gear';
 
 export * from './gear';
@@ -522,6 +523,101 @@ export const WILDLIFE = wildlifeJson as unknown as {
   species: Record<AnimalKind, AnimalDef>;
 };
 
+// ------------------------------------------------------------------------------------------ road travellers
+
+/** How a traveller carries itself toward you. Traders are always `neutral`; the rest are mostly neutral too, but some are rude or wary. */
+export type Attitude = 'neutral' | 'rude' | 'wary';
+export const ATTITUDES: Attitude[] = ['neutral', 'rude', 'wary'];
+export type TravellerKind = 'trader' | 'pilgrim' | 'drifter' | 'scavenger' | 'courier' | 'hunter';
+export type RequestKind = 'food' | 'medicine' | 'fuel' | 'directions';
+/** A [min, max] range of whole units. */
+export type Span = [number, number];
+
+export interface TravellerDef {
+  name: string;
+  /** Relative chance of turning up when a traveller is due. */
+  weight: number;
+  /** Most of this kind on the road at once. */
+  cap: number;
+  hp: number;
+  /** Walking pace, m/s. */
+  walk: number;
+  group: Span;
+  /** Relative weights of each attitude. */
+  attitudes: Record<Attitude, number>;
+  /** Chance that an individual is asking for help, and what they might ask for. */
+  request: number;
+  asks: RequestKind[];
+  /** What is in their hand (a `Held` name from the humanoid renderer). */
+  held: string;
+  /** Shoots back when shot at. Everyone else runs. */
+  armed: boolean;
+  /** Pulls a handcart. */
+  cart?: boolean;
+  /** Opens a trade panel instead of making small talk. */
+  trade?: boolean;
+  /** Always in a hurry: barely stops to talk. */
+  hurry?: boolean;
+  /** Multiplier on their spawn weight at deep night. */
+  night: number;
+  /** What a body is worth, per stock, as [min, max]. */
+  loot: Partial<Record<StockId, Span>>;
+}
+export interface RequestDef {
+  cost: Cost;
+  /** What they press into your hand in thanks. */
+  thanks: Partial<Record<StockId, Span>>;
+  axes: Partial<Record<'mercy' | 'trust' | 'notoriety', number>>;
+  loyalty: number;
+  /** Axes moved by turning them away. */
+  refuse: Partial<Record<'mercy' | 'trust' | 'notoriety', number>>;
+  /** They tell you where a camp is. */
+  rumour?: boolean;
+}
+export interface BuyOfferDef {
+  id: string;
+  give: Partial<Record<StockId, number>>;
+  cost: Partial<Record<StockId, number>>;
+  qty: Span;
+}
+export interface SellOfferDef {
+  id: string;
+  take: Partial<Record<StockId, number>>;
+  pay: Partial<Record<StockId, number>>;
+}
+export const TRAVELLERS = travellersJson as unknown as {
+  rules: {
+    firstAfter: number;
+    spawnEvery: number;
+    maxAlive: number;
+    spawnMin: number;
+    spawnMax: number;
+    despawnRadius: number;
+    nightFactor: number;
+    stormFactor: number;
+    campClear: number;
+    noticeRadius: number;
+    talkReach: number;
+    wardRadius: number;
+    yieldAhead: number;
+    yieldSpeed: number;
+    shoulder: number;
+    corpseSeconds: number;
+    fleeSeconds: number;
+    barkGap: number;
+    rumourChance: number;
+    murder: Partial<Record<'mercy' | 'trust' | 'notoriety', number>>;
+    murderTrader: Partial<Record<'mercy' | 'trust' | 'notoriety', number>>;
+    witnessRadius: number;
+  };
+  archetypes: Record<TravellerKind, TravellerDef>;
+  requests: Record<RequestKind, RequestDef>;
+  trade: { buyCount: number; sellCount: number; priceSpread: number; purse: Span; buy: BuyOfferDef[]; sell: SellOfferDef[] };
+  barks: Record<string, number>;
+};
+export const TRAVELLER_KINDS = Object.keys(TRAVELLERS.archetypes) as TravellerKind[];
+export const REQUEST_KINDS = Object.keys(TRAVELLERS.requests) as RequestKind[];
+
 export const ENEMIES = enemiesJson as unknown as {
   zombies: Record<ZombieKind, ZombieDef>;
   zombieRules: {
@@ -695,6 +791,45 @@ export function validateData(): string[] {
     }
   }
   for (const el of STRUCTURES.build.elements) need(el.size.length === 3, `build element ${el.id}: size`);
+  errs.push(...validateTravellers());
   errs.push(...validateGear());
+  return errs;
+}
+
+function validateTravellers(): string[] {
+  const errs: string[] = [];
+  const need = (cond: boolean, msg: string) => {
+    if (!cond) errs.push(msg);
+  };
+  const T = TRAVELLERS;
+  const spanOk = (s: Span) => Array.isArray(s) && s.length === 2 && s[0] >= 0 && s[1] >= s[0];
+  const stockOk = (o: Partial<Record<StockId, unknown>>) => Object.keys(o).every((k) => (STOCK_IDS as string[]).includes(k));
+  for (const k of TRAVELLER_KINDS) {
+    const a = T.archetypes[k];
+    need(hasString(`trav.name.${k}`), `traveller ${k}: missing name string`);
+    need(a.weight > 0 && a.cap >= 1 && a.hp > 0 && a.walk > 0, `traveller ${k}: numbers`);
+    need(spanOk(a.group) && a.group[0] >= 1, `traveller ${k}: group span`);
+    need(ATTITUDES.every((x) => typeof a.attitudes[x] === 'number' && a.attitudes[x] >= 0) && ATTITUDES.some((x) => a.attitudes[x] > 0), `traveller ${k}: attitude weights`);
+    need(a.request >= 0 && a.request <= 1, `traveller ${k}: request chance`);
+    need(a.request === 0 || a.asks.length > 0, `traveller ${k}: asks for help but names nothing to ask for`);
+    need(a.asks.every((r) => r in T.requests), `traveller ${k}: unknown request`);
+    need(!a.trade || (a.attitudes.rude === 0 && a.attitudes.wary === 0), `traveller ${k}: a trader is neutral`);
+    need(a.night >= 0, `traveller ${k}: night factor`);
+    need(stockOk(a.loot) && Object.values(a.loot).every((s) => spanOk(s as Span)), `traveller ${k}: loot`);
+    need(!a.trade || !a.armed, `traveller ${k}: a trader carries no gun`);
+  }
+  for (const r of REQUEST_KINDS) {
+    const q = T.requests[r];
+    need(stockOk(q.cost) && stockOk(q.thanks) && Object.values(q.thanks).every((s) => spanOk(s as Span)), `request ${r}: stocks`);
+    for (const a of ATTITUDES) need(hasString(`trav.ask.${r}.${a}`), `request ${r}: missing ask for ${a}`);
+    need(hasString(`trav.ask.${r}.title`) && hasString(`trav.ask.${r}.give`), `request ${r}: missing title or label`);
+  }
+  for (const o of T.trade.buy) need(stockOk(o.give) && stockOk(o.cost) && spanOk(o.qty) && o.qty[0] >= 1 && hasString(`trav.offer.${o.id}`), `trade buy ${o.id}: shape or label`);
+  for (const o of T.trade.sell) need(stockOk(o.take) && stockOk(o.pay) && hasString(`trav.offer.sell.${o.id}`), `trade sell ${o.id}: shape or label`);
+  need(T.trade.buy.length >= T.trade.buyCount && T.trade.sell.length >= T.trade.sellCount, 'trade: not enough offers for the counts');
+  for (const [pool, n] of Object.entries(T.barks)) {
+    need(n >= 1, `bark ${pool}: empty`);
+    for (let i = 1; i <= n; i++) need(hasString(`trav.bark.${pool}.${i}`), `bark ${pool}.${i}: missing string`);
+  }
   return errs;
 }

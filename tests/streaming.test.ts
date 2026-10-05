@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { initPhysics } from '../src/physics/physics';
+import { G, groups, initPhysics } from '../src/physics/physics';
+import { PROP_COLLISION, propCollisionMesh } from '../src/render/propCollision';
 import { legById } from '../src/data';
 import { LegScene } from '../src/game/legScene';
 import { WorldMemory } from '../src/game/worldMemory';
@@ -75,15 +76,50 @@ describe('staged chunk views', () => {
     const staged = build(sc, data, true);
     expect(whole.pending).toBe(0);
     expect(staged.pending).toBeGreaterThan(0);
-    expect(staged.colliders.length).toBe(whole.colliders.length);
+    // Ground, buildings and props are solid at once; the stones laid by the scatter stage get their colliders with it.
+    const atOnce = staged.colliders.length;
+    expect(atOnce).toBeGreaterThan(0);
+    expect(atOnce).toBeLessThanOrEqual(whole.colliders.length);
     expect(drawn(staged).verts).toBe(0);
     let steps = 0;
     while (staged.buildNext()) steps++;
     expect(steps).toBeGreaterThan(5);
     expect(staged.pending).toBe(0);
+    expect(staged.colliders.length).toBe(whole.colliders.length);
     expect(drawn(staged)).toEqual(drawn(whole));
     whole.dispose();
     staged.dispose();
+  });
+
+  it('every solid prop in a loaded world is hit by a shot from above, as its own material', () => {
+    const sc = open();
+    const kinds = new Map<string, { hit: number; n: number }>();
+    for (const v of sc.chunks.values()) {
+      for (const p of v.data.props) {
+        const m = propCollisionMesh(p);
+        if (!m) continue;
+        // Aim at the middle of the highest points: for a hull that is its top, for a pole its tip.
+        let top = -Infinity;
+        for (let i = 1; i < m.vertices.length; i += 3) top = Math.max(top, m.vertices[i]);
+        let sx = 0;
+        let sz = 0;
+        let n = 0;
+        for (let i = 0; i < m.vertices.length; i += 3) if (m.vertices[i + 1] > top - 0.15) {
+          sx += m.vertices[i];
+          sz += m.vertices[i + 2];
+          n++;
+        }
+        const r = sc.P.raycast(sx / n, top + 20, sz / n, 0, -1, 0, 40, groups(0xffff, G.STATIC | G.FURN | G.LOOSE));
+        const e = kinds.get(p.kind) ?? { hit: 0, n: 0 };
+        e.n++;
+        if (r && sc.P.surfaces.has(r.collider.handle)) e.hit++;
+        kinds.set(p.kind, e);
+      }
+    }
+    expect(kinds.size).toBeGreaterThan(0);
+    const bad = [...kinds].filter(([, e]) => e.n >= 5 && e.hit / e.n < 0.8).map(([k, e]) => `${k} ${e.hit}/${e.n}`);
+    expect(bad).toEqual([]);
+    expect(Object.keys(PROP_COLLISION).length).toBeGreaterThan(40);
   });
 
   it('can be thrown away half built', () => {

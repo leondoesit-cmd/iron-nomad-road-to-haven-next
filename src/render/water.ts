@@ -183,9 +183,15 @@ vec2 wn2 = texture2D( tWNorm, wp * 0.27 + vec2( -wT * 0.02, wT * 0.015 ) ).xy * 
 vec2 wn3 = texture2D( tWNorm, wp * 0.7 + vec2( wT * 0.03, -wT * 0.025 ) ).xy * 2.0 - 1.0;
 // The shallows are calmer than the open water.
 float wCalm = 1.0 - 0.55 * ( 1.0 - smoothstep( 0.0, 1.4, wD ) );
-vec2 wn = ( wn1 * 0.55 + wn2 * 0.38 + wn3 * 0.22 ) * wCalm * 0.35;
+// Far off, and seen at a glancing angle, the ripples are finer than a pixel: each one would flip the mirror between the sky
+// and the ground and the water would show stripes. They calm down with distance and toward the horizon, as a real lake
+// does to the eye.
+vec3 wV = normalize( cameraPosition - vWWorld );
+float wGlance = smoothstep( 0.015, 0.3, abs( wV.y ) );
+float wFine = ( 1.0 - 0.75 * smoothstep( 5.0, 40.0, length( vViewPosition ) ) ) * mix( 0.2, 1.0, wGlance );
+vec2 wn = ( wn1 * 0.55 + wn2 * 0.38 + wn3 * 0.22 ) * wCalm * 0.35 * wFine;
 // Slow swell on top of the ripples.
-wn += vec2( cos( wp.x * 0.09 + wp.y * 0.05 + wT * 0.7 ) * 0.05 + cos( wp.x * 0.04 - wp.y * 0.08 + wT * 0.5 ) * 0.04, cos( wp.y * 0.07 - wp.x * 0.03 + wT * 0.6 ) * 0.05 ) * wCalm;
+wn += vec2( cos( wp.x * 0.09 + wp.y * 0.05 + wT * 0.7 ) * 0.05 + cos( wp.x * 0.04 - wp.y * 0.08 + wT * 0.5 ) * 0.04, cos( wp.y * 0.07 - wp.x * 0.03 + wT * 0.6 ) * 0.05 ) * wCalm * mix( 0.4, 1.0, wGlance );
 vec3 wNw = normalize( vec3( wn.x, 1.0, wn.y ) );
 float wDeep = smoothstep( 0.15, 4.2, wD );
 vec3 wCol = mix( cWShallow, cWDeep, wDeep );
@@ -268,7 +274,8 @@ diffuseColor = vec4( wCol, wA );
 }
 
 const FRAG_ROUGH = /* glsl */ `
-float roughnessFactor = wRough;
+// Where the surface still turns faster than a pixel can show, blur the reflection instead of letting it sparkle and band.
+float roughnessFactor = max( wRough, clamp( length( fwidth( wNw ) ) * 2.5, 0.0, 0.35 ) );
 `;
 
 const FRAG_NORMAL = /* glsl */ `
