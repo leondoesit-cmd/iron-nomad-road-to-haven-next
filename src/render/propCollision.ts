@@ -62,6 +62,8 @@ export const PROP_COLLISION: Record<PropKind, 'mesh' | 'hull' | 'none'> = {
   bus: 'hull',
   busShelter: 'hull',
   floodlight: 'mesh',
+  campfire: 'none',
+  tent: 'hull',
 };
 
 export interface CollisionMesh {
