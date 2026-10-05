@@ -107,8 +107,30 @@ const DRAWN_SPECS: Partial<Record<Exclude<Held, 'none'>, Spec>> = {
 const MELEE_LIKE: Partial<Record<Exclude<Held, 'none'>, Exclude<Held, 'none'>>> = { pipe: 'bat', sledge: 'axe', katana: 'machete' };
 const SPECS = {} as Record<Exclude<Held, 'none'>, Spec>;
 for (const k of Object.keys(DRAWN_SPECS) as Exclude<Held, 'none'>[]) SPECS[k] = DRAWN_SPECS[k]!;
-for (const m of Object.keys(GUN_BASE) as GunModel[]) SPECS[m] ??= DRAWN_SPECS[GUN_BASE[m]]!;
-for (const [k, like] of Object.entries(MELEE_LIKE) as [Exclude<Held, 'none'>, Exclude<Held, 'none'>][]) SPECS[k] ??= DRAWN_SPECS[like]!;
+// Hands for the other guns, from where each model's own grip and fore-end sit (see `weaponGeometry`): the firing hand on the
+// grip (tilted as the grip is), the support hand under the fore-end.
+const PIST = (y: number, z: number, tilt: number): Grip => GRIP_R([0, y - 0.015, z], [0, Math.cos(tilt), -Math.sin(tilt)]);
+const GRIPS: Partial<Record<GunModel, Partial<Spec>>> = {
+  cannon: { r: PIST(-0.045, 0.03, 0.3) },
+  mp: { r: PIST(-0.04, 0, 0.2), l: UNDER(0.15) },
+  smg2: { r: PIST(-0.05, 0.03, 0.2), l: UNDER(0.2) },
+  carbine: { r: PIST(-0.05, 0.04, 0.3), l: UNDER(0.36) },
+  ar: { r: PIST(-0.06, 0.05, 0.3), l: UNDER(0.5) },
+  br: { r: PIST(-0.06, 0.05, 0.3), l: UNDER(0.55) },
+  dmr: { r: PIST(-0.06, 0.05, 0.3), l: UNDER(0.55) },
+  sniper: { l: UNDER(0.45) },
+  lever: { l: UNDER(0.5) },
+  crossbow: { r: PIST(-0.06, 0, 0.25), l: UNDER(0.35) },
+  combat: { r: PIST(-0.04, 0, 0.15), l: UNDER(0.45) },
+  coach: { l: UNDER(0.3) },
+  lmg: { r: PIST(-0.06, 0.05, 0.25), l: UNDER(0.45) },
+};
+for (const m of Object.keys(GUN_BASE) as GunModel[]) SPECS[m] ??= { ...DRAWN_SPECS[GUN_BASE[m]]!, ...GRIPS[m] };
+const MELEE_GRIPS: Partial<Record<Exclude<Held, 'none'>, Partial<Spec>>> = {
+  pipe: { r: HANDLE(0.1) },
+  sledge: { r: HANDLE(0.15), l: HANDLE(0.03, [-1, 0, 0]) },
+};
+for (const [k, like] of Object.entries(MELEE_LIKE) as [Exclude<Held, 'none'>, Exclude<Held, 'none'>][]) SPECS[k] ??= { ...DRAWN_SPECS[like]!, ...MELEE_GRIPS[k] };
 
 /** Bare fists, for a punch. */
 const FIST: Spec = { hip: [0.18, -0.3, -0.36], ads: 0, rest: [0, 0, 0], scale: 1, r: HANDLE(0) };
