@@ -93,6 +93,11 @@ export interface PromptAlt {
 
 /** Seconds to climb into a vehicle: reach, step up, duck, sit. */
 const ENTER_SECS = 0.8;
+/** Seconds to climb out, a high five, and how long the map button is held to offer one. */
+const EXIT_SECS = 0.55;
+const FIVE_SECS = 1.3;
+const FIVE_HOLD = 0.5;
+const MAP_TAP = 0.45;
 const WALK = 3.4;
 const SPRINT = 5.9;
 const CROUCH = 1.7;
@@ -188,6 +193,12 @@ export class Player implements Pilot {
   enterT = 0;
   /** Where the hands are working while a hold-action runs (null otherwise): the body reaches for it. */
   private workAt: THREE.Vector3 | null = null;
+  /** A high five under way with a friend: who, which style, how far along. */
+  private five: { t: number; style: 1 | 2 | 3; partner: Player; hit: boolean; lead: boolean } | null = null;
+  private fiveSent = false;
+  /** Visual only: climbing out of a vehicle. The player is already on foot; the body is eased from the seat to the ground. */
+  private exitT = 0;
+  private exitSeat = new THREE.Vector3();
   private enterFrom = new THREE.Vector3();
   private enterTo: Vehicle | null = null;
   private enterSeat: 'driver' | 'gunner' = 'driver';
@@ -636,6 +647,8 @@ export class Player implements Pilot {
       }
     }
     const speed = Math.abs(v.speed);
+    // Where the body sat, so it can be eased out of the seat rather than popping to the kerb.
+    const seatW = this.state === 'driving' ? v.body.toWorld(0, -0.4, -0.1) : v.gunnerPos();
     if (this.state === 'driving') {
       v.driver = null;
       v.setEngine(false);
@@ -654,11 +667,84 @@ export class Player implements Pilot {
     this.yaw = v.yaw;
     this.aimYaw = v.yaw;
     this.cam.snap();
+    if (!bail && !boat) {
+      this.exitT = EXIT_SECS;
+      this.exitSeat.set(seatW[0], seatW[1] - 0.6, seatW[2]);
+    } else this.exitT = 0;
     if (bail && speed > 3 && !boat) {
       const dmg = 10 + clamp(speed / 20, 0, 1) * 20;
       this.hurt(dmg, spot.x, spot.z, 'fall');
       this.note(`Bailed out at ${(speed * 3.6).toFixed(0)} km/h`, 'warn');
     }
+  }
+
+  // ------------------------------------------------------------------ high five
+
+  private canFive() {
+    return this.state === 'foot' && !this.five && !this.carry && !this.action && !this.drugs.passedOut && !this.swimming && this.grounded && this.ads < 0.3 && this.swingT <= 0 && !this.buildMode && !this.beltOpen && this.stunT <= 0;
+  }
+
+  /** Hold the map button next to a friend: the two turn to face each other and slap hands, in one of three styles. */
+  private offerFive() {
+    const others = this.ctx.players.filter((q) => q !== this && q.state !== 'dead');
+    if (!others.length) return;
+    if (!this.canFive()) return;
+    let best: Player | null = null;
+    let bd = 4.5;
+    for (const q of others) {
+      const d = Math.hypot(q.pos.x - this.pos.x, q.pos.z - this.pos.z);
+      if (d < bd && Math.abs(q.pos.y - this.pos.y) < 1.2 && q.canFive()) {
+        bd = d;
+        best = q;
+      }
+    }
+    if (!best) {
+      this.note('No friend close enough for a high five', 'info');
+      return;
+    }
+    const style = (1 + Math.floor(Math.random() * 3)) as 1 | 2 | 3;
+    this.five = { t: 0, style, partner: best, hit: false, lead: true };
+    best.five = { t: 0, style, partner: this, hit: false, lead: false };
+    const name = style === 1 ? 'High five!' : style === 2 ? 'Fist bump!' : 'Double slap!';
+    this.note(name, 'good');
+    best.note(name, 'good');
+  }
+
+  private updateFive(dt: number) {
+    const f = this.five;
+    if (!f) return;
+    const q = f.partner;
+    const d = Math.hypot(q.pos.x - this.pos.x, q.pos.z - this.pos.z);
+    // Over if either is hurt, driving off, or the two are pulled apart.
+    if (this.state !== 'foot' || q.state !== 'foot' || q.five?.partner !== this || d > 6 || this.sinceHit < 0.15 || this.swimming) {
+      this.five = null;
+      return;
+    }
+    f.t += dt;
+    const p = f.t / FIVE_SECS;
+    // Square up to the friend, and close the gap to arm's length (each takes half).
+    const toward = Math.atan2(q.pos.x - this.pos.x, q.pos.z - this.pos.z);
+    this.yaw = dampAngle(this.yaw, toward, 14, dt);
+    this.aimYaw = dampAngle(this.aimYaw, toward, 10, dt);
+    if (d > 1.15 && p < 0.5) {
+      const step = Math.min(d - 1.15, 2.4 * dt) * 0.5;
+      this.pos.x += ((q.pos.x - this.pos.x) / d) * step;
+      this.pos.z += ((q.pos.z - this.pos.z) / d) * step;
+      this.body.setTranslation({ x: this.pos.x, y: this.pos.y + BODY_H / 2, z: this.pos.z }, true);
+    }
+    if (!f.hit && p >= 0.5) {
+      f.hit = true;
+      if (f.lead) {
+        const ctx = this.ctx;
+        const hx = (this.pos.x + q.pos.x) / 2;
+        const hy = this.pos.y + (f.style === 2 ? 1.25 : 1.65);
+        const hz = (this.pos.z + q.pos.z) / 2;
+        ctx.fx.spark(hx, hy, hz, f.style === 2 ? 8 : 14, 3);
+        ctx.fx.puff(hx, hy, hz, 0.9, 0.85, 0.7, 0.5, 0.4);
+        ctx.audio.play(f.style === 2 ? 'thud' : 'hit', hx, hz, 0.35);
+      }
+    }
+    if (f.t >= FIVE_SECS) this.five = null;
   }
 
   // ------------------------------------------------------------------ tick
@@ -677,8 +763,17 @@ export class Player implements Pilot {
     this.commandWheel = isHeld(it, Btn.Up) && this.state !== 'dead';
     this.sheet = isHeld(it, Btn.Back) && heldFor(it, Btn.Back) > 0.25;
     const beltBusy = this.useHold > 0 || this.beltOpen;
-    if (wasPressed(it, Btn.Map) && !beltBusy && this.state !== 'dead') this.mapMode = (this.mapMode + 1) % this.ctx.mapModes;
-    else if (this.mapMode >= this.ctx.mapModes) this.mapMode = 0;
+    // The map button: a short tap steps the map; holding it offers a high five to a friend standing close.
+    if (wasReleased(it, Btn.Map)) {
+      if (!this.fiveSent && it.releasedAfter[Btn.Map] < MAP_TAP && !beltBusy && this.state !== 'dead') this.mapMode = (this.mapMode + 1) % this.ctx.mapModes;
+      this.fiveSent = false;
+    } else if (isHeld(it, Btn.Map) && !this.fiveSent && heldFor(it, Btn.Map) >= FIVE_HOLD) {
+      this.fiveSent = true;
+      if (!beltBusy) this.offerFive();
+    }
+    if (this.mapMode >= this.ctx.mapModes) this.mapMode = 0;
+    this.updateFive(dt);
+    if (this.exitT > 0) this.exitT = Math.max(0, this.exitT - dt);
     if (this.fireCd > 0) this.fireCd -= dt;
     if (this.meleeCd > 0) this.meleeCd -= dt;
     if (this.muzzleT > 0) this.muzzleT -= dt;
@@ -706,7 +801,8 @@ export class Player implements Pilot {
 
     switch (this.state) {
       case 'foot':
-        this.updateFoot(dt, it);
+        // Mid high five the feet stay put.
+        this.updateFoot(dt, this.five ? { ...it, move: [0, 0] as [number, number], pressed: 0 } : it);
         break;
       case 'entering':
         this.updateEntering(dt);
@@ -2364,6 +2460,16 @@ export class Player implements Pilot {
     this.syncCarryModel();
     this.airVis = damp(this.airVis, this.state === 'foot' && !this.grounded && !this.swimming && this.airT > 0.06 ? 1 : 0, 16, dt);
     h.enter = this.state === 'entering' ? clamp(this.enterT / ENTER_SECS, 0.001, 1) : 0;
+    h.fiveStyle = this.five && this.state === 'foot' ? this.five.style : 0;
+    h.five = this.five ? clamp(this.five.t / FIVE_SECS, 0, 1) : 0;
+    // Climbing out: the body leaves the seat and settles on the ground, the climb-in pose played backwards.
+    if (this.exitT > 0 && this.state === 'foot') {
+      const k = this.exitT / EXIT_SECS;
+      const w = k * k * (3 - 2 * k);
+      const ey = lerp(y, this.exitSeat.y, w);
+      h.root.position.set(lerp(x, this.exitSeat.x, w * w), ey, lerp(z, this.exitSeat.z, w * w));
+      h.enter = Math.max(0.001, k);
+    } else this.exitT = 0;
     this.syncWork(h, lying);
     h.update(dt, lying ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch, this.airVis);
     h.muzzle(this.muzzleT > 0.05);

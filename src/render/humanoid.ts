@@ -321,6 +321,9 @@ export class Humanoid {
   private workT = 0;
   /** 0..1 while climbing into a vehicle: a step to the door, a duck under the frame and a drop into the seat. */
   enter = 0;
+  /** A greeting with a friend: 0 none, else 1 high five, 2 fist bump, 3 two-handed slap. `five` is its progress 0..1. */
+  fiveStyle = 0;
+  five = 0;
   /**
    * Hands at work on something at `workAt` (root space: x to the left, y up from the feet, z ahead). `workAmt` is 1 while
    * the job runs; the owner sets both every frame. What is carried is held out to the spot, a tool is worked on it.
@@ -565,6 +568,7 @@ export class Humanoid {
         this.carried.rotation.set(0, 0, 0);
       }
       if (wk > 0.01 && air < 0.5) this.workPose(wk, aim);
+      if (this.fiveStyle > 0 && !this.carried && air < 0.5) this.fivePose(this.fiveStyle, this.five);
       if (enter > 0) this.enterPose(enter);
     } else if (pose === 'ride') {
       // Astride a moped: hips down, knees bent, arms out to the bars.
@@ -675,6 +679,41 @@ export class Humanoid {
       this.elbowR.rotation.x = lerp(this.elbowR.rotation.x, -0.45 + out * 0.3, k);
     }
     void aim;
+  }
+
+  /**
+   * Meeting a friend's hand. The arm comes up (overhead for a high five, chest high for a fist bump, both for a double slap),
+   * lands at contact halfway through, then rides the recoil and drops. The hand angles in toward the other person's.
+   */
+  private fivePose(style: number, p: number) {
+    const raise = smooth(0.0, 0.42, p) * (1 - smooth(0.72, 1, p));
+    // The contact jolt: a quick shove back at the moment the hands meet.
+    const hit = Math.exp(-Math.pow((p - 0.5) / 0.05, 2));
+    const hop = style === 2 ? 0 : Math.sin(Math.PI * clamp((p - 0.28) / 0.42, 0, 1)) * (style === 3 ? 0.1 : 0.05);
+    this.hips.position.y += hop;
+    this.torso.rotation.x += raise * 0.1 - hit * 0.05;
+    this.torso.rotation.y = lerp(this.torso.rotation.y, 0, raise);
+    this.head.rotation.x = lerp(this.head.rotation.x, -0.1, raise);
+    this.head.rotation.y = 0;
+    this.armR.rotation.y = 0;
+    if (style === 1 || style === 3) {
+      const up = style === 3 ? -2.05 : -2.2;
+      this.armR.rotation.x = lerp(this.armR.rotation.x, up + hit * 0.18, raise);
+      this.armR.rotation.z = lerp(this.armR.rotation.z, 0.38, raise);
+      this.elbowR.rotation.x = lerp(this.elbowR.rotation.x, -0.2 - hit * 0.2, raise);
+    }
+    if (style === 3) {
+      this.armL.rotation.x = lerp(this.armL.rotation.x, -2.05 + hit * 0.18, raise);
+      this.armL.rotation.z = lerp(this.armL.rotation.z, -0.38, raise);
+      this.elbowL.rotation.x = lerp(this.elbowL.rotation.x, -0.2 - hit * 0.2, raise);
+    }
+    if (style === 2) {
+      // Fist out at chest height, the other hand tucked in.
+      this.armR.rotation.x = lerp(this.armR.rotation.x, -1.35 + hit * 0.12, raise);
+      this.armR.rotation.z = lerp(this.armR.rotation.z, 0.3, raise);
+      this.elbowR.rotation.x = lerp(this.elbowR.rotation.x, -0.55 - hit * 0.15, raise);
+      this.hand.rotation.x = lerp(this.hand.rotation.x, 0.2, raise);
+    }
   }
 
   /**

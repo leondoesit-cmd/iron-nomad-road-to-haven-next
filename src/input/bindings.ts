@@ -80,7 +80,7 @@ export const ACTIONS: ActionDef[] = [
   { id: 'nextBuild', label: 'Build: next', hint: 'Camp build mode on keys (a pad uses RB)', group: 'team', btn: [Btn.Right], devices: ['kb'], optional: true },
   { id: 'use', label: 'Take drug', hint: 'Tap to take the selected drug · hold to pick the next one', group: 'combat', pad: Btn.Down, btn: [Btn.Down], devices: ALL, optional: true },
   { id: 'sheet', label: 'Convoy sheet', hint: 'Hold for the convoy sheet', group: 'team', pad: Btn.Back, btn: [Btn.Back], devices: ALL, optional: true },
-  { id: 'map', label: 'Map', hint: 'Tap to open the map: a closer look, then the whole leg, then close', group: 'team', pad: Btn.Map, btn: [Btn.Map], devices: ALL, optional: true },
+  { id: 'map', label: 'Map', hint: 'Tap to open the map: a closer look, then the whole leg, then close · Hold next to a friend for a high five', group: 'team', pad: Btn.Map, btn: [Btn.Map], devices: ALL, optional: true },
 ];
 
 export const ACTION_BY_ID = Object.fromEntries(ACTIONS.map((a) => [a.id, a])) as Record<ActionId, ActionDef>;
