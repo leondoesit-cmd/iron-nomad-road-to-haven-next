@@ -1843,7 +1843,7 @@ export class Player implements Pilot {
     const ctx = this.ctx;
     const v = this.nearestVehicle(3.8, (q) => !q.wreck && q.faction !== 'raider' && q.kind !== 'crew');
     if (!v) return null;
-    const bench = v.faction === 'convoy' && v.build ? '  ·  X: paint & oil bench' : '';
+    const bench = (v.faction === 'convoy' || v.faction === 'neutral') && v.build ? '  ·  X: paint & oil bench' : '';
     const job = planRepair(v.health, ctx.campaign.stocks, { spare: v.stats.spare, weapon: !!v.weapon, dents: v.bodywork.dentLevel(), missing: v.bodywork.missing(), glass: v.glass.broken() });
     if (!job) return { kind: 'repair', prompt: `${v.def.name} is in good shape${bench}`, dur: 1, target: v, ok: false, label: 'repair', run: () => {} };
     const cost = Object.keys(job.cost).length ? ` (${costText(job.cost)})` : '';
