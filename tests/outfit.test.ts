@@ -87,7 +87,7 @@ describe('what they hold', () => {
       if (!model) continue;
       const h = new Humanoid(identityOf(0));
       h.setWeapon(model);
-      const mesh = h.hand.children.find((c): c is THREE.Mesh => (c as THREE.Mesh).isMesh && c !== h.flash);
+      const mesh = h.hand.children.find((c): c is THREE.Mesh => (c as THREE.Mesh).isMesh);
       expect(mesh, g.id).toBeDefined();
       expect(mesh!.geometry.getAttribute('position').count, g.id).toBeGreaterThan(0);
     }

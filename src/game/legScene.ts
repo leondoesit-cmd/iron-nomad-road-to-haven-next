@@ -79,7 +79,6 @@ interface ZoneState {
   fired: boolean;
 }
 
-const STREAM_R = 2;
 /** Milliseconds of chunk work a tick may start: for the look-ahead, and for a chunk next to a player. */
 const STREAM_CALM_MS = 4;
 const STREAM_URGENT_MS = 10;
@@ -584,6 +583,7 @@ export class LegScene extends Scene {
       }
       return best;
     };
+    const R = QUALITY[this.R.quality].stream;
     const t0 = performance.now();
     for (let unit = 0; unit < 6; unit++) {
       // Finish the nearest staged chunk, if there is one.
@@ -604,8 +604,8 @@ export class LegScene extends Scene {
       for (const p of points) {
         const pcx = Math.floor(p.x / CHUNK);
         const pcz = Math.floor(p.z / CHUNK);
-        for (let dx = -STREAM_R; dx <= STREAM_R; dx++) {
-          for (let dz = -STREAM_R; dz <= STREAM_R; dz++) {
+        for (let dx = -R; dx <= R; dx++) {
+          for (let dz = -R; dz <= R; dz++) {
             if (this.chunks.has(chunkKey(pcx + dx, pcz + dz))) continue;
             const d = dx * dx + dz * dz;
             if (d < wantD) {
@@ -650,10 +650,11 @@ export class LegScene extends Scene {
     }
     this.streamWork(pts, pts.slice(0, this.players.length));
     // Unload far chunks (hysteresis of one chunk).
+    const R = QUALITY[this.R.quality].stream;
     for (const [key, view] of this.chunks) {
       let near = false;
       for (const p of pts) {
-        if (Math.abs(view.data.cx - Math.floor(p.x / CHUNK)) <= STREAM_R + 1 && Math.abs(view.data.cz - Math.floor(p.z / CHUNK)) <= STREAM_R + 1) {
+        if (Math.abs(view.data.cx - Math.floor(p.x / CHUNK)) <= R + 1 && Math.abs(view.data.cz - Math.floor(p.z / CHUNK)) <= R + 1) {
           near = true;
           break;
         }
@@ -1670,6 +1671,8 @@ export class LegScene extends Scene {
       let d = Infinity;
       for (const p of pts) d = Math.min(d, Math.hypot(p.x - cx, p.z - cz));
       view.setDetailDistance(Math.max(0, d - CHUNK * 0.71));
+      // Once its roads and props are in, the far stand-ins over this chunk step aside.
+      if (!view.pending) this.landscape.setBuilt(view.data.cx, view.data.cz);
     }
     void alpha;
   }

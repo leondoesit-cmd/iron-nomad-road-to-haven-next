@@ -11,8 +11,11 @@ import type { AmmoKind, Surface } from './ballistics';
 // ------------------------------------------------------------------ muzzle
 
 export interface MuzzleFx {
-  /** Size of the core flash sprite, metres. */
+  /** Size of the glow sprite round the flash, metres (the flash itself is `star` and `tongue`). */
   flash: number;
+  /** The flame at the muzzle: across its petals seen from in front, and how far its tongue reaches along the barrel (m). */
+  star: number;
+  tongue: number;
   /** Sprites strung down the line of the barrel, and how far they reach (m). */
   cone: number;
   reach: number;
@@ -26,16 +29,22 @@ export interface MuzzleFx {
 }
 
 export const MUZZLE: Record<GunModel, MuzzleFx> = {
-  pistol: { flash: 0.8, cone: 3, reach: 0.55, sparks: 3, smoke: 1, light: 0.8, tint: [1, 0.82, 0.45] },
-  revolver: { flash: 1.25, cone: 5, reach: 0.85, sparks: 6, smoke: 2, light: 1.1, tint: [1, 0.72, 0.34] },
-  smg: { flash: 0.7, cone: 3, reach: 0.5, sparks: 2, smoke: 1, light: 0.7, tint: [1, 0.86, 0.5] },
-  sawn: { flash: 1.8, cone: 9, reach: 1.5, sparks: 11, smoke: 4, light: 1.5, tint: [1, 0.64, 0.26] },
-  pump: { flash: 1.55, cone: 8, reach: 1.3, sparks: 9, smoke: 3, light: 1.3, tint: [1, 0.68, 0.3] },
-  rifle: { flash: 1.4, cone: 6, reach: 1.2, sparks: 5, smoke: 3, light: 1.2, tint: [1, 0.9, 0.62] },
+  pistol: { flash: 0.8, star: 0.11, tongue: 0.15, cone: 3, reach: 0.55, sparks: 3, smoke: 1, light: 0.8, tint: [1, 0.82, 0.45] },
+  revolver: { flash: 1.25, star: 0.16, tongue: 0.22, cone: 5, reach: 0.85, sparks: 6, smoke: 2, light: 1.1, tint: [1, 0.72, 0.34] },
+  smg: { flash: 0.7, star: 0.1, tongue: 0.13, cone: 3, reach: 0.5, sparks: 2, smoke: 1, light: 0.7, tint: [1, 0.86, 0.5] },
+  sawn: { flash: 1.8, star: 0.3, tongue: 0.42, cone: 9, reach: 1.5, sparks: 11, smoke: 4, light: 1.5, tint: [1, 0.64, 0.26] },
+  pump: { flash: 1.55, star: 0.26, tongue: 0.36, cone: 8, reach: 1.3, sparks: 9, smoke: 3, light: 1.3, tint: [1, 0.68, 0.3] },
+  rifle: { flash: 1.4, star: 0.18, tongue: 0.3, cone: 6, reach: 1.2, sparks: 5, smoke: 3, light: 1.2, tint: [1, 0.9, 0.62] },
 };
 
+/** How long the flame at the muzzle lasts, seconds: a couple of frames. */
+export const FLASH_SECS = 0.035;
+
 /** How long the light from a shot lasts, seconds. */
-export const MUZZLE_LIGHT_LIFE = 0.07;
+export const MUZZLE_LIGHT_LIFE = 0.05;
+/** The shot's light: brightness per unit of `MuzzleFx.light`, and how far out in front of the muzzle it sits (m). */
+export const MUZZLE_LIGHT_POWER = 14;
+export const MUZZLE_LIGHT_AHEAD = 0.35;
 
 // ------------------------------------------------------------------ tracers
 

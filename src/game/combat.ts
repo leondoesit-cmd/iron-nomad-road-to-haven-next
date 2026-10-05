@@ -14,7 +14,7 @@ import {
   type Surface,
 } from '../sim/ballistics';
 import { structuralMul } from '../sim/breach';
-import { IMPACT_SOUND, MUZZLE_LIGHT_LIFE, SKIP_DAMAGE, TRACER, skipOf, tracerTint } from '../sim/weaponfx';
+import { IMPACT_SOUND, MUZZLE_LIGHT_AHEAD, MUZZLE_LIGHT_LIFE, MUZZLE_LIGHT_POWER, SKIP_DAMAGE, TRACER, skipOf, tracerTint } from '../sim/weaponfx';
 import { windAt } from '../sim/weather';
 import type { Ctx } from './ctx';
 import type { Vehicle } from './vehicle';
@@ -93,7 +93,7 @@ export class Combat {
   onImpact: ((e: { surface: Surface | 'flesh'; x: number; y: number; z: number; speed: number; penetrated: boolean }) => void) | null = null;
 
   /** One shared light that flashes at the latest muzzle, so night fights light the people in them without a light per gun. */
-  light = new THREE.PointLight(0xffb468, 0, 16, 1.8);
+  light = new THREE.PointLight(0xffb468, 0, 14, 2);
   private lightT = 0;
   private lightPeak = 0;
 
@@ -101,10 +101,14 @@ export class Combat {
     ctx.root.add(this.light);
   }
 
-  /** A gun went off here: flash the shared light, brightest at the moment of the shot. */
-  muzzleLight(x: number, y: number, z: number, strength: number) {
-    this.light.position.set(x, y, z);
-    this.lightPeak = Math.max(strength * 38, this.lightT > 0 ? this.light.intensity : 0);
+  /**
+   * A gun went off here, pointing along (dx, dy, dz): flash the shared light, brightest at the moment of the shot. The light
+   * sits a little out in front of the muzzle, where the flame is, so it lights the scene rather than blinding the shooter's
+   * own hands and face a hand's length behind it.
+   */
+  muzzleLight(x: number, y: number, z: number, strength: number, dx = 0, dy = 0, dz = 0) {
+    this.light.position.set(x + dx * MUZZLE_LIGHT_AHEAD, y + dy * MUZZLE_LIGHT_AHEAD, z + dz * MUZZLE_LIGHT_AHEAD);
+    this.lightPeak = Math.max(strength * MUZZLE_LIGHT_POWER, this.lightT > 0 ? this.light.intensity : 0);
     this.lightT = MUZZLE_LIGHT_LIFE;
     this.light.intensity = this.lightPeak;
   }

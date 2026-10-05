@@ -108,6 +108,7 @@ export class ControlsMenu {
               },
             })),
             num('fov', 'First-person field of view', () => st().fpFov, (v) => (st().fpFov = v), 5, 70, 120, (v) => `${Math.round(v)}°`),
+            num('lens', 'Bodycam lens (first person)', () => st().fpLens, (v) => (st().fpLens = v), 0.1, 0, 1, (v) => (v < 0.01 ? 'OFF' : `${Math.round(v * 100)}%`)),
             ...perSeat('cr', 'Crouch', (i) => ({ value: () => (st().toggleCrouch[i] ? 'TOGGLE' : 'HOLD'), step: () => (st().toggleCrouch[i] = !st().toggleCrouch[i]) })),
           ];
       }
@@ -178,6 +179,7 @@ export class ControlsMenu {
         s.invertLookY = [false, false];
         s.toggleCrouch = [true, true];
         s.fpFov = 100;
+        s.fpLens = 0.7;
         s.firstPerson = [false, false];
         for (const p of g.scene?.players ?? []) p.viewFirst = false;
       }

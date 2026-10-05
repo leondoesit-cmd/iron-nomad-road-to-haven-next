@@ -13,6 +13,7 @@ import { BuildingView } from './buildingView';
 import type { LegLayout } from '../world/layout';
 import { shoreShade } from '../world/lakes';
 import { buildLakeWater, type LakeWater } from './water';
+import { FarDetail } from './farDetail';
 
 /**
  * Scenery beyond the streamed chunks. In the wasteland, one coarse terrain mesh covers the whole leg out to
@@ -30,6 +31,8 @@ export class Landscape {
   private geos: THREE.BufferGeometry[] = [];
   private mats: THREE.Material[] = [];
   private lakeWater: LakeWater[] = [];
+  /** Roads and standout props beyond the streamed chunks. */
+  private farDetail: FarDetail | null = null;
   /** Every roadside building of the leg, each cut away on its own when someone steps inside. */
   buildings: BuildingView[] = [];
 
@@ -42,7 +45,9 @@ export class Landscape {
     cityBuildings?: BuildingSpec[],
   ) {
     if (def.biome === 'wasteland') {
-      this.buildFarTerrain();
+      const lod = this.buildFarTerrain();
+      this.farDetail = new FarDetail(def, layout?.props ?? [], lod);
+      this.group.add(this.farDetail.group);
       this.buildLakes();
       if (layout) this.buildSettlements(layout);
       if (def.open && cityBuildings?.length) this.buildDistrictFar(cityBuildings);
@@ -129,7 +134,7 @@ export class Landscape {
     }
   }
 
-  private buildFarTerrain() {
+  private buildFarTerrain(): TerrainUniforms {
     const def = this.def;
     // Chunk grid the hole mask covers.
     const open = def.open;
@@ -219,6 +224,7 @@ export class Landscape {
     m.receiveShadow = true;
     m.frustumCulled = false;
     this.group.add(m);
+    return lod;
   }
 
   /**
@@ -238,16 +244,33 @@ export class Landscape {
     }
   }
 
-  /** Mark a detailed chunk as loaded (the far mesh steps aside) or unloaded. */
+  /**
+   * Mark a detailed chunk's ground as loaded (the far terrain steps aside) or the chunk as unloaded. The mask's red
+   * channel is the ground; green is the whole chunk (see setBuilt).
+   */
   setLoaded(cx: number, cz: number, on: boolean) {
     if (!this.loaded || !this.loadedTex) return;
     const x = cx - this.cx0;
     const z = cz - this.cz0;
     if (x < 0 || z < 0 || x >= this.cw || z >= this.ch) return;
-    this.loaded[(z * this.cw + x) * 4] = on ? 255 : 0;
+    const i = (z * this.cw + x) * 4;
+    this.loaded[i] = on ? 255 : 0;
+    if (!on) this.loaded[i + 1] = 0;
     this.loadedTex.needsUpdate = true;
     const far = this.cityFar.get(`${cx}:${cz}`);
     if (far) far.visible = !on;
+  }
+
+  /** Mark a detailed chunk as fully built, roads and props included: the far roads and props step aside. */
+  setBuilt(cx: number, cz: number) {
+    if (!this.loaded || !this.loadedTex) return;
+    const x = cx - this.cx0;
+    const z = cz - this.cz0;
+    if (x < 0 || z < 0 || x >= this.cw || z >= this.ch) return;
+    const i = (z * this.cw + x) * 4 + 1;
+    if (this.loaded[i]) return;
+    this.loaded[i] = 255;
+    this.loadedTex.needsUpdate = true;
   }
 
   /** Towers behind the city corridor, standing on the rubble slopes. */
@@ -301,6 +324,7 @@ export class Landscape {
   }
 
   dispose() {
+    this.farDetail?.dispose();
     for (const w of this.lakeWater) w.dispose();
     for (const b of this.buildings) b.dispose();
     for (const g of this.geos) g.dispose();

@@ -323,7 +323,7 @@ export abstract class Scene implements Ctx {
 
   /** A first-person camera sits inside its own player, so that player is hidden from that view only. */
   private beforeViewHook = (i: number) => {
-    this.players[i]?.beginOwnView();
+    this.players[i]?.beginOwnView(this.R.views[i].camera);
     // Whatever this player is seeing that is not there goes in just for their view.
     this.ghosts.mesh.visible = this.players[i] ? this.phantoms.render(i, this.ghosts, this.time) > 0 : false;
     if (this.players[i]) this.playerFx.beginView(i, this.R.views[i].camera);
@@ -750,7 +750,7 @@ export abstract class Scene implements Ctx {
       }
       v.active = true;
       p.cam.apply(v.camera);
-      R.setViewMode(i, p.firstPerson, this.input.settings.fpFov);
+      R.setViewMode(i, p.firstPerson, this.input.settings.fpFov, this.input.settings.fpLens);
       this.syncTrip(i, p, dt);
       v.focus.set(p.pos.x, p.pos.y, p.pos.z);
       if (p.vehicle) v.focus.set(p.vehicle.position.x, p.vehicle.position.y, p.vehicle.position.z);

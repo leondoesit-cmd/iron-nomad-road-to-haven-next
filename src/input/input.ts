@@ -37,6 +37,8 @@ export interface Settings {
   firstPerson: [boolean, boolean];
   /** Horizontal field of view in first person, degrees. */
   fpFov: number;
+  /** How strongly the first-person view is drawn as a body camera sees it (barrel lens, colour fringes, dark rim), 0 to 1. */
+  fpLens: number;
   /** Which physical input drives which action, per device. */
   bindings: Bindings;
 }
@@ -52,6 +54,7 @@ export const defaultSettings = (): Settings => ({
   keyTurn: 1,
   firstPerson: [false, false],
   fpFov: 100,
+  fpLens: 0.7,
   bindings: defaultBindings(),
 });
 
@@ -397,6 +400,7 @@ export class InputManager {
       keyTurn: s.keyTurn,
       firstPerson: s.firstPerson,
       fpFov: s.fpFov,
+      fpLens: s.fpLens,
       bindings: exportBindings(s.bindings),
     };
   }
@@ -422,6 +426,7 @@ export class InputManager {
     s.deadzone = num(r.deadzone, 0.05, 0.4, s.deadzone);
     s.keyTurn = num(r.keyTurn, 0.4, 2.5, s.keyTurn);
     s.fpFov = num(r.fpFov, 70, 120, s.fpFov);
+    s.fpLens = num(r.fpLens, 0, 1, s.fpLens);
     if (r.bindings) s.bindings = importBindings(r.bindings);
     this.bindingsChanged();
   }

@@ -250,18 +250,19 @@ export class Particles {
   }
 
   /**
-   * A gun going off, thrown down the line of the barrel: a hot core, a tongue of flame strung along the muzzle's heading,
-   * burning grains flung out of it and a wisp of smoke that stays behind. A shotgun is a bigger, longer, smokier version.
+   * A gun going off, thrown down the line of the barrel. The flame itself is drawn on the gun (`MuzzleFlash`); here are the
+   * soft glow round it, hot gas strung out along the muzzle's heading, burning grains flung out of it and the smoke that
+   * stays behind. A shotgun is a bigger, longer, smokier version.
    */
   muzzle(x: number, y: number, z: number, dx: number, dy: number, dz: number, m: MuzzleFx) {
     const [r, g, b] = m.tint;
-    this.glow.emit(x, y, z, dx * 1.5, dy * 1.5, dz * 1.5, 0.06, m.flash, m.flash * 0.35, 1, 0.95, 0.75, 1, 0, 0);
-    this.glow.emit(x + dx * 0.08, y + dy * 0.08, z + dz * 0.08, 0, 0, 0, 0.08, m.flash * 1.5, m.flash * 0.5, r, g * 0.8, b * 0.6, 0.55, 0, 0);
+    this.glow.emit(x + dx * 0.04, y + dy * 0.04, z + dz * 0.04, dx * 1.5, dy * 1.5, dz * 1.5, 0.045, m.flash * 0.3, m.flash * 0.12, 1, 0.9, 0.65, 0.7, 0, 0);
+    this.glow.emit(x + dx * 0.08, y + dy * 0.08, z + dz * 0.08, 0, 0, 0, 0.06, m.flash * 0.45, m.flash * 0.25, r, g * 0.8, b * 0.6, 0.13, 0, 0);
     for (let i = 0; i < m.cone; i++) {
       const t = (i + 0.5) / m.cone;
-      const d = m.reach * t;
-      const w = (1 - t * 0.6) * m.flash * 0.55;
-      this.glow.emit(x + dx * d + (Math.random() - 0.5) * 0.06, y + dy * d + (Math.random() - 0.5) * 0.06, z + dz * d + (Math.random() - 0.5) * 0.06, dx * 6, dy * 6, dz * 6, 0.05 + Math.random() * 0.04, w, w * 0.3, r, g * (1 - t * 0.35), b * (1 - t * 0.6), 0.9 - t * 0.35, 0, 0);
+      const d = m.reach * t * 0.7;
+      const w = (1 - t * 0.6) * m.flash * 0.16;
+      this.glow.emit(x + dx * d + (Math.random() - 0.5) * 0.03, y + dy * d + (Math.random() - 0.5) * 0.03, z + dz * d + (Math.random() - 0.5) * 0.03, dx * 6, dy * 6, dz * 6, 0.035 + Math.random() * 0.03, w, w * 0.3, r, g * (1 - t * 0.35), b * (1 - t * 0.6), 0.45 - t * 0.2, 0, 0);
     }
     for (let i = 0; i < m.sparks; i++) {
       const k = 6 + Math.random() * 12;

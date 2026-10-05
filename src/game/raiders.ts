@@ -6,7 +6,7 @@ import { C } from '../render/palette';
 import { angleDiff, clamp, damp, dampAngle, wrapAngle } from '../core/math';
 import type { DriveInput } from '../physics/vehicle';
 import { gearDrop } from '../sim/gear';
-import { MELEE, MUZZLE, knockFor, type MeleeFeel } from '../sim/weaponfx';
+import { FLASH_SECS, MELEE, MUZZLE, knockFor, type MeleeFeel } from '../sim/weaponfx';
 import { stormSight } from '../sim/weather';
 import type { Ctx } from './ctx';
 import type { Player } from './player';
@@ -341,6 +341,8 @@ export class Infantry {
   state: 'approach' | 'fire' | 'sabotage' | 'flee' | 'snipe' = 'approach';
   stateT = 0;
   fireCd = 1;
+  /** Seconds left of the flame at the muzzle after a shot. */
+  flashT = 0;
   speed: number;
   strafe = Math.random() < 0.5 ? 1 : -1;
   strafeT = 0;
@@ -382,6 +384,8 @@ export class RaiderSystem {
   units: Infantry[] = [];
   pilots = new Map<Vehicle, RaiderPilot>();
   kills = 0;
+  /** Raiders each player put down on foot, by player index. */
+  killedByPlayer: [number, number] = [0, 0];
 
   constructor(private ctx: Ctx) {}
 
@@ -498,6 +502,7 @@ export class RaiderSystem {
       u.deadT = 0;
       this.ctx.campaign.stats.raidersKilled++;
       this.kills++;
+      if (killer >= 0) this.killedByPlayer[killer]++;
       this.ctx.fx.blood(u.x, u.y + 1, u.z, 8);
       this.ctx.audio.play('zdie', u.x, u.z, 0.6);
       if (Math.random() < 0.5) this.ctx.addLoot({ scrap: 4 + Math.floor(Math.random() * 5) }, 'raider');
@@ -742,7 +747,8 @@ export class RaiderSystem {
     u.human.root.position.set(u.x, u.y, u.z);
     u.human.root.rotation.y = u.yaw;
     u.human.update(dt, 'stand', u.moveSpeed, u.kind === 'saboteur' ? 0 : u.fireCd < 0.2 ? 1 : 0.6, 0);
-    u.human.muzzle(false);
+    u.human.muzzle(u.flashT / FLASH_SECS);
+    u.flashT = Math.max(0, u.flashT - dt);
   }
 
   /** Does a sentry see, hear or smell someone? Engines carry far, a crouched walker barely; shots and horns carry further. */
@@ -812,8 +818,13 @@ export class RaiderSystem {
       tracer: true,
     });
     const m = MUZZLE[u.kind === 'sniper' ? 'rifle' : 'pistol'];
-    ctx.fx.muzzle(ox, oy, oz, dx, dy, dz, m);
-    ctx.combat.muzzleLight(ox, oy, oz, m.light * 0.8);
+    // The flame, the smoke and the light come from the gun in the raider's hands as it was last drawn.
+    u.human.capturePoints();
+    const mp = u.human.points.valid ? u.human.points.muzzle : null;
+    const [fx, fy, fz] = mp ? [mp.x, mp.y, mp.z] : [ox, oy, oz];
+    ctx.fx.muzzle(fx, fy, fz, dx, dy, dz, m);
+    ctx.combat.muzzleLight(fx, fy, fz, m.light * 0.8, dx, dy, dz);
+    u.flashT = FLASH_SECS;
     ctx.audio.play(u.kind === 'sniper' ? 'sniper' : 'pistol', ox, oz, 0.5);
   }
 }

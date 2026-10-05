@@ -19,7 +19,10 @@ export interface QualitySpec {
   scale: number;
   shadow: number;
   zombies: number;
+  /** View range in metres: sets the fog and thins the haze. 330 is the reference the day haze was tuned at. */
   draw: number;
+  /** Chunks streamed in full detail around each player, in each direction (beyond them the far landscape takes over). */
+  stream: number;
   particles: number;
   /** HDR target with bloom and grading. Low draws straight to the canvas. */
   post: boolean;
@@ -30,9 +33,9 @@ export interface QualitySpec {
   envEvery: number;
 }
 export const QUALITY: Record<QualityPreset, QualitySpec> = {
-  low: { scale: 0.7, shadow: 1024, zombies: 40, draw: 240, particles: 0.5, post: false, msaa: 0, scatter: 0.3, envEvery: 4 },
-  medium: { scale: 0.85, shadow: 2048, zombies: 60, draw: 330, particles: 1, post: true, msaa: 4, scatter: 0.65, envEvery: 1 },
-  high: { scale: 1.0, shadow: 4096, zombies: 80, draw: 420, particles: 1, post: true, msaa: 4, scatter: 1, envEvery: 0.5 },
+  low: { scale: 0.7, shadow: 1024, zombies: 40, draw: 300, stream: 2, particles: 0.5, post: false, msaa: 0, scatter: 0.3, envEvery: 4 },
+  medium: { scale: 0.85, shadow: 2048, zombies: 60, draw: 440, stream: 2, particles: 1, post: true, msaa: 4, scatter: 0.65, envEvery: 1 },
+  high: { scale: 1.0, shadow: 4096, zombies: 80, draw: 560, stream: 3, particles: 1, post: true, msaa: 4, scatter: 1, envEvery: 0.5 },
 };
 
 export type SplitLayout = 'horizontal' | 'vertical';
@@ -46,7 +49,12 @@ export interface PlayerView {
   active: boolean;
   /** This view is a first-person camera: a taller field of view than the chase strip. */
   first?: boolean;
+  /** How strongly this view is drawn through a body camera's lens (first person only), 0 to 1. */
+  lens?: number;
 }
+
+/** How much the body-camera lens swells the middle of the picture at full strength (the composite's barrel uses the same). */
+export const LENS_K = 0.32;
 
 /** Horizontal FOV is fixed at 100 degrees; vertical is derived with a floor of 32 degrees. */
 export function fovFor(aspect: number, hfovDeg = 100, vfovMinDeg = 32) {
@@ -68,6 +76,9 @@ export function firstPersonFov(aspect: number, layout: SplitLayout, hfovDeg: num
   const v = fovFor(aspect, hfovDeg, 50);
   return layout === 'vertical' ? Math.min(v, 85) : v;
 }
+
+/** Longest view any preset gets, metres; each view's far plane follows the fog inside it (see fitFar). */
+const VIEW_FAR = 3400;
 
 /** Shadow box half-size in metres, and how far ahead of the player its centre sits. */
 const SHADOW_HALF = 60;
@@ -98,6 +109,12 @@ export class GameRenderer {
   quality: QualityPreset = 'medium';
   renderScale = 1;
   private baseDpr = 1;
+  /**
+   * The canvas's own pixels per CSS pixel: the screen's, so the browser never stretches the finished picture (a stretch of a
+   * few percent blurs some rows of pixels and not others, and fine detail shows faint regular lines). With the post chain
+   * the scene itself is drawn at `baseDpr * quality * renderScale` and the composite scales it up with a sharp filter.
+   */
+  private outDpr = 1;
   private frameEma = 16;
   private lastRender = 0;
   night = 0;
@@ -135,6 +152,7 @@ export class GameRenderer {
   constructor(public canvas: HTMLCanvasElement) {
     this.gl = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance', stencil: false });
     this.baseDpr = Math.min(window.devicePixelRatio || 1, 1.75);
+    this.outDpr = Math.min(window.devicePixelRatio || 1, 2);
     this.floatOk = this.gl.extensions.has('EXT_color_buffer_float') || this.gl.extensions.has('EXT_color_buffer_half_float');
     this.gl.shadowMap.enabled = true;
     this.gl.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -158,7 +176,7 @@ export class GameRenderer {
     this.sun.shadow.normalBias = 0.35;
     this.applyQuality();
 
-    const mkView = (): PlayerView => ({ camera: new THREE.PerspectiveCamera(37, 3.56, 0.2, 2600), rect: { x: 0, y: 0, w: 1, h: 1 }, focus: new THREE.Vector3(), active: true });
+    const mkView = (): PlayerView => ({ camera: new THREE.PerspectiveCamera(37, 3.56, 0.2, VIEW_FAR), rect: { x: 0, y: 0, w: 1, h: 1 }, focus: new THREE.Vector3(), active: true });
     this.views = [mkView(), mkView()];
 
     canvas.addEventListener('webglcontextlost', (e) => {
@@ -273,7 +291,7 @@ export class GameRenderer {
     if (this.usePost) {
       if (!this.post) this.post = new PostFX(q.msaa);
       this.post.fx.setTier(this.quality === 'high' ? 1 : 0);
-      this.gl.setPixelRatio(this.baseDpr * q.scale);
+      this.gl.setPixelRatio(this.outDpr);
     } else {
       this.post?.dispose();
       this.post = null;
@@ -343,13 +361,19 @@ export class GameRenderer {
   private applyFov(v: PlayerView) {
     const layout = this.seats === 1 ? 'horizontal' : this.layout;
     v.camera.fov = v.first ? firstPersonFov(v.camera.aspect, layout, this.fpHfov) : viewFov(v.camera.aspect, layout);
+    // Through the body-camera lens the middle keeps its size and the rim takes in more: drawn wider by what the lens's
+    // barrel swells the middle by (see the composite in post.ts).
+    const lens = v.first ? (v.lens ?? 0) : 0;
+    if (lens > 0) v.camera.fov = (2 * Math.atan(Math.tan((v.camera.fov * DEG) / 2) * (1 + LENS_K * lens))) / DEG;
     v.camera.updateProjectionMatrix();
   }
 
   /** Switch a view between the chase strip and first person. Cheap to call every frame: it only rebuilds the projection on a change. */
-  setViewMode(i: number, first: boolean, hfov = this.fpHfov) {
+  setViewMode(i: number, first: boolean, hfov = this.fpHfov, lens = 0) {
     const v = this.views[i];
-    if (!!v.first === first && this.fpHfov === hfov) return;
+    const l = first ? lens : 0;
+    if (!!v.first === first && this.fpHfov === hfov && (v.lens ?? 0) === l) return;
+    v.lens = l;
     v.first = first;
     this.fpHfov = hfov;
     for (const o of this.views) this.applyFov(o);
@@ -379,7 +403,7 @@ export class GameRenderer {
 
   /** Render-target pixels per CSS pixel (particle sizes are in render pixels). */
   renderPixelRatio() {
-    return this.gl.getPixelRatio() * (this.usePost ? this.postScale() : 1);
+    return this.usePost ? this.baseDpr * QUALITY[this.quality].scale * this.postScale() : this.gl.getPixelRatio();
   }
 
   private postScale() {
@@ -410,9 +434,11 @@ export class GameRenderer {
     const dist = QUALITY[this.quality].draw;
     const city = cityMix > 0.5;
     // The wasteland has far scenery out to the mountains, so its fog is mostly height haze; the city's
-    // skyline sits close behind the corridor.
-    this.fog.near = lerp(lerp(160, 60, cityMix), 22, l.night);
-    this.fog.far = lerp(lerp(dist * 3.2, Math.min(dist * 1.6, 520), cityMix), 170, l.night);
+    // skyline sits close behind the corridor. Past the streamed chunks the far landscape carries roads and
+    // standout props, so a longer view still has things in it.
+    const reach = dist / 330;
+    this.fog.near = lerp(lerp(160, 60, cityMix) * reach, 22, l.night);
+    this.fog.far = lerp(lerp(dist * 3.2, Math.min(dist * 1.8, 900), cityMix), 150 + dist * 0.1, l.night);
     if (storm > 0) {
       this.fog.near *= Math.pow(0.1, storm);
       this.fog.far *= Math.pow(0.12, storm);
@@ -441,7 +467,7 @@ export class GameRenderer {
       this.sunDir,
       this.sun.color,
       scatter,
-      lerp(city ? 0.0035 : 0.0016, 0.006, l.night) + 0.011 * storm,
+      lerp((city ? 0.0035 : 0.0016) / Math.max(1, reach), 0.006, l.night) + 0.011 * storm,
       lerp(city ? 0.03 : 0.045, 0.012, storm),
       city ? 2 : 0,
     );
@@ -567,9 +593,10 @@ export class GameRenderer {
     this.scene.environment = this.sky.updateEnv(gl, dtReal, q.envEvery);
     const post = this.usePost ? this.post : null;
     if (post) {
+      // The scene at its own resolution; the canvas (and the composite) at the screen's.
       const pr = gl.getPixelRatio();
-      const s = this.postScale();
-      post.setSize(this.width * pr * s, this.height * pr * s);
+      const rs = this.renderPixelRatio();
+      post.setSize(this.width * rs, this.height * rs);
       const sx = post.width / this.width;
       const sy = post.height / this.height;
       const uv: [number, number, number, number][] = [];
@@ -594,6 +621,9 @@ export class GameRenderer {
       const a = this.views[0].active ? uv[0] : uv[1];
       const b = this.views[1].active ? uv[1] : uv[0];
       post.setRects(a, b);
+      const la = (this.views[0].active ? this.views[0] : this.views[1]).lens ?? 0;
+      const lb = (this.views[1].active ? this.views[1] : this.views[0]).lens ?? 0;
+      post.lens.set(la, lb);
       gl.setRenderTarget(null);
       gl.setViewport(0, 0, this.width, this.height);
       gl.setScissorTest(false);
@@ -615,8 +645,20 @@ export class GameRenderer {
     gl.setScissorTest(false);
   }
 
+  /**
+   * Past the fog's far end everything is fog colour, the same as the sky's horizon, so the view stops there and
+   * nothing beyond it is culled, sorted or drawn. Never inside the sky dome (radius 1000).
+   */
+  private fitFar(cam: THREE.PerspectiveCamera) {
+    const far = Math.min(VIEW_FAR, Math.max(1150, this.fog.far * 1.05 + 60));
+    if (Math.abs(cam.far - far) < 1) return;
+    cam.far = far;
+    cam.updateProjectionMatrix();
+  }
+
   private renderView(i: number) {
     const v = this.views[i];
+    this.fitFar(v.camera);
     this.sky.mesh.position.copy(v.camera.position);
     this.aimShadow(v);
     for (const cb of this.onBeforeView) cb(i, v.camera);

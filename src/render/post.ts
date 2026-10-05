@@ -116,6 +116,10 @@ uniform vec2 uFxRes;
 uniform vec2 uNearFar;
 uniform float uFxOn;
 uniform float uAoK;
+// Body-camera lens strength per half (A, B): 0 for a plain view.
+uniform vec2 uLens;
+// 1 when the scene is drawn smaller than the screen and has to be scaled up.
+uniform float uUpscale;
 varying vec2 vUv;
 ${RECTS}
 vec4 gRect;
@@ -151,8 +155,37 @@ vec3 rainbow( float h ) {
 vec3 sceneAt( vec2 uv ) {
   return texture2D( tScene, clamp( uv, gRect.xy + uTexel, gRect.zw - uTexel ) ).rgb;
 }
+// Catmull-Rom resample in five bilinear taps (the four corner taps barely count and are dropped). Bent through the lens the
+// picture is enlarged by an amount that changes across the screen, and a plain bilinear tap blurs the rows that fall between
+// texels and not the rows on them: the picture shows bands. This keeps every row equally sharp.
+vec3 sceneSharp( vec2 uv ) {
+  vec2 pos = uv / uTexel;
+  vec2 tc = floor( pos - 0.5 ) + 0.5;
+  vec2 f = pos - tc;
+  vec2 w0 = f * ( -0.5 + f * ( 1.0 - 0.5 * f ) );
+  vec2 w1 = 1.0 + f * f * ( -2.5 + 1.5 * f );
+  vec2 w2 = f * ( 0.5 + f * ( 2.0 - 1.5 * f ) );
+  vec2 w3 = f * f * ( -0.5 + 0.5 * f );
+  vec2 w12 = w1 + w2;
+  vec2 t0 = ( tc - 1.0 ) * uTexel;
+  vec2 t3 = ( tc + 2.0 ) * uTexel;
+  vec2 t12 = ( tc + w2 / w12 ) * uTexel;
+  vec3 c = sceneAt( vec2( t12.x, t0.y ) ) * ( w12.x * w0.y )
+    + sceneAt( vec2( t0.x, t12.y ) ) * ( w0.x * w12.y )
+    + sceneAt( t12 ) * ( w12.x * w12.y )
+    + sceneAt( vec2( t3.x, t12.y ) ) * ( w3.x * w12.y )
+    + sceneAt( vec2( t12.x, t3.y ) ) * ( w12.x * w3.y );
+  float w = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+  // The negative lobes can ring below black next to a very bright pixel.
+  return max( c / w, vec3( 0.0 ) );
+}
 float linZ( float d ) {
   return ( uNearFar.x * uNearFar.y ) / ( ( uNearFar.y - uNearFar.x ) * d - uNearFar.y );
+}
+// Depth at the middle of the depth pixel under uv. The buffer is not filtered, and the half-resolution samples below fall
+// exactly between two of its pixels: left to rounding, which one is read flips in bands across the screen.
+float depthAt( vec2 uv ) {
+  return texture2D( tDepth, ( floor( uv / uTexel + 0.25 ) + 0.5 ) * uTexel ).r;
 }
 // The half-resolution AO and scattered light, upsampled with weights that fall off across depth edges, so occlusion never
 // leaks from a car onto the ground behind it.
@@ -160,17 +193,19 @@ vec4 fxUp( vec2 uv ) {
   vec2 hp = uv * uFxRes - 0.5;
   vec2 base = floor( hp );
   vec2 f = hp - base;
-  float zc = linZ( texture2D( tDepth, uv ).r );
+  float zc = linZ( depthAt( uv ) );
   float dzX = dFdx( zc );
   float dzY = dFdy( zc );
+  // How far the picture moves per screen pixel here: one pixel's worth, unless the lens (or a trip) stretches it.
+  vec2 duv = max( vec2( abs( dFdx( uv ).x ), abs( dFdy( uv ).y ) ), uTexel * 0.05 );
   float tol = max( 0.04 * abs( zc ) + 0.12, ( abs( dzX ) + abs( dzY ) ) * 1.5 );
   vec4 sum = vec4( 0.0 );
   float wsum = 0.0;
   for ( int j = 0; j < 2; j++ ) {
     for ( int i = 0; i < 2; i++ ) {
       vec2 tuv = clamp( ( base + vec2( float( i ), float( j ) ) + 0.5 ) / uFxRes, gRect.xy, gRect.zw );
-      float zi = linZ( texture2D( tDepth, tuv ).r );
-      vec2 dp = ( tuv - uv ) * uRes;
+      float zi = linZ( depthAt( tuv ) );
+      vec2 dp = ( tuv - uv ) / duv;
       float zExp = zc + dzX * dp.x + dzY * dp.y;
       float wb = ( i == 0 ? 1.0 - f.x : f.x ) * ( j == 0 ? 1.0 - f.y : f.y );
       float diff = min( abs( zi - zc ), abs( zi - zExp ) );
@@ -201,6 +236,18 @@ void main() {
   float aspect = span.x * uRes.x / max( span.y * uRes.y, 1.0 );
   vec2 ax = vec2( aspect, 1.0 );
   float rr0 = length( q0 * ax ) / length( ax * 0.5 );
+  // Body-camera lens: a wide barrel that swells the middle and squeezes the rim (the corners stay where they are), with
+  // colour fringes growing toward the edge and a heavier dark rim further down.
+  float lens = inA ? uLens.x : uLens.y;
+  vec2 lensOff = vec2( 0.0 );
+  if ( lens > 0.001 ) {
+    vec2 pl = q0 * ax;
+    float r2 = dot( pl, pl ) / dot( ax * 0.5, ax * 0.5 );
+    float k = lens * 0.32; // LENS_K in renderer.ts
+    q0 = pl * ( 1.0 + k * r2 ) / ( 1.0 + k ) / ax;
+    lensOff = q0 * lens * 0.0075 * r2;
+  }
+  vec2 sUv = clamp( ctr + q0 * span, r.xy, r.zw );
   vec3 col;
   vec3 bloom;
   vec3 edgeAdd = vec3( 0.0 );
@@ -253,8 +300,16 @@ void main() {
     }
     // Hue swim: swirls across the picture and over time.
     hueA = f0.x * ( 1.4 * sin( ph * 0.37 ) + 1.1 * sin( rr * 5.0 - ph * 0.8 + q0.x * 2.0 ) );
+  } else if ( lens > 0.001 ) {
+    vec2 off = lensOff * span;
+    col = sceneSharp( sUv );
+    // The fringes: red and blue drawn a little out and in, only where they are apart enough to show.
+    if ( dot( off, off ) * dot( uRes, uRes ) > 0.25 ) col = vec3( sceneSharp( sUv + off ).r, col.g, sceneSharp( sUv - off ).b );
+    bloom = texture2D( tBloom, sUv ).rgb;
+    fxUv = sUv;
   } else {
-    col = texture2D( tScene, vUv ).rgb;
+    // Scaled up to the screen, a plain bilinear tap would blur some rows and not others: the sharp filter keeps them even.
+    col = uUpscale > 0.5 ? sceneSharp( vUv ) : texture2D( tScene, vUv ).rgb;
     bloom = texture2D( tBloom, vUv ).rgb;
   }
   if ( uFxOn > 0.5 ) {
@@ -267,7 +322,7 @@ void main() {
     col *= mix( 1.0, min( ao, 1.0 ), uAoK * ( 1.0 - 0.72 * smoothstep( 0.45, 2.4, lum ) ) );
     vec4 sr = texture2D( tFxSsr, fxUv );
     col = mix( col, sr.rgb, sr.a );
-    float zc = abs( linZ( texture2D( tDepth, fxUv ).r ) );
+    float zc = abs( linZ( depthAt( fxUv ) ) );
     float creviceShield = mix( ao * ao, 1.0, smoothstep( 6.0, 50.0, zc ) );
     col += fl.rgb * ( 1.0 - col * 0.35 ) * creviceShield;
   }
@@ -283,7 +338,7 @@ void main() {
   }
   c *= mix( uShadowTint, uHighTint, smoothstep( 0.05, 0.75, l ) );
   c = clamp( ( c - 0.5 ) * uContrast + 0.5, 0.0, 1.0 );
-  c *= 1.0 - ( uVignette + ( f4.w > 0.5 ? f1.z * 0.6 : 0.0 ) ) * smoothstep( 0.45 - ( f4.w > 0.5 ? f1.z * 0.2 : 0.0 ), 1.05, rr0 );
+  c *= 1.0 - ( uVignette + lens * 0.32 + ( f4.w > 0.5 ? f1.z * 0.6 : 0.0 ) ) * smoothstep( 0.45 - ( f4.w > 0.5 ? f1.z * 0.2 : 0.0 ), 1.05, rr0 );
   if ( f4.w > 0.5 ) {
     // Eyelids closing from top and bottom, and the room going dark.
     float lid = smoothstep( 1.0 - f2.w * 1.15, 1.12 - f2.w * 1.15, abs( q0.y ) * 2.0 );
@@ -418,6 +473,8 @@ export class PostFX {
         uNearFar: { value: new THREE.Vector2(0.2, 2600) },
         uFxOn: { value: 0 },
         uAoK: { value: 1 },
+        uLens: { value: this.lens },
+        uUpscale: { value: 0 },
         ...rects,
       },
       vertexShader: VERT,
@@ -484,6 +541,9 @@ export class PostFX {
       this.up[i].setSize(lw, lh);
     }
   }
+
+  /** Body-camera lens strength for the two halves, in the order of `setRects` (0 is a plain view). */
+  readonly lens = new THREE.Vector2();
 
   /** View rects in UV space (origin bottom-left). Pass the same rect twice for a single view. */
   setRects(a: [number, number, number, number], b: [number, number, number, number]) {
@@ -556,6 +616,7 @@ export class PostFX {
     u.uHighTint.value.copy(p.highTint);
     u.uRes.value.set(outW, outH);
     u.uTexel.value.set(1 / this.width, 1 / this.height);
+    u.uUpscale.value = outW > this.width + 0.5 || outH > this.height + 0.5 ? 1 : 0;
     this.quad.material = cm;
     if (this.wantTrails()) {
       // Draw into the history buffer (with the previous frame laid under it), then copy that to the screen.

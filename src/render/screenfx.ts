@@ -38,8 +38,18 @@ float linZ( float d ) {
 vec2 gUv( vec2 l ) {
   return uRect.xy + clamp( l, vec2( 0.0005 ), vec2( 0.9995 ) ) * uRect.zw;
 }
+// The depth buffer is not filtered. A read that falls on the line between two of its pixels (and every pixel of the
+// half-resolution pass does) lands on one or the other by rounding that drifts across the screen: the surface normal and
+// the occlusion flip with it, and the ground shows dark bands. Every read goes to the middle of one pixel instead, picked
+// the same way every time.
+vec2 snapL( vec2 l ) {
+  return ( floor( l / uPix + 0.25 ) + 0.5 ) * uPix;
+}
+float dAt( vec2 l ) {
+  return texture2D( tDepth, gUv( snapL( l ) ) ).r;
+}
 float zAt( vec2 l ) {
-  return linZ( texture2D( tDepth, gUv( l ) ).r );
+  return linZ( dAt( l ) );
 }
 vec3 viewPos( vec2 l, float z ) {
   return vec3( ( l * 2.0 - 1.0 ) * uProjXY * ( - z ), z );
@@ -202,7 +212,7 @@ vec3 radial( vec2 l, float jit ) {
   float acc = 0.0;
   for ( int i = 0; i < RAD_STEPS; i++ ) {
     suv += stepv;
-    float dd = texture2D( tDepth, gUv( suv ) ).r;
+    float dd = dAt( suv );
     vec2 q = ( suv - uSunUv ) * vec2( uAspect, 1.0 );
     float glow = exp( - dot( q, q ) * uRad.y );
     acc += step( 0.99999, dd ) * glow * illum;
@@ -212,8 +222,8 @@ vec3 radial( vec2 l, float jit ) {
 }
 
 void main() {
-  vec2 l = vUv;
-  float d = texture2D( tDepth, gUv( l ) ).r;
+  vec2 l = snapL( vUv );
+  float d = dAt( l );
   float z = linZ( d );
   float jit = ign( gl_FragCoord.xy + vec2( 17.0, 3.0 ) );
   float ao = 1.0;
@@ -265,7 +275,7 @@ void main() {
   vec4 hd = texture2D( tColor, gUv( l ) );
   float R = clamp( 1.0 - hd.a, 0.0, 1.0 );
   if ( R < 0.004 ) return;
-  float d = texture2D( tDepth, gUv( l ) ).r;
+  float d = dAt( l );
   if ( d >= 1.0 ) return;
   // Opaque surfaces never write above 0.95; the water sheet writes alpha 0 (R of 1).
   bool water = R > 0.97;
@@ -317,7 +327,7 @@ void main() {
     float rz = mix( z0, z1, t ) / k;
     float sz = zAt( uv );
     float diff = sz - rz;
-    if ( diff > 0.01 + 0.004 * ( - z ) && diff < thick && texture2D( tDepth, gUv( uv ) ).r < 1.0 ) {
+    if ( diff > 0.01 + 0.004 * ( - z ) && diff < thick && dAt( uv ) < 1.0 ) {
       tHit = t;
       break;
     }

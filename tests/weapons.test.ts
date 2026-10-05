@@ -9,9 +9,13 @@ import { AMMO, type AmmoKind } from '../src/sim/ballistics';
 import {
   BLOOM,
   CONTACT,
+  FLASH_SECS,
   IMPACT_SOUND,
   MELEE,
   MUZZLE,
+  MUZZLE_LIGHT_AHEAD,
+  MUZZLE_LIGHT_LIFE,
+  MUZZLE_LIGHT_POWER,
   PUMP_OPEN,
   SKIP,
   SKIP_SIN,
@@ -61,6 +65,19 @@ describe('muzzle, tracer and bloom tables', () => {
     expect(MUZZLE.sawn.smoke).toBeGreaterThan(MUZZLE.pistol.smoke);
     expect(MUZZLE.sawn.light).toBeGreaterThan(MUZZLE.pistol.light);
     expect(MUZZLE.rifle.reach).toBeGreaterThan(MUZZLE.smg.reach);
+  });
+
+  it('the flame at the muzzle is about a hand across for a pistol, far bigger for a shotgun, and gone in a couple of frames', () => {
+    for (const m of GUNS) {
+      expect(MUZZLE[m].star, m).toBeGreaterThan(0.05);
+      expect(MUZZLE[m].star, m).toBeLessThan(0.4);
+      // Seen from the side it is longer than it is wide.
+      expect(MUZZLE[m].tongue, m).toBeGreaterThan(MUZZLE[m].star);
+    }
+    expect(MUZZLE.sawn.star).toBeGreaterThan(MUZZLE.pistol.star * 2);
+    expect(MUZZLE.rifle.tongue).toBeGreaterThan(MUZZLE.smg.tongue);
+    expect(FLASH_SECS).toBeGreaterThan(1 / 60);
+    expect(FLASH_SECS).toBeLessThan(0.05);
   });
 
   it('a pellet or an SMG round is drawn less often than a rifle round, so a burst is not a wall of lines', () => {
@@ -332,6 +349,38 @@ describe('firing', () => {
     expect(sc.combat.light.intensity).toBeGreaterThan(0);
     run(sc, 0.2);
     expect(sc.combat.light.intensity).toBe(0);
+  });
+
+  it('the light sits out in front of the muzzle, not on the shooter, and is gentle enough not to blind them', () => {
+    const { h, sc, p } = scene();
+    // Drawn once, so the gun's muzzle is where the flash comes from.
+    sc.renderFrame(1, DT);
+    h.intents[0].device = 'pad';
+    h.intents[0].rt = 1;
+    sc.tick(DT);
+    h.intents[0].rt = 0;
+    const at = sc.combat.light.position;
+    // Further out along the aim than the gun itself: well clear of the hands and the face.
+    const ahead = (at.x - p.pos.x) * Math.sin(p.aimYaw) + (at.z - p.pos.z) * Math.cos(p.aimYaw);
+    expect(ahead).toBeGreaterThan(0.6);
+    // A pistol's flash lights a wall a few metres off, not the survivor holding it.
+    expect(sc.combat.light.intensity).toBeLessThanOrEqual(MUZZLE.pistol.light * MUZZLE_LIGHT_POWER + 1e-6);
+    expect(MUZZLE_LIGHT_POWER).toBeLessThan(20);
+    expect(MUZZLE_LIGHT_AHEAD).toBeGreaterThan(0.2);
+    expect(MUZZLE_LIGHT_LIFE).toBeLessThanOrEqual(0.06);
+  });
+});
+
+describe('the screen effects read depth at pixel centres', () => {
+  // The depth buffer is not filtered: a read between two of its pixels lands on either by rounding, and the ground bands.
+  it('every depth read in the screen-space passes and the composite goes through the snapped helper', async () => {
+    const fs = await import('node:fs');
+    for (const file of ['src/render/screenfx.ts', 'src/render/post.ts']) {
+      const src = fs.readFileSync(file, 'utf8');
+      const reads = src.match(/texture2D\( tDepth/g) ?? [];
+      expect(reads.length, file).toBe(1);
+      expect(src, file).toMatch(/floor\( [a-z]+ \/ u(Pix|Texel) \+ 0\.25 \) \+ 0\.5/);
+    }
   });
 });
 
