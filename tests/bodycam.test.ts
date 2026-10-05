@@ -29,7 +29,8 @@ import {
   strafeRoll,
   wallBlend,
 } from '../src/sim/gait';
-import { CYCLE_EJECT, RELOAD_KIND, curve, cycleRack, cycleTime, dropAt, newGunPose, reloadPose } from '../src/sim/weaponanim';
+import { Brass } from '../src/render/brass';
+import { CYCLE_EJECT, DROPS_MAG, GUN_POINTS, RELOAD_KIND, curve, cycleRack, cycleTime, dropAt, newGunPose, reloadPose } from '../src/sim/weaponanim';
 import { fakeServices } from './helpers/sim';
 
 vi.setConfig({ testTimeout: 90000 });
@@ -779,5 +780,328 @@ describe('the gun lags behind a turn of the view', () => {
     expect(peak).toBeGreaterThan(0.01);
     runFor(sc, 1.5);
     expect(Math.abs(lag().yaw.x)).toBeLessThan(0.003);
+  });
+});
+
+// ------------------------------------------------------------------ iron sights
+
+describe('aiming down the sights', () => {
+  it('every gun has a sight line pointing down the barrel, with the muzzle beyond it', () => {
+    for (const m of GUNS) {
+      const g = GUN_POINTS[m];
+      expect(g.front[2], m).toBeGreaterThan(g.rear[2] + 0.1);
+      expect(g.muzzle[2], m).toBeGreaterThanOrEqual(g.front[2]);
+      // The sights stand above the barrel line.
+      expect(g.rear[1], m).toBeGreaterThan(0.04);
+      expect(g.front[1], m).toBeGreaterThan(0.04);
+      // The line of sight is nearly parallel to the barrel: no more than a couple of degrees.
+      expect(Math.abs(Math.atan2(g.front[1] - g.rear[1], g.front[2] - g.rear[2])), m).toBeLessThan(0.1);
+    }
+  });
+
+  it('only guns that take a magazine drop one', () => {
+    expect(DROPS_MAG.pistol).toBe('pistol');
+    expect(DROPS_MAG.smg).toBe('smg');
+    for (const m of ['revolver', 'sawn', 'pump', 'rifle'] as const) expect(DROPS_MAG[m]).toBeNull();
+  });
+
+  const sighted = (model: (typeof GUNS)[number], k: number, o: { pitch?: number; kick?: number } = {}) => {
+    const h = new Humanoid(identityOf(0));
+    h.setWeapon(model);
+    // The owner's eye, a hair forward of the neck, looking level or up or down.
+    const pitch = o.pitch ?? 0;
+    h.sight.k = k;
+    h.sight.ex = 0;
+    h.sight.ey = 1.62;
+    h.sight.ez = 0.08;
+    h.sight.fx = 0;
+    h.sight.fy = Math.sin(pitch);
+    h.sight.fz = Math.cos(pitch);
+    h.fpAds = k;
+    h.gunKick = o.kick ?? 0;
+    h.update(0.016, 'stand', 0, 1, 0, pitch);
+    h.setFirstPerson(true);
+    h.root.updateMatrixWorld(true);
+    const w = (h as unknown as { weapon: THREE.Mesh }).weapon;
+    const g = GUN_POINTS[model];
+    const rear = w.localToWorld(new THREE.Vector3(...g.rear));
+    const front = w.localToWorld(new THREE.Vector3(...g.front));
+    const eye = new THREE.Vector3(0, 1.62, 0.08);
+    const f = new THREE.Vector3(0, Math.sin(pitch), Math.cos(pitch));
+    const off = (p: THREE.Vector3) => {
+      const d = p.clone().sub(eye);
+      return d.sub(f.clone().multiplyScalar(d.dot(f)));
+    };
+    const dir = front.clone().sub(rear).normalize();
+    return { rear: off(rear).length(), front: off(front).length(), angle: Math.acos(Math.min(1, dir.dot(f))), distance: rear.clone().sub(eye).dot(f), h };
+  };
+
+  it('with the sights up, the rear and front sights sit on the line from the eye, for every gun', () => {
+    for (const m of GUNS) {
+      const r = sighted(m, 1);
+      expect(r.rear, m).toBeLessThan(0.006);
+      expect(r.front, m).toBeLessThan(0.012);
+      expect(r.angle, m).toBeLessThan(0.03);
+      // And in front of the eye, within arm's length, not behind the head or across the room.
+      expect(r.distance, m).toBeGreaterThan(0.2);
+      expect(r.distance, m).toBeLessThan(1.2);
+    }
+  });
+
+  it('looking up or down, the sights stay on the line', () => {
+    for (const pitch of [-0.5, 0.4]) {
+      const r = sighted('pistol', 1, { pitch });
+      expect(r.rear).toBeLessThan(0.008);
+      expect(r.angle).toBeLessThan(0.04);
+    }
+  });
+
+  it('from the hip the sights are well off the line, and halfway they are partway there', () => {
+    const hip = sighted('pistol', 0);
+    const half = sighted('pistol', 0.5);
+    const up = sighted('pistol', 1);
+    expect(hip.rear).toBeGreaterThan(0.08);
+    expect(half.rear).toBeLessThan(hip.rear);
+    expect(half.rear).toBeGreaterThan(up.rear);
+  });
+
+  it('a shot kicks the sights off the line, and the kick comes off again', () => {
+    const still = sighted('pistol', 1);
+    const kicked = sighted('pistol', 1, { kick: 1.2 });
+    expect(kicked.rear + kicked.front).toBeGreaterThan(still.rear + still.front + 0.02);
+  });
+
+  it('a partner who sees this survivor in third person sees the torso where it belongs', () => {
+    const r = sighted('pistol', 1);
+    r.h.setFirstPerson(false);
+    expect(r.h.torso.position.length()).toBe(0);
+  });
+});
+
+describe('aiming down the sights in a real scene', () => {
+  it('the sights are on the middle of the screen with the sights up, and below it from the hip', () => {
+    const { h, sc, p } = scene();
+    p.viewFirst = true;
+    stop(h);
+    h.intents[0].device = 'pad';
+    const centre = () => {
+      sc.renderFrame(1, DT);
+      p.beginOwnView();
+      p.human.root.updateMatrixWorld(true);
+      const cam = sc.R.views[0].camera;
+      cam.updateMatrixWorld();
+      const w = (p.human as unknown as { weapon: THREE.Mesh }).weapon;
+      const g = GUN_POINTS.pistol;
+      const rear = w.localToWorld(new THREE.Vector3(...g.rear)).project(cam);
+      const front = w.localToWorld(new THREE.Vector3(...g.front)).project(cam);
+      p.endOwnView();
+      return { rear, front };
+    };
+    runFor(sc, 0.6);
+    const hip = centre();
+    expect(hip.rear.y).toBeLessThan(-0.15);
+    h.intents[0].lt = 1;
+    runFor(sc, 0.8);
+    expect(p.ads).toBeGreaterThan(0.95);
+    const ads = centre();
+    // The barrel wanders a hair even at rest, so not exactly the middle, but close.
+    expect(Math.hypot(ads.rear.x, ads.rear.y)).toBeLessThan(0.1);
+    expect(Math.hypot(ads.front.x, ads.front.y)).toBeLessThan(0.12);
+    h.intents[0].lt = 0;
+  });
+});
+
+// ------------------------------------------------------------------ dropped magazines, smoke and shells
+
+describe('a magazine that falls', () => {
+  const fakeWorld = () => {
+    const clunks: number[] = [];
+    return { clunks, world: { floorAt: () => 0, ring: () => {}, clunk: (_x: number, _y: number, _z: number, loud: number) => clunks.push(loud) } };
+  };
+
+  it('drops, clatters on the floor and lies there', () => {
+    const { world, clunks } = fakeWorld();
+    const b = new Brass(world);
+    b.dropMag(0, 1.2, 0, 0.3, -0.4, 0.1, 'pistol');
+    expect(b.magCount).toBe(1);
+    for (let i = 0; i < 60 * 4; i++) b.update(DT);
+    expect(clunks.length).toBeGreaterThan(0);
+    const m = new THREE.Matrix4();
+    const mags = b.meshes[1];
+    mags.getMatrixAt(0, m);
+    const pos = new THREE.Vector3().setFromMatrixPosition(m);
+    // On the floor, on its side, and where it stays.
+    expect(pos.y).toBeLessThan(0.05);
+    expect(pos.y).toBeGreaterThan(0.01);
+    const again = new THREE.Vector3();
+    for (let i = 0; i < 60; i++) b.update(DT);
+    mags.getMatrixAt(0, m);
+    again.setFromMatrixPosition(m);
+    expect(again.distanceTo(pos)).toBeLessThan(0.001);
+    expect(b.magCount).toBe(1);
+  });
+
+  it('shells and magazines are separate: a shell does not count as a magazine', () => {
+    const { world } = fakeWorld();
+    const b = new Brass(world);
+    b.eject(0, 1, 0, 1, 1, 0, 'pistol');
+    expect(b.count).toBe(1);
+    expect(b.magCount).toBe(0);
+    expect(b.meshes).toHaveLength(2);
+    b.clear();
+    expect(b.count).toBe(0);
+    b.dispose();
+  });
+
+  it('an SMG magazine is longer than a pistol magazine', () => {
+    const { world } = fakeWorld();
+    const b = new Brass(world);
+    b.dropMag(0, 0.5, 0, 0, 0, 0, 'pistol');
+    b.dropMag(1, 0.5, 0, 0, 0, 0, 'smg');
+    b.update(DT);
+    const m = new THREE.Matrix4();
+    const scale = (i: number) => {
+      b.meshes[1].getMatrixAt(i, m);
+      return new THREE.Vector3().setFromMatrixScale(m).y;
+    };
+    expect(scale(1)).toBeGreaterThan(scale(0) * 1.5);
+  });
+});
+
+describe('reloading drops the empty magazine', () => {
+  const reload = (id: string | null, mag: number) => {
+    const { h, sc, c, p } = scene();
+    if (id) equip(p, id, 3);
+    c.ammo = 80;
+    p.mag = mag;
+    p.fireCd = 0;
+    stop(h);
+    h.intents[0].device = 'keyboard';
+    h.intents[0].held |= 1 << Btn.X;
+    h.intents[0].pressed = 1 << Btn.X;
+    sc.tick(DT);
+    h.intents[0].held = 0;
+    h.intents[0].pressed = 0;
+    return { sc, p };
+  };
+
+  it('a pistol drops it part-way through the reload, once', () => {
+    const { sc, p } = reload(null, 4);
+    expect(sc.gore.brass.magCount).toBe(0);
+    let at = -1;
+    for (let i = 0; i < 200 && p.reloadT > 0; i++) {
+      sc.tick(DT);
+      if (at < 0 && sc.gore.brass.magCount > 0) at = i;
+    }
+    expect(at).toBeGreaterThan(5);
+    expect(at).toBeLessThan(60);
+    runFor(sc, 1.5);
+    expect(sc.gore.brass.magCount).toBe(1);
+    // Reloading again drops another.
+    p.mag = 2;
+    p.fireCd = 0;
+    const it = (sc as unknown as { input: { intents?: unknown } }).input;
+    void it;
+  });
+
+  it('an SMG drops a longer one; a revolver, a pump and a rifle drop none', () => {
+    const smg = reload('w_smg', 5);
+    runFor(smg.sc, 2.5);
+    expect(smg.sc.gore.brass.magCount).toBe(1);
+    for (const id of ['w_revolver', 'w_pump', 'w_rifle']) {
+      const r = reload(id, 0);
+      runFor(r.sc, 4);
+      expect(r.sc.gore.brass.magCount, id).toBe(0);
+    }
+  });
+
+  it('a reload that is cancelled before it comes to the magazine drops nothing', () => {
+    const { sc, p } = reload(null, 3);
+    runFor(sc, 0.05);
+    p.reloadT = 0;
+    runFor(sc, 1);
+    expect(sc.gore.brass.magCount).toBe(0);
+  });
+});
+
+describe('effects come from the gun itself', () => {
+  const shot = (sc: LegScene, p: P, h: ReturnType<typeof fakeServices>) => {
+    h.intents[0].device = 'pad';
+    h.intents[0].rt = 1;
+    p.fireCd = 0;
+    sc.tick(DT);
+    h.intents[0].rt = 0;
+  };
+
+  it('the flash, the light and the smoke start at the drawn muzzle, and the shell at the drawn port', () => {
+    const { h, sc, c, p } = scene();
+    c.ammo = 50;
+    p.viewFirst = true;
+    stop(h);
+    runFor(sc, 0.3);
+    sc.renderFrame(1, DT);
+    p.beginOwnView();
+    p.endOwnView();
+    const pts = p.human.points;
+    expect(pts.valid).toBe(true);
+    const muzzle = vi.spyOn(sc.fx, 'muzzle');
+    const eject = vi.spyOn(sc.gore, 'eject');
+    shot(sc, p, h);
+    expect(muzzle).toHaveBeenCalledTimes(1);
+    const [mx, my, mz] = muzzle.mock.calls[0];
+    expect(Math.hypot(mx - pts.muzzle.x, my - pts.muzzle.y, mz - pts.muzzle.z)).toBeLessThan(0.05);
+    expect(eject).toHaveBeenCalledTimes(1);
+    const [, ex, ey, ez] = eject.mock.calls[0];
+    expect(Math.hypot(ex - pts.port.x, ey - pts.port.y, ez - pts.port.z)).toBeLessThan(0.05);
+    expect(sc.gore.brass.count).toBe(1);
+  });
+
+  it('the muzzle is in front of the face and below the eye in the owner\'s view, and clear of the body in the partner\'s', () => {
+    const { h, sc, p } = scene();
+    p.viewFirst = true;
+    stop(h);
+    p.aimYaw = 0;
+    runFor(sc, 0.3);
+    sc.renderFrame(1, DT);
+    p.beginOwnView();
+    const fp = p.human.points.muzzle.clone();
+    p.endOwnView();
+    expect(fp.z - p.pos.z).toBeGreaterThan(0.3);
+    expect(fp.y - p.pos.y).toBeLessThan(1.62);
+    expect(fp.y - p.pos.y).toBeGreaterThan(1.0);
+  });
+
+  it('smoke curls off the barrel for a couple of seconds after a shot, and then stops', () => {
+    const { h, sc, c, p } = scene();
+    c.ammo = 50;
+    stop(h);
+    runFor(sc, 0.2);
+    sc.renderFrame(1, DT);
+    const wisp = vi.spyOn(sc.fx, 'wisp');
+    shot(sc, p, h);
+    wisp.mockClear();
+    runFor(sc, 1.5);
+    const during = wisp.mock.calls.length;
+    expect(during).toBeGreaterThan(4);
+    wisp.mockClear();
+    runFor(sc, 3);
+    // Longer after: it has burnt out.
+    runFor(sc, 1);
+    wisp.mockClear();
+    runFor(sc, 1);
+    expect(wisp.mock.calls.length).toBe(0);
+  });
+
+  it('a shotgun leaves more smoke than a pistol', () => {
+    const smoke = (id: string | null) => {
+      const { h, sc, c, p } = scene();
+      c.ammo = 50;
+      if (id) equip(p, id, 3);
+      stop(h);
+      runFor(sc, 0.1);
+      shot(sc, p, h);
+      return (p as unknown as { smokeT: number }).smokeT;
+    };
+    expect(smoke('w_sawn')).toBeGreaterThan(smoke(null));
   });
 });

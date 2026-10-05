@@ -37,7 +37,7 @@ void main() {
   vec2 uv = vec2( c.x * k - c.y * s, c.x * s + c.y * k ) + 0.5;
   vec4 t = texture2D( tPuff, uv );
   // Fade sprites that get right up to the lens instead of filling the screen.
-  float a = mix( smoothstep( 1.0, 0.25, length( c ) * 2.0 ), t.a, uLit ) * vColor.a * smoothstep( 0.4, 2.2, vDepth );
+  float a = mix( smoothstep( 1.0, 0.25, length( c ) * 2.0 ), t.a, uLit ) * vColor.a * smoothstep( 0.18, 0.9, vDepth );
   if ( a < 0.004 ) discard;
   vec3 col = vColor.rgb * mix( vec3( 1.0 ), uLight * ( 0.7 + t.r * 0.45 ), uLit );
   gl_FragColor = vec4( col, a );
@@ -267,10 +267,20 @@ export class Particles {
       const k = 6 + Math.random() * 12;
       this.glow.emit(x + dx * 0.1, y + dy * 0.1, z + dz * 0.1, dx * k + (Math.random() - 0.5) * 5, dy * k + (Math.random() - 0.2) * 4, dz * k + (Math.random() - 0.5) * 5, 0.18 + Math.random() * 0.2, 0.07, 0.015, 1, 0.78, 0.35, 1, 12, 1.2);
     }
-    for (let i = 0; i < m.smoke; i++) {
-      const k = 0.8 + Math.random() * 2.2;
-      this.smoke.emit(x + dx * (0.2 + 0.15 * i), y + dy * (0.2 + 0.15 * i), z + dz * (0.2 + 0.15 * i), dx * k + (Math.random() - 0.5) * 0.5, dy * k + 0.35 + Math.random() * 0.3, dz * k + (Math.random() - 0.5) * 0.5, 0.7 + Math.random() * 0.7, 0.14 + m.flash * 0.1, 0.7 + m.flash * 0.45, 0.62, 0.6, 0.58, 0.38, -0.25, 1.6);
+    // Powder smoke: a drift of puffs thrown out along the barrel that swell and hang in the air for a couple of seconds, greyer
+    // than the dust so it reads against a bright sky.
+    for (let i = 0; i < m.smoke * 2; i++) {
+      const k = 0.6 + Math.random() * 2.6;
+      const d = 0.15 + 0.12 * i;
+      this.smoke.emit(x + dx * d, y + dy * d, z + dz * d, dx * k + (Math.random() - 0.5) * 0.6, dy * k + 0.25 + Math.random() * 0.35, dz * k + (Math.random() - 0.5) * 0.6, 1.4 + Math.random() * 1.2, 0.18 + m.flash * 0.12, 0.9 + m.flash * 0.6, 0.44, 0.44, 0.47, 0.66, -0.2, 1.4);
     }
+    // A fatter cloud that stays near the muzzle.
+    this.smoke.emit(x + dx * 0.25, y + dy * 0.25, z + dz * 0.25, dx * 0.5, 0.2, dz * 0.5, 2.2 + Math.random() * 0.8, 0.25 + m.flash * 0.2, 1.3 + m.flash * 0.8, 0.48, 0.48, 0.5, 0.46, -0.12, 1.0);
+  }
+
+  /** A thin wisp curling off a hot barrel or an open breech in the seconds after a shot. */
+  wisp(x: number, y: number, z: number, strength = 1) {
+    this.smoke.emit(x + (Math.random() - 0.5) * 0.02, y, z + (Math.random() - 0.5) * 0.02, (Math.random() - 0.5) * 0.12, 0.3 + Math.random() * 0.25, (Math.random() - 0.5) * 0.12, 1.1 + Math.random() * 0.9, 0.04 + 0.03 * strength, 0.22 + 0.12 * strength, 0.62, 0.62, 0.64, 0.2 + 0.12 * strength, -0.15, 1.1);
   }
 
   /** Embers and a lick of flame thrown out along the ground from where a burning bottle bursts. */

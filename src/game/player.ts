@@ -21,7 +21,7 @@ import { BLEED, STAMINA, bind, bleedLabel, canSprint, jamChance, newBleed, newSt
 import { ammoForGun } from '../sim/ballistics';
 import { HANDLING, kickVelocity, spring, stepSpring, swayAt, type Handling, type Spring } from '../sim/handling';
 import { ACCEL, READY, SPRINT_IN, SPRINT_OUT, WALL_BLOCK, REACH, approachVelocity, carryOf, drawLow, drawOf, landGait, newGait, newGaitOut, stepBlend, stepGait, strafeRoll, wallBlend } from '../sim/gait';
-import { RELOAD_KIND, cycleRack, cycleTime, newGunPose, reloadPose } from '../sim/weaponanim';
+import { DROPS_MAG, RELOAD_KIND, cycleRack, cycleTime, dropAt, newGunPose, reloadPose } from '../sim/weaponanim';
 import { MUZZLE, bloomAfterShot, bloomSettle, meleeFeel, reloadPlan, swingArc, type MeleeFeel } from '../sim/weaponfx';
 import type { ShellKind } from '../render/brass';
 import type { DriveInput } from '../physics/vehicle';
@@ -186,6 +186,9 @@ export class Player implements Pilot {
   private cycleT = 0;
   private cycleDur = 1;
   private pose = newGunPose();
+  /** Whether this reload's empty magazine has dropped yet, and seconds of smoke still curling off the gun. */
+  private magDropped = false;
+  private smokeT = 0;
   /** Seconds per round while a gun is being loaded a round at a time (a pump); 0 when the reload takes the lot at once. */
   private loadEach = 0;
   /** How far sustained fire has opened the spread, as a share of the gun's own. It closes up between shots. */
@@ -1357,6 +1360,7 @@ export class Player implements Pilot {
     this.reloadT = t;
     this.reloadDur = Math.max(0.01, t);
     this.loadEach = each;
+    this.magDropped = false;
   }
 
   /** The reload the gun in hand needs: quicker with a round still in it, a shell at a time for a pump. */
@@ -1546,8 +1550,11 @@ export class Player implements Pilot {
       });
     }
     const mfx = MUZZLE[gun.model];
-    ctx.fx.muzzle(mx, my, mz, dx, dy, dz, mfx);
-    ctx.combat.muzzleLight(mx, my, mz, mfx.light);
+    // The flash, the smoke and the light come from the gun itself as it is drawn, not from where the body thinks it is.
+    const [vx, vy, vz] = this.gunPoint('muzzle', [mx, my, mz]);
+    ctx.fx.muzzle(vx, vy, vz, dx, dy, dz, mfx);
+    ctx.combat.muzzleLight(vx, vy, vz, mfx.light);
+    this.smokeT = Math.min(3.5, this.smokeT + 1.2 + (gun.pellets > 1 ? 0.8 : 0));
     ctx.audio.play(gun.sound, mx, mz, 0.8, { occluded: 0 });
     const kick = Math.min(0.14, (gun.dmg * gun.pellets) / 700);
     const hd = HANDLING[gun.model];
@@ -1597,6 +1604,7 @@ export class Player implements Pilot {
     const hd = this.handling();
     const k = this.kick;
     if (this.drawT > 0) this.drawT -= dt;
+    this.updateGunEffects(dt);
     if (this.cycleT > 0) this.cycleT -= dt;
     // The gun lags behind a turn of the view and swings back: heavy things do not follow the eye exactly.
     if (this.prevAim) {
@@ -1641,7 +1649,45 @@ export class Player implements Pilot {
   private ejectCase(kind: ShellKind) {
     const [mx, my, mz] = this.muzzlePos();
     const f = this.aimYaw;
-    this.ctx.gore.eject(kind, mx - Math.sin(f) * 0.32, my - 0.06, mz - Math.cos(f) * 0.32, f);
+    // Out of the ejection port on the gun, with a wisp of smoke from the breech and the shooter's own motion carried over.
+    const [px, py, pz] = this.gunPoint('port', [mx - Math.sin(f) * 0.32, my - 0.06, mz - Math.cos(f) * 0.32]);
+    this.ctx.gore.eject(kind, px, py, pz, f, this.hvx, this.hvz);
+    this.ctx.fx.wisp(px, py, pz, 1);
+  }
+
+  /**
+   * A point on the gun in the world: read off the rig as it was last drawn (the owner's own first-person pose included), or
+   * `fallback` where the body thinks it is when the gun has not been drawn.
+   */
+  private gunPoint(which: 'muzzle' | 'port' | 'well', fallback: [number, number, number]): [number, number, number] {
+    const pts = this.human.points;
+    if (!pts.valid || !this.human.root.visible) return fallback;
+    const v = pts[which];
+    return [v.x, v.y, v.z];
+  }
+
+  /** The empty magazine falls out of the gun at the right moment of a reload, and the barrel keeps smoking for a while after a shot. */
+  private updateGunEffects(dt: number) {
+    const ctx = this.ctx;
+    if (this.reloadT > 0 && !this.magDropped && this.loadEach === 0 && this.equip === 'gun') {
+      const model = this.gunModel();
+      const mag = DROPS_MAG[model];
+      const at = dropAt(RELOAD_KIND[model]);
+      if (mag && 1 - this.reloadT / this.reloadDur >= at) {
+        this.magDropped = true;
+        const [wx, wy, wz] = this.gunPoint('well', [this.pos.x, this.pos.y + 1.0, this.pos.z]);
+        ctx.gore.dropMag(mag, wx, wy, wz, this.hvx, this.hvz);
+        ctx.audio.play('click', wx, wz, 0.4);
+      }
+    }
+    if (this.smokeT > 0) {
+      this.smokeT -= dt;
+      if (this.equip === 'gun' && this.state === 'foot' && Math.random() < dt * 14 * Math.min(1, this.smokeT)) {
+        const [mx, my, mz] = this.muzzlePos();
+        const [wx, wy, wz] = this.gunPoint('muzzle', [mx, my, mz]);
+        ctx.fx.wisp(wx, wy, wz, Math.min(1, this.smokeT));
+      }
+    }
   }
 
   /** The gun is opened to reload: a revolver or a break-action drops what it fired. */
@@ -2491,7 +2537,11 @@ export class Player implements Pilot {
    */
   beginOwnView() {
     if (!this.firstPerson) return;
-    if (this.state === 'foot') this.human.setFirstPerson(true);
+    if (this.state === 'foot') {
+      this.human.setFirstPerson(true);
+      // The gun as this view will draw it: where its muzzle, port and magazine well really are.
+      this.human.capturePoints();
+    }
     const v = this.vehicle;
     const occ = this.state === 'driving' ? v?.visual.driver : this.state === 'gunner' ? v?.visual.passenger : null;
     if (occ) {
@@ -2529,6 +2579,7 @@ export class Player implements Pilot {
     h.gunSway[0] = this.sway[0] + clamp(this.lag.yaw.x, -0.08, 0.08) + this.gaitOut.armX;
     h.gunSway[1] = this.sway[1] + clamp(this.lag.pitch.x, -0.08, 0.08) + this.gaitOut.armY;
     if (this.syncGunPose(h, dt)) aim = Math.max(aim, 0.75);
+    this.syncSight(h);
     h.fpAds = this.ads;
     h.gunKick = clamp(this.kick.pitch.x / 0.05, -0.4, 1.6);
     // First person: whatever is in hand is held up in front, where the camera can see it.
@@ -2537,7 +2588,24 @@ export class Player implements Pilot {
     this.airVis = damp(this.airVis, this.state === 'foot' && !this.grounded && !this.swimming && this.airT > 0.06 ? 1 : 0, 16, dt);
     h.update(dt, lying ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch, this.airVis);
     h.muzzle(this.muzzleT > 0.05);
+    h.capturePoints();
     if (this.invuln > 0) h.root.visible = Math.floor(this.invuln * 12) % 2 === 0;
+  }
+
+  /** In first person, aimed: tell the rig where the eye is and which way it looks, so it can line the sights up on that. */
+  private syncSight(h: Humanoid) {
+    const s = h.sight;
+    const gp = h.gunPose;
+    const on = this.firstPerson && this.state === 'foot' && this.equip === 'gun' && !this.carry;
+    s.k = on ? clamp(this.ads, 0, 1) * (1 - gp.low) * (1 - gp.high) * (1 - this.reloadBlend) : 0;
+    if (s.k <= 0) return;
+    const cp = Math.cos(this.aimPitch);
+    s.ex = this.cam.pos.x;
+    s.ey = this.cam.pos.y;
+    s.ez = this.cam.pos.z;
+    s.fx = Math.sin(this.aimYaw) * cp;
+    s.fy = Math.sin(this.aimPitch);
+    s.fz = Math.cos(this.aimYaw) * cp;
   }
 
   /** Hand the rig how the gun is being handled this frame. Returns whether the gun must be up in front of the body. */
