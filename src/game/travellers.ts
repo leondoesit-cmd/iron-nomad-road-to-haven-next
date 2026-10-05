@@ -945,7 +945,7 @@ export class TravellerSystem {
     h.root.rotation.y = tv.yaw;
     const aim = tv.state === 'fight' ? 1 : tv.def.armed && tv.suspicion > 0.55 ? 0.7 : 0;
     h.update(dt, 'stand', tv.moveSpeed, aim, 0);
-    h.muzzle(false);
+    h.muzzle(0);
     if (tv.cart) {
       const back = HANDLE_Z - 0.55;
       const cx = tv.x - Math.sin(tv.yaw) * back;
