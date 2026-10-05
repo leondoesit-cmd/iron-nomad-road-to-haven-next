@@ -52,14 +52,14 @@ function hold(h: ReturnType<typeof fakeServices>, sc: LegScene, who: number, btn
 }
 
 /** One of the convoy's own vehicles, parked still, with player 0 on foot beside its door. */
-function ownCar(sc: LegScene, chassis = 'hatch', o: { fuel?: number } = {}): Vehicle {
+function ownCar(sc: LegScene, chassis = 'hatch', o: { fuel?: number; yaw?: number } = {}): Vehicle {
   const p = sc.players[0];
   p.exitVehicle(false);
   const st = sc.src.layout.start;
   const x = st.x + 9;
   const z = st.z + 8;
   const b = newBuild(chassis, { seed: 31, fuel: o.fuel ?? 0.5 });
-  const v = sc.spawnVehicle({ build: b, x, z, y: sc.groundAt(x, z), yaw: 0, ownerIndex: 0, faction: 'convoy' });
+  const v = sc.spawnVehicle({ build: b, x, z, y: sc.groundAt(x, z), yaw: o.yaw ?? 0, ownerIndex: 0, faction: 'convoy' });
   sc.campaign.adopt(b);
   run(sc, 1.5);
   const d = v.doorPos(1);
@@ -271,7 +271,8 @@ describe('heat on the road', () => {
 
   it('a V8 in a hatchback on the factory radiator cooks: warnings, lost power, a worn engine', () => {
     const { sc } = leg();
-    const v = ownCar(sc, 'hatch', { fuel: 1 });
+    // Facing across the road, clear of the pole that stands ahead of the start and would wreck it before it heats.
+    const v = ownCar(sc, 'hatch', { fuel: 1, yaw: Math.PI / 2 });
     installPart(v.build!, newPart('eng_v8', 1));
     v.syncFromBuild();
     const e0 = v.health.comp.engine;
