@@ -1,5 +1,5 @@
 import type { CompassPin } from '../game/scene';
-import { MapProjection, fitRect, headingFor, radiusFor, type MapBase, type MapFrame, type MapPin, type MapPinKind, type MapRoad } from './mapdata';
+import { MapProjection, fitRect, headingFor, radiusFor, type MapBase, type MapFrame, type MapPin, type MapPinKind, type MapRoad, type MapWater } from './mapdata';
 
 /** Colours of the markers shared by the compass and the maps. */
 export const PIN_COLOR: Record<MapPinKind, string> = {
@@ -25,6 +25,10 @@ export const PIN_COLOR: Record<MapPinKind, string> = {
   ride: '#7ddc7a',
   site: '#e9dfc7',
   lake: '#5ad8ff',
+  falls: '#bdf2ff',
+  spring: '#7fe8d6',
+  swamp: '#a9b86a',
+  river: '#8fd4e8',
 };
 
 /** What a map needs to know about the seat it is drawn for. */
@@ -238,6 +242,27 @@ export class MapPainter {
 
   private layers(g: CanvasRenderingContext2D, P: MapProjection, f: MapFrame, v: MapView, o: { labels: boolean; rim: number; size: number; overview?: boolean }) {
     const s = P.scale;
+    // Rivers and streams under the roads: the baked ground is too coarse for a stream a few metres wide.
+    if (f.waters.length) {
+      const reach = (o.size / 2 + 24) / s;
+      const near = (w: MapWater) => w.x1 > P.cx - reach && w.x0 < P.cx + reach && w.z1 > P.cz - reach && w.z0 < P.cz + reach;
+      g.lineJoin = 'round';
+      g.lineCap = 'round';
+      g.strokeStyle = '#3f8fa2';
+      for (const w of f.waters) {
+        if (!near(w)) continue;
+        g.beginPath();
+        for (let i = 0; i < w.pts.length; i += 2) {
+          const x = P.x(w.pts[i], w.pts[i + 1]);
+          const y = P.y(w.pts[i], w.pts[i + 1]);
+          if (i === 0) g.moveTo(x, y);
+          else g.lineTo(x, y);
+        }
+        g.lineWidth = Math.max(w.half > 3 ? 1.6 : 1, w.half * 2 * s);
+        g.stroke();
+      }
+      g.lineWidth = 1;
+    }
     // The open world's roads: only those that reach the view, tracks only up close.
     if (f.roads.length) {
       const reach = (o.size / 2 + 24) / s;
@@ -434,6 +459,32 @@ export class MapPainter {
         g.closePath();
         g.fill();
         g.stroke();
+        break;
+      case 'falls':
+        // A notch: water going over.
+        g.beginPath();
+        g.moveTo(x - r, y - r * 0.7);
+        g.lineTo(x + r, y - r * 0.7);
+        g.lineTo(x, y + r);
+        g.closePath();
+        g.fill();
+        g.stroke();
+        break;
+      case 'spring':
+      case 'lake':
+        g.beginPath();
+        g.arc(x, y, r * (pin.kind === 'lake' ? 0.9 : 0.75), 0, Math.PI * 2);
+        g.fill();
+        g.stroke();
+        break;
+      case 'swamp':
+        g.beginPath();
+        g.ellipse(x, y, r * 1.1, r * 0.6, 0, 0, Math.PI * 2);
+        g.fill();
+        g.stroke();
+        break;
+      case 'river':
+        // No marker: only its name, beside the water on the larger maps.
         break;
       case 'site':
         g.beginPath();

@@ -1,5 +1,6 @@
 import type { LegDef } from '../data';
 import { Rng } from '../core/rng';
+import { nearHydro } from './hydro';
 import { corridorHalf, roadX, type Site, type SiteKind, type TerrainDef } from './terrain';
 import type { PropKind } from './layout';
 
@@ -75,6 +76,7 @@ export function planMainlandDelve(def: TerrainDef, leg: LegDef): { delve: DelveS
     // Keep clear of roadside places, lakes and the road itself.
     if (def.sites.some((s) => Math.hypot(s.x - x, s.z - z) < s.radius + 48 + (s.kind === 'windfarm' ? 120 : 0))) continue;
     if (def.lakes.some((l) => Math.hypot(l.x - x, l.z - z) < l.reach + 50)) continue;
+    if (nearHydro(def, x, z, 50)) continue;
     if (def.ramps.some((r) => Math.abs(r.z0 - z) < 160) || def.minefields.some((m) => z > m.z0 - 80 && z < m.z1 + 80)) continue;
     // The mouth faces the road.
     const yaw = side > 0 ? -Math.PI / 2 : Math.PI / 2;

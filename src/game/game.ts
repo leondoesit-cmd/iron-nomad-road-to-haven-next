@@ -12,6 +12,8 @@ import { initPhysics, FIXED_STEP } from '../physics/physics';
 import { LEGS, legById, t, validateData } from '../data';
 import { Overlays } from '../ui/overlays';
 import { CampScene } from './campScene';
+import type { CampLand } from '../render/campArena';
+import { forestAt, lushAt, woodsAt } from '../world/hydro';
 import { DelveScene, carryOf } from './delveScene';
 import type { DelveSite } from '../world/delveSites';
 import { applyEncounterEffects } from './encounterFx';
@@ -384,15 +386,17 @@ export class Game {
     const leg = this.scene instanceof LegScene ? this.scene.leg : legById(this.campaign.legId);
     // Carry over vehicle HP before the leg is torn down.
     this.snapshotVehicles();
+    let land: CampLand | undefined;
     if (this.scene instanceof LegScene && leg.open) {
       // The world remembers the day; the Ledger knows which hub, if any, the convoy is camped at.
       this.campaign.hub = this.scene.hubNearby();
       if (this.world) this.scene.capture(this.world);
+      land = campLand(this.scene);
     } else this.campaign.hub = leg.endHub ?? null;
     this.disposeScene();
     this.overlays.hideAll();
     this.campaign.hotCamp = hot;
-    const camp = new CampScene(this.services(), leg, siteId, hot);
+    const camp = new CampScene(this.services(), leg, siteId, hot, false, land);
     camp.onResult = (r) => this.onSceneResult(r);
     camp.openWorkbench = (p, v) => this.openWorkbench(p, v);
     camp.openInventory = (p) => this.openInventory(p);
@@ -728,3 +732,23 @@ export class Game {
 }
 
 void LEGS;
+
+/**
+ * The land round the spot where the convoy made camp, if it is on the green: the meadow under it, and the thickest wood within
+ * 70 m (the camp's basin is ringed by it). Undefined in the dust, so a desert camp stays as it always was.
+ */
+function campLand(sc: LegScene): CampLand | undefined {
+  const T = sc.terrain;
+  const p = sc.campPose;
+  if (!T?.hydro || !p) return undefined;
+  let lush = 0;
+  let wood = 0;
+  for (let k = 0; k < 9; k++) {
+    const a = (k / 8) * Math.PI * 2;
+    const r = k === 8 ? 0 : 25;
+    lush += lushAt(T, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r) / 9;
+    wood = Math.max(wood, forestAt(T, p.x + Math.cos(a) * 70, p.z + Math.sin(a) * 70));
+  }
+  if (lush < 0.2) return undefined;
+  return { lush, wood, woods: woodsAt(T, p.x, p.z) };
+}

@@ -9,12 +9,13 @@ import { isLakeSite, lakeAt } from './lakes';
 import { delveName, delveSiteKind, type DelveSite } from './delveSites';
 import { planById } from './plans';
 import { districtAt, nearestRoad, type District } from './openWorld';
+import { bridgeTag, courseAt, swampQ } from './hydro';
 import { GANGS } from '../data';
 import { dressGangCamp, fitSpot, newCampSpec, planFreeCamps, type GangCampSpec } from './gangCamps';
 import type { BuildingRole, CityPlan, Facing, LandmarkKind, PlannedPlace, PlannedStreet } from './cityPlan';
 import type { Look } from './interiors';
 
-export type AabbKind = 'building' | 'wall' | 'car' | 'rock' | 'barricade' | 'crate' | 'pillar' | 'tower' | 'partition' | 'furniture' | 'stair' | 'floor' | 'dock';
+export type AabbKind = 'building' | 'wall' | 'car' | 'rock' | 'barricade' | 'crate' | 'pillar' | 'tower' | 'partition' | 'furniture' | 'stair' | 'floor' | 'dock' | 'tree';
 
 /** Axis-aligned obstacle used by zombies, projectiles, camera and the Rapier collider builder. */
 export interface Aabb {
@@ -100,7 +101,8 @@ export type PropKind =
   | 'busShelter'
   | 'floodlight'
   | 'tent'
-  | 'campfire';
+  | 'campfire'
+  | 'bridge';
 
 export interface PropSpawn {
   kind: PropKind;
@@ -499,6 +501,7 @@ export class LegLayoutImpl implements LegLayout {
     this.aabbs = this.aabbs.filter((a, i) => i < n0[2] || !inSite((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2));
     this.zombies = this.zombies.filter((q) => !inCamp(q.x, q.z));
     this.buildLakes();
+    this.buildWater();
     this.cars = this.cars.filter((c) => !waterAt(T, c.x, c.z) && !inCamp(c.x, c.z));
     // Nothing of the desert stands inside a city.
     const outside = (x: number, z: number) => !districtAt(o, x, z);
@@ -1407,6 +1410,64 @@ export class LegLayoutImpl implements LegLayout {
     this.rural = this.rural.filter((b) => !wet((b.aabb.minX + b.aabb.maxX) / 2, (b.aabb.minZ + b.aabb.maxZ) / 2));
     const ctx = { def: this.terrain, newId: newAabbId };
     for (const site of this.terrain.sites) if (isLakeSite(site)) this.mergeSite(buildSite(ctx, site));
+  }
+
+  /**
+   * The open world's running water, springs and swamps: clear away whatever the ambient passes dropped into a channel, a pool
+   * or onto a causeway, then build what goes with the water: a bridge where a road crosses, a ring of stones round each spring,
+   * boulders at the foot of each waterfall.
+   */
+  private buildWater() {
+    const T = this.terrain;
+    const hy = T.hydro;
+    if (!hy) return;
+    const rng = new Rng(this.leg.seed ^ 0x3a7e);
+    const wet = (x: number, z: number, pad: number) => {
+      const c = courseAt(hy, x, z, pad);
+      if (c && c.d < c.half + pad) return true;
+      if (hy.swamps.some((s) => swampQ(s, x, z) < 1.02)) return true;
+      if (hy.springs.some((s) => Math.hypot(x - s.x, z - s.z) < s.r + pad)) return true;
+      return hy.crossings.some((q) => Math.hypot(x - q.x, z - q.z) < q.span * 0.5 + q.roadHalf + 6);
+    };
+    this.props = this.props.filter((p) => !wet(p.x, p.z, 2));
+    this.pickups = this.pickups.filter((p) => !wet(p.x, p.z, 1.5));
+    this.zombies = this.zombies.filter((z) => !wet(z.x, z.z, 1));
+    this.cars = this.cars.filter((c) => !wet(c.x, c.z, 4));
+    this.aabbs = this.aabbs.filter((a) => !wet((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2, 2));
+    this.mines = this.mines.filter((m) => !wet(m.x, m.z, 2));
+    hy.crossings.forEach((q, i) => {
+      const r = hy.rivers[q.river];
+      const drop = q.y - (q.level - r.depth[q.i]);
+      this.props.push({ kind: 'bridge', x: q.x, y: q.y, z: q.z, yaw: q.yaw, scale: 1, seed: i, tag: bridgeTag(q.span, drop, q.roadHalf) });
+    });
+    for (const s of hy.springs) {
+      // Stones round the pool, leaving the outflow open.
+      const out = s.feeds >= 0 ? Math.atan2(hy.rivers[s.feeds].z[3] - s.z, hy.rivers[s.feeds].x[3] - s.x) : 99;
+      const n = Math.round(s.r * 1.6);
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2 + rng.range(-0.15, 0.15);
+        let da = Math.abs(a - out) % (Math.PI * 2);
+        if (da > Math.PI) da = Math.PI * 2 - da;
+        if (da < 0.45 || rng.chance(0.25)) continue;
+        const rr = s.r + rng.range(0.6, 1.8);
+        const x = s.x + Math.cos(a) * rr;
+        const z = s.z + Math.sin(a) * rr;
+        this.props.push({ kind: 'rock', x, y: heightAt(T, x, z), z, yaw: rng.range(0, 6.28), scale: rng.range(0.45, 0.9), seed: rng.int(0, 9999) });
+      }
+    }
+    for (const f of hy.falls) {
+      if (f.rim) continue;
+      const r = hy.rivers[f.river];
+      const i = Math.min(r.n - 1, f.i1 + 2);
+      for (const side of [-1, 1]) {
+        for (let k = 0; k < 2; k++) {
+          const off = r.half[i] + rng.range(0.5, 2.5);
+          const x = r.x[i] - r.dz[i] * side * off + r.dx[i] * rng.range(-3, 3);
+          const z = r.z[i] + r.dx[i] * side * off + r.dz[i] * rng.range(-3, 3);
+          this.props.push({ kind: 'rock', x, y: heightAt(T, x, z), z, yaw: rng.range(0, 6.28), scale: rng.range(1.2, 2.2), seed: rng.int(0, 9999) });
+        }
+      }
+    }
   }
 
   // ---------------------------------------------------------------- ambient content

@@ -789,3 +789,628 @@ export function smokeTexture(): THREE.Texture {
     return t;
   });
 }
+
+// ------------------------------------------------------------------------------------------ green country
+
+/**
+ * A small CPU canvas for sprites: colour plus coverage, painted back to front. A later stroke wins wherever it covers at
+ * least most of what is already there, so overlapping leaves read as lying on top of each other. `wrap` makes it tile.
+ */
+class Paint {
+  r: Float32Array;
+  g: Float32Array;
+  b: Float32Array;
+  a: Float32Array;
+  constructor(
+    public w: number,
+    public h: number,
+    private wrap = false,
+  ) {
+    const n = w * h;
+    this.r = new Float32Array(n);
+    this.g = new Float32Array(n);
+    this.b = new Float32Array(n);
+    this.a = new Float32Array(n);
+  }
+
+  put(px: number, py: number, cov: number, cr: number, cg: number, cb: number) {
+    if (this.wrap) {
+      px = ((px % this.w) + this.w) % this.w;
+      py = ((py % this.h) + this.h) % this.h;
+    } else if (px < 0 || py < 0 || px >= this.w || py >= this.h) return;
+    const i = py * this.w + px;
+    if (cov >= this.a[i] * 0.8) {
+      this.r[i] = cr;
+      this.g[i] = cg;
+      this.b[i] = cb;
+    }
+    if (cov > this.a[i]) this.a[i] = cov;
+  }
+
+  disc(x: number, y: number, rad: number, cr: number, cg: number, cb: number) {
+    const R = Math.ceil(rad + 1);
+    const ix = Math.round(x);
+    const iy = Math.round(y);
+    for (let oy = -R; oy <= R; oy++) {
+      for (let ox = -R; ox <= R; ox++) {
+        const c = sat(rad + 0.5 - Math.hypot(ix + ox - x, iy + oy - y));
+        if (c > 0) this.put(ix + ox, iy + oy, c, cr, cg, cb);
+      }
+    }
+  }
+
+  /** A tapered stroke, widths in pixels. */
+  stroke(x0: number, y0: number, x1: number, y1: number, w0: number, w1: number, cr: number, cg: number, cb: number) {
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    const n = Math.max(1, Math.ceil(len * 1.5));
+    for (let k = 0; k <= n; k++) {
+      const t = k / n;
+      this.disc(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, Math.max(0.35, (w0 + (w1 - w0) * t) * 0.5), cr, cg, cb);
+    }
+  }
+
+  /**
+   * A leaf from its stalk at (x, y), `len` long and `wid` wide, pointing along `ang` (0 is up the image). The midrib is a
+   * shade darker and the two halves are lit differently, as if the blade were folded a little.
+   */
+  leaf(x: number, y: number, len: number, wid: number, ang: number, cr: number, cg: number, cb: number, rib = 0.82) {
+    const dx = Math.sin(ang);
+    const dy = -Math.cos(ang);
+    const R = Math.ceil(len + wid);
+    const ix = Math.round(x);
+    const iy = Math.round(y);
+    for (let oy = -R; oy <= R; oy++) {
+      for (let ox = -R; ox <= R; ox++) {
+        const rx = ix + ox - x;
+        const ry = iy + oy - y;
+        const u = (rx * dx + ry * dy) / len;
+        if (u < 0 || u > 1) continue;
+        const v = rx * -dy + ry * dx;
+        const hw = wid * 0.5 * Math.pow(Math.sin(Math.PI * Math.min(1, u * 0.92 + 0.04)), 0.75);
+        const c = sat(hw - Math.abs(v) + 0.5);
+        if (c <= 0) continue;
+        const k = (Math.abs(v) < 0.75 && u < 0.9 ? rib : 1) * (v > 0 ? 1.05 : 0.9);
+        this.put(ix + ox, iy + oy, c, cr * k, cg * k, cb * k);
+      }
+    }
+  }
+
+  /** RGBA bytes: colour where painted, `bg` (about the average colour, so filtering never pulls in a dark fringe) elsewhere. */
+  bytes(bg: [number, number, number], gain = 1.3): Uint8Array {
+    const n = this.w * this.h;
+    const out = new Uint8Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      const has = this.a[i] > 0;
+      out[i * 4] = b8(has ? this.r[i] : bg[0]);
+      out[i * 4 + 1] = b8(has ? this.g[i] : bg[1]);
+      out[i * 4 + 2] = b8(has ? this.b[i] : bg[2]);
+      out[i * 4 + 3] = b8(this.a[i] * gain);
+    }
+    return out;
+  }
+}
+
+function lcg(seed: number) {
+  let s = seed >>> 0 || 1;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+/**
+ * Mipmaps for an atlas of alpha-tested sprites (`cols` x `rows` equal cells). Each level is filtered from the one above with
+ * colour weighted by coverage, then each cell's alpha is scaled so the same share of it passes `ref` as at full size:
+ * without that, leaves thin out to nothing as a tree recedes.
+ */
+function coverageMips(base: Uint8Array, w: number, h: number, cols: number, rows: number, ref: number): { data: Uint8Array; width: number; height: number }[] {
+  const out = [{ data: base, width: w, height: h }];
+  const cw0 = w / cols;
+  const ch0 = h / rows;
+  const T = ref * 255;
+  const target: number[] = [];
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      let n = 0;
+      for (let y = 0; y < ch0; y++) for (let x = 0; x < cw0; x++) if (base[((cy * ch0 + y) * w + cx * cw0 + x) * 4 + 3] > T) n++;
+      target.push(n / (cw0 * ch0));
+    }
+  }
+  let prev = base;
+  let pw = w;
+  let ph = h;
+  let level = 0;
+  while (pw > 1 || ph > 1) {
+    level++;
+    const nw = Math.max(1, pw >> 1);
+    const nh = Math.max(1, ph >> 1);
+    const raw = new Uint8Array(nw * nh * 4);
+    for (let y = 0; y < nh; y++) {
+      for (let x = 0; x < nw; x++) {
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        let a = 0;
+        let r0 = 0;
+        let g0 = 0;
+        let b0 = 0;
+        for (let k = 0; k < 4; k++) {
+          const sx = Math.min(pw - 1, x * 2 + (k & 1));
+          const sy = Math.min(ph - 1, y * 2 + (k >> 1));
+          const j = (sy * pw + sx) * 4;
+          const al = prev[j + 3];
+          r += prev[j] * al;
+          g += prev[j + 1] * al;
+          b += prev[j + 2] * al;
+          a += al;
+          r0 += prev[j];
+          g0 += prev[j + 1];
+          b0 += prev[j + 2];
+        }
+        const i = (y * nw + x) * 4;
+        raw[i] = a > 0 ? r / a : r0 / 4;
+        raw[i + 1] = a > 0 ? g / a : g0 / 4;
+        raw[i + 2] = a > 0 ? b / a : b0 / 4;
+        raw[i + 3] = a / 4;
+      }
+    }
+    // Keep each cell's coverage while the cell is still a few texels across.
+    const data = raw.slice();
+    const cw = cw0 >> level;
+    const ch = ch0 >> level;
+    if (cw >= 2 && ch >= 2) {
+      for (let cy = 0; cy < rows; cy++) {
+        for (let cx = 0; cx < cols; cx++) {
+          const want = target[cy * cols + cx];
+          if (want <= 0 || want >= 1) continue;
+          const share = (s: number) => {
+            let n = 0;
+            for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) if (raw[((cy * ch + y) * nw + cx * cw + x) * 4 + 3] * s > T) n++;
+            return n / (cw * ch);
+          };
+          let lo = 1;
+          let hi = 6;
+          for (let it = 0; it < 9; it++) {
+            const mid = (lo + hi) / 2;
+            if (share(mid) < want) lo = mid;
+            else hi = mid;
+          }
+          const s = (lo + hi) / 2;
+          for (let y = 0; y < ch; y++) {
+            for (let x = 0; x < cw; x++) {
+              const j = ((cy * ch + y) * nw + cx * cw + x) * 4 + 3;
+              data[j] = Math.min(255, raw[j] * s);
+            }
+          }
+        }
+      }
+    }
+    out.push({ data, width: nw, height: nh });
+    prev = raw;
+    pw = nw;
+    ph = nh;
+  }
+  return out;
+}
+
+/** An atlas of alpha-tested sprites as an sRGB texture with coverage-preserving mipmaps (see `coverageMips`). */
+export function spriteAtlasTexture(data: Uint8Array, w: number, h: number, cols: number, rows: number, ref = 0.5): THREE.DataTexture {
+  const t = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.mipmaps = coverageMips(data, w, h, cols, rows, ref) as unknown as THREE.DataTexture['mipmaps'];
+  t.generateMipmaps = false;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.anisotropy = 4;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.needsUpdate = true;
+  return shared(t);
+}
+
+/** Cells of the leaf atlas (4 x 2 cells of 256 px). Each foliage card of a tree maps one whole cell. */
+export const LEAF_CELL = { broad: 0, needle: 1, acacia: 2, feather: 3, strands: 4, poplar: 5, frond: 6, bark: 7 } as const;
+export const LEAF_ATLAS = { w: 1024, h: 512, cols: 4, rows: 2, cell: 256 };
+
+export interface LeafAtlas {
+  tex: THREE.DataTexture;
+  /** Full-size RGBA (sRGB) bytes, for baking the impostors on the CPU. */
+  data: Uint8Array;
+}
+
+let leafAtlasHit: LeafAtlas | null = null;
+
+/**
+ * The trees' leaves and bark in one atlas, so a whole tree (trunk, branches and foliage) is one draw: broadleaf clusters,
+ * a pine's needle spray, acacia's fine leaflets, the feathery sprays of a swamp cypress, a willow's hanging strands, poplar
+ * leaves, a date palm's frond (laid along the cell, base at the left) and a strip of bark. RGB is near white, so each
+ * species' vertex colour sets its green; the leaves vary a little in tone and hue among themselves.
+ */
+export function leafAtlas(): LeafAtlas {
+  if (leafAtlasHit) return leafAtlasHit;
+  const { w: W, h: H, cell: C } = LEAF_ATLAS;
+  const data = new Uint8Array(W * H * 4);
+  const blit = (ci: number, bytes: Uint8Array) => {
+    const ox = (ci % 4) * C;
+    const oy = Math.floor(ci / 4) * C;
+    for (let y = 0; y < C; y++) data.set(bytes.subarray(y * C * 4, (y + 1) * C * 4), ((oy + y) * W + ox) * 4);
+  };
+  const twig: [number, number, number] = [0.42, 0.36, 0.3];
+  // Broadleaf: twigs fanning up from the bottom, leaves clustered over a round, ragged shape.
+  {
+    const p = new Paint(C, C);
+    const r = lcg(101);
+    for (let k = 0; k < 7; k++) {
+      const a = (k / 6 - 0.5) * 2.2;
+      p.stroke(128, 252, 128 + Math.sin(a) * 90, 212 - Math.cos(a) * 110, 4, 1.2, ...twig);
+    }
+    for (let i = 0; i < 150; i++) {
+      let x = 0;
+      let y = 0;
+      for (let t = 0; t < 20; t++) {
+        x = 128 + (r() * 2 - 1) * 100;
+        y = 120 + (r() * 2 - 1) * 96;
+        if (((x - 128) / 100) ** 2 + ((y - 120) / 96) ** 2 < 1) break;
+      }
+      const out = Math.atan2(x - 128, -(y - 150));
+      const tone = 0.72 + r() * 0.3;
+      const ye = r() < 0.15 ? 0.1 : 0;
+      p.leaf(x, y, 22 + r() * 14, 11 + r() * 6, out + (r() - 0.5) * 1.2, tone * (0.9 + ye), tone, tone * (0.8 - ye));
+    }
+    blit(LEAF_CELL.broad, p.bytes([0.8, 0.86, 0.72]));
+  }
+  // Needle spray: a curving twig with side twigs, needles in pairs angled toward the tip.
+  {
+    const p = new Paint(C, C);
+    const r = lcg(202);
+    const twigs: [number, number, number, number, number][] = [[128, 250, 0, 225, 3.5]];
+    for (let k = 0; k < 8; k++) {
+      const t = 0.15 + k * 0.1;
+      twigs.push([128 + Math.sin(t * 2) * 6, 250 - t * 225, (k % 2 ? 1 : -1) * (0.75 + r() * 0.3), 60 + r() * 30 - t * 20, 2]);
+    }
+    for (const [x0, y0, a, len, wd] of twigs) {
+      const x1 = x0 + Math.sin(a) * len;
+      const y1 = y0 - Math.cos(a) * len;
+      p.stroke(x0, y0, x1, y1, wd, 1, 0.45, 0.35, 0.27);
+      for (let s = 4; s < len; s += 3) {
+        const t = s / len;
+        const bx = x0 + (x1 - x0) * t;
+        const by = y0 + (y1 - y0) * t;
+        const nl = (22 + r() * 10) * (1 - t * 0.4);
+        for (const side of [-1, 1]) {
+          for (let q = 0; q < 2; q++) {
+            const na = a + side * (0.6 + q * 0.45 + r() * 0.3);
+            const tone = 0.7 + r() * 0.32;
+            p.stroke(bx, by, bx + Math.sin(na) * nl, by - Math.cos(na) * nl, 2.6, 0.9, tone * 0.86, tone * 0.97, tone * 0.9);
+          }
+        }
+      }
+    }
+    blit(LEAF_CELL.needle, p.bytes([0.74, 0.84, 0.78]));
+  }
+  // Acacia: twigs spread wide, bipinnate leaves of tiny leaflets.
+  {
+    const p = new Paint(C, C);
+    const r = lcg(303);
+    for (let k = 0; k < 9; k++) {
+      const a = (k / 8 - 0.5) * 2.6 + (r() - 0.5) * 0.2;
+      const len = 95 + r() * 30;
+      const x1 = 128 + Math.sin(a) * len;
+      const y1 = 200 - Math.cos(a) * len * 0.75;
+      p.stroke(128, 200, x1, y1, 2.6, 1, 0.38, 0.3, 0.25);
+      for (let s = 10; s < len; s += 8) {
+        const t = s / len;
+        const bx = 128 + (x1 - 128) * t;
+        const by = 200 + (y1 - 200) * t;
+        for (const side of [-1, 1]) {
+          const pa = a + side * (1.1 + r() * 0.3);
+          const pl = 14 + r() * 8;
+          for (let q = 2; q < pl; q += 2.6) {
+            const tone = 0.74 + r() * 0.28;
+            p.disc(bx + Math.sin(pa) * q + (r() - 0.5) * 2, by - Math.cos(pa) * q + (r() - 0.5) * 2, 1.4 + r() * 0.9, tone * 0.95, tone, tone * 0.78);
+          }
+        }
+      }
+    }
+    blit(LEAF_CELL.acacia, p.bytes([0.82, 0.86, 0.68]));
+  }
+  // Feathery sprays (swamp cypress): stems with short soft needles on both sides, drooping toward the ends.
+  {
+    const p = new Paint(C, C);
+    const r = lcg(404);
+    for (let k = 0; k < 7; k++) {
+      let x = 128 + (r() - 0.5) * 60;
+      let y = 250;
+      let a = (k / 6 - 0.5) * 1.8;
+      const len = 150 + r() * 70;
+      for (let s = 0; s < len; s += 3) {
+        a += 0.012 * Math.sign(a || 1);
+        const nx = x + Math.sin(a) * 3;
+        const ny = y - Math.cos(a) * 3;
+        p.stroke(x, y, nx, ny, 1.6, 1.6, 0.48, 0.38, 0.28);
+        const nl = 9 * (1 - (s / len) * 0.5);
+        for (const side of [-1, 1]) {
+          const na = a + side * (1.25 + r() * 0.25);
+          const tone = 0.74 + r() * 0.26;
+          p.stroke(nx, ny, nx + Math.sin(na) * nl, ny - Math.cos(na) * nl, 1.4, 0.7, tone * 0.92, tone, tone * 0.8);
+        }
+        x = nx;
+        y = ny;
+        if (x < 6 || x > 250 || y < 6) break;
+      }
+    }
+    blit(LEAF_CELL.feather, p.bytes([0.8, 0.88, 0.7]));
+  }
+  // Hanging strands: from the top edge down, narrow leaves angled down along each.
+  {
+    const p = new Paint(C, C);
+    const r = lcg(505);
+    for (let k = 0; k < 16; k++) {
+      const x0 = 10 + (k / 15) * 236 + (r() - 0.5) * 10;
+      const len = 130 + r() * 115;
+      const ph = r() * 6;
+      let px = x0;
+      let py = 3;
+      for (let s = 0; s < len; s += 3.5) {
+        const nx = x0 + Math.sin(s / 40 + ph) * 5;
+        const ny = 3 + s;
+        p.stroke(px, py, nx, ny, 1.4, 1.4, 0.55, 0.5, 0.36);
+        const tone = 0.74 + r() * 0.28;
+        p.leaf(nx, ny, 10 + r() * 6, 3 + r() * 1.5, Math.PI + (r() < 0.5 ? -1 : 1) * (0.25 + r() * 0.35), tone * 0.95, tone, tone * 0.75, 0.9);
+        px = nx;
+        py = ny;
+      }
+    }
+    blit(LEAF_CELL.strands, p.bytes([0.82, 0.88, 0.66]));
+  }
+  // Poplar: small rounded leaves packed on upward twigs over a tall oval.
+  {
+    const p = new Paint(C, C);
+    const r = lcg(606);
+    for (let k = 0; k < 6; k++) p.stroke(128, 254, 128 + (k - 2.5) * 22, 30 + r() * 30, 3, 1, ...twig);
+    for (let i = 0; i < 190; i++) {
+      let x = 0;
+      let y = 0;
+      for (let t = 0; t < 20; t++) {
+        x = 128 + (r() * 2 - 1) * 84;
+        y = 128 + (r() * 2 - 1) * 118;
+        if (((x - 128) / 84) ** 2 + ((y - 128) / 118) ** 2 < 1) break;
+      }
+      const tone = 0.72 + r() * 0.3;
+      p.leaf(x, y, 13 + r() * 6, 10 + r() * 4, (r() - 0.5) * 1.6, tone * 0.92, tone, tone * 0.8);
+    }
+    blit(LEAF_CELL.poplar, p.bytes([0.8, 0.86, 0.72]));
+  }
+  // Palm frond, laid along the cell: the rachis down the middle from the base (left), leaflets angled toward the tip. The
+  // card is about 4 m by 1.3 m, so lengths are worked in metres and squeezed into the cell.
+  {
+    const p = new Paint(C, C);
+    const r = lcg(707);
+    const L = 4;
+    const Wd = 1.3;
+    const X = (m: number) => 4 + (m / L) * 248;
+    const Y = (m: number) => 128 + (m / Wd) * 248;
+    p.stroke(X(0), Y(0), X(L), Y(0.02), 7, 1.5, 0.8, 0.76, 0.55);
+    for (let s = 0.25; s < L * 0.98; s += 0.055) {
+      const t = s / L;
+      const ll = (0.12 + 0.5 * Math.pow(Math.sin(Math.PI * Math.min(1, t * 1.05)), 0.6)) * (0.85 + r() * 0.3);
+      for (const side of [-1, 1]) {
+        const th = 0.6 + r() * 0.25;
+        const tone = 0.72 + r() * 0.3;
+        p.stroke(X(s), Y(0), X(s + Math.cos(th) * ll), Y(side * Math.sin(th) * ll * 0.9), 2.4, 0.8, tone * 0.9, tone, tone * 0.86);
+      }
+    }
+    blit(LEAF_CELL.frond, p.bytes([0.8, 0.86, 0.76]));
+  }
+  // Bark: vertical fissures over a mottled grey-brown, opaque.
+  {
+    const fis = fbm(C, 0, { px: 12, py: 3, octaves: 4, ridged: true, seed: 808 });
+    const mot = fbm(C, 6, { octaves: 4, seed: 809 });
+    const bytes = new Uint8Array(C * C * 4);
+    for (let i = 0; i < C * C; i++) {
+      const l = 0.5 + 0.5 * Math.pow(fis[i], 1.4) * (0.8 + mot[i] * 0.4);
+      bytes[i * 4] = b8(l);
+      bytes[i * 4 + 1] = b8(l * 0.95);
+      bytes[i * 4 + 2] = b8(l * 0.88);
+      bytes[i * 4 + 3] = 255;
+    }
+    blit(LEAF_CELL.bark, bytes);
+  }
+  leafAtlasHit = { tex: spriteAtlasTexture(data, W, H, 4, 2, 0.5), data };
+  return leafAtlasHit;
+}
+
+/**
+ * Living ground, tileable, for the terrain shader: R a mat of fine grass blades seen from above, G clumps (which green a
+ * patch takes), B leaf litter for the wood floor, A how high the mat stands (the edge of the green frays along it).
+ */
+export function meadowTexture(): THREE.DataTexture {
+  return cached('meadow', () => {
+    const S = 256;
+    const grass = new Paint(S, S, true);
+    const litter = new Paint(S, S, true);
+    const r = lcg(909);
+    for (let i = 0; i < 7000; i++) {
+      const x = r() * S;
+      const y = r() * S;
+      const a = r() * Math.PI * 2;
+      const l = 5 + r() * 9;
+      const t = 0.5 + r() * 0.5;
+      grass.stroke(x, y, x + Math.cos(a) * l, y + Math.sin(a) * l, 1.3, 0.6, t, t, t);
+    }
+    for (let i = 0; i < 1400; i++) {
+      const t = 0.35 + r() * 0.65;
+      litter.leaf(r() * S, r() * S, 9 + r() * 8, 5 + r() * 3, r() * 6.283, t, t, t, 0.85);
+    }
+    const clump = fbm(S, 4, { octaves: 4, seed: 910 });
+    const mat = fbm(S, 16, { octaves: 3, seed: 911 });
+    const out = new Uint8Array(S * S * 4);
+    for (let i = 0; i < S * S; i++) {
+      out[i * 4] = b8(grass.a[i] > 0 ? 0.35 + grass.r[i] * 0.65 * Math.min(1, grass.a[i] * 1.5) : 0.3);
+      out[i * 4 + 1] = b8(clump[i]);
+      out[i * 4 + 2] = b8(litter.a[i] > 0 ? litter.r[i] * Math.min(1, litter.a[i] * 1.4) + 0.12 : 0.18);
+      out[i * 4 + 3] = b8(mat[i] * 0.7 + clump[i] * 0.3);
+    }
+    return toTexture(out, S);
+  });
+}
+
+/**
+ * Wildflowers: a few stems with leaves and open blossoms. Data, not colour: R is brightness, G marks petals (tinted per
+ * instance, so one texture gives poppies, daisies, mustard and lupins), B marks the blossoms' hearts, A is coverage.
+ */
+export function flowerTexture(): THREE.Texture {
+  return cached('flowers', () => {
+    const S = 256;
+    const p = new Paint(S, S);
+    const r = lcg(1201);
+    const heads: [number, number, number][] = [];
+    for (let k = 0; k < 11; k++) {
+      const x0 = 128 + (r() - 0.5) * 120;
+      const top = 30 + r() * 120;
+      const bend = (r() - 0.5) * 40;
+      const x1 = x0 + bend;
+      p.stroke(x0, 254, x1, top, 2.4, 1.6, 0.55, 0, 0);
+      for (let q = 0; q < 2; q++) {
+        const ly = 254 - (254 - top) * (0.2 + r() * 0.4);
+        const lx = x0 + bend * ((254 - ly) / (254 - top));
+        p.leaf(lx, ly, 18 + r() * 12, 5 + r() * 3, (r() < 0.5 ? -1 : 1) * (0.5 + r() * 0.5), 0.6, 0, 0);
+      }
+      heads.push([x1, top, 7 + r() * 6]);
+    }
+    for (const [x, y, rad] of heads) {
+      const n = 5 + Math.floor(r() * 4);
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2 + r() * 0.3;
+        const t = 0.8 + r() * 0.2;
+        p.leaf(x, y, rad * 1.1, rad * 0.8, a, t, 1, 0, 0.95);
+      }
+      p.disc(x, y, rad * 0.32, 0.8, 0, 1);
+    }
+    const t = toTexture(p.bytes([0.6, 0, 0], 1.3), S);
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
+/** Ferns and undergrowth: arching fronds from a crown, pinnae shortening toward the tip. Tint-ready RGB, A coverage. */
+export function fernTexture(): THREE.Texture {
+  return cached('fern', () => {
+    const S = 256;
+    const p = new Paint(S, S);
+    const r = lcg(1301);
+    for (let k = 0; k < 9; k++) {
+      const side = (k / 8 - 0.5) * 2;
+      let x = 128 + side * 8;
+      let y = 252;
+      let a = side * 0.5;
+      const len = 150 + r() * 60;
+      for (let s = 0; s < len; s += 4) {
+        const t = s / len;
+        a += side * 0.02 + 0.006 * Math.sign(side || 1);
+        const nx = x + Math.sin(a) * 4;
+        const ny = y - Math.cos(a) * 4;
+        p.stroke(x, y, nx, ny, 2 * (1 - t) + 0.6, 2 * (1 - t) + 0.6, 0.5, 0.52, 0.32);
+        if (t > 0.08) {
+          const pl = 26 * Math.sin(Math.PI * Math.min(1, t * 1.1)) + 3;
+          for (const sd of [-1, 1]) {
+            const tone = 0.72 + r() * 0.3;
+            p.leaf(nx, ny, pl, 5 + 3 * (1 - t), a + sd * 1.15, tone * 0.9, tone, tone * 0.72, 0.85);
+          }
+        }
+        x = nx;
+        y = ny;
+        if (x < 4 || x > 252 || y < 4 || y > 252) break;
+      }
+    }
+    const t = toTexture(p.bytes([0.7, 0.78, 0.55], 1.3), S, { srgb: true });
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
+/** Reeds and cattails: tall tapering blades, some dry, and brown seed heads on stalks. Coloured, A coverage. */
+export function reedTexture(): THREE.Texture {
+  return cached('reeds', () => {
+    const S = 256;
+    const p = new Paint(S, S);
+    const r = lcg(1401);
+    for (let k = 0; k < 26; k++) {
+      const x0 = 128 + (r() - 0.5) * 150;
+      const top = 6 + r() * 110;
+      const lean = (r() - 0.5) * 70;
+      const dry = r() < 0.2;
+      const tone = 0.75 + r() * 0.25;
+      const c: [number, number, number] = dry ? [tone, tone * 0.88, tone * 0.6] : [tone * 0.72, tone * 0.88, tone * 0.5];
+      let px = x0;
+      let py = 254;
+      for (let s = 1; s <= 12; s++) {
+        const t = s / 12;
+        const nx = x0 + lean * t * t;
+        const ny = 254 - (254 - top) * t;
+        p.stroke(px, py, nx, ny, 4.2 * (1 - t) + 0.6, 4.2 * (1 - t * 1.08) + 0.4, ...c);
+        px = nx;
+        py = ny;
+      }
+    }
+    for (let k = 0; k < 5; k++) {
+      const x = 128 + (r() - 0.5) * 110;
+      const top = 20 + r() * 50;
+      p.stroke(x, 254, x + (r() - 0.5) * 6, top - 14, 1.8, 1.2, 0.55, 0.6, 0.38);
+      for (let q = 0; q < 26; q++) p.disc(x + (r() - 0.5) * 1.5, top + q, 4.2 - Math.abs(q - 13) * 0.08, 0.36, 0.24, 0.15);
+    }
+    const t = toTexture(p.bytes([0.62, 0.68, 0.42], 1.3), S, { srgb: true });
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
+/** Lily pads and duckweed seen from above: notched round leaves with veins, a white and a pink flower. Coloured. */
+export function lilyTexture(): THREE.Texture {
+  return cached('lily', () => {
+    const S = 256;
+    const p = new Paint(S, S);
+    const r = lcg(1501);
+    for (let i = 0; i < 260; i++) {
+      const a = r() * 6.283;
+      const d = Math.sqrt(r()) * 118;
+      const t = 0.4 + r() * 0.3;
+      p.disc(128 + Math.cos(a) * d, 128 + Math.sin(a) * d, 1 + r() * 1.2, t * 0.55, t, t * 0.3);
+    }
+    const pads: [number, number, number][] = [];
+    for (let k = 0; k < 9; k++) {
+      const a = r() * 6.283;
+      const d = Math.sqrt(r()) * 82;
+      pads.push([128 + Math.cos(a) * d, 128 + Math.sin(a) * d, 16 + r() * 22]);
+    }
+    for (const [cx, cy, rad] of pads) {
+      const notch = r() * 6.283;
+      const tone = 0.32 + r() * 0.18;
+      const yel = r() * 0.12;
+      const R = Math.ceil(rad + 1);
+      for (let oy = -R; oy <= R; oy++) {
+        for (let ox = -R; ox <= R; ox++) {
+          const d = Math.hypot(ox, oy);
+          const ang = Math.atan2(oy, ox);
+          let da = Math.abs(ang - notch);
+          da = Math.min(da, 6.283 - da);
+          if (da < 0.22 && d > 2) continue;
+          const c = sat(rad + 0.5 - d);
+          if (c <= 0) continue;
+          const vein = Math.abs(Math.sin(ang * 7)) < 0.12 && d > 3 ? 0.85 : 1;
+          const rim = d > rad - 2 ? 0.8 : 1;
+          const k = tone * vein * rim * (0.95 + (ox / rad) * 0.08);
+          p.put(Math.round(cx) + ox, Math.round(cy) + oy, c, k * (0.62 + yel), k * 1.05, k * 0.32);
+        }
+      }
+    }
+    for (let k = 0; k < 2; k++) {
+      const [cx, cy] = pads[k];
+      const pink = k === 1;
+      for (let q = 0; q < 9; q++) p.leaf(cx, cy, 9, 5, (q / 9) * 6.283, 1, pink ? 0.75 : 0.98, pink ? 0.82 : 0.95, 0.95);
+      p.disc(cx, cy, 2.6, 0.95, 0.8, 0.2);
+    }
+    const t = toTexture(p.bytes([0.3, 0.4, 0.15], 1.4), S, { srgb: true });
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}

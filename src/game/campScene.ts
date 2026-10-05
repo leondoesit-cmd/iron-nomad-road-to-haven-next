@@ -7,7 +7,7 @@ import { appendProp } from '../render/props';
 import { propCollisionMesh } from '../render/propCollision';
 import type { PropSpawn } from '../world/layout';
 import { kitMaterial } from '../render/materials';
-import { CampArena } from '../render/campArena';
+import { CampArena, type CampLand } from '../render/campArena';
 import { QUALITY } from '../render/renderer';
 import { C } from '../render/palette';
 import { Btn, heldFor, isHeld, wasPressed, type PlayerIntent } from '../input/intents';
@@ -127,6 +127,8 @@ export class CampScene extends Scene {
     public siteId: string,
     public hot: boolean,
     private ledgerOnly = false,
+    /** The land the convoy stopped on, on the green (see `CampLand`): the camp is drawn to match. */
+    private land?: CampLand,
   ) {
     super(svc);
     this.biome = leg.biome === 'city' || CITY_CAMPS.has(siteId) ? 'city' : leg.biome;
@@ -198,7 +200,7 @@ export class CampScene extends Scene {
     // One flat collider for the ground; the visual ground rises into a basin beyond the raid spawn ring.
     this.P.addStaticBox(0, -0.5, 0, 260, 0.5, 260, 0, GROUPS.static);
     const r = this.rng2;
-    const arena = new CampArena(this.biome, r.int(0, 99999));
+    const arena = new CampArena(this.biome, r.int(0, 99999), this.land);
     this.arena = arena;
     this.root.add(arena.group);
     const decor = new MeshBuilder();

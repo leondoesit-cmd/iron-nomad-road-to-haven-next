@@ -370,6 +370,46 @@ export interface OpenWorldSpec {
   hubs: { id: string; x: number; z: number }[];
   /** Where the road ends: reaching it ends the slice. */
   haven: { x: number; z: number; radius: number };
+  /** The water of the country: big lakes, springs, swamps, rivers and streams, and the green land around them. */
+  water?: OpenWaterSpec;
+}
+
+/** A point in world metres. */
+export type XZ = [number, number];
+
+/**
+ * Hand-set water of the open world (`world/hydro.ts` turns it into ground and water). Places are anchors: a river's course
+ * winds between its `via` points, its level is worked out from the ground it crosses, and everything else (islands, piers,
+ * the country's roads and places) is planned around it.
+ */
+export interface OpenWaterSpec {
+  /** Big lakes at fixed places: built like the rolled ones (islands, a pier, boats), only larger. */
+  lakes: { id: string; name: string; x: number; z: number; r: number; ax?: number; rot?: number }[];
+  /** Spring pools. `oasis` ones stand alone in the dust with palms round them; the rest feed a stream. */
+  springs: { id: string; name: string; x: number; z: number; r: number; oasis?: boolean }[];
+  /** Swamps: low ground that is half shallow water, half sodden hummocks. */
+  swamps: { id: string; name: string; x: number; z: number; r: number; ax?: number; rot?: number }[];
+  /** Rivers and streams in planning order: one may end in a river listed before it. */
+  rivers: WaterCourseSpec[];
+  /** Green country beyond what the water greens by itself, and the kind of wood that grows there. */
+  greens: { id: string; x: number; z: number; r: number; lush: number; woods: 'broadleaf' | 'pine' | 'fen' }[];
+}
+
+export interface WaterCourseSpec {
+  id: string;
+  name: string;
+  kind: 'river' | 'stream';
+  /** A spring by id, or a waterfall off the mountains at the edge of the map (`at` is x on the north rim, z on the others). */
+  from: { spring: string } | { rim: 'west' | 'east' | 'north'; at: number; name: string };
+  via: XZ[];
+  to: { lake: string } | { swamp: string } | { river: string };
+  /** Half the width of the water and the depth in mid-channel, at the source and at the mouth. */
+  half: [number, number];
+  depth: [number, number];
+  /** Cascades along the course: where (0 source, 1 mouth) and how far it drops, in metres. */
+  falls?: { at: number; h: number; name?: string }[];
+  /** Sideways wander of the course between its anchors, in metres. */
+  meander?: number;
 }
 
 export interface HubDef {

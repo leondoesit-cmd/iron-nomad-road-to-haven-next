@@ -31,6 +31,11 @@ export const NEEDS = {
   /** A hydration of 1 is about three litres: a lake gulp costs nothing but is not always clean. */
   dirtyChance: 0.3,
   dirtyBowel: 0.3,
+  /**
+   * How likely raw water is to sit badly, by where it came from. A spring comes up out of the rock clean; running water
+   * mostly is; a lake is as it always was; a swamp is standing rot and usually turns the stomach.
+   */
+  dirtyBy: { lake: 0.3, river: 0.12, stream: 0.08, spring: 0, swamp: 0.65 },
   /** Below this it is time to eat or drink, and below `critical` it is hurting. */
   low: 0.3,
   critical: 0.1,
@@ -161,11 +166,14 @@ export function eat(n: Needs, rations: number): ActResult {
   return { ok: true, spent: 1 };
 }
 
+/** Where raw water was drunk from: the kinds of water in the world. */
+export type WaterSource = keyof typeof NEEDS.dirtyBy;
+
 /**
- * Drink. `litres` is what the reserve can spare (ignored for a lake, where `lake` is set); `roll` is a uniform [0,1)
- * that decides whether raw water sat badly.
+ * Drink. `litres` is what the reserve can spare (ignored for raw water, where `lake` is set); `source` is the kind of water
+ * it came from (a lake if not given), and `roll` is a uniform [0,1) that decides whether it sat badly.
  */
-export function drink(n: Needs, litres: number, o: { lake?: boolean; roll?: number } = {}): ActResult {
+export function drink(n: Needs, litres: number, o: { lake?: boolean; source?: WaterSource; roll?: number } = {}): ActResult {
   if (!o.lake && litres < 0.05) return { ok: false, reason: 'No water in the reserve' };
   if (n.water > 0.92) return { ok: false, reason: 'You are not thirsty' };
   const want = Math.min(NEEDS.drinkWater, 1 - n.water);
@@ -173,7 +181,7 @@ export function drink(n: Needs, litres: number, o: { lake?: boolean; roll?: numb
   const gained = o.lake ? want : (cost / NEEDS.drinkLitres) * NEEDS.drinkWater;
   n.water = Math.min(1, n.water + gained);
   n.bladder = Math.min(1, n.bladder + gained * NEEDS.bladderPerWater);
-  const dirty = !!o.lake && (o.roll ?? 1) < NEEDS.dirtyChance;
+  const dirty = !!o.lake && (o.roll ?? 1) < (o.source ? NEEDS.dirtyBy[o.source] : NEEDS.dirtyChance);
   if (dirty) n.bowel = Math.min(1, n.bowel + NEEDS.dirtyBowel);
   return { ok: true, spent: cost, dirty };
 }

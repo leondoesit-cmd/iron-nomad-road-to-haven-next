@@ -21,7 +21,9 @@ import { BOULEVARD_HALF, SIDEWALK } from '../world/layout';
 import { GROUPS, type Collider, type PhysicsWorld } from '../physics/physics';
 import { hash2, noise2 } from '../core/rng';
 import { smoothstep } from '../core/math';
-import { shoreShade } from '../world/lakes';
+import { forestAt, hydroCalm, lushAt } from '../world/hydro';
+import { mixWater, wetGround, type GroundMix } from './groundMix';
+import { buildTreesSteps, TREE_NEAR_SHOW, type TreeSet } from './trees';
 
 export interface ChunkMaterials {
   terrain: THREE.Material;
@@ -84,7 +86,9 @@ export function cliffDetail(def: TerrainDef, x: number, z: number): number {
   const ridge2 = 1 - Math.abs(noise2(x / 23 + 4, z / 23, def.seed + 64) * 2 - 1);
   const fine = noise2(x / 3.7, z / 3.7, def.seed + 62);
   const ledge = Math.floor(noise2(x / 37, z / 37, def.seed + 63) * 5) * 1.1;
-  return m * (ridge * 4.2 + ridge2 * 3.5 + fine * 1.6 + ledge - 5.5) + mountainRelief(def, x, z, d, ch);
+  const out = m * (ridge * 4.2 + ridge2 * 3.5 + fine * 1.6 + ledge - 5.5) + mountainRelief(def, x, z, d, ch);
+  // A waterfall off the rim pours down a clean notch, not through the crags.
+  return def.hydro ? out * (1 - hydroCalm(def.hydro, x, z)) : out;
 }
 
 /** Big ridges and peaks on the slopes beyond the canyon rim: the far scenery, never reachable. */
@@ -125,7 +129,7 @@ function cliffPush(def: TerrainDef, x: number, z: number, h: number): [number, n
   if (m <= 0) return null;
   const n1 = noise2(z / 15 + h / 9, h / 13 + x / 40, def.seed + 66) * 2 - 1;
   const n2 = noise2(z / 5.5 - h / 4, h / 5 + 3.1, def.seed + 67) * 2 - 1;
-  const amt = (n1 * 3.2 + n2 * 1.1) * m;
+  const amt = (n1 * 3.2 + n2 * 1.1) * m * (def.hydro ? 1 - hydroCalm(def.hydro, x, z) : 1);
   // Toward the corridor (negative = into the rock).
   return [-Math.sign(x - rx) * amt, 0];
 }
@@ -164,6 +168,8 @@ export class ChunkView {
         if (!ground.next().done) return true;
         opts.onGround?.();
       },
+      // Trees straight after the ground: the far forest has stepped aside already.
+      this.sliced(() => this.buildTrees()),
       () => (def.open ? this.buildOpenRoads(def, mats, x0, z0) : this.buildRoad(def, mats, z0)),
       this.sliced(() => this.buildBuildings(data, mats)),
       () => this.buildProps(data, mats, def.biome === 'city'),
@@ -242,6 +248,8 @@ export class ChunkView {
     const spl = new Float32Array(total * 4);
     const tdat = new Float32Array(total * 4);
     const ao = new Float32Array(vcount).fill(1);
+    const green = !city && !!def.hydro?.lush;
+    const gm: GroundMix = { sand: 0, earth: 0, rock: 0, gravel: 0, wet: 0, tr: 1, tg: 1, tb: 1 };
     // Contact darkening around props and obstacles.
     const shade = (cx: number, cz: number, rad: number, amount: number) => {
       const c0 = Math.max(0, Math.floor((cx - rad - x0) / CELL));
@@ -303,6 +311,9 @@ export class ChunkView {
         let gravel = 0;
         let wet = 0;
         let track = false;
+        // How green and how wooded (packed into tdata for the shader; the far landscape packs the same).
+        const L = green ? lushAt(def, x, z) : 0;
+        const F = L > 0.42 ? forestAt(def, x, z) : 0;
         if (city) {
           earth = 0.7 + noise2(x / 21, z / 21, seed + 73) * 0.5;
           gravel = smoothstep(0.62, 0.8, noise2(x / 15, z / 15, seed + 71)) * 0.9;
@@ -317,31 +328,29 @@ export class ChunkView {
             track = hit.road?.kind === 'track';
             if (track) gravel = Math.max(gravel, 1 - smoothstep(-0.5, 1.6, hit.edge) * 0.9);
           } else gravel = 1 - smoothstep(def.roadHalf + 1.2, def.roadHalf + 4.2, d);
-          gravel = Math.max(gravel, smoothstep(0.68, 0.84, noise2(x / 17, z / 17, seed + 71)) * 0.75);
-          sand = surf === 'sand' ? 1 : smoothstep(0.5, 0.78, noise2(x / 36 + 3, z / 36, seed + 72)) * 0.85;
-          earth = track ? 0.1 : 0.55 + noise2(x / 23, z / 23, seed + 73) * 0.6;
+          // Lush land keeps its soil: the loose gravel and drifted sand patches give way to earth (the grass grows on it).
+          gravel = Math.max(gravel, smoothstep(0.68, 0.84, noise2(x / 17, z / 17, seed + 71)) * 0.75 * (1 - L * 0.85));
+          sand = surf === 'sand' ? 1 - L * 0.75 : smoothstep(0.5, 0.78, noise2(x / 36 + 3, z / 36, seed + 72)) * 0.85 * (1 - L * 0.8);
+          earth = track ? 0.1 : 0.55 + noise2(x / 23, z / 23, seed + 73) * 0.6 + L * 0.3;
           if (surf === 'mud') {
             wet = 0.75;
             sand *= 0.2;
           }
         }
-        // Damp sand along a lake's beach, and a murky green-grey floor under its water.
+        // By water (a lake's beach and floor, river banks and beds, a spring's bowl, a swamp): see `mixWater`.
         let tr = 1;
         let tg = 1;
         let tb = 1;
-        const shore = def.lakes.length ? shoreShade(def.lakes, x, z, h) : null;
-        if (shore) {
-          rock *= 1 - shore.damp;
-          sand = Math.max(sand, shore.damp * 0.9);
-          earth *= 1 - shore.damp * 0.8;
-          if (shore.depth > 0) gravel = 0.5 + shore.depth * 0.1;
-          wet = Math.max(wet, 0.35 + shore.damp * 0.5);
-          if (shore.depth > 0) {
-            const dk = Math.min(1, shore.depth / 3);
-            tr = 0.62 - 0.3 * dk;
-            tg = 0.82 - 0.24 * dk;
-            tb = 0.78 - 0.18 * dk;
-          }
+        const wg = city ? null : wetGround(def, x, z, h);
+        if (wg) {
+          gm.sand = sand;
+          gm.earth = earth;
+          gm.rock = rock;
+          gm.gravel = gravel;
+          gm.wet = wet;
+          gm.tr = gm.tg = gm.tb = 1;
+          mixWater(gm, wg);
+          ({ sand, earth, rock, gravel, wet, tr, tg, tb } = gm);
         }
         const keep = 1 - rock;
         sand *= keep;
@@ -357,6 +366,8 @@ export class ChunkView {
         const a = Math.min(1, Math.max(0.45, 1 - Math.max(0, concave) * 0.22)) * ao[i];
         tdat[i * 4] = a;
         tdat[i * 4 + 1] = wet;
+        tdat[i * 4 + 2] = L;
+        tdat[i * 4 + 3] = F;
         const k = 0.93 + hash2(Math.round(x / CELL), Math.round(z / CELL), 5) * 0.14;
         const kk = k * (0.82 + 0.18 * a);
         col[i * 3] = kk * tr;
@@ -573,8 +584,8 @@ export class ChunkView {
     if (density <= 0) return;
     // Nothing grows on the lake bed.
     const submerged = def.lakes.length ? (x: number, z: number) => waterAt(def, x, z) !== null : undefined;
-    const set = yield* buildScatterSteps(def, this.data.cx, this.data.cz, this.data.aabbs, this.data.props, density, submerged);
-    for (const im of [set.grass, set.shrubs, ...set.pebbles, ...set.boulders]) {
+    const set = yield* buildScatterSteps(def, this.data.cx, this.data.cz, this.data.aabbs, this.data.props, density, submerged, this.data.heights);
+    for (const im of [set.grass, set.shrubs, ...set.pebbles, ...set.boulders, set.flowers, set.ferns, set.reeds, set.pads]) {
       if (!im) continue;
       this.group.add(im);
       this.instanced.push(im);
@@ -584,13 +595,35 @@ export class ChunkView {
 
   private scatterSet: ScatterSet | null = null;
 
-  /** Distance from the nearest player to this chunk's edge: small ground cover switches off beyond its fade range. */
+  /** The chunk's trees: 3D near the camera, impostors further out (`render/trees.ts`). */
+  private *buildTrees(): Generator<void> {
+    if (!this.data.trees.length) return;
+    const set = yield* buildTreesSteps(this.data.trees);
+    for (const im of [...set.near, set.far]) {
+      if (!im) continue;
+      this.group.add(im);
+      this.instanced.push(im);
+    }
+    this.treeSet = set;
+  }
+
+  private treeSet: TreeSet | null = null;
+
+  /**
+   * Distance from the nearest player to this chunk's edge: small ground cover switches off beyond its fade range, and the 3D
+   * trees beyond the range where every view has faded them to impostors.
+   */
   setDetailDistance(d: number) {
+    if (this.treeSet) for (const im of this.treeSet.near) im.visible = d < TREE_NEAR_SHOW;
     const s = this.scatterSet;
     if (!s) return;
     if (s.grass) s.grass.visible = d < 90;
+    if (s.flowers) s.flowers.visible = d < 85;
     for (const p of s.pebbles) p.visible = d < 110;
+    if (s.ferns) s.ferns.visible = d < 145;
     if (s.shrubs) s.shrubs.visible = d < 190;
+    if (s.reeds) s.reeds.visible = d < 190;
+    if (s.pads) s.pads.visible = d < 195;
   }
 
   private *buildBuildings(data: ChunkData, mats: ChunkMaterials): Generator<void> {
@@ -1534,8 +1567,8 @@ export class ChunkView {
       hy,
       (a.maxZ - a.minZ) / 2,
       0,
-      // Glass stops people and cars and takes a round, but the camera sees through it.
-      a.kind === 'furniture' || a.kind === 'floor' || a.mat === 'glass' ? GROUPS.furn : GROUPS.static,
+      // Glass stops people and cars and takes a round, but the camera sees through it (and through a wood's trunks).
+      a.kind === 'furniture' || a.kind === 'floor' || a.kind === 'tree' || a.mat === 'glass' ? GROUPS.furn : GROUPS.static,
     );
     this.colliders.push(c);
     this.aabbColliders.set(a.id, c);

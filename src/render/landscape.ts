@@ -5,6 +5,10 @@ import { smoothstep } from '../core/math';
 import { FACADE_TINT, cliffDetail } from './chunkview';
 import type { BuildingSpec } from '../world/chunkgen';
 import { makeTerrainMaterial, type TerrainUniforms } from './terrainMaterial';
+import { forestAt, lushAt } from '../world/hydro';
+import { mixWater, wetGround, type GroundMix } from './groundMix';
+import { farForestMaterial, farForestMeshes, planFarForest, treeWarmup, type FarTree } from './trees';
+import { scatterWarmup } from './scatter';
 import { FacadeBuilder, facadeMaterial } from './facade';
 import { MeshBuilder } from './builder';
 import { kitMaterial } from './materials';
@@ -12,7 +16,11 @@ import { appendLandmark, LANDMARK_KINDS } from './landmarks';
 import { BuildingView } from './buildingView';
 import type { LegLayout } from '../world/layout';
 import { shoreShade } from '../world/lakes';
-import { buildLakeWater, type LakeWater } from './water';
+import { buildLakeWater, buildSpringWater, buildSwampWater } from './water';
+import { buildRiverWater } from './riverWater';
+
+/** The far forest's plan per leg: the same every time a scene of that leg is built, so it is worked out once. */
+const FAR_PLANS = new WeakMap<TerrainDef, FarTree[][]>();
 
 /**
  * Scenery beyond the streamed chunks. In the wasteland, one coarse terrain mesh covers the whole leg out to
@@ -29,12 +37,19 @@ export class Landscape {
   private ch = 0;
   private geos: THREE.BufferGeometry[] = [];
   private mats: THREE.Material[] = [];
-  private lakeWater: LakeWater[] = [];
+  /** Lakes, swamps, spring pools, rivers and falls. */
+  private water: { dispose(): void }[] = [];
   /** Every roadside building of the leg, each cut away on its own when someone steps inside. */
   buildings: BuildingView[] = [];
 
   /** The open world's city, drawn whole from far away: one mesh per chunk, put away when that chunk is loaded in detail. */
   private cityFar = new Map<string, THREE.Mesh>();
+
+  /** The far mesh's grid (open world), to stand the far forest on exactly what is drawn, and the loaded-chunk mask. */
+  private farGrid: { us: number[]; zs: number[]; pos: Float32Array } | null = null;
+  private lod: TerrainUniforms | null = null;
+  /** The far forest, one impostor mesh per region, and the meshes that compile the vegetation's shaders at load. */
+  private farTrees: THREE.InstancedMesh[] = [];
 
   constructor(
     private def: TerrainDef,
@@ -43,6 +58,7 @@ export class Landscape {
   ) {
     if (def.biome === 'wasteland') {
       this.buildFarTerrain();
+      this.buildFarForest();
       this.buildLakes();
       if (layout) this.buildSettlements(layout);
       if (def.open && cityBuildings?.length) this.buildDistrictFar(cityBuildings);
@@ -155,6 +171,10 @@ export class Landscape {
     };
     const mat = makeTerrainMaterial('wasteland', lod, def.theme);
     this.mats.push(mat);
+    this.lod = lod;
+    // Lush and wooded land is packed into tdata exactly as the detailed chunks pack it, so the two meshes agree.
+    const green = !!(open && def.hydro?.lush);
+    const gm: GroundMix = { sand: 0, earth: 0, rock: 0, gravel: 0, wet: 0, tr: 1, tg: 1, tb: 1 };
     // A grid in (offset from the road, z): dense near the canyon, coarse toward the mountains.
     const us: number[] = [];
     for (let u = -halfW; u <= halfW; ) {
@@ -184,22 +204,33 @@ export class Landscape {
         pos[i * 3 + 2] = z;
         const d = Math.abs(x - rx);
         const cliff = smoothstep(corridorHalf(def, z) + 1, corridorHalf(def, z) + 10, d);
-        const sand = smoothstep(0.5, 0.78, noise2(x / 36 + 3, z / 36, def.seed + 72)) * (1 - cliff);
+        const L = green ? lushAt(def, x, z) : 0;
+        const F = L > 0.42 ? forestAt(def, x, z) : 0;
+        const sand = smoothstep(0.5, 0.78, noise2(x / 36 + 3, z / 36, def.seed + 72)) * (1 - cliff) * (1 - L * 0.8);
         const k = 0.93 + hash2(c, r, 5) * 0.14;
-        // Lake beaches and floors read the same as in the detailed chunks.
-        const shore = def.lakes.length ? shoreShade(def.lakes, x, z, h + 0.6) : null;
-        const dk = shore && shore.depth > 0 ? Math.min(1, shore.depth / 3) : 0;
-        col[i * 3] = k * (shore && shore.depth > 0 ? 0.62 - 0.3 * dk : 1);
-        col[i * 3 + 1] = k * (shore && shore.depth > 0 ? 0.82 - 0.24 * dk : 1);
-        col[i * 3 + 2] = k * (shore && shore.depth > 0 ? 0.78 - 0.18 * dk : 1);
-        spl[i * 4] = shore ? Math.max(sand, shore.damp * 0.9) : sand;
-        spl[i * 4 + 1] = (1 - cliff) * (1 - sand) * 0.8 * (shore ? 1 - shore.damp * 0.8 : 1);
-        spl[i * 4 + 2] = shore ? cliff * (1 - shore.damp) : cliff;
-        spl[i * 4 + 3] = shore && shore.depth > 0 ? 0.5 : (1 - cliff) * 0.2;
+        gm.sand = sand;
+        gm.earth = (1 - cliff) * ((1 - sand) * 0.8 + L * 0.3);
+        gm.rock = cliff;
+        gm.gravel = (1 - cliff) * 0.2 * (1 - L * 0.85);
+        gm.wet = 0;
+        gm.tr = gm.tg = gm.tb = 1;
+        // Shores, banks and beds read the same as in the detailed chunks.
+        const wg = wetGround(def, x, z, h + 0.6);
+        if (wg) mixWater(gm, wg);
+        col[i * 3] = k * gm.tr;
+        col[i * 3 + 1] = k * gm.tg;
+        col[i * 3 + 2] = k * gm.tb;
+        spl[i * 4] = gm.sand;
+        spl[i * 4 + 1] = gm.earth;
+        spl[i * 4 + 2] = gm.rock;
+        spl[i * 4 + 3] = gm.gravel;
         tda[i * 4] = 1;
-        tda[i * 4 + 1] = shore ? 0.35 + shore.damp * 0.5 : 0;
+        tda[i * 4 + 1] = gm.wet;
+        tda[i * 4 + 2] = L;
+        tda[i * 4 + 3] = F;
       }
     }
+    if (open) this.farGrid = { us, zs, pos };
     const idx: number[] = [];
     for (let r = 0; r < rows - 1; r++) {
       for (let c = 0; c < cols - 1; c++) {
@@ -226,6 +257,52 @@ export class Landscape {
   }
 
   /**
+   * The far forest: impostor trees over every wood of the open world out to the haze (`planFarForest`), one mesh per
+   * region so the views cull them, each tree hidden while its chunk is loaded (the chunk draws its own). With it go the
+   * meshes that have the vegetation's shaders compiled now rather than when the first wood streams in.
+   */
+  private buildFarForest() {
+    const def = this.def;
+    if (!def.open || !def.hydro?.lush || !this.farGrid || !this.lod) return;
+    let plan = FAR_PLANS.get(def);
+    if (!plan) {
+      const G = (x: number, z: number) => this.farGroundAt(x, z);
+      plan = planFarForest(def, G, (x, z) => Math.hypot(G(x + 3, z) - G(x - 3, z), G(x, z + 3) - G(x, z - 3)) / 6);
+      FAR_PLANS.set(def, plan);
+    }
+    const mat = farForestMaterial(this.lod);
+    this.mats.push(mat);
+    for (const im of [...farForestMeshes(plan, mat), ...treeWarmup(), ...scatterWarmup()]) {
+      this.group.add(im);
+      this.farTrees.push(im);
+    }
+  }
+
+  /** Height of the far mesh at a point, on the same triangles it is drawn with (the terrain itself off its grid). */
+  private farGroundAt(x: number, z: number): number {
+    const { us, zs, pos } = this.farGrid!;
+    const cols = us.length;
+    if (x <= us[0] || x >= us[cols - 1] || z <= zs[0] || z >= zs[zs.length - 1]) return heightAt(this.def, x, z) - 0.6;
+    let lo = 0;
+    let hi = cols - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (us[mid] <= x) lo = mid;
+      else hi = mid;
+    }
+    const r = Math.min(zs.length - 2, Math.floor((z - zs[0]) / (zs[1] - zs[0])));
+    const tx = (x - us[lo]) / (us[lo + 1] - us[lo]);
+    const tz = (z - zs[r]) / (zs[r + 1] - zs[r]);
+    const H = (c: number, rr: number) => pos[(rr * cols + c) * 3 + 1];
+    const a = H(lo, r);
+    const b = H(lo + 1, r);
+    const d = H(lo, r + 1);
+    const e = H(lo + 1, r + 1);
+    // Triangles (a, d, e) and (a, e, b), as the index buffer splits each cell.
+    return tz > tx ? a + (e - d) * tx + (d - a) * tz : a + (b - a) * tx + (e - b) * tz;
+  }
+
+  /**
    * Per view, before it renders: cut away the building the viewer's focus is in (roof and upper storeys), leave
    * every other one whole, and drop furniture for cameras too far away to see through a window.
    */
@@ -233,12 +310,32 @@ export class Landscape {
     for (const b of this.buildings) b.setView(focus, camX, camY, camZ);
   }
 
-  /** One water sheet per lake, drawn for the whole leg. */
+  /**
+   * All the water of the leg, drawn whole: a sheet per lake and per swamp, one mesh for every spring pool, and in the open
+   * world one for every river and stream and one for every waterfall.
+   */
   private buildLakes() {
     for (const l of this.def.lakes) {
       const w = buildLakeWater(l);
-      this.lakeWater.push(w);
+      this.water.push(w);
       this.group.add(w.mesh);
+    }
+    const hy = this.def.hydro;
+    if (!hy?.ready) return;
+    for (const s of hy.swamps) {
+      const w = buildSwampWater(this.def, s);
+      this.water.push(w);
+      this.group.add(w.mesh);
+    }
+    const springs = buildSpringWater(this.def, hy.springs);
+    if (springs) {
+      this.water.push(springs);
+      this.group.add(springs.mesh);
+    }
+    const rivers = buildRiverWater(this.def);
+    if (rivers) {
+      this.water.push(rivers);
+      this.group.add(rivers.group);
     }
   }
 
@@ -305,9 +402,10 @@ export class Landscape {
   }
 
   dispose() {
-    for (const w of this.lakeWater) w.dispose();
+    for (const w of this.water) w.dispose();
     for (const b of this.buildings) b.dispose();
     for (const g of this.geos) g.dispose();
+    for (const im of this.farTrees) im.dispose();
     for (const m of this.mats) m.dispose();
     this.loadedTex?.dispose();
     this.group.removeFromParent();

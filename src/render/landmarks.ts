@@ -3,6 +3,7 @@ import { MeshBuilder, S } from './builder';
 import { C } from './palette';
 import type { PropKind } from '../world/layout';
 import { buildLakeLandmark, LAKE_KINDS } from './lakeProps';
+import { buildWaterLandmark, WATER_KINDS } from './waterProps';
 
 /**
  * Roadside landmarks for the wasteland: things tall or long enough to be seen from kilometres away.
@@ -33,6 +34,7 @@ export const LANDMARK_KINDS = new Set<PropKind>([
   'overpass',
   'canopy',
   ...LAKE_KINDS,
+  ...WATER_KINDS,
 ]);
 
 const PAINT = [0xb8b0a0, 0xa89880, 0x9aa0a0, 0xc2b8a0];
@@ -375,6 +377,8 @@ export function buildLandmark(kind: PropKind, seed: number, tag: number): MeshBu
       return overpass(seed);
     case 'canopy':
       return canopy(seed);
+    case 'bridge':
+      return buildWaterLandmark(kind, seed, tag);
     default:
       return buildLakeLandmark(kind, seed, tag);
   }

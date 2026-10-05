@@ -4,6 +4,7 @@ import { lerp, smoothstep } from '../core/math';
 import { baseHeight, buttes, roadX, type Site, type TerrainDef } from './terrain';
 import { districtMask, nearestRoad } from './openWorld';
 import { delveName, snapYaw, type DelveSite } from './delveSites';
+import { nearHydro } from './hydro';
 
 /**
  * Lakes, islands and docks for the wasteland legs. A lake is a blobby basin carved out of the terrain with a flat
@@ -69,6 +70,8 @@ export interface Lake {
   dock: Dock | null;
   /** Distance beyond which the lake changes nothing. */
   reach: number;
+  /** Hand-set lakes have a name (`world/hydro.ts`). */
+  name?: string;
 }
 
 /** A widening of the corridor so a lake and its banks fit between the cliffs. */
@@ -124,7 +127,9 @@ export function islandHeight(l: Lake, i: Island, x: number, z: number): number {
 
 /** Height of the lake floor (with islands) at a point inside the waterline. */
 export function lakeBed(l: Lake, x: number, z: number, q: number): number {
-  let bed = l.level - l.depth * profile(q) + (noise2(x / 8, z / 8, l.seed) - 0.5) * 0.55 * smoothstep(1, 0.7, q);
+  // A big lake shelves off as quickly as a small one: its beach is as wide in metres, not in proportion.
+  const qs = l.r > 90 ? 1 - Math.min(1, (1 - q) * (l.r / 90)) : q;
+  let bed = l.level - l.depth * profile(qs) + (noise2(x / 8, z / 8, l.seed) - 0.5) * 0.55 * smoothstep(1, 0.7, qs);
   for (const i of l.islands) bed = Math.max(bed, islandHeight(l, i, x, z));
   return bed;
 }
@@ -142,11 +147,25 @@ export function lakeAdjust(l: Lake, x: number, z: number, h: number): number {
   return out < bank ? bank : out;
 }
 
+/** What kind of water a point is in: a lake, a river or stream (flowing), a spring pool or a swamp. */
+export type WaterKind = 'lake' | 'river' | 'stream' | 'spring' | 'swamp';
+/** How the water looks (and how clean it is to drink). */
+export type WaterStyle = LakeStyle | 'river' | 'spring' | 'swamp';
+
 export interface WaterHit {
-  lake: Lake;
+  kind: WaterKind;
+  style: WaterStyle;
   level: number;
   /** Metres of water over the floor (0 at the waterline). */
   depth: number;
+  /** The lake, for lake water. */
+  lake?: Lake;
+  /** Which river, swamp or spring (its index in `TerrainDef.hydro`), for the other kinds. */
+  ref?: number;
+  /** Running water: the current, in metres per second along x and z. */
+  flow?: [number, number];
+  /** Its name, for the map and the radio (lakes are named only when they are hand-set). */
+  name?: string;
 }
 
 /** Water at a point, or null on dry land. */
@@ -155,7 +174,7 @@ export function lakeWater(lakes: Lake[], x: number, z: number): WaterHit | null 
     const q = lakeQ(l, x, z);
     if (q >= 1) continue;
     const bed = lakeBed(l, x, z, q);
-    if (bed < l.level) return { lake: l, level: l.level, depth: l.level - bed };
+    if (bed < l.level) return { kind: 'lake', style: l.style, lake: l, level: l.level, depth: l.level - bed, name: l.name };
   }
   return null;
 }
@@ -199,8 +218,21 @@ export function lakeCurrent(l: Lake, x: number, z: number): [number, number] {
   return [dx / m, dz / m];
 }
 
-export function lakeColors(style: LakeStyle): { shallow: number; deep: number; foam: number } {
-  return style === 'brine' ? { shallow: 0x7fd6c8, deep: 0x1f7f86, foam: 0xf4f1e6 } : style === 'ash' ? { shallow: 0x6a7a74, deep: 0x1b2528, foam: 0xb8b2a6 } : { shallow: 0x58c4b0, deep: 0x0f5a74, foam: 0xf2f4ee };
+export function lakeColors(style: WaterStyle): { shallow: number; deep: number; foam: number } {
+  switch (style) {
+    case 'brine':
+      return { shallow: 0x7fd6c8, deep: 0x1f7f86, foam: 0xf4f1e6 };
+    case 'ash':
+      return { shallow: 0x6a7a74, deep: 0x1b2528, foam: 0xb8b2a6 };
+    case 'river':
+      return { shallow: 0x6cb8a4, deep: 0x1d5a62, foam: 0xf4f6f0 };
+    case 'spring':
+      return { shallow: 0x7fe0d0, deep: 0x1a8a98, foam: 0xf6f8f2 };
+    case 'swamp':
+      return { shallow: 0x6e7a46, deep: 0x26301c, foam: 0xa8a87c };
+    default:
+      return { shallow: 0x58c4b0, deep: 0x0f5a74, foam: 0xf2f4ee };
+  }
 }
 
 // ------------------------------------------------------------------------------------------------- planning
@@ -252,11 +284,14 @@ export function planOpenLakes(def: TerrainDef, leg: LegDef, existing: Lake[]): L
       const ax = rng.range(0.85, 1.25);
       const ext = extentOf(r, ax);
       if (districtMask(o, cx, cz) > 0 || Math.hypot(cx, cz - 12) < 420) continue;
+      // Clear of the mountains at the edge of the map.
+      if (Math.abs(cx) + ext > o.x1 - 40 || cz - ext < o.z0 + 40 || cz + ext > o.z1 - 40) continue;
       if (Math.abs(cx - roadX(def, cz)) < ext + 90) continue;
       if (nearestRoad(o, cx, cz).d < ext + 40) continue;
       if (o.haven.z - cz < 400 && Math.abs(cx - o.haven.x) < 500) continue;
       if (def.sites.some((s) => Math.hypot(s.x - cx, s.z - cz) < ext + s.radius + 60)) continue;
       if (all.some((q) => Math.hypot(q.x - cx, q.z - cz) < q.reach + ext + 80)) continue;
+      if (nearHydro(def, cx, cz, ext + 60)) continue;
       let bad = false;
       for (let a = 0; a < 36 && !bad; a++) {
         const rr = ext * Math.sqrt(((a % 6) + 0.5) / 6);
@@ -306,7 +341,9 @@ function tryLake(def: TerrainDef, leg: LegDef, rng: Rng, cz: number, others: Lak
     if (s.radius > 0 && Math.hypot(s.x - cx, s.z - cz) < ext + s.radius + 30) return null;
     if (s.kind === 'windfarm' && s.side === side && Math.abs(s.z - cz) < ext + 200) return null;
   }
-  for (const o of others) if (Math.hypot(o.x - cx, o.z - cz) < o.reach + ext + 60) return null;
+  for (const o of [...others, ...def.lakes]) if (Math.hypot(o.x - cx, o.z - cz) < o.reach + ext + 60) return null;
+  // The rivers, springs and swamps of the open world have their own ground.
+  if (nearHydro(def, cx, cz, ext + 60)) return null;
   // Mesas, ramps and minefields do not mix with water.
   for (let a = 0; a < 36; a++) {
     const rr = ext * Math.sqrt(((a % 6) + 0.5) / 6);
@@ -321,9 +358,34 @@ function tryLake(def: TerrainDef, leg: LegDef, rng: Rng, cz: number, others: Lak
 
 /** The lake itself, once its place is settled: shape, level, islands and pier. */
 function makeLake(def: TerrainDef, rng: Rng, cx: number, cz: number, r: number, ax: number, ext: number, others: Lake[], nextKind: () => IslandKind): Lake {
-  const rot = rng.range(0, Math.PI);
+  const lake = lakeShape(def, rng, cx, cz, r, ax, ext, others.length, rng.range(0, Math.PI));
+  finishLake(def, lake, rng, others.length === 0, nextKind);
+  return lake;
+}
+
+/**
+ * A big lake at a hand-set place (`world/hydro.ts`): only its shape and a first level. The rivers that run into it may
+ * lower the level before `finishLake` sets its islands and pier.
+ */
+export function fixedLake(def: TerrainDef, rng: Rng, cx: number, cz: number, r: number, ax: number, rot: number, id: number): Lake {
+  return lakeShape(def, rng, cx, cz, r, ax, extentOf(r, ax), id, rot);
+}
+
+/** Islands and the pier, once the level is final. */
+export function finishLake(def: TerrainDef, lake: Lake, rng: Rng, forceCave: boolean, nextKind: () => IslandKind) {
+  placeIslands(lake, rng, forceCave, nextKind);
+  placeDock(def, lake, rng);
+}
+
+export const nextIslandKind = (rng: Rng) => {
+  let rot = Math.floor(rng.range(0, ISLAND_ROTATION.length));
+  return () => ISLAND_ROTATION[rot++ % ISLAND_ROTATION.length];
+};
+
+/** Shape and level of a lake: a little under the lowest quarter of the ground round it. */
+function lakeShape(def: TerrainDef, rng: Rng, cx: number, cz: number, r: number, ax: number, ext: number, id: number, rot: number): Lake {
   const lake: Lake = {
-    id: others.length,
+    id,
     x: cx,
     z: cz,
     r,
@@ -352,8 +414,6 @@ function makeLake(def: TerrainDef, rng: Rng, cx: number, cz: number, r: number, 
   }
   ring.sort((p, q) => p - q);
   lake.level = ring[Math.floor(ring.length * 0.22)] - 0.15;
-  placeIslands(lake, rng, others.length === 0, nextKind);
-  placeDock(def, lake, rng);
   return lake;
 }
 

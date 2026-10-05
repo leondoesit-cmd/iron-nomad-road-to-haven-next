@@ -1,6 +1,7 @@
 import { clamp, smoothstep } from '../core/math';
 import { corridorHalf, heightAt, roadX, waterAt, type TerrainDef } from '../world/terrain';
 import { lakeColors } from '../world/lakes';
+import { forestAt, lushAt, type Hydro } from '../world/hydro';
 import type { LegLayout } from '../world/layout';
 import { CELL as DELVE_CELL, cellX, cellZ, type DelveMap } from '../world/delve';
 import type { CompassPin } from '../game/scene';
@@ -49,8 +50,8 @@ export interface MapMover {
   color: string;
 }
 
-/** Map-only pin kinds on top of the compass ones: the places a leg is made of. */
-export type MapPinKind = CompassPin['kind'] | 'site' | 'lake';
+/** Map-only pin kinds on top of the compass ones: the places a leg is made of, and its named water. */
+export type MapPinKind = CompassPin['kind'] | 'site' | 'lake' | 'falls' | 'spring' | 'swamp' | 'river';
 export interface MapPin {
   x: number;
   z: number;
@@ -68,6 +69,16 @@ export interface MapRoad {
   z1: number;
 }
 
+/** A river or stream as a map line: its centre-line as [x, z, x, z, ...], its half-width, and its bounds. */
+export interface MapWater {
+  pts: number[];
+  half: number;
+  x0: number;
+  x1: number;
+  z0: number;
+  z1: number;
+}
+
 /** Everything a scene tells the HUD so it can draw this scene's map. Built once and refreshed in place. */
 export interface MapFrame {
   mode: 'leg' | 'delve' | 'camp';
@@ -78,6 +89,8 @@ export interface MapFrame {
   roadHalf: number;
   /** The open world's whole road network, each with its bounds so the minimap can skip what is off screen. */
   roads: MapRoad[];
+  /** Running water drawn as lines over the ground, so a stream too narrow for the baked pixels still shows. */
+  waters: MapWater[];
   /** Mined ground and other hatched areas, each a flat [x, z, x, z, ...] outline. */
   hazards: number[][];
   /** The whole thing, for the overview. */
@@ -100,6 +113,7 @@ export function newFrame(mode: MapFrame['mode']): MapFrame {
     road: null,
     roadHalf: 4,
     roads: [],
+    waters: [],
     hazards: [],
     bounds: { x0: -100, x1: 100, z0: -100, z1: 100 },
     radiusMin: 60,
@@ -200,6 +214,9 @@ const PALETTE: Record<NonNullable<TerrainDef['theme']>, { lo: Rgb; hi: Rgb }> = 
   salt: { lo: [168, 166, 156], hi: [236, 234, 224] },
   cinder: { lo: [66, 58, 56], hi: [140, 110, 96] },
 };
+/** The green country of the open world: grass and meadow, and the darker woods. */
+const MEADOW: Rgb = [112, 132, 70];
+const WOOD: Rgb = [50, 76, 42];
 const CITY_GROUND: Rgb = [36, 33, 30];
 const CITY_BLOCK: Rgb = [92, 84, 74];
 const CITY_ZONE: Rgb = [128, 104, 58];
@@ -260,6 +277,30 @@ export function openRoadLines(def: TerrainDef): MapRoad[] {
       z1 = Math.max(z1, r.pts[i + 1]);
     }
     return { pts: r.pts, half: r.half, kind: r.kind, x0, x1, z0, z1 };
+  });
+}
+
+/** The open world's rivers and streams as map lines, from the source to just inside whatever they run into. */
+export function waterLines(hy: Hydro): MapWater[] {
+  return hy.rivers.map((r) => {
+    const pts: number[] = [];
+    let half = 0;
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let z0 = Infinity;
+    let z1 = -Infinity;
+    const last = Math.min(r.n - 1, r.end + 1);
+    for (let i = 0; ; i = Math.min(last, i + 2)) {
+      pts.push(r.x[i], r.z[i]);
+      half = Math.max(half, r.half[i]);
+      x0 = Math.min(x0, r.x[i]);
+      x1 = Math.max(x1, r.x[i]);
+      z0 = Math.min(z0, r.z[i]);
+      z1 = Math.max(z1, r.z[i]);
+      if (i === last) break;
+    }
+    // Most of a course runs at its middling width: draw it so, not at the widest pool by its mouth.
+    return { pts, half: Math.min(half, r.kind === 'river' ? 7 : 2.5), x0, x1, z0, z1 };
   });
 }
 
@@ -368,10 +409,12 @@ export class LegMapBaker {
     return this.base;
   }
 
-  // Wasteland: relief shading with a low sun in the north-west, tinted by height.
+  // Wasteland: relief shading with a low sun in the north-west, tinted by height, and green where the land is.
   private shadeRows(j0: number, j1: number) {
     const b = this.base;
     const hs = this.heights!;
+    const def = this.def;
+    const green = !!def.hydro?.lush;
     const pal = PALETTE[this.def.theme ?? 'dust'];
     const span = Math.max(1, this.hMax - this.hMin);
     const [sx, sy, sz] = [0.45, 0.75, -0.48];
@@ -388,7 +431,17 @@ export class LegMapBaker {
         const dz = (at(i, j + 1) - at(i, j - 1)) / (2 * b.cell);
         const nl = Math.hypot(dx, 1, dz);
         const lit = clamp(((-dx * sx + sy - dz * sz) / (nl * sl)) * 1.1, 0, 1.2);
-        const tone = mix(pal.lo, pal.hi, smoothstep(0, 1, (h - this.hMin) / span));
+        let tone = mix(pal.lo, pal.hi, smoothstep(0, 1, (h - this.hMin) / span));
+        if (green) {
+          const x = b.x0 + (i + 0.5) * b.cell;
+          const z = b.z0 + (j + 0.5) * b.cell;
+          const L = lushAt(def, x, z);
+          if (L > 0.02) {
+            tone = mix(tone, MEADOW, L * 0.8);
+            const F = forestAt(def, x, z);
+            if (F > 0) tone = mix(tone, WOOD, F * 0.85);
+          }
+        }
         const k = 0.5 + 0.62 * lit;
         put(b, i, j, [tone[0] * k, tone[1] * k, tone[2] * k]);
       }
@@ -407,8 +460,7 @@ export class LegMapBaker {
         const x = b.x0 + (i + 0.5) * b.cell;
         const z = b.z0 + (j + 0.5) * b.cell;
         const hit = waterAt(this.def, x, z);
-        const lake = hit?.lake ?? lakes[0];
-        const col = lakeColors(lake.style);
+        const col = lakeColors(hit?.style ?? lakes[0]?.style ?? 'clear');
         const depth = hit ? clamp(hit.depth / 4, 0, 1) : 0.5;
         put(b, i, j, mix(hex(col.shallow), hex(col.deep), depth));
       }

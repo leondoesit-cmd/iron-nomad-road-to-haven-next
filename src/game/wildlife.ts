@@ -9,6 +9,20 @@ import type { Ctx } from './ctx';
 import type { Player } from './player';
 import type { Vehicle } from './vehicle';
 import { MELEE, knockFor, type MeleeFeel } from '../sim/weaponfx';
+import { forestAt, lushAt, wetReach } from '../world/hydro';
+
+/**
+ * How a species takes to the green country of the open world, as multipliers on its weight: on bare dust, on meadow and in
+ * the woods (blended by how lush and how wooded the spot is). A `wild` one lives in the woods whatever the land's theme,
+ * and only there. Read from `wildlife.json`; species without it do not care.
+ */
+interface LandTaste {
+  bare: number;
+  meadow: number;
+  wood: number;
+  wild?: boolean;
+}
+const tasteOf = (d: AnimalDef) => (d as AnimalDef & { land?: LandTaste }).land;
 
 /**
  * idle: grazing or standing about. alert: head up, frozen, watching something it does not trust yet (prey) or warning it off
@@ -207,14 +221,26 @@ export class WildlifeSystem {
 
   // ------------------------------------------------------------------ ambient population
 
-  private pickKind(biome: 'wasteland' | 'city', theme: string, legIndex: number): AnimalKind | null {
+  /**
+   * Which species turns up, weighted by the land, the day and the leg. `land` is how lush and how wooded the spot is, in the
+   * open world's green country: hares and antelope crowd the meadows, wolves, hogs and bears keep to the woods, and the
+   * vultures have the bare dust.
+   */
+  pickKind(biome: 'wasteland' | 'city', theme: string, legIndex: number, land?: { lush: number; wood: number }): AnimalKind | null {
     const night = this.ctx.night;
     let total = 0;
     const opts: [AnimalKind, number][] = [];
     for (const k in WILDLIFE.species) {
       const d = WILDLIFE.species[k as AnimalKind];
-      if (!d.biomes.includes(biome) || !d.themes.includes(theme as 'dust') || d.legs > legIndex) continue;
+      if (!d.biomes.includes(biome) || d.legs > legIndex) continue;
+      const taste = land ? tasteOf(d) : undefined;
+      const wildHere = !!taste?.wild && land!.wood > 0.25;
+      if (!d.themes.includes(theme as 'dust') && !wildHere) continue;
       let w = d.weight;
+      if (taste && land) {
+        const open = taste.bare + (taste.meadow - taste.bare) * land.lush;
+        w *= d.themes.includes(theme as 'dust') ? open + (taste.wood - open) * land.wood : taste.wood * land.wood;
+      }
       if (d.temper === 'pack') w *= 1 + night * 1.4;
       else if (d.temper === 'prey') w *= 1 - night * 0.65;
       else if (d.temper === 'bird') w *= 1 - night * 0.9;
@@ -272,7 +298,11 @@ export class WildlifeSystem {
       const w = this.ctx.waterAt(x, z);
       if (w && w.depth > 0.1) continue;
       if (this.ctx.visibleToAnyView(x, this.ctx.groundAt(x, z) + 1, z, 6)) continue;
-      const kind = this.pickKind(biome, theme, legIndex);
+      // In the green country the land decides what lives there, and bare dust holds less of anything.
+      const T = this.ctx.terrain;
+      const land = T?.hydro?.lush ? { lush: lushAt(T, x, z), wood: forestAt(T, x, z) } : undefined;
+      if (land && land.lush < 0.15 && this.rng.next() < 0.45 * (1 - land.lush / 0.15)) return;
+      const kind = this.pickKind(biome, theme, legIndex, land);
       if (!kind) return;
       this.spawnGroup(kind, x, z);
       return;
@@ -819,6 +849,9 @@ export class WildlifeSystem {
           a.tz = L.z + Math.sin(ang) * r;
         } else {
           a.migrate += (Math.random() - 0.5) * 1.3;
+          // Grazers in dry country work their way toward water, a little at every move.
+          const toWater = a.def.temper === 'prey' ? this.waterWay(a) : null;
+          if (toWater !== null && Math.random() < 0.5) a.migrate += wrapAngle(toWater - a.migrate) * 0.5;
           const r = 2 + Math.random() * range * 1.2;
           a.tx = a.homeX + Math.cos(a.migrate) * r;
           a.tz = a.homeZ + Math.sin(a.migrate) * r;
@@ -838,6 +871,21 @@ export class WildlifeSystem {
         a.homeZ += (a.z - a.homeZ) * 0.5;
       }
     }
+  }
+
+  /**
+   * The way to the nearest water for an animal out on the dry land of the open world (as an angle for `migrate`), or null
+   * where there is none to find or it is already close: uphill on the field of how near the water is.
+   */
+  private waterWay(a: Animal): number | null {
+    const T = this.ctx.terrain;
+    if (!T?.hydro?.wet) return null;
+    const here = wetReach(T, a.x, a.z);
+    if (here > 70 || here < -400) return null;
+    const gx = wetReach(T, a.x + 12, a.z) - wetReach(T, a.x - 12, a.z);
+    const gz = wetReach(T, a.x, a.z + 12) - wetReach(T, a.x, a.z - 12);
+    if (Math.abs(gx) + Math.abs(gz) < 1e-3) return null;
+    return Math.atan2(gz, gx);
   }
 
   /**

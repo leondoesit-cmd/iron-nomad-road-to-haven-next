@@ -544,7 +544,8 @@ export class Vehicle {
   dust(): number {
     if (!this.engineOn) return 0;
     const f = clamp(Math.abs(this.speed) / Math.max(8, this.topSpeed), 0, 1);
-    return clamp(this.signature() * (0.35 + 0.9 * f), 0, 100);
+    const ground = this.ctx.groundDust?.(this.position.x, this.position.z) ?? 1;
+    return clamp(this.signature() * (0.35 + 0.9 * f) * ground, 0, 100);
   }
 
   snapshotPrev() {
@@ -675,7 +676,7 @@ export class Vehicle {
       const [bx, , bz] = this.body.toWorld(0, 0, -this.def.length * 0.45);
       const surf = ctx.surfaceAt(bx, bz);
       const tint: [number, number, number] = surf.name === 'sand' ? [0.85, 0.72, 0.5] : surf.name === 'mud' ? [0.35, 0.28, 0.2] : surf.name === 'asphalt' ? [0.55, 0.52, 0.48] : [0.72, 0.6, 0.42];
-      const k = clamp(Math.abs(this.speed) / 24, 0.3, 1.6) * (surf.name === 'asphalt' ? 0.5 : 1);
+      const k = clamp(Math.abs(this.speed) / 24, 0.3, 1.6) * (surf.name === 'asphalt' ? 0.5 : 1) * (ctx.groundDust?.(bx, bz) ?? 1);
       ctx.fx.dust(bx, ctx.groundAt(bx, bz), bz, -Math.sin(this.yaw) * this.speed, -Math.cos(this.yaw) * this.speed, k, tint);
     }
     if (this.health.burning || (this.wreck && this.burnT > 0)) {

@@ -8,6 +8,20 @@ import { boulderGeo, scatterFromSpots, type Spot } from './scatter';
 import { crate, drum, jerryCan, plate, spareTyre } from './parts';
 import { hash2, noise2 } from '../core/rng';
 import { smoothstep } from '../core/math';
+import { buildTreesSteps } from './trees';
+import { TREE_SPECIES, type TreeSpecies, type TreeSpot } from '../world/flora';
+import type { Woods } from '../world/hydro';
+
+/**
+ * The land where the convoy stopped, when it stopped on the green: how lush the ground is, how wooded the country round it,
+ * and what grows there (`lushAt`, `forestAt` and `woodsAt` of `world/hydro.ts`). The camp is drawn to match: a meadow for a
+ * floor and the wood standing round the basin.
+ */
+export interface CampLand {
+  lush: number;
+  wood: number;
+  woods: Woods;
+}
 
 /** A raised block of visual ground (canyon walls at the canyon-mouth camp), matching a collider box. */
 export interface Rise {
@@ -37,8 +51,10 @@ export class CampArena {
   constructor(
     public biome: 'wasteland' | 'city',
     private seed: number,
+    private land?: CampLand,
   ) {
     this.det.jitter = 0.05;
+    if (biome === 'city') this.land = undefined;
   }
 
   /** Visual ground height: zero on the play area, rising walls beyond it and on any rises. */
@@ -103,6 +119,13 @@ export class CampArena {
         spl[i * 4 + 2] = slope;
         spl[i * 4 + 3] = gravel + (city ? 0.2 : 0.1) * (1 - slope);
         tda[i * 4] = 1;
+        const land = this.land;
+        if (land) {
+          // A meadow for the floor, frayed by noise, and the wood's litter under the trees round the basin.
+          const rr = Math.hypot(x, z);
+          tda[i * 4 + 2] = land.lush * (0.78 + 0.32 * noise2(x / 40, z / 40, this.seed + 21));
+          tda[i * 4 + 3] = land.wood * smoothstep(FLAT_R - 10, FLAT_R + 30, rr);
+        }
       }
     }
     const idx: number[] = [];
@@ -352,8 +375,58 @@ export class CampArena {
         }
       }
     }
-    const set = scatterFromSpots(grass, shrubs, pebbles, city);
+    const set = scatterFromSpots(grass, shrubs, pebbles, city, this.land?.lush ?? 0);
     for (const im of [set.grass, set.shrubs, ...set.pebbles]) {
+      if (!im) continue;
+      this.group.add(im);
+      this.instanced.push(im);
+    }
+    this.trees();
+  }
+
+  /**
+   * On the green, the wood stands round the basin, outside the ground the raid crosses (it is scenery: nothing collides with
+   * it), thick where the country is wooded and a scatter of lone trees where it is meadow.
+   */
+  private trees() {
+    const land = this.land;
+    if (!land || land.lush < 0.3) return;
+    const pick = (k: number): TreeSpecies => {
+      switch (land.woods) {
+        case 'pine':
+          return k < 0.85 ? 'pine' : 'oak';
+        case 'fen':
+          return k < 0.7 ? 'cypress' : 'snag';
+        case 'riparian':
+          return k < 0.55 ? 'willow' : 'poplar';
+        default:
+          return k < 0.8 ? 'oak' : k < 0.9 ? 'pine' : 'poplar';
+      }
+    };
+    const spots: TreeSpot[] = [];
+    const p = Math.min(0.75, land.wood * 0.85 + 0.06);
+    for (let r = FLAT_R + 8; r < FLAT_R + 120; r += 6.5) {
+      const n = Math.floor((Math.PI * 2 * r) / 6.5);
+      const ri = Math.round(r);
+      for (let k = 0; k < n; k++) {
+        const a = ((k + hash2(k, ri, this.seed + 31) * 0.6) / n) * Math.PI * 2;
+        const rr = r + (hash2(k, ri, this.seed + 32) - 0.5) * 4;
+        const x = Math.sin(a) * rr;
+        const z = Math.cos(a) * rr;
+        const roll = hash2(k, ri, this.seed + 33);
+        // Thicker toward the back of the basin, so the edge of the wood is ragged.
+        if (roll > p * smoothstep(FLAT_R, FLAT_R + 40, rr) * (0.7 + 0.6 * noise2(x / 50, z / 50, this.seed + 34))) continue;
+        const y = this.heightAt(x, z);
+        if (Math.abs(this.heightAt(x + 2, z) - this.heightAt(x - 2, z)) > 2.4 || Math.abs(this.heightAt(x, z + 2) - this.heightAt(x, z - 2)) > 2.4) continue;
+        const kk = hash2(k, ri, this.seed + 35);
+        spots.push({ x, y: y - 0.12, z, yaw: kk * Math.PI * 2, s: 0.75 + roll * 0.5, sp: TREE_SPECIES.indexOf(pick(kk)), v: Math.floor(hash2(k, ri, this.seed + 36) * 3), lean: [0, 0] });
+      }
+    }
+    if (!spots.length) return;
+    const g = buildTreesSteps(spots);
+    let step = g.next();
+    while (!step.done) step = g.next();
+    for (const im of [...step.value.near, step.value.far]) {
       if (!im) continue;
       this.group.add(im);
       this.instanced.push(im);

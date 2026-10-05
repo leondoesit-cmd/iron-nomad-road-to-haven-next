@@ -25,14 +25,16 @@ import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { RARITY_NAMES, newPart, partName } from '../sim/parts';
 import { carriedName, partModelKey, planStow, type Carried, type Goods, type Loose } from '../sim/carry';
 import { pickupFuel } from '../sim/fuel';
-import { lakeCurrent } from '../world/lakes';
+import { lakeCurrent, type WaterKind } from '../world/lakes';
 import { DRUGS, DRUG_IDS } from '../sim/drugs';
 import type { DelveSite } from '../world/delveSites';
 import { newDelveRecord, type DelveRecord, type PlayerCarry } from './delveScene';
 import { districtMask } from '../world/openWorld';
 import { GangCamps } from './gangCamps';
 import type { WorldMemory, WorldPose } from './worldMemory';
-import { LegMapBaker, SITE_LABEL, minefieldOutline, newFrame, openRoadLines, roadLine, type MapFrame } from '../ui/mapdata';
+import { LegMapBaker, SITE_LABEL, minefieldOutline, newFrame, openRoadLines, roadLine, waterLines, type MapFrame } from '../ui/mapdata';
+import { courseAt, lushAt, swampQ, type Waterfall } from '../world/hydro';
+import type { WaterAmbience } from '../audio/audio';
 
 /**
  * A loose thing lying in the world. It lies: a fixed place, a fixed heading and a natural tilt, set when it appears and never
@@ -99,6 +101,11 @@ const STREAM_R = 2;
 const STREAM_CALM_MS = 4;
 const STREAM_URGENT_MS = 10;
 const MINE_COLOR = new THREE.Color(0x1d1b19);
+/** Metres above a waterfall's lip over which the current builds to more than a swimmer can beat. */
+const FALLS_PULL = 10;
+/** Waterfalls throw up mist for anyone this close; the roar carries further. */
+const MIST_R = 150;
+const QUIET_WATER: WaterAmbience = { roar: 0, tall: 0, babble: 0, marsh: 0, night: 0 };
 
 export class LegScene extends Scene {
   biome: 'wasteland' | 'city';
@@ -266,10 +273,21 @@ export class LegScene extends Scene {
         const a = (k / 12) * Math.PI * 2;
         const x = p.x + Math.cos(a) * r;
         const z = p.z + Math.sin(a) * r;
-        if (!L.blockedAt(x, z, 7) && !terrainWater(T, x, z)) return { x, z, yaw: p.yaw };
+        if (!L.blockedAt(x, z, 7) && !terrainWater(T, x, z) && !this.treeNear(x, z, 6)) return { x, z, yaw: p.yaw };
       }
     }
     return p;
+  }
+
+  /** Whether a tree trunk stands within `r` metres of a point: a camp made in a wood must not wake up inside one. */
+  private treeNear(x: number, z: number, r: number): boolean {
+    if (!this.terrain?.hydro) return false;
+    for (let cx = Math.floor((x - r) / CHUNK); cx <= Math.floor((x + r) / CHUNK); cx++) {
+      for (let cz = Math.floor((z - r) / CHUNK); cz <= Math.floor((z + r) / CHUNK); cz++) {
+        for (const t of this.src.get(cx, cz).trees) if ((t.x - x) ** 2 + (t.z - z) ** 2 < r * r) return true;
+      }
+    }
+    return false;
   }
 
   private adoptMemory(m: WorldMemory) {
@@ -390,9 +408,224 @@ export class LegScene extends Scene {
     return false;
   }
 
-  waterAt(x: number, z: number) {
-    const w = terrainWater(this.terrain!, x, z);
-    return w ? { level: w.level, depth: w.depth, flow: lakeCurrent(w.lake, x, z) } : null;
+  waterAt(x: number, z: number): { level: number; depth: number; flow?: [number, number]; kind?: WaterKind; name?: string } | null {
+    const T = this.terrain!;
+    const w = terrainWater(T, x, z);
+    if (!w) return null;
+    // Rivers carry their own current; a lake's is a gentle drift toward the nearest shore.
+    let flow = w.flow ?? (w.lake ? lakeCurrent(w.lake, x, z) : undefined);
+    if (flow && (w.kind === 'river' || w.kind === 'stream')) flow = this.fallsPull(x, z, flow);
+    // A lake measures its depth from its own bed, which knows nothing of the channel (or the pool under a fall) a river
+    // has cut into it at its mouth: there the ground is the true floor.
+    let depth = w.depth;
+    if (w.kind === 'lake' && T.hydro?.ready && courseAt(T.hydro, x, z)) depth = Math.max(depth, w.level - heightAt(T, x, z));
+    return { level: w.level, depth, flow, kind: w.kind, name: w.name };
+  }
+
+  /**
+   * Above a waterfall the river gathers itself: for a dozen metres or so short of the lip (more over a tall one) the current
+   * builds to more than anyone can swim against, so whatever floats there goes over. Only the water in line with the drop.
+   */
+  private fallsPull(x: number, z: number, flow: [number, number]): [number, number] {
+    const hy = this.terrain!.hydro;
+    if (!hy) return flow;
+    for (const f of hy.falls) {
+      const reach = FALLS_PULL + Math.min(8, (f.top - f.bottom) * 0.25);
+      const ox = x - f.x;
+      const oz = z - f.z;
+      if (Math.abs(ox) > reach + 6 || Math.abs(oz) > reach + 6) continue;
+      const u = ox * f.dx + oz * f.dz;
+      if (u < -reach || u > 1.5 || Math.abs(ox * f.dz - oz * f.dx) > f.half + 2) continue;
+      const want = 1 + 2.6 * smoothstep(-reach, 0, u);
+      const along = flow[0] * f.dx + flow[1] * f.dz;
+      if (along >= want) return flow;
+      return [flow[0] + f.dx * (want - along), flow[1] + f.dz * (want - along)];
+    }
+    return flow;
+  }
+
+  // ------------------------------------------------------------------ rivers, falls, springs and swamps
+
+  /** Seconds to the next look round: for water nobody has met yet, for which falls are close enough to mist, and for the sound. */
+  private waterLookT = 0;
+  /** When water was last named on the banner, and last talked about on the radio. */
+  private waterSaidAt = -99;
+  private waterRadioAt = -99;
+  /** Falls close enough to someone to throw up mist, each with the share of a particle it owes. */
+  private mistFalls: { f: Waterfall; acc: number }[] = [];
+
+  /** Where everyone still in it is: the vehicle, for whoever is in one. */
+  private here(): { x: number; z: number }[] {
+    const out: { x: number; z: number }[] = [];
+    for (const p of this.players) if (p.state !== 'dead') out.push({ x: p.vehicle?.position.x ?? p.pos.x, z: p.vehicle?.position.z ?? p.pos.z });
+    return out;
+  }
+
+  /** The water of the open world, each tick: the falls' mist, and a few times a second its sound and its news. */
+  private updateWater(dt: number) {
+    const hy = this.terrain?.hydro;
+    if (!hy?.ready) return;
+    this.waterLookT -= dt;
+    if (this.waterLookT <= 0) {
+      this.waterLookT = 0.3;
+      const pts = this.here();
+      const had = new Map(this.mistFalls.map((m) => [m.f, m]));
+      this.mistFalls = [];
+      for (const f of hy.falls) {
+        const r = hy.rivers[f.river];
+        if (pts.some((p) => Math.hypot(p.x - r.x[f.i1], p.z - r.z[f.i1]) < MIST_R)) this.mistFalls.push(had.get(f) ?? { f, acc: 0 });
+      }
+      this.waterSound(pts);
+      if (!this.training) this.waterNews(pts);
+    }
+    this.fallsMist(dt);
+  }
+
+  /**
+   * Mist rolling off the foot of every waterfall near enough to be seen (more, bigger and higher the taller the drop) and,
+   * over a tall one, spray thrown off the lip and down the face. Particles only: the falling sheet itself is the water
+   * renderer's.
+   */
+  private fallsMist(dt: number) {
+    const hy = this.terrain!.hydro!;
+    for (const m of this.mistFalls) {
+      const f = m.f;
+      const r = hy.rivers[f.river];
+      const h = f.top - f.bottom;
+      const big = clamp(h / 30, 0, 1);
+      const ox = r.dx[f.i1];
+      const oz = r.dz[f.i1];
+      const footX = r.x[f.i1] + ox * 1.5;
+      const footZ = r.z[f.i1] + oz * 1.5;
+      m.acc += (5 + h * 0.45 + f.half * 1.2) * dt;
+      while (m.acc >= 1) {
+        m.acc -= 1;
+        const across = (Math.random() * 2 - 1) * (f.half + 1);
+        const out = Math.random() * (2 + big * 4);
+        const sp = 0.6 + Math.random() * (1 + big * 2.2);
+        this.fx.smoke.emit(
+          footX - oz * across + ox * out,
+          f.bottom + 0.15 + Math.random() * 0.5,
+          footZ + ox * across + oz * out,
+          ox * sp + (Math.random() - 0.5) * 0.8,
+          0.4 + Math.random() * (0.7 + big * 1.6),
+          oz * sp + (Math.random() - 0.5) * 0.8,
+          2 + Math.random() * 1.5 + big * 1.5,
+          1.1 + big,
+          3 + big * 5 + Math.random() * 2,
+          0.88,
+          0.92,
+          0.95,
+          0.24 + big * 0.1,
+          -0.12,
+          0.9,
+        );
+      }
+      if (h < 6 || Math.random() > dt * (3 + h * 0.25)) continue;
+      // Off the lip: white water thrown out over the drop, falling.
+      const a = (Math.random() * 2 - 1) * f.half;
+      this.fx.smoke.emit(f.x - f.dz * a + f.dx * 0.6, f.top - 0.1, f.z + f.dx * a + f.dz * 0.6, f.dx * (1.5 + Math.random() * 1.5), 0.2, f.dz * (1.5 + Math.random() * 1.5), 1.3, 0.5, 2, 0.94, 0.96, 0.98, 0.32, 7, 0.3);
+      // And somewhere down the face, a breath of spray standing off the falling water.
+      const k = 0.2 + Math.random() * 0.7;
+      const b = (Math.random() * 2 - 1) * f.half;
+      const fx = f.x + (footX - f.x) * k - oz * b;
+      const fz = f.z + (footZ - f.z) * k + ox * b;
+      this.fx.smoke.emit(fx, f.top + (f.bottom - f.top) * k, fz, ox * 0.8, -0.3, oz * 0.8, 1.6, 1, 3.4, 0.9, 0.93, 0.96, 0.18, 0.4, 0.8);
+    }
+  }
+
+  /**
+   * What the water sounds like from where everyone is, for the audio mix: the roar of the nearest falls (a taller drop is
+   * louder, deeper and carries further), the babble of running water close by, a trickle at a spring, and off a swamp the
+   * insects by day and the frogs once the light goes. The mix eases between the levels, so a few looks a second is plenty.
+   */
+  private waterSound(pts: { x: number; z: number }[]) {
+    const hy = this.terrain!.hydro!;
+    let roar = 0;
+    let tall = 0;
+    let babble = 0;
+    let marsh = 0;
+    for (const p of pts) {
+      for (const f of hy.falls) {
+        const r = hy.rivers[f.river];
+        const h = f.top - f.bottom;
+        const R = 70 + h * 6;
+        const d = Math.hypot((f.x + r.x[f.i1]) / 2 - p.x, (f.z + r.z[f.i1]) / 2 - p.z);
+        if (d >= R) continue;
+        const k = Math.pow(1 - d / R, 1.7) * (0.45 + 0.55 * clamp(h / 25, 0, 1));
+        if (k > roar) {
+          roar = k;
+          tall = clamp(h / 35, 0, 1);
+        }
+      }
+      const c = courseAt(hy, p.x, p.z, 45);
+      if (c) {
+        const sp = c.river.speed[c.i];
+        const k = Math.pow(1 - clamp((c.d - c.half) / 45, 0, 1), 1.5) * (c.river.kind === 'river' ? 0.75 : 0.6) * clamp(0.45 + sp / 3, 0.5, 1);
+        babble = Math.max(babble, k);
+      }
+      for (const sp of hy.springs) {
+        const d = Math.hypot(sp.x - p.x, sp.z - p.z) - sp.r;
+        if (d < 30) babble = Math.max(babble, 0.35 * (1 - Math.max(0, d) / 30));
+      }
+      for (const s of hy.swamps) marsh = Math.max(marsh, 1 - smoothstep(0.9, 1.8, swampQ(s, p.x, p.z)));
+    }
+    this.audio.setWaterAmbience?.({ roar, tall, babble, marsh, night: Math.max(this.night, smoothstep(0.8, 0.95, this.clock.t)) });
+  }
+
+  /**
+   * The first time the convoy comes near a river or stream, a waterfall, a spring, a swamp or one of the big lakes, it is
+   * named: a banner, and a word on the radio where there is something worth knowing (a waterfall always, the rest when the
+   * radio has been quiet a while). Once named it is on the map for good: the keys live in `mapSeen`, which the world keeps.
+   */
+  private waterNews(pts: { x: number; z: number }[]) {
+    const T = this.terrain!;
+    const hy = T.hydro!;
+    if (this.time < 5 || this.time - this.waterSaidAt < 4.5 || this.pendingResult) return;
+    const near = (x: number, z: number, r: number) => pts.some((p) => (p.x - x) ** 2 + (p.z - z) ** 2 < r * r);
+    const say = (key: string, name: string, sub: string, line: string | null, extra: Record<string, number> = {}, urgent = false) => {
+      const Name = name.charAt(0).toUpperCase() + name.slice(1);
+      this.mapSeen.add(key);
+      this.waterSaidAt = this.time;
+      this.services.onBanner?.(Name, sub);
+      if (line && (urgent || this.time - this.waterRadioAt > 25)) {
+        this.waterRadioAt = this.time;
+        this.radio(t(line, { name, Name, ...extra }));
+      }
+    };
+    for (const f of hy.falls) {
+      const key = `wf:${f.name}`;
+      const h = f.top - f.bottom;
+      if (this.mapSeen.has(key) || !near(f.x, f.z, h > 8 ? 280 : 170)) continue;
+      return say(key, f.name, `Waterfall · ${Math.round(h)} m`, h > 8 ? 'radio.water.fallsBig' : 'radio.water.falls', { h: Math.round(h) }, true);
+    }
+    for (const sp of hy.springs) {
+      const key = `ws${sp.id}`;
+      if (this.mapSeen.has(key) || !near(sp.x, sp.z, sp.r + (sp.oasis ? 140 : 70))) continue;
+      return say(key, sp.name, sp.oasis ? 'Oasis' : 'Spring', sp.oasis ? 'radio.water.oasis' : 'radio.water.spring');
+    }
+    for (const s of hy.swamps) {
+      const key = `wm${s.id}`;
+      if (this.mapSeen.has(key) || !pts.some((p) => swampQ(s, p.x, p.z) < 1.5)) continue;
+      return say(key, s.name, 'Swamp', 'radio.water.swamp');
+    }
+    for (const l of T.lakes) {
+      const key = `wl${l.id}`;
+      if (!l.name || this.mapSeen.has(key) || !near(l.x, l.z, l.r + 140)) continue;
+      return say(key, l.name, 'Lake', 'radio.water.lake');
+    }
+    for (const p of pts) {
+      const c = courseAt(hy, p.x, p.z, 50);
+      if (!c || this.mapSeen.has(`wr${c.river.id}`)) continue;
+      const r = c.river;
+      return say(`wr${r.id}`, r.name, r.kind === 'river' ? 'River' : 'Stream', r.kind === 'river' ? 'radio.water.river' : 'radio.water.stream');
+    }
+  }
+
+  /** Off to a delve, or gone for the night: the water falls silent with the rest of this place. */
+  suspend() {
+    super.suspend();
+    this.audio.setWaterAmbience?.(QUIET_WATER);
   }
 
   // ------------------------------------------------------------------ ways underground
@@ -501,6 +734,11 @@ export class LegScene extends Scene {
     const name: Surface = surfaceAt(this.terrain!, x, z);
     const s = VEHICLES.surfaces[name];
     return { grip: s.grip, drag: s.drag, name };
+  }
+
+  /** Grass holds the dust down: on a meadow or in a wood a vehicle raises about half the dust it would on bare ground. */
+  groundDust(x: number, z: number): number {
+    return 1 - 0.55 * lushAt(this.terrain!, x, z);
   }
 
   // ------------------------------------------------------------------ chunk streaming
@@ -1470,6 +1708,7 @@ export class LegScene extends Scene {
         let id: string | null = null;
         if (!this.shownTips.has('tip-boat') && p.vehicle?.def.physics.kind === 'boat') id = 'boat';
         else if (!this.shownTips.has('tip-swim') && p.swimming) id = 'swim';
+        else if (!this.shownTips.has('tip-river') && this.terrain!.hydro?.ready && courseAt(this.terrain!.hydro, x, z, 20)) id = 'river';
         else if (!this.shownTips.has('tip-lake') && this.terrain!.lakes.some((l) => l.dock && Math.hypot(l.dock.shoreX - x, l.dock.shoreZ - z) < 120)) id = 'lake';
         else if (!this.shownTips.has('tip-delve') && this.src.layout.delves.some((d) => Math.hypot(d.x - x, d.z - z) < 45)) id = 'delve';
         if (id) {
@@ -1648,6 +1887,7 @@ export class LegScene extends Scene {
     this.updatePickups(dt);
     this.updateMines(dt);
     this.updateRamming();
+    this.updateWater(dt);
     // Training is quiet: no hordes, raiders, wildlife, encounters, tips from the road, nor an end to the day.
     if (!this.training) {
       this.updateZones(dt);
@@ -1845,6 +2085,7 @@ export class LegScene extends Scene {
       f.bounds = baker.bounds;
       if (T.open) f.roads = openRoadLines(T);
       else f.road = roadLine(T);
+      if (T.hydro?.ready) f.waters = waterLines(T.hydro);
       f.roadHalf = T.roadHalf;
       f.hazards = T.minefields.map((m) => minefieldOutline(T, m.z0, m.z1, m.halfWidth));
       f.overview = true;
@@ -1867,6 +2108,25 @@ export class LegScene extends Scene {
     for (const d of this.src.layout.delves) {
       if (this.mapSeen.has(`d${d.id}`)) f.pins.push({ x: d.x, z: d.z, kind: 'delve', label: d.theme === 'cave' ? 'CAVE' : d.theme === 'mine' ? 'MINE' : d.theme === 'bunker' ? 'BUNKER' : 'METRO' });
     }
+    // Water, once it has been named (`waterNews`): the falls at their foot, springs, swamps, the big lakes, and each river's name.
+    const hy = T.hydro;
+    if (hy) {
+      const named = new Set<string>();
+      for (const fl of hy.falls) {
+        if (!this.mapSeen.has(`wf:${fl.name}`)) continue;
+        const r = hy.rivers[fl.river];
+        f.pins.push({ x: r.x[fl.i1], z: r.z[fl.i1], kind: 'falls', label: named.has(fl.name) ? '' : fl.name.toUpperCase() });
+        named.add(fl.name);
+      }
+      for (const sp of hy.springs) if (this.mapSeen.has(`ws${sp.id}`)) f.pins.push({ x: sp.x, z: sp.z, kind: 'spring', label: sp.name.toUpperCase() });
+      for (const s of hy.swamps) if (this.mapSeen.has(`wm${s.id}`)) f.pins.push({ x: s.x, z: s.z, kind: 'swamp', label: s.name.toUpperCase() });
+      for (const r of hy.rivers) {
+        if (!this.mapSeen.has(`wr${r.id}`)) continue;
+        const i = Math.floor(r.end * 0.5);
+        f.pins.push({ x: r.x[i], z: r.z[i], kind: 'river', label: r.name.toUpperCase() });
+      }
+    }
+    for (const l of T.lakes) if (l.name && this.mapSeen.has(`wl${l.id}`)) f.pins.push({ x: l.x, z: l.z, kind: 'lake', label: l.name.toUpperCase() });
     return f;
   }
 
@@ -1896,6 +2156,7 @@ export class LegScene extends Scene {
     if (this.cityMats) disposeChunkMaterials(this.cityMats);
     this.R.onBeforeView[1] = () => {};
     this.landscape.dispose();
+    this.audio.setWaterAmbience?.(QUIET_WATER);
     super.dispose();
   }
 }

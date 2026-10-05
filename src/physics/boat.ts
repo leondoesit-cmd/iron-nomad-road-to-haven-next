@@ -33,8 +33,14 @@ export interface Chassis {
   destroy(): void;
 }
 
-/** Water at a point: the surface height and how deep it is over the floor, or null on dry land. */
-export type WaterQuery = (x: number, z: number) => { level: number; depth: number } | null;
+/**
+ * Water at a point: the surface height, how deep it is over the floor and which way it runs (m/s), or null on dry land.
+ * `kind` tells a lake's gentle drift to shore from a river's current.
+ */
+export type WaterQuery = (x: number, z: number) => { level: number; depth: number; flow?: [number, number]; kind?: string } | null;
+
+/** A lake's drift is a direction more than a speed: a boat feels only this much of it. */
+const LAKE_DRIFT = 0.12;
 
 const G = 9.81;
 
@@ -48,6 +54,8 @@ export function swell(x: number, z: number, t: number): number {
  * (so the boat finds its own trim, rolls and pitches over swell and heels when thrown about), water drag bleeds off
  * forward speed and a great deal of sideways speed, and the engine pushes along the keel at the stern: an outboard
  * only works with its propeller under water, an airboat's fan does not care. Aground it is just a box on the sand.
+ * The drag is against the water, not the ground, so a boat left to itself on a river goes downstream with it, and
+ * over a waterfall if nobody opens the throttle.
  */
 export class BoatBody implements Chassis {
   body: RigidBody;
@@ -202,10 +210,15 @@ export class BoatBody implements Chassis {
       }
     }
 
-    // Water drag: a little along the keel, a lot across it. Velocity is read again here: the impulses above changed it.
+    // Water drag: a little along the keel, a lot across it, against the water's own movement. Velocity is read again
+    // here: the impulses above changed it.
     const cv = this.body.linvel();
-    vf = cv.x * fx + cv.z * fz;
-    const vl2 = cv.x * rxn + cv.z * rzn;
+    const wc = sub > 0.02 ? this.water(pos.x, pos.z) : null;
+    const k = wc?.flow ? (wc.kind === 'lake' ? LAKE_DRIFT : 1) : 0;
+    const ux = k ? wc!.flow![0] * k : 0;
+    const uz = k ? wc!.flow![1] * k : 0;
+    vf = (cv.x - ux) * fx + (cv.z - uz) * fz;
+    const vl2 = (cv.x - ux) * rxn + (cv.z - uz) * rzn;
     if (sub > 0.02) {
       const nf = vf * Math.exp(-(bp.forwardDrag + bp.quadDrag * Math.abs(vf)) * dt * sub);
       const nl = vl2 * Math.exp(-bp.lateralDrag * dt * sub);

@@ -114,8 +114,10 @@ export interface Ctx {
   breakBarricade(a: Aabb, how: 'ram' | 'charge' | 'smash'): void;
   groundAt(x: number, z: number): number;
   surfaceAt(x: number, z: number): { grip: number; drag: number; name: Surface };
-  /** Water over the ground at a point, or null on dry land. */
-  waterAt(x: number, z: number): { level: number; depth: number; flow?: [number, number] } | null;
+  /** How much dust the ground gives up under wheels, 0..1: grass holds it down. Absent means all of it. */
+  groundDust?(x: number, z: number): number;
+  /** Water over the ground at a point, or null on dry land: its current (metres per second), what kind it is, and its name if it has one. */
+  waterAt(x: number, z: number): { level: number; depth: number; flow?: [number, number]; kind?: import('../world/lakes').WaterKind; name?: string } | null;
   notify(player: number, text: string, kind?: NoteKind): void;
   radio(text: string): void;
   tip(id: string): void;

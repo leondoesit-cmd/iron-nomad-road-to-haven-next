@@ -345,7 +345,7 @@ export abstract class Scene implements Ctx {
   abstract surfaceAt(x: number, z: number): { grip: number; drag: number; name: Surface };
 
   /** Water over the ground at a point (lakes), or null on dry land. */
-  waterAt(x: number, z: number): { level: number; depth: number; flow?: [number, number] } | null {
+  waterAt(x: number, z: number): { level: number; depth: number; flow?: [number, number]; kind?: import('../world/lakes').WaterKind } | null {
     void x;
     void z;
     return null;

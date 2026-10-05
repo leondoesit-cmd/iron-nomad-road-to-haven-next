@@ -17,6 +17,7 @@ import { CHUNK, chunkHeightsSteps } from './terrain';
 import { cityChunk } from './openWorld';
 import { hash2 } from '../core/rng';
 import { shopPaneBoxes } from './shopGlass';
+import { plantTreesSteps, trunkBox, type TreeSpot } from './flora';
 
 export interface BuildingSpec {
   aabb: Aabb;
@@ -55,6 +56,8 @@ export interface ChunkData {
   blocks: { z0: number; z1: number }[];
   /** Planned legs: paved streets, plazas and lawns overlapping this chunk. */
   patches: PlannedStreet[];
+  /** The trees of the green country standing in this chunk (their trunks are among `aabbs`, kind 'tree'). */
+  trees: TreeSpot[];
 }
 
 const inChunk = (cx: number, cz: number, x: number, z: number) => Math.floor(x / CHUNK) === cx && Math.floor(z / CHUNK) === cz;
@@ -144,6 +147,11 @@ export class ChunkSource {
     const heights = yield* chunkHeightsSteps(L.terrain, cx, cz);
     const buildings = this.buildingAabbs.filter((b) => inChunk(cx, cz, (b.aabb.minX + b.aabb.maxX) / 2, (b.aabb.minZ + b.aabb.maxZ) / 2));
     const aabbs = L.aabbs.filter((a) => inChunk(cx, cz, (a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2));
+    const trees: TreeSpot[] = [];
+    if (L.terrain.hydro) {
+      yield* plantTreesSteps(L.terrain, cx, cz, heights, { aabbs: L.aabbs, props: L.props, keep: this.keepClear() }, trees);
+      for (const t of trees) aabbs.push(trunkBox(t, newAabbId()));
+    }
     return {
       cx,
       cz,
@@ -160,7 +168,25 @@ export class ChunkSource {
       zones: L.zones.filter((p) => inChunk(cx, cz, p.x, p.z)),
       blocks: L.slots.filter((s) => s.z1 > cz * CHUNK && s.z0 < (cz + 1) * CHUNK).map((s) => ({ z0: s.z0, z1: s.z1 })),
       patches: L.streets.filter((s) => !s.silent && s.x1 > cx * CHUNK && s.x0 < (cx + 1) * CHUNK && s.z1 > cz * CHUNK && s.z0 < (cz + 1) * CHUNK),
+      trees,
     };
+  }
+
+  private keep: { x: number; z: number; r: number }[] | null = null;
+  /** What the woods leave room around: parked cars, things lying about, camps, encounters, ways underground and the start. */
+  private keepClear() {
+    if (this.keep) return this.keep;
+    const L = this.layout;
+    const k: { x: number; z: number; r: number }[] = [];
+    for (const c of L.cars) k.push({ x: c.x, z: c.z, r: 5.5 });
+    for (const p of L.pickups) k.push({ x: p.x, z: p.z, r: 2.2 });
+    for (const g of L.gangCamps) k.push({ x: g.x, z: g.z, r: g.radius + 10 });
+    for (const e of L.encounters) k.push({ x: e.x, z: e.z, r: 14 });
+    for (const d of L.delves) k.push({ x: d.x, z: d.z, r: 16 });
+    for (const zn of L.zones) k.push({ x: zn.x, z: zn.z, r: 10 });
+    k.push({ x: L.start.x, z: L.start.z, r: 70 });
+    for (const l of L.terrain.lakes) if (l.dock) k.push({ x: (l.dock.x0 + l.dock.x1) / 2, z: (l.dock.z0 + l.dock.z1) / 2, r: Math.max(l.dock.x1 - l.dock.x0, l.dock.z1 - l.dock.z0) / 2 + 12 });
+    return (this.keep = k);
   }
 
   /** Every city building, for the far view of a district. */

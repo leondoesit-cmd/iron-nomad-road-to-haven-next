@@ -52,7 +52,21 @@ export type SoundId =
   | 'tink'
   | 'chip'
   | 'ricochet'
-  | 'slash';
+  | 'slash'
+  | 'plunge';
+
+/**
+ * The sound of the water around the players, 0..1 each: `roar` of the nearest waterfall and how `tall` it is (a tall one is
+ * deeper), the `babble` of running water close by, how far into a swamp (`marsh`), and how far gone the light is (`night`),
+ * which is when the frogs start.
+ */
+export interface WaterAmbience {
+  roar: number;
+  tall: number;
+  babble: number;
+  marsh: number;
+  night: number;
+}
 
 export type MusicState = 'none' | 'travel' | 'stealth' | 'combat' | 'camp' | 'raid';
 
@@ -119,6 +133,7 @@ export class AudioEngine {
   private bass?: OscillatorNode;
   private radioHiss?: GainNode;
   private wind?: { gain: GainNode; filt: BiquadFilterNode };
+  private water?: { roar: GainNode; roarLp: BiquadFilterNode; rumble: GainNode; babble: GainNode; insects: GainNode; frogs: GainNode; frogLevel: number };
   private lastPlay = new Map<string, number>();
 
   /** Must be called from a user gesture. */
@@ -571,6 +586,13 @@ export class AudioEngine {
         this.tone(out, t0, 'sine', 1700, 650, 0.1, 0.002, 0.09);
         break;
 
+      case 'plunge':
+        // Going over a waterfall: the slap, the deep boom of the body going under, and the white water closing over.
+        this.burst(out, t0, 'bandpass', 1100, 0.6, 0.55, 0.004, 0.5);
+        this.tone(out, t0, 'sine', 140, 42, 0.8, 0.004, 0.45);
+        this.burst(out, t0 + 0.05, 'lowpass', 700, 0.5, 0.45, 0.08, 1.3);
+        break;
+
       case 'reload':
         // Multi-stage mechanical reload foley
         if (this.samples?.mechanicalClicks.length) {
@@ -844,6 +866,116 @@ export class AudioEngine {
     if (!w || !this.ctx) return;
     w.gain.gain.setTargetAtTime(this.muted ? 0 : level * 0.42, this.ctx.currentTime, 0.6);
     w.filt.Q.setTargetAtTime(0.7 + level * 0.5, this.ctx.currentTime, 0.6);
+  }
+
+  // ---------------------------------------------------------------- Water
+
+  /**
+   * Loops for the water, made the first time they are wanted: a waterfall's roar (broad noise through a low-pass, with a
+   * sub-bass rumble under it for a tall drop), a river's babble (two bands of noise whose pitch and loudness wander, so it
+   * burbles instead of hissing) and a swamp's insects (a narrow high band, pulsed). Frogs are not a loop: `setWaterAmbience`
+   * scatters croaks while the swamp is close and the light is going.
+   */
+  private initWater() {
+    const ctx = this.ctx!;
+    const bus = (v = 0) => {
+      const g = ctx.createGain();
+      g.gain.value = v;
+      g.connect(this.sfx);
+      return g;
+    };
+    const lfo = (freq: number, depth: number, target: AudioParam) => {
+      const o = ctx.createOscillator();
+      o.frequency.value = freq;
+      const g = ctx.createGain();
+      g.gain.value = depth;
+      o.connect(g).connect(target);
+      o.start();
+    };
+    const roar = bus();
+    const roarLp = ctx.createBiquadFilter();
+    roarLp.type = 'lowpass';
+    roarLp.frequency.value = 1400;
+    roarLp.Q.value = 0.4;
+    const n1 = this.noise();
+    n1.connect(roarLp).connect(roar);
+    n1.start(0, Math.random());
+    const rumble = bus();
+    const rLp = ctx.createBiquadFilter();
+    rLp.type = 'lowpass';
+    rLp.frequency.value = 140;
+    const n2 = this.noise();
+    n2.connect(rLp).connect(rumble);
+    n2.start(0, Math.random());
+    // Babble: a lower and a higher band, each wandering in pitch, through gains that wobble at uneven rates.
+    const babble = bus();
+    for (const [f, q, rate, wob] of [
+      [650, 1.4, 0.73, 3.1],
+      [2100, 2.2, 1.37, 5.3],
+    ]) {
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = f;
+      bp.Q.value = q;
+      lfo(rate, f * 0.35, bp.frequency);
+      const g = ctx.createGain();
+      g.gain.value = 0.55;
+      lfo(wob, 0.4, g.gain);
+      const n = this.noise();
+      n.connect(bp).connect(g).connect(babble);
+      n.start(0, Math.random());
+    }
+    const insects = bus();
+    const ibp = ctx.createBiquadFilter();
+    ibp.type = 'bandpass';
+    ibp.frequency.value = 5200;
+    ibp.Q.value = 9;
+    const pulse = ctx.createGain();
+    pulse.gain.value = 0.5;
+    lfo(23, 0.5, pulse.gain);
+    const n3 = this.noise();
+    n3.connect(ibp).connect(pulse).connect(insects);
+    n3.start(0, Math.random());
+    const frogs = bus(1);
+    this.water = { roar, roarLp, rumble, babble, insects, frogs, frogLevel: 0 };
+  }
+
+  /** How the water around the players sounds now. Cheap to call a few times a second: the levels ease. */
+  setWaterAmbience(a: WaterAmbience) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (!this.water) {
+      if (a.roar + a.babble + a.marsh <= 0) return;
+      this.initWater();
+    }
+    const w = this.water!;
+    const now = ctx.currentTime;
+    const m = this.muted ? 0 : 1;
+    const tall = clamp(a.tall, 0, 1);
+    const roar = clamp(a.roar, 0, 1);
+    w.roar.gain.setTargetAtTime(m * roar * (0.34 - 0.08 * tall), now, 0.5);
+    w.roarLp.frequency.setTargetAtTime(1700 - 1000 * tall, now, 0.5);
+    w.rumble.gain.setTargetAtTime(m * roar * (0.15 + 0.6 * tall), now, 0.5);
+    w.babble.gain.setTargetAtTime(m * clamp(a.babble, 0, 1) * 0.16 * (1 - roar * 0.6), now, 0.6);
+    const marsh = clamp(a.marsh, 0, 1);
+    const night = clamp(a.night, 0, 1);
+    w.insects.gain.setTargetAtTime(m * marsh * (0.015 + 0.035 * night), now, 0.8);
+    w.frogLevel = marsh * night;
+    // Frogs: now and then one, and the next answers.
+    if (m && w.frogLevel > 0.05 && Math.random() < 0.35 * w.frogLevel) this.croak(w.frogs, now + Math.random() * 0.2, w.frogLevel);
+  }
+
+  /** One frog: a run of short buzzing pulses, low and falling a little. */
+  private croak(dest: AudioNode, t0: number, level: number) {
+    const ctx = this.ctx!;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 420 + Math.random() * 380;
+    bp.Q.value = 3;
+    bp.connect(dest);
+    const f = 95 + Math.random() * 90;
+    const n = 3 + Math.floor(Math.random() * 5);
+    for (let i = 0; i < n; i++) this.tone(bp, t0 + i * 0.052, 'sawtooth', f, f * 0.88, 0.07 * level, 0.004, 0.032);
   }
 
   // ---------------------------------------------------------------- Music

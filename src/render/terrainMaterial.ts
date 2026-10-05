@@ -1,12 +1,15 @@
 import * as THREE from 'three';
 import { GLOBALS, WET_PARS } from './materials';
-import { macroTexture, roadTextures, terrainTextures } from './proctex';
+import { macroTexture, meadowTexture, roadTextures, terrainTextures } from './proctex';
 
 /**
  * Ground shading: four detail materials (wind-rippled sand, cracked earth, layered rock, gravel) blended
  * per pixel by per-vertex weights sharpened with the materials' own height maps, so transitions follow
  * cracks and pebbles instead of smearing. Rock is projected triplanar so cliffs show strata, not stretching.
- * Per-vertex `tdata` carries ambient occlusion (x) and wetness (y).
+ * Per-vertex `tdata` carries ambient occlusion (x), wetness (y), how lush the land is (z, `lushAt`) and how wooded (w,
+ * `forestAt`): lush ground turns to living grass, in drifts of fresh green, olive and yellow-green that dry to straw at the
+ * edge of the green and fray into the dust along the grass's own height; under the woods it is a darker floor of leaf
+ * litter and moss. Rock stays rock, gravel shoulders and tracks stay worn, dune sand stays mostly sand, standing water bare.
  */
 
 export interface GroundLook {
@@ -32,6 +35,9 @@ export const GROUND_LOOK: Record<'wasteland' | 'city', GroundLook> = {
   wasteland: { sand: 0xd6bd93, earth: 0xae9879, rockA: 0x8a5a40, rockB: 0xb08c6c, gravel: 0x8e8478, scale: [4.5, 4.2, 9, 1.7] },
   city: { sand: 0x9a9286, earth: 0x77797a, rockA: 0x6e6f6c, rockB: 0x8c8b86, gravel: 0x6f6b66, scale: [5, 5.5, 8, 3] },
 };
+
+/** Living ground: fresh green, olive and yellow-green grass, dry straw at the edge of the green, leaf litter and moss. */
+const LIVING = { grassA: 0x5d8a30, grassB: 0x6e7a38, grassC: 0x8f9c3a, straw: 0xb6a26a, litter: 0x5e4a33, moss: 0x415e27 };
 
 const VERT_PARS = /* glsl */ `
 attribute vec4 splat;
@@ -65,6 +71,13 @@ uniform vec3 cRockA;
 uniform vec3 cRockB;
 uniform vec3 cGravel;
 uniform vec4 uTScale;
+uniform sampler2D tMeadow;
+uniform vec3 cGrassA;
+uniform vec3 cGrassB;
+uniform vec3 cGrassC;
+uniform vec3 cStraw;
+uniform vec3 cLitter;
+uniform vec3 cMoss;
 ${WET_PARS}
 #ifdef TERRAIN_LOD
 uniform sampler2D tLoaded;
@@ -125,18 +138,39 @@ vec3 tCol = cSand * ( tSA.r * 1.12 ) * tB.x
   + cGravel * ( tGA.b * 1.3 ) * tB.w;
 tCol *= 0.8 + tMac.r * 0.4;
 tCol *= mix( vec3( 1.0 ), vec3( 1.07, 0.99, 0.9 ), tMac2.g );
+// Living ground.
+float tLive = 0.0;
+float tWood = 0.0;
+if ( vTData.z > 0.003 ) {
+  vec4 tM1 = texture2D( tMeadow, tXZ * 0.62 );
+  vec4 tM2 = texture2D( tMeadow, tXZ * 0.151 + vec2( 0.31, 0.77 ) );
+  float tL = vTData.z;
+  vec3 tGr = mix( cGrassA, cGrassB, smoothstep( 0.3, 0.75, tMac2.r * 0.7 + tM2.g * 0.5 ) );
+  tGr = mix( tGr, cGrassC, smoothstep( 0.55, 0.85, tMac.b + ( tM2.g - 0.5 ) * 0.3 ) * 0.7 );
+  tGr = mix( cStraw, tGr, smoothstep( 0.22, 0.62, tL + ( tMac2.g - 0.5 ) * 0.3 ) );
+  tGr *= 0.55 + tM1.r * 0.75;
+  // The wood floor: leaf litter, with moss where it is damp or hollow.
+  vec3 tFl = mix( cLitter * ( 0.45 + tM1.b * 0.9 ), cMoss * ( 0.7 + tM1.r * 0.5 ), smoothstep( 0.45, 0.75, tM2.g + vTData.y * 0.5 + ( 1.0 - vTData.x ) * 0.4 ) );
+  tWood = smoothstep( 0.12, 0.6, vTData.w );
+  vec3 tLiv = mix( tGr, tFl, tWood );
+  float tMat = tM1.a * 0.6 + tM2.a * 0.4;
+  tLive = smoothstep( 0.4, 0.62, tL * 1.3 + ( tMat - 0.5 ) * 0.45 + ( tMac2.a - 0.5 ) * 0.3 );
+  tLive *= ( 1.0 - tB.z ) * ( 1.0 - tB.w * 0.85 ) * ( 1.0 - tB.x * 0.55 ) * ( 1.0 - smoothstep( 0.55, 0.8, vTData.y ) );
+  tCol = mix( tCol, tLiv, tLive );
+}
 tCol *= mix( 1.0, 0.5, vTData.y );
 // Rain: the whole ground darkens, and the low spots fill with puddles. The shore stays glassy whatever the weather.
-float tFlat = smoothstep( 0.88, 0.97, tWn.y ) * ( 1.0 - tB.z );
+// Grass drinks the rain: few puddles stand in a meadow.
+float tFlat = smoothstep( 0.88, 0.97, tWn.y ) * ( 1.0 - tB.z ) * ( 1.0 - tLive * 0.8 );
 float tPud = max( puddleMask( tXZ, tFlat ), smoothstep( 0.45, 0.8, vTData.y ) * tFlat * 0.85 );
 tCol *= mix( 1.0, 0.62, uWet * 0.55 );
 tCol *= mix( 1.0, 0.5, tPud );
 diffuseColor.rgb = tCol * vColor.rgb;
-float tCavity = mix( 1.0, 0.65 + 0.35 * dot( tH, tB ), 0.8 );
+float tCavity = mix( mix( 1.0, 0.65 + 0.35 * dot( tH, tB ), 0.8 ), 0.85, tLive ) * ( 1.0 - tWood * tLive * 0.22 );
 `;
 
 const FRAG_ROUGH = /* glsl */ `
-float roughnessFactor = mix( clamp( dot( tB, vec4( 0.96, 0.9, 0.82, 0.88 ) ) - vTData.y * 0.45 - uWet * 0.25, 0.2, 1.0 ), 0.04, tPud );
+float roughnessFactor = mix( clamp( mix( dot( tB, vec4( 0.96, 0.9, 0.82, 0.88 ) ), 0.93, tLive ) - vTData.y * 0.45 - uWet * 0.25, 0.2, 1.0 ), 0.04, tPud );
 `;
 
 const FRAG_METAL = /* glsl */ `
@@ -148,7 +182,8 @@ const FRAG_NORMAL = /* glsl */ `
   vec2 nS = texture2D( tTAN, tXZ * uTScale.x ).rg * 2.0 - 1.0;
   vec2 nE = texture2D( tTAN, tXZ * uTScale.y + vec2( 0.37, 0.61 ) ).ba * 2.0 - 1.0;
   vec2 nG = texture2D( tTBN, tXZ * uTScale.w + vec2( 0.53, 0.29 ) ).ba * 2.0 - 1.0;
-  vec2 nP = nS * tB.x * 0.9 + nE * tB.y * 0.75 + nG * tB.w;
+  // Cracks and ripples go quiet under the grass.
+  vec2 nP = ( nS * tB.x * 0.9 + nE * tB.y * 0.75 + nG * tB.w ) * ( 1.0 - tLive );
   vec3 wn = tWn + vec3( nP.x, 0.0, nP.y ) * 0.9;
   if ( tB.z > 0.001 ) {
     vec3 rpert = vec3( 0.0, tRockNX.y, tRockNX.x ) * tRW.x + vec3( tRockNY.x, 0.0, tRockNY.y ) * tRW.y + vec3( tRockNZ.x, tRockNZ.y, 0.0 ) * tRW.z;
@@ -195,6 +230,13 @@ export function makeTerrainMaterial(biome: 'wasteland' | 'city', lod?: TerrainUn
     cGravel: col(look.gravel),
     uTScale: { value: new THREE.Vector4(1 / look.scale[0], 1 / look.scale[1], 1 / look.scale[2], 1 / look.scale[3]) },
     uWet: GLOBALS.uWet,
+    tMeadow: { value: meadowTexture() },
+    cGrassA: col(LIVING.grassA),
+    cGrassB: col(LIVING.grassB),
+    cGrassC: col(LIVING.grassC),
+    cStraw: col(LIVING.straw),
+    cLitter: col(LIVING.litter),
+    cMoss: col(LIVING.moss),
   };
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);

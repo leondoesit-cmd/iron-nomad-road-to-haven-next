@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { LEGS } from '../src/data';
 import { corridorHalf, groundHeight, heightAt, makeTerrainDef, roadX, surfaceAt, waterAt } from '../src/world/terrain';
 import { dockDeckAt, lakeQ } from '../src/world/lakes';
+import { courseAt } from '../src/world/hydro';
 
 const wasteland = LEGS.legs.filter((l) => l.biome === 'wasteland');
 
@@ -58,7 +59,9 @@ describe.each(wasteland.map((l) => [l.id, l] as const))('lakes on %s', (_id, leg
           const z = l.z + Math.sin(th) * rr;
           const q = lakeQ(l, x, z);
           const h = heightAt(def, x, z);
-          if (q > 1.0 && q < 1.2) expect(h).toBeGreaterThanOrEqual(l.level - 1e-6);
+          // A river or stream may cut the rim where it runs in: its own water meets the lake's there.
+          const running = q > 1.0 && def.hydro && courseAt(def.hydro, x, z, 2);
+          if (q > 1.0 && q < 1.2 && !running) expect(h).toBeGreaterThanOrEqual(l.level - 1e-6);
           if (q < 1) {
             const w = waterAt(def, x, z);
             if (w) {

@@ -4,6 +4,7 @@ import { clamp, smoothstep, lerp } from '../core/math';
 import { dockDeckAt, lakeAdjust, lakeWater, planLakeSites, planLakes, planOpenLakes, type Bay, type Lake, type WaterHit } from './lakes';
 import { delveName, delveSiteKind, planMainlandDelve, snapYaw, type DelveSite, type DelveTheme } from './delveSites';
 import { addRoad, districtAt, districtMask, makeOpenWorld, nearestRoad, nearestRoadAny, type OpenWorld, type RoadPath } from './openWorld';
+import { courseAt, finishHydro, hydroAdjust, hydroMud, hydroWater, lushAt, mesaBlocked, nearHydro, planHydro, type Hydro } from './hydro';
 
 export const CHUNK = 128;
 export const CELL = 2; // heightfield resolution in metres
@@ -111,6 +112,8 @@ export interface TerrainDef {
   bays: Bay[];
   /** Ways underground in the open country and on lake islands. */
   delves: DelveSite[];
+  /** The open world's rivers, streams, springs, swamps and green land (`world/hydro.ts`). */
+  hydro?: Hydro;
   theme: 'dust' | 'salt' | 'cinder';
   /** Planned city legs: the paved side and cross streets (rectangles) beyond the boulevard. */
   streets?: { x0: number; x1: number; z0: number; z1: number }[];
@@ -157,9 +160,12 @@ export function makeTerrainDef(leg: LegDef): TerrainDef {
   }
   if (leg.biome === 'wasteland') {
     if (def.open) def.sites = planHubs(def);
+    // The water goes in before the places, so they keep clear of it (the big lakes join `def.lakes`).
+    if (def.open) planHydro(def, leg);
     def.sites.push(...planSites(def, leg));
-    def.lakes = planLakes(def, leg).lakes;
+    def.lakes.push(...planLakes(def, leg).lakes);
     if (def.open) def.lakes.push(...planOpenLakes(def, leg, def.lakes));
+    def.lakes.forEach((l, i) => (l.id = i));
     const open = def.open ? planOpenSites(def, leg) : null;
     if (open) {
       def.sites.push(...open.sites);
@@ -173,6 +179,8 @@ export function makeTerrainDef(leg: LegDef): TerrainDef {
       def.sites.push(main.site);
       def.delves.push(main.delve);
     }
+    // How green the land is waits for every lake.
+    finishHydro(def);
   }
   return def;
 }
@@ -259,6 +267,7 @@ function planOpenSites(def: TerrainDef, leg: LegDef): { sites: Site[]; delves: D
       const radius = SITE_SPEC[kind].radius;
       if (def.sites.some(near(x, z, radius + 90)) || sites.some(near(x, z, radius + 160))) continue;
       if (def.lakes.some((l) => Math.hypot(l.x - x, l.z - z) < l.reach + radius + 50)) continue;
+      if (nearHydro(def, x, z, radius + 40)) continue;
       if (buttes(def, x, z) > 0.5 || buttes(def, x + radius, z) > 0.5 || buttes(def, x - radius, z) > 0.5) continue;
       // The track to the nearest road must not run through a lake.
       const hit = nearestRoadAny(o, x, z);
@@ -269,6 +278,8 @@ function planOpenSites(def: TerrainDef, leg: LegDef): { sites: Site[]; delves: D
       let wet = false;
       for (let u = 0; u <= 1 && !wet; u += 0.04) wet = def.lakes.some((l) => Math.hypot(l.x - (x + (tx - x) * u), l.z - (z + (tz - z) * u)) < l.reach + 12);
       if (wet) continue;
+      // A track may ford running water, but not down a gorge or over a waterfall, and never through a swamp or a spring.
+      if (def.hydro && !fordable(def, x, z, tx, tz)) continue;
       const h = baseHeight(def, x, z);
       const seed = rng.int(1, 99999);
       if (wantDelve) {
@@ -296,6 +307,22 @@ function planOpenSites(def: TerrainDef, leg: LegDef): { sites: Site[]; delves: D
   return { sites, delves };
 }
 
+/** Whether a straight track from (x0, z0) to (x1, z1) only crosses running water where a car can ford it. */
+function fordable(def: TerrainDef, x0: number, z0: number, x1: number, z1: number): boolean {
+  const hy = def.hydro!;
+  const len = Math.hypot(x1 - x0, z1 - z0);
+  for (let d = 0; d <= len; d += 6) {
+    const x = x0 + ((x1 - x0) * d) / len;
+    const z = z0 + ((z1 - z0) * d) / len;
+    const c = courseAt(hy, x, z, 60);
+    if (c && (c.bank > 13 || hy.falls.some((f) => Math.hypot(f.x - x, f.z - z) < 70))) return false;
+    if (hy.swamps.some((s) => Math.hypot(s.x - x, s.z - z) < s.reach + 10)) return false;
+    if (hy.springs.some((s) => Math.hypot(s.x - x, s.z - z) < s.r + 14)) return false;
+    if (hy.lakes.some((li) => Math.hypot(def.lakes[li].x - x, def.lakes[li].z - z) < def.lakes[li].reach + 12)) return false;
+  }
+  return true;
+}
+
 /** Where roadside places go: spaced along the leg, clear of the authored set pieces. */
 function planSites(def: TerrainDef, leg: LegDef): Site[] {
   const rng = new Rng(leg.seed * 31 + 5);
@@ -315,7 +342,8 @@ function planSites(def: TerrainDef, leg: LegDef): Site[] {
       const off = Math.min(rng.range(spec.off[0], spec.off[1]), ch - spec.radius - (spec.radius ? 25 : 30));
       if (off >= spec.off[0] * 0.6) {
         const x = roadX(def, zz) + side * off;
-        sites.push({ kind, z: zz, side, off, radius: spec.radius, seed: rng.int(1, 99999), x });
+        const seed = rng.int(1, 99999);
+        if (!nearHydro(def, x, zz, spec.radius + 30)) sites.push({ kind, z: zz, side, off, radius: spec.radius, seed, x });
       }
     }
     z = zz + rng.range(260, 400);
@@ -432,6 +460,7 @@ function openButtes(def: TerrainDef, x: number, z: number): number {
       if (Math.hypot(xc, zc - 12) < 160) continue;
       if (nearestRoad(o, xc, zc).d < 70) continue;
       if (def.sites.some((s) => Math.hypot(s.x - xc, s.z - zc) < s.radius + r + 20)) continue;
+      if (def.hydro && mesaBlocked(def, (i + 4096) * 8192 + (j + 4096), xc, zc, r)) continue;
       const H = 10 + hash2(i, j, def.seed + 100) * 30;
       const t = smoothstep(r, r * 0.6, dd);
       out = Math.max(out, H * t * (1 - 0.1 * noise2(x / 6, z / 6, def.seed + 101)));
@@ -467,6 +496,12 @@ function rampHeight(r: Ramp, rx: number, z: number, xc: number): number {
 
 /** Terrain height under (x, z). The same function drives meshes, colliders, props and AI. */
 export function heightAt(def: TerrainDef, x: number, z: number): number {
+  const h = lakeHeight(def, x, z);
+  return def.hydro ? hydroAdjust(def, def.hydro, x, z, h) : h;
+}
+
+/** The ground with the lakes carved in (and nothing of the running water yet). */
+function lakeHeight(def: TerrainDef, x: number, z: number): number {
   const h = baseHeight(def, x, z);
   if (def.lakes.length === 0) return h;
   for (const l of def.lakes) {
@@ -587,8 +622,10 @@ function openSurface(def: TerrainDef, x: number, z: number): Surface {
     if (hit.edge < 3) return 'hardpan';
   }
   if (def.lakes.length && lakeWater(def.lakes, x, z)) return 'mud';
+  if (def.hydro && hydroMud(def.hydro, x, z)) return 'mud';
   const sand = noise2(x / 65 + 40, z / 65 - 11, def.seed + 21);
-  if (sand > lerp(0.7, 0.5, duneness(def, z, x))) return 'sand';
+  // Grass binds the ground: a meadow is firm soil, not loose sand.
+  if (sand > lerp(0.7, 0.5, duneness(def, z, x))) return def.hydro && lushAt(def, x, z) > 0.45 ? 'hardpan' : 'sand';
   const mud = noise2(x / 48 - 90, z / 48 + 33, def.seed + 45);
   if (mud > 0.76 && heightAt(def, x, z) < roadElev(def, z) + 0.8) return 'mud';
   return 'hardpan';
@@ -651,7 +688,9 @@ export const clampToCorridor = (def: TerrainDef, x: number, z: number) => {
 
 /** Water over the ground at a point, or null on dry land. */
 export function waterAt(def: TerrainDef, x: number, z: number): WaterHit | null {
-  return def.lakes.length ? lakeWater(def.lakes, x, z) : null;
+  const w = def.lakes.length ? lakeWater(def.lakes, x, z) : null;
+  if (w || !def.hydro) return w;
+  return hydroWater(def, def.hydro, x, z);
 }
 
 /** Where a person stands: the terrain, or a dock deck standing over it. */

@@ -621,6 +621,136 @@ from `MapFrame.roads` and places showing once someone has been near them. The mi
 **Tests.** `tests/openworld.test.ts` (terrain, roads, district, layout), `tests/openplay.test.ts` (real scenes in Node: streaming far from
 the highway, the city and the desert switching rules, calling the camp, rolling out with the world remembered, Haven, the save).
 
+### Rivers, springs, swamps and the green country
+
+The open world is no longer all dust. Its water is hand-set in `legs.json` (`open.water`, typed as `OpenWaterSpec`) the way the hubs
+are: big lakes, springs, swamps and the anchors each river winds between. `world/hydro.ts` turns that into ground and water, and
+everything else (the places, the rolled lakes, the gang camps, the mesas) is planned around it. The result is a country that is
+desert in the south and along the highway, with a green river valley crossing it, and woods, lakes and fens to the west and north.
+
+| Water | Where | What it is |
+|---|---|---|
+| **The Yarkon** | rises at the Yarkon Springs (1180, -560), crosses the highway 400 m south of the start, ends in Glasswater | a lowland river, 9 to 17 m wide |
+| **The Greywater** | pours off the west rim at **Veil Falls** (37 m), down **the Seven Steps**, under the Dustwell west road, into Glasswater | the long river of the west valley |
+| **The Silverrun** | off the east rim at **Silver Falls** (37 m), down **Silver Steps**, into the Black Fen | |
+| Goat Brook, Thorn Brook, Fallbrook, Pine Run, Cold Brook | from springs (Fallbrook from **North Falls**, 35 m off the north rim) into a swamp or a lake | streams, 3 to 5 m wide and fordable |
+| **Glasswater**, Coldmere, Stillwater | south-west, north-east, north-west | big lakes with islands, a pier and boats, built like the rolled ones |
+| **Reedmarsh**, **the Black Fen** | west of Glasswater; the low basin east of the city | swamps: half shallow pools, half sodden hummocks |
+| Ein Tamar, Date Spring, Sweetwater, Hart Spring | out in the dry country | oases: a spring pool with palms round it |
+
+**Courses.** A river or stream is a centre-line sampled every 3 m (a Catmull-Rom curve through its anchors with a meander laid
+over it), each sample with a water level, half-width, depth, bank width and current. The level only ever falls downstream. It is
+worked out from the ground along the course, taken at its lowest across the channel and smoothed with a running median (which
+keeps a cliff a cliff and irons out the dunes): the water sits a metre or so under that ground, halfway between the highest level
+that never rises (it would fill every hollow) and the lowest (it would cut through every hump), so a river neither sinks into a
+gorge at the first dip nor rides an embankment over it. Where the ground falls away steeply the level drops with it, and that is a
+**waterfall**: the three off the mountains at the edge of the map are 35 to 37 m; the hand-set cascades (`falls` in the spec) are
+put where the land itself steps down most near where the spec asks, and never deeper than the water it runs into. A course that
+runs into a lake or swamp meets its level exactly, and the lake or swamp sits as low as the courses arriving in it (within 2.5 m),
+so no water ever climbs.
+
+**Ground.** `heightAt` is the base ground, then the lakes, then the water network (`hydroAdjust`): a rounded channel down to the
+bed, a strip of flat floodplain, and a valley side whose width grows with how deep the course is cut (a 6 m cut has a valley about
+25 m wide on each side), so gorges have slopes, not walls. A notch is cut through the rim cliff under each rim fall, and the visual
+crags (`cliffDetail`) stand aside there. Spring pools are round bowls, swamps a hollow of hummocks and pools round a level. Every
+query agrees: the terrain mesh, the physics heightfield, the far landscape and `waterAt`, which now answers for running water,
+springs and swamps too, with the current as `flow` (metres a second down the course, and a little toward the nearer bank so a
+swamped car fetches up against it). Channels, swamps and spring bowls are `mud` underfoot.
+
+**Roads over water.** Where the highway or a side road crosses a river (`Hydro.crossings`: the Yarkon on the highway at z = -407 and
+the Greywater on the Dustwell west road) the road runs over a causeway: the ground stays at road height for 3 m past the
+carriageway, the channel is cut on both sides, and a **bridge** prop (`render/waterProps.ts`, drawn for the whole map like the other
+landmarks) dresses it: concrete headwalls down to the river bed with the culvert mouths in them, parapets, guard rails and wing
+walls. The water passes "under" the road through the culverts. A dirt track crossing running water fords it: the bed is raised to
+26 cm under the surface for a few metres either side of the track, and the planner never sends a track down a gorge, over a fall,
+or through a swamp or a spring.
+
+**Green land and woods.** `finishHydro` bakes an 8 m raster of how green the land is (`lushAt`): water greens the land round it
+(rivers and big lakes out to about 70 m fully and 120 to 140 m in all, streams and springs less), the spec's `greens` green whole
+regions (the north-west and north-east woods, the west valley, the fen, the fields round Haven), dune seas stay sandier, the city
+stays bare and so does the dusty middle round the start. `forestAt` turns lush ground into clumps of wood with clearings between,
+and `woodsAt` says what grows: broadleaf, pine, fen or riparian. About a third of the map is green and a seventh wooded.
+
+**Trees** (`world/flora.ts`) are planted per chunk while its data is made (`ChunkSource`), from the chunk's own heightfield so they
+stand on the ground that is drawn: oaks and the odd pine or poplar in the broadleaf country, pines in the northern woods, willows
+and poplars within a few tens of metres of the rivers and lakes, swamp cypress and dead snags in the swamps (they may stand in the
+shallows), date palms round an oasis, lone trees in the meadows and acacias out in the dry grass at their edge. Nothing grows on a
+road (a car's width of verge is left), in water, on a steep slope, on a place's pad, in a camp, by a parked car, a pickup, an
+encounter, a way underground or the start. A wood has 120 to 260 trees a chunk. Each trunk is an obstacle box of kind `tree`
+(`ChunkData.aabbs`): a collider for people and cars (invisible to the camera), an obstacle for the dead and the animals, and wood to a
+bullet, so a wood is cover.
+
+**Green on screen.** The ground shader takes two more channels (`tdata.z` is `lushAt`, `tdata.w` is `forestAt`, packed the same
+by the chunks and the far landscape): lush ground turns to meadow (fresh green, olive and yellow-green, straw at the fraying edge,
+a `meadowTexture` for the blades), woods get a floor of leaf litter and moss, while rock stays rock, dunes stay sandier and road
+shoulders stay worn. `render/groundMix.ts` colours the water's ground for the chunks, the far mesh and the reeds alike: dark wet
+banks, gravelly beds under rivers and streams, a pale stone bowl under a spring, peat under swamp water with mossy hummocks between.
+The ground cover (`render/scatter.ts`) greens and thickens with the land and has four new layers: wildflowers in six colours on the
+meadows, ferns and bracken under the woods, reeds and cattails in the shallows and on damp banks, lily pads on swamp water 0.2 to
+1.2 m deep.
+
+**Trees on screen** (`render/trees.ts`) are built in code: round oaks and terebinths, conical pines, weeping willows, Lombardy poplars, date
+palms with a skirt of dead fronds, flat umbrella acacias, buttressed swamp cypress with knees and hanging moss, and dead snags, three
+variants each. Wood is tapered tubes with vertex colour, foliage alpha-tested leaf cards from one atlas, so a tree is one draw; a
+chunk draws one instanced mesh per species, the variants sharing it. They sway in the shared wind and cast alpha-tested shadows. Each
+species is also baked into an impostor atlas at load (about 0.1 s), and between 80 and 100 m from each camera the 3D trees dither into
+three crossed impostor cards. Past the streamed chunks the **far forest** (`planFarForest`, `Landscape.buildFarForest`) plants
+impostors on a 9 m grid by the same rules (about 36,000 trees in 79 regions of 512 m, one draw each, about 215k triangles for the
+whole map), standing on the far terrain mesh and stepping aside inside loaded chunks like it does, so the woods read out to the haze.
+In the dense west woods the vegetation costs about a millisecond a frame on the reference machine.
+
+**On the green.** Grass binds the ground: where the land is lush the surface is firm soil, never loose sand, and a vehicle raises
+about half the dust it would on bare ground (`LegScene.groundDust`), so its Dust signature carries less far and the green country
+is the quiet way across. Make camp on the green and the camp is drawn to match (`CampLand` in `render/campArena.ts`, worked out in
+`game.ts` from the camp pose): a meadow for a floor and the wood of that country (pine, broadleaf, riparian or fen) standing round
+the basin outside the ground the raid crosses.
+
+**Water on screen.** All the standing water shares one flat-water builder (`render/water.ts`): lakes as before, a swamp as an
+olive-brown, nearly still sheet with drifts of scum and duckweed (a 512² depth texture each), and the nine spring pools as one clear
+turquoise mesh with rings spreading from the middle and bubbles breaking over it. Running water is one ribbon for the whole map
+(`render/riverWater.ts`): seven vertices across every 3 m sample, flat at its level and reaching 1.5 m over each bank so the banks
+themselves cut the waterline, each carrying its depth, flow direction, speed and travel time, so ripples and foam move downstream
+at the river's own speed and stretch into streaks where it is fast; there is foam along the banks, in rapids and in a boiling pool
+under each fall. The drops themselves are a second mesh: a sheet that arcs off the lip, glassy at the top and roped with white
+streaks below, a veil of spray just in front and a ring of spray on the pool (it never mirrors anything). Far off, the ribbon is
+lifted a little so the coarse far terrain does not swallow it, and the river reads unbroken out to the haze. All of it is five draw
+calls a view and no per-frame work beyond the shared time uniform.
+
+**In the water.** Running water carries what is in it. A swimmer goes with the current at its full speed (a lake drifts them at
+15% of its pull toward shore); wading deep, quick water pushes you, up to 85% of the current where it runs faster than 2.4 m/s. A
+floating car goes where the river goes, and fording a quick stream leans on the body. A boat's drag is measured against the water,
+so a boat left to itself drifts downstream. In the last 10 m before a lip (18 m before a tall fall) the current builds to 3.6 m/s:
+come too close and you go over. Going over (the running water under you suddenly 1.4 m lower) is a splash, a jolt and the note
+*Over Veil Falls!*: a person takes (drop − 4) × 1.5 damage, at most 40 and never below a fifth of their health, and a 0.5 to 2 s
+stagger; a car up to 60, never enough to wreck it (`game/waterfx.ts`, `player.ts`, `physics/boat.ts`).
+
+**Drinking** from water is free, and how clean it is depends on what it is: a spring never makes you sick, a stream rarely (8%), a
+river now and then (12%), a lake often (30%), a swamp usually (65%). The note names the water: *You drink from Ein Tamar: cold
+and clean* (`sim/needs.ts`).
+
+**What you see and hear of it.** Every fall within 150 m throws mist off its foot (more for a tall or wide one) and spray down its
+face if it is over 6 m. Procedural loops (`setWaterAmbience` in `audio/audio.ts`) follow the nearest water: a waterfall's roar,
+heard out to 70 m plus 6 m for every metre of drop and lower for a tall one; river babble within 45 m of a channel and a quieter
+trickle at a spring; insects over a swamp, loudest at dusk, and frogs after dark. The first time the convoy comes near a
+waterfall (280 m for a big one), a spring, a swamp, a named lake or a river, a banner and the radio name it, and it goes on the map
+and the minimap (falls at their foot, springs, swamps and lakes as pins, rivers as named lines). The map bakes the country green
+where it is lush and darker where it is wooded.
+
+**Wildlife** follows the green: each species in `wildlife.json` has a liking for bare, meadow and wooded ground. Antelope are about
+four times as common on a meadow as on bare dust, wolves and bears come into the open world but only in the woods, vultures keep
+to the bare ground, and about half the spawns on bare dust are skipped. Grazers on dry land wander toward the nearest water.
+
+**Tests.** `tests/hydro.test.ts` (the plan is the same every time; no course runs uphill and each ends in its water; water all along
+every course except under a causeway; no mesa in a course; both causeways dry and level with water either side; the rim falls and the
+cascades; swamps half water, half mud; springs hold clear water; places, hubs and roads stay dry and tracks only ford; how green the
+country is, and bare at the start and in the city; meadows are soil; the woods keep off roads, water and places, every trunk is
+solid, the same trees every time), `tests/hydroplay.test.ts` (real scenes in Node: a swimmer and a loose boat go downstream, a wader
+swept over Thorn Brook Falls is hurt but lives, a car on the highway bridge sits dry at road height, a spring is always clean and a
+swamp seldom, a fall is named once, pinned, heard and misted, a convoy that camped in a wood wakes clear of the trees, grazers crowd
+the meadows and wolves and bears keep to the woods),
+`tests/waterrender.test.ts` (the river ribbon, the fall sheets, swamp and spring water, the bridge) and `tests/vegetation.test.ts`
+(every tree species and variant builds, the ground packing matches the fields, ground cover in the dust and on the green).
+
 ### Petah Tikva Center: an authored city
 
 Leg 3 has a third road, **Petah Tikva Center** (`L3P`), which the open world also uses as its city: a recreation of the old centre of Petah Tikva, "Em HaMoshavot" (Mother of the Colonies). It is a city leg whose block grid is drawn by hand instead of rolled: `legs.json` names a `plan`, and `world/plans/petahTikva.ts` holds it (`world/cityPlan.ts` has the types). A plan keeps the usual skeleton (a boulevard down the middle, building columns either side, cross streets between blocks) so physics, zombies, camps and set pieces all keep working, and replaces the dice with fixed block lengths, strip widths, named streets and landmark lots.

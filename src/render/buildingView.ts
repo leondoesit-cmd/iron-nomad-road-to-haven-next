@@ -77,6 +77,11 @@ function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, f
   for (const w of plan.walls) {
     if (w.level !== L) continue;
     wi++;
+    const seed = rb.seed * 0.37 + wi * 0.41;
+    // The reveals (wall ends, door and window jambs, lintel soffits) take the facade outside, plaster inside.
+    const revStyle = w.ext ? rb.extStyle : INTERIOR_STYLE;
+    const revTint = w.ext ? extTint : new THREE.Color(roomTint(w.axis === 'x' ? (w.a + w.b) / 2 : w.c, w.axis === 'x' ? w.c : (w.a + w.b) / 2));
+    const foot = w.ext && L === 0 ? base - 0.9 : base;
     for (const p of wallPieces(w)) {
       const yTop = base + p.v1;
       const yBot = base + p.v0;
@@ -88,20 +93,16 @@ function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, f
         const sz = w.axis === 'x' ? w.c + side * 0.4 : mid;
         const tint = isOut ? extTint : new THREE.Color(roomTint(sx, sz));
         const y0 = isOut && L === 0 && p.v0 === 0 ? base - 0.9 : yBot;
-        face(fb, w, p.u0, p.u1, y0, yTop, side, isOut ? rb.extStyle : INTERIOR_STYLE, tint, rb.seed * 0.37 + wi * 0.41, base);
+        face(fb, w, p.u0, p.u1, y0, yTop, side, isOut ? rb.extStyle : INTERIOR_STYLE, tint, seed, base);
       }
-      // The long exterior walls run the full footprint and own the corner columns; their open ends would show the room
-      // behind as a slit down every corner, so close them with a face in the exterior material.
-      if (w.ext && w.axis === 'x') {
-        const yCap = L === 0 && p.v0 === 0 ? base - 0.9 : yBot;
-        const lo = w.c - w.t / 2;
-        const hi = w.c + w.t / 2;
-        const seed = rb.seed * 0.37 + wi * 0.41;
-        if (p.u0 <= w.a + 0.001) fb.wall(w.a, lo, w.a, hi, yCap, yTop, 0, extTint, rb.extStyle, seed, 3, 2, base);
-        if (p.u1 >= w.b - 0.001) fb.wall(w.b, hi, w.b, lo, yCap, yTop, 0, extTint, rb.extStyle, seed, 3, 2, base);
+      // Close the piece into a solid, as 3dhome extrudes its walls: the full-height pieces get end faces (the
+      // building's corners, free wall ends and the jambs of every opening), a lintel gets its soffit.
+      if (p.v0 === 0 && p.v1 >= w.h - 0.001) {
+        for (const [u, dir] of [[p.u0, -1], [p.u1, 1]] as const) reveal(fb, w, u, dir, foot, yTop, revStyle, revTint, seed, base);
       }
+      if (p.v0 > 0.001) soffit(fb, w, p.u0, p.u1, yBot, -1, revStyle, revTint, seed, base);
       // Top edge so a cut-away wall reads as solid.
-      if (p.v1 > 0.05 && p.solid) {
+      if (p.v1 > 0.05) {
         const along = p.u1 - p.u0;
         const sillCap = p.v1 < w.h - 0.01;
         if (w.axis === 'x') trim.box(mid, yTop - 0.02, w.c, along, 0.04, w.t + (sillCap ? 0.1 : 0.01), cap);
@@ -119,6 +120,15 @@ function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, f
         else trim.box(w.c + w.out * 0.04, py - 0.18, mid, w.t + 0.08, 0.5, along, S.concrete(0x7c7a74, 0.6));
       }
     }
+    // Under an exterior ground-floor doorway the foundation carries on: its face down to the ground and a threshold.
+    if (w.ext && L === 0) {
+      for (const op of w.ops) {
+        if (op.sill > 0.001) continue;
+        face(fb, w, op.a, op.b, foot, base, w.out as 1 | -1, rb.extStyle, extTint, seed, base);
+        soffit(fb, w, op.a, op.b, base - 0.004, 1, rb.extStyle, extTint, seed, base);
+        for (const [u, dir] of [[op.a, 1], [op.b, -1]] as const) reveal(fb, w, u, dir, foot, base, rb.extStyle, extTint, seed, base);
+      }
+    }
     const wallIndex = plan.walls.indexOf(w);
     for (const op of w.ops) opening(rb, plan, w, op, base, trim, trimCol, rnd, panes, wallIndex);
   }
@@ -133,6 +143,38 @@ function face(fb: FacadeBuilder, w: Wall, u0: number, u1: number, y0: number, y1
   const uOff = forward ? u0 - w.a : w.b - u1;
   if (w.axis === 'x') fb.wall(a, p, b, p, y0, y1, uOff, tint, style, seed, 3, 2, base);
   else fb.wall(p, a, p, b, y0, y1, uOff, tint, style, seed, 3, 2, base);
+}
+
+/** A quad through the facade builder, its winding turned to face `n` whatever order the corners came in. */
+function facing(fb: FacadeBuilder, pts: [number, number, number][], n: [number, number, number], uvs: [number, number][], style: number, tint: THREE.Color, seed: number) {
+  const [a, b, c] = pts;
+  const ex = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const ey = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+  const dot = (ex[1] * ey[2] - ex[2] * ey[1]) * n[0] + (ex[2] * ey[0] - ex[0] * ey[2]) * n[1] + (ex[0] * ey[1] - ex[1] * ey[0]) * n[2];
+  if (dot < 0) {
+    pts = [pts[0], pts[3], pts[2], pts[1]];
+    uvs = [uvs[0], uvs[3], uvs[2], uvs[1]];
+  }
+  fb.quad(pts, n, uvs, tint, style, seed, 3, 2);
+}
+
+/** The end face of a wall at along-wall position `u`, facing `dir` along the wall, across its whole thickness. */
+function reveal(fb: FacadeBuilder, w: Wall, u: number, dir: 1 | -1, y0: number, y1: number, style: number, tint: THREE.Color, seed: number, base: number) {
+  const p0 = w.c - w.t / 2;
+  const p1 = w.c + w.t / 2;
+  const at = (p: number, y: number): [number, number, number] => (w.axis === 'x' ? [u, y, p] : [p, y, u]);
+  const n: [number, number, number] = w.axis === 'x' ? [dir, 0, 0] : [0, 0, dir];
+  const uu = u - w.a;
+  facing(fb, [at(p0, y0), at(p1, y0), at(p1, y1), at(p0, y1)], n, [[uu, y0 - base], [uu + w.t, y0 - base], [uu + w.t, y1 - base], [uu, y1 - base]], style, tint, seed);
+}
+
+/** A horizontal face across the wall's thickness from u0 to u1 at height y: up (+1) for a threshold, down (-1) for a lintel's soffit. */
+function soffit(fb: FacadeBuilder, w: Wall, u0: number, u1: number, y: number, dir: 1 | -1, style: number, tint: THREE.Color, seed: number, base: number) {
+  const p0 = w.c - w.t / 2;
+  const p1 = w.c + w.t / 2;
+  const at = (u: number, p: number): [number, number, number] => (w.axis === 'x' ? [u, y, p] : [p, y, u]);
+  const v = y - base;
+  facing(fb, [at(u0, p0), at(u1, p0), at(u1, p1), at(u0, p1)], [0, dir, 0], [[u0 - w.a, v], [u1 - w.a, v], [u1 - w.a, v + w.t], [u0 - w.a, v + w.t]], style, tint, seed);
 }
 
 function boxAlong(trim: MeshBuilder, w: Wall, u: number, y: number, perp: number, along: number, h: number, deep: number, color: Parameters<MeshBuilder['box']>[6], tilt = 0, yaw = 0) {

@@ -185,6 +185,7 @@ export function surfaceOfBox(kind: string, thickness: number, mat?: Surface): Su
     case 'crate':
     case 'furniture':
     case 'dock':
+    case 'tree':
       return 'wood';
     case 'partition':
       return 'wood';

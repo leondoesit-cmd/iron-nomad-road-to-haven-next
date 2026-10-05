@@ -30,6 +30,8 @@ import { GunBeam } from '../render/gunBeam';
 import { kitOf, lookKey, type GunKit } from '../sim/gunmods';
 import type { DriveInput } from '../physics/vehicle';
 import type { Ctx } from './ctx';
+import type { WaterKind } from '../world/lakes';
+import type { WaterSource } from '../sim/needs';
 import type { Pilot, Vehicle } from './vehicle';
 import type { Interactable } from './interact';
 import { carryModelKey, carrySlow, type Carried } from '../sim/carry';
@@ -118,6 +120,8 @@ const JUMP_V = 6.6;
 const COYOTE = 0.1;
 const JUMP_BUFFER = 0.12;
 const BODY_R = 0.3;
+/** Still water. */
+const NO_DRIFT: readonly [number, number] = [0, 0];
 /** Seconds the use button is held before the drug belt opens. */
 const BELT_HOLD = 0.35;
 const RAY_STATIC = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
@@ -327,6 +331,14 @@ export class Player implements Pilot {
   waterLevel = 0;
   swimming = false;
   private splashT = 0;
+  /** The water's own current where you are (m/s), and what kind of water it is. */
+  private waterFlow: [number, number] | null = null;
+  private waterKind: WaterKind | null = null;
+  /** The highest running water under you lately, and when: a sudden drop below it is a waterfall gone over. */
+  private riverTop = -Infinity;
+  private riverTopT = -99;
+  private plungeT = -99;
+  private currentWarnT = -99;
   /** Camp build phase: input drives the placement reticle instead of weapons. */
   buildMode = false;
   private colliderOn = true;
@@ -1163,12 +1175,16 @@ export class Player implements Pilot {
     return true;
   }
 
-  /** Drink: from the lake if you are standing at one (free, and not always clean), else from the convoy's water reserve. */
+  /**
+   * Drink: from the water you are standing at if there is any (free, and not always clean: a spring always is, a swamp
+   * seldom), else from the convoy's water reserve.
+   */
   drinkUp(): boolean {
     const ctx = this.ctx;
     const c = ctx.campaign;
     const lake = this.state === 'foot' ? (ctx.waterAt(this.pos.x + Math.sin(this.aimYaw) * 1.2, this.pos.z + Math.cos(this.aimYaw) * 1.2) ?? ctx.waterAt(this.pos.x, this.pos.z)) : null;
-    const r = drinkWater(this.needs, c.items.water, { lake: !!lake, roll: this.rollNeed() });
+    const source: WaterSource = lake?.kind ?? 'lake';
+    const r = drinkWater(this.needs, c.items.water, { lake: !!lake, source, roll: this.rollNeed() });
     if (!r.ok) {
       this.note(r.reason!, 'warn');
       ctx.audio.play('deny');
@@ -1179,7 +1195,7 @@ export class Player implements Pilot {
     this.fireCd = Math.max(this.fireCd, 0.7);
     this.meleeCd = Math.max(this.meleeCd, 0.7);
     ctx.audio.play('gulp', this.pos.x, this.pos.z, 0.5);
-    if (lake) this.note(r.dirty ? 'You drink from the lake. It tastes of mud: your stomach turns' : 'You drink from the lake', r.dirty ? 'warn' : 'good');
+    if (lake) this.note(rawDrinkText(source, lake.name, !!r.dirty), r.dirty ? 'warn' : 'good');
     else this.note(`You drink (${c.items.water.toFixed(0)} L left in the reserve)`, 'good');
     return true;
   }
@@ -1371,6 +1387,7 @@ export class Player implements Pilot {
   /** Passed out cold: nothing works until you come round, or something hurts enough to wake you. */
   private updateAsleep(dt: number) {
     this.moveSpeed = damp(this.moveSpeed, 0, 10, dt);
+    this.senseWater();
     this.moveBody(dt, 0, 0);
     this.prompt = { text: `Passed out… ${Math.ceil(this.drugs.blackout)}s`, progress: clamp(1 - this.drugs.blackout / 9, 0, 1), button: 'A' };
   }
@@ -1416,10 +1433,7 @@ export class Player implements Pilot {
     if (wantSprint) this.crouch = false;
     if (this.relief?.kind === 'shit') this.crouch = true;
     // Water: wading drags at the legs, deep water means swimming (slow, no sprint, no crouch).
-    const wet = ctx.waterAt(this.pos.x, this.pos.z);
-    this.waterDepth = wet ? wet.depth : 0;
-    this.waterLevel = wet ? wet.level : 0;
-    this.swimming = this.waterDepth > (this.swimming ? 1.1 : 1.3);
+    this.senseWater();
     if (this.swimming) this.crouch = false;
     const sprinting = wantSprint && this.waterDepth < 0.6;
     if (sprinting) this.sprintingNow = true;
@@ -1544,6 +1558,86 @@ export class Player implements Pilot {
     this.ctx.audio.play('swing', this.pos.x, this.pos.z, 0.25);
   }
 
+  /**
+   * What the water is doing where you are: how deep, where its surface is, which way it runs, and whether you are afloat.
+   * In running water it also keeps the highest level under you of the last few seconds: come down more than a body's
+   * height below it all at once and you have gone over a waterfall.
+   */
+  private senseWater() {
+    const ctx = this.ctx;
+    const wet = ctx.waterAt(this.pos.x, this.pos.z);
+    this.waterDepth = wet ? wet.depth : 0;
+    this.waterLevel = wet ? wet.level : 0;
+    this.waterFlow = wet?.flow ?? null;
+    this.waterKind = wet?.kind ?? null;
+    this.swimming = this.waterDepth > (this.swimming ? 1.1 : 1.3);
+    if (!wet || (wet.kind !== 'river' && wet.kind !== 'stream')) return;
+    if (ctx.time - this.riverTopT > 3 || wet.level >= this.riverTop) {
+      this.riverTop = wet.level;
+      this.riverTopT = ctx.time;
+    }
+    // Only once the body has come down into the water: falling past the face of a tall one does not count yet.
+    const drop = this.riverTop - wet.level;
+    if (drop > 1.4 && this.pos.y < wet.level + 0.4 && (this.swimming || this.grounded)) {
+      this.riverTop = wet.level;
+      this.riverTopT = ctx.time;
+      this.plunge(drop, ctx.time - this.plungeT < 3);
+      this.plungeT = ctx.time;
+    }
+    // In the pull above a drop: say so while there is still a chance of the bank.
+    const f = this.waterFlow;
+    if (f && this.swimming && this.state === 'foot' && Math.hypot(f[0], f[1]) > 2.1 && ctx.time - this.currentWarnT > 8) {
+      this.currentWarnT = ctx.time;
+      this.note('The current has you: swim hard for the bank!', 'warn');
+    }
+  }
+
+  /**
+   * How the water moves you, in m/s. Running water carries a swimmer bodily and leans on a wader's legs, harder the deeper
+   * and quicker it is; over a lip it takes the feet from under you. A lake only drifts a swimmer slowly toward its shore.
+   */
+  private currentDrift(): readonly [number, number] {
+    const f = this.waterFlow;
+    if (!f || this.waterDepth < 0.25 || this.inVehicle) return NO_DRIFT;
+    const sp = Math.hypot(f[0], f[1]);
+    let k: number;
+    if (this.waterKind === 'lake') k = this.swimming ? 0.15 : 0;
+    else if (this.swimming) k = 1;
+    else {
+      const lean = clamp((this.waterDepth - 0.3) / 0.9, 0, 1) * 0.45 * clamp((sp - 0.4) / 1.2, 0, 1);
+      const swept = sp > 2.4 ? 0.55 * clamp((this.waterDepth - 0.2) / 0.4, 0, 1) : 0;
+      k = Math.min(0.85, lean + swept);
+    }
+    return k > 0 ? [f[0] * k, f[1] * k] : NO_DRIFT;
+  }
+
+  /**
+   * Over a waterfall. A short drop is a dunking and a fright; a tall one knocks the wind out of you and hurts. The pool under
+   * a fall is deep, so it never kills: the blow stops well short of the last fifth of your health.
+   */
+  private plunge(drop: number, again: boolean) {
+    const ctx = this.ctx;
+    const x = this.pos.x;
+    const z = this.pos.z;
+    const k = clamp(drop / 30, 0, 1);
+    for (let i = 0; i < 8 + 14 * k; i++) ctx.fx.puff(x + (Math.random() - 0.5) * 3, this.waterLevel + 0.1, z + (Math.random() - 0.5) * 3, 0.92, 0.96, 1, 1.4 + 2.6 * k, 1.1 + k);
+    ctx.audio.play('plunge', x, z, 0.6 + 0.5 * k);
+    ctx.sig.emit(x, z, 30 + 30 * k, 'noise');
+    this.cam.addShake(0.2 + 0.5 * k);
+    ctx.input.rumble(this.index, 0.4 + 0.6 * k, 0.7, 300);
+    // A tall fall can be met in two stages (a ledge of water partway down): the second is the same fall, not a new one.
+    const hard = again ? drop : drop - 4;
+    if (hard > 0 && this.state === 'foot') {
+      const dmg = Math.min(hard * 1.5, 40, Math.max(0, this.hp - this.maxHp * 0.2) * 0.5);
+      if (dmg > 0.5) this.hurt(dmg, x, z, 'fall');
+      this.stunT = Math.max(this.stunT, 0.5 + Math.min(1.5, drop * 0.05));
+    }
+    if (again) return;
+    let name = '';
+    for (const f of ctx.terrain?.hydro?.falls ?? []) if (Math.hypot(f.x - x, f.z - z) < 30) name = f.name;
+    this.note(name ? `Over ${name}!` : 'Over the falls!', drop > 4 ? 'bad' : 'warn');
+  }
+
   private moveBody(dt: number, vx: number, vz: number) {
     const ctx = this.ctx;
     // Airborne, the feet cannot push: the take-off velocity carries, and the stick only bends it.
@@ -1566,6 +1660,10 @@ export class Player implements Pilot {
       const target = this.waterLevel - 1.2 + Math.sin(ctx.time * 2.2 + this.index) * 0.04;
       desired = { x: vx * dt, y: clamp((target - this.pos.y) * 7 * dt, -0.35, 0.35), z: vz * dt };
     }
+    // The water's own way: on top of where the legs and arms take you, not instead of it.
+    const [cx, cz] = this.currentDrift();
+    desired.x += cx * dt;
+    desired.z += cz * dt;
     this.splashT -= dt;
     if (this.waterDepth > 0.15 && Math.hypot(vx, vz) > 0.8 && this.splashT <= 0) {
       this.splashT = this.swimming ? 0.22 : 0.3;
@@ -2724,6 +2822,7 @@ export class Player implements Pilot {
     this.aimYaw -= it.look[0] * 1.6 * dt + it.lookDelta[0];
     this.moveSpeed = damp(this.moveSpeed, Math.hypot(vx, vz) * 0.9, 8, dt);
     if (this.moveSpeed > 0.1) this.yaw = dampAngle(this.yaw, Math.atan2(vx, vz), 6, dt);
+    this.senseWater();
     this.moveBody(dt, vx * 0.9, vz * 0.9);
     if (this.downT >= bleed) {
       this.state = 'dead';
@@ -3090,6 +3189,23 @@ export class Player implements Pilot {
 
 function it0(v: number) {
   return v;
+}
+
+/** What raw water tastes like, by where it came from (and its name, where it has one), and whether it sat badly. */
+function rawDrinkText(kind: WaterSource, name: string | undefined, dirty: boolean): string {
+  switch (kind) {
+    case 'spring':
+      return `You drink from ${name ?? 'the spring'}: cold and clean`;
+    case 'river':
+    case 'stream': {
+      const from = name ?? `the ${kind}`;
+      return dirty ? `You drink from ${from}. Something upstream died in it: your stomach turns` : `You drink from ${from}: cold, and it tastes of stone`;
+    }
+    case 'swamp':
+      return dirty ? 'You drink swamp water. It tastes of rot: your stomach turns' : 'You drink swamp water. Brown and warm, but it stays down';
+    default:
+      return dirty ? `You drink from ${name ?? 'the lake'}. It tastes of mud: your stomach turns` : `You drink from ${name ?? 'the lake'}`;
+  }
 }
 
 function wasPressedOrFresh(it: PlayerIntent) {
