@@ -229,6 +229,17 @@ describe.each(LEGS.legs.map((l) => [l.id, l] as const))('leg %s cars', (_id, leg
     }
   });
 
+  it('stands none of them in a wall or a building, where the physics would shove it onto its side', () => {
+    const clipped = L.cars.filter((c) =>
+      [-1.8, 0, 1.8].some((o) => {
+        const px = c.x + Math.sin(c.yaw) * o;
+        const pz = c.z + Math.cos(c.yaw) * o;
+        return L.aabbs.some((a) => a.kind !== 'car' && a.kind !== 'floor' && a.kind !== 'stair' && a.kind !== 'rock' && px > a.minX - 0.9 && px < a.maxX + 0.9 && pz > a.minZ - 0.9 && pz < a.maxZ + 0.9 && a.y1 > c.y + 0.3 && a.y0 < c.y + 1.5);
+      }),
+    );
+    expect(clipped.map((c) => c.id)).toEqual([]);
+  });
+
   it('never drops a zombie or a pickup inside a car', () => {
     for (const z of L.zombies) for (const c of L.cars) expect(Math.hypot(z.x - c.x, z.z - c.z)).toBeGreaterThan(1.0);
   });
