@@ -111,7 +111,11 @@ function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, f
       if (L === 0 && w.ext && p.v0 === 0 && p.solid) {
         const along = p.u1 - p.u0;
         const py = base + 0.12;
-        if (w.axis === 'x') trim.box(mid, py - 0.18, w.c + w.out * 0.04, along, 0.5, w.t + 0.08, S.concrete(0x7c7a74, 0.6));
+        // The plinth stands 0.08 proud of the wall, so at a corner the long wall's plinth has to run that far past the
+        // wall end or it stops short of the side wall's plinth and leaves a notch.
+        const lo = w.axis === 'x' && p.u0 <= w.a + 0.001 ? 0.08 : 0;
+        const hi = w.axis === 'x' && p.u1 >= w.b - 0.001 ? 0.08 : 0;
+        if (w.axis === 'x') trim.box(mid + (hi - lo) / 2, py - 0.18, w.c + w.out * 0.04, along + lo + hi, 0.5, w.t + 0.08, S.concrete(0x7c7a74, 0.6));
         else trim.box(w.c + w.out * 0.04, py - 0.18, mid, w.t + 0.08, 0.5, along, S.concrete(0x7c7a74, 0.6));
       }
     }
