@@ -11,6 +11,7 @@ import wildlifeJson from './wildlife.json';
 import { validateGear } from './gear';
 
 export * from './gear';
+export * from './gangs';
 
 export type StockId = 'fuel' | 'rations' | 'scrap' | 'parts' | 'tech' | 'medicine';
 export const STOCK_IDS: StockId[] = ['fuel', 'rations', 'scrap', 'parts', 'tech', 'medicine'];
