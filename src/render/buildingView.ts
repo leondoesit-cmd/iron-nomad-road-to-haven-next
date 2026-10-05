@@ -54,6 +54,7 @@ export function buildBuildingGeometry(rb: RuralBuilding): BuildingGeometry {
     const panes: PaneSpec[] = [];
     walls(rb, plan, L, base, fb, trim, roomTint, rnd, panes);
     floors(plan, L, base, fb, inside, rnd);
+    ceiling(plan, L, base, fb);
     if (L > 0) slab(plan, L, base, inside);
     for (const s of plan.stairs) if (s.level === L) stairs(plan, s, base, inside);
     for (const f of plan.furn) if (f.level === L) appendFurn(inside, f, base + (L === 0 ? 0.012 : 0.004));
@@ -316,6 +317,24 @@ function floors(plan: BuildingPlan, L: number, base: number, fb: FacadeBuilder, 
   }
   void inside;
   void rnd;
+}
+
+/**
+ * Ceiling of a storey, a one-sided quad seen from below. The roof and the storeys above are cut away when the
+ * viewer is inside, so without this the room would be open to the sky; from above it is culled and stays unseen.
+ */
+function ceiling(plan: BuildingPlan, L: number, base: number, fb: FacadeBuilder) {
+  const top = L === plan.levels - 1;
+  const y = base + plan.levelH - (top ? 0.02 : 0.31);
+  const wells = plan.wells.filter((q) => q.level === L + 1);
+  const tint = new THREE.Color(0xc8c4b8);
+  for (const room of plan.rooms) {
+    if (room.level !== L) continue;
+    for (const p of subtractRects(room, wells)) {
+      const { x0, x1, z0, z1 } = p;
+      fb.quad([[x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]], [0, -1, 0], [[x0, z0], [x1, z0], [x1, z1], [x0, z1]], tint, 19, room.id * 0.37 + plan.seed * 0.01, 3, 2);
+    }
+  }
 }
 
 /** Floor slab of an upper storey: its underside is the ceiling below. */
