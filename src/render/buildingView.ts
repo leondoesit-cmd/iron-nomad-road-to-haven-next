@@ -90,6 +90,16 @@ function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, f
         const y0 = isOut && L === 0 && p.v0 === 0 ? base - 0.9 : yBot;
         face(fb, w, p.u0, p.u1, y0, yTop, side, isOut ? rb.extStyle : INTERIOR_STYLE, tint, rb.seed * 0.37 + wi * 0.41, base);
       }
+      // The long exterior walls run the full footprint and own the corner columns; their open ends would show the room
+      // behind as a slit down every corner, so close them with a face in the exterior material.
+      if (w.ext && w.axis === 'x') {
+        const yCap = L === 0 && p.v0 === 0 ? base - 0.9 : yBot;
+        const lo = w.c - w.t / 2;
+        const hi = w.c + w.t / 2;
+        const seed = rb.seed * 0.37 + wi * 0.41;
+        if (p.u0 <= w.a + 0.001) fb.wall(w.a, lo, w.a, hi, yCap, yTop, 0, extTint, rb.extStyle, seed, 3, 2, base);
+        if (p.u1 >= w.b - 0.001) fb.wall(w.b, hi, w.b, lo, yCap, yTop, 0, extTint, rb.extStyle, seed, 3, 2, base);
+      }
       // Top edge so a cut-away wall reads as solid.
       if (p.v1 > 0.05 && p.solid) {
         const along = p.u1 - p.u0;
