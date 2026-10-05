@@ -305,6 +305,22 @@ Shots are real objects now. `Combat.shoot` still takes the same arguments, but i
 
 Tests: `tests/destruction.test.ts` (the breach rules, and real scenes breaching a building by gunfire, blast and ram-sized damage, barricades), `tests/ballistics.test.ts` (flight, drop, wind, penetration, the wound rules, kick and ADS springs, and real leg scenes: time of flight, a plank fence, a thick wall, a round through two bodies, a shotgun's shove, dismemberment, wall splatter, brass and kick) and `tests/weapons.test.ts` (the muzzle, tracer, bloom, reload, skip and melee tables; bloom, reloads, the pump's shells, melee timing, cleave and stagger, skips off steel and thrown fire in real leg scenes).
 
+### Weight, inertia and weapon handling
+
+On foot you move, and handle a gun, like a tactical shooter (`sim/gait.ts`, `sim/weaponanim.ts`, `render/humanoid.ts`).
+
+- **The body has weight.** Speed builds over about a fifth of a second and a sprint takes most of a second to reach; braking is quicker than starting, and a reversal passes through the slow part. A rifle (0.91), pump (0.93) or fire axe (0.94) is slower to carry about than a pistol (1.0); a knife is a touch quicker.
+- **The view follows the feet** (first person). The eye bobs and sways in time with the steps, wider in a sprint, smaller crouched and almost still behind the sights; it leans a little into a sidestep, dips when you land (more the harder the landing), and standing up from a crouch takes a moment instead of snapping.
+- **Sprinting lowers the gun.** In a sprint the gun is carried low across the chest and cannot be fired until it is back up (a fraction of a second after you stop). Aiming cancels the sprint.
+- **Drawing takes time.** Swapping to a weapon brings it up from low ready over its own time: a pistol 0.32 s, a rifle 0.72 s, a knife 0.2 s. A gun cannot be fired until it is out.
+- **A wall in the way pushes the gun up.** Within the gun's length of a wall the muzzle comes up and the gun is pulled in to the chest, sooner for a long gun; with the muzzle against the wall it cannot be fired.
+- **Every reload is a routine.** A pistol or SMG tips the gun, the hand goes to the belt for a fresh magazine and back, and the slide is racked; a revolver or break-action is opened muzzle up and snapped shut; a pump is canted over and takes a shell at a time (the hand goes to the pouch for each); a bolt rifle throws its bolt, takes rounds and runs it home. A pump or bolt is worked after every shot, and the case leaves at the end of the stroke.
+- **The gun has weight in the hands.** It lags behind a turn of the view and swings back, rocks with the steps and bucks back toward the shoulder with each shot.
+- **First person is a viewmodel now.** The forearms and hands come up from below the frame to a larger gun in the lower right, and come up and in behind the sights.
+
+Tests: `tests/bodycam.test.ts` (the gait, inertia, draw, wall, reload and rack rules; the rig's poses; and real scenes: speed ramps, the sprint carry blocking the trigger, drawing, a wall in front, animated reloads, the first-person eye).
+
+
 ### Cars, parts and the garage
 
 Every car standing in the world is a real vehicle. Hatchbacks, sedans, pickups and vans (`vehicles.json` `cars`) are streamed in as the convoy approaches and put away, with their state, once it moves on (`game/cars.ts`). Each car rolls its condition from its seed: a **burnt-out hulk** (strip it for parts), a **rough runner** with at least two real faults (flat tyres, a seized engine, a leaking tank), or one **sound enough to drive**. Roadside wastelands also have stalled-traffic jams on the shoulder, and city boulevards are full of them.

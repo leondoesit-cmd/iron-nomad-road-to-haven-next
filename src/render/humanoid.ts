@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { C } from './palette';
+import { clamp, lerp } from '../core/math';
 import { swingPose } from '../sim/weaponfx';
 import { shared } from './dispose';
 import { kitMaterial } from './materials';
@@ -379,7 +380,24 @@ export class Humanoid {
    */
   setFirstPerson(on: boolean) {
     for (const m of this.bodyMeshes) m.visible = !on;
+    // The upper arms point straight at a camera at the eyes and would fill the view: the forearms come up from below the frame.
+    this.partMesh.upperL.visible = !on;
+    this.partMesh.upperR.visible = !on;
+    // The arms are brought up and forward to where a camera at the eyes can see them, the gun big in the lower right of the view.
+    const o = this.fpOffset;
+    const k = on ? 1 : 0;
+    // Braced behind the sights the arms come up and in so the gun sits on the line of sight.
+    const a = k * this.fpAds;
+    this.armR.position.set(-0.22 + k * o.x + a * 0.05, 0.45 + k * o.y + a * o.ads, k * o.z);
+    this.armL.position.set(0.22 - k * o.x - a * 0.05, 0.45 + k * o.y + a * o.ads, k * o.z);
+    // The gun is drawn larger than life in the owner's view, so it reads as the thing in hand.
+    this.weapon?.scale.setScalar(on ? o.gun : 1);
   }
+
+  /** How far the arms are moved for the owner's own first-person view: toward the view's centre (x), up (y) and forward (z), metres. */
+  fpOffset = { x: 0.12, y: 0.05, z: 0.32, ads: 0.1, gun: 1.6 };
+  /** How far the owner has the sights up (0 to 1), for the first-person arms. */
+  fpAds = 0;
 
   /** Swap the item in the right hand. Cheap to call every frame: geometry is cached per item. */
   setWeapon(kind: Held) {
@@ -415,6 +433,61 @@ export class Humanoid {
     if (on) this.flash.rotation.set(Math.random() * 6, Math.random() * 6, 0);
   }
 
+  /** Whether the thing in the right hand is a firearm. */
+  private get gunHeld() {
+    return this.held === 'pistol' || this.held === 'revolver' || this.held === 'smg' || this.held === 'sawn' || this.held === 'pump' || this.held === 'rifle';
+  }
+
+  /** Lay the way the gun is being handled over the pose: low ready, high ready, a reload, a rack. */
+  private applyGunPose() {
+    const gp = this.gunPose;
+    this.hand.position.z = 0.02 - (this.gunHeld && !this.carried ? clamp(this.gunKick, 0, 1.6) * 0.04 : 0);
+    if (!this.gunHeld || this.carried) return;
+    if (gp.low > 0.001) {
+      // Low ready: the gun across the chest with its muzzle down and ahead, the support hand under it.
+      const k = gp.low;
+      this.armR.rotation.x = lerp(this.armR.rotation.x, -0.55, k);
+      this.elbowR.rotation.x = lerp(this.elbowR.rotation.x, -0.95, k);
+      this.hand.rotation.x = lerp(this.hand.rotation.x, 1.8, k);
+      this.armL.rotation.x = lerp(this.armL.rotation.x, -0.8, k);
+      this.armL.rotation.z = lerp(this.armL.rotation.z, -0.5, k);
+      this.elbowL.rotation.x = lerp(this.elbowL.rotation.x, -0.95, k);
+      this.torso.rotation.x += 0.1 * k;
+    }
+    if (gp.high > 0.001) {
+      // High ready: a wall is in the way, so the muzzle comes up and the gun is pulled in to the chest.
+      const k = gp.high;
+      this.armR.rotation.x = lerp(this.armR.rotation.x, -1.95, k);
+      this.elbowR.rotation.x = lerp(this.elbowR.rotation.x, -0.5, k);
+      this.hand.rotation.x = lerp(this.hand.rotation.x, 1.55, k);
+      this.armL.rotation.x = lerp(this.armL.rotation.x, -1.8, k);
+      this.armL.rotation.z = lerp(this.armL.rotation.z, -0.5, k);
+      this.elbowL.rotation.x = lerp(this.elbowL.rotation.x, -0.6, k);
+    }
+    // Canted about the barrel and with the muzzle moved: a reload tips the gun for the magazine well or the port.
+    this.hand.rotation.z += gp.tilt;
+    this.hand.rotation.x += gp.pitch;
+    if (gp.down > 0.001) {
+      // The support hand leaves the gun for the belt or the pouch.
+      const k = gp.down;
+      this.armL.rotation.x = lerp(this.armL.rotation.x, -0.15, k);
+      this.armL.rotation.z = lerp(this.armL.rotation.z, 0.35, k);
+      this.elbowL.rotation.x = lerp(this.elbowL.rotation.x, -1.2, k);
+    }
+    if (gp.rack > 0.001) {
+      if (gp.bolt) {
+        // A bolt: the right hand turns up, draws back and runs home.
+        this.hand.rotation.z += gp.rack * 0.9;
+        this.armR.rotation.x += gp.rack * 0.12;
+        this.elbowR.rotation.x -= gp.rack * 0.45;
+      } else {
+        // A slide or a pump: the support hand draws back along the gun and goes forward again.
+        this.armL.rotation.x += gp.rack * 0.3;
+        this.elbowL.rotation.x -= gp.rack * 0.55;
+      }
+    }
+  }
+
   /**
    * Pose the rig. `speed` is horizontal speed in m/s for walk cycles; `aim` raises the weapon arm;
    * `crouch` 0..1 lowers the stance, `air` 0..1 tucks the legs for a jump or a fall.
@@ -422,6 +495,13 @@ export class Humanoid {
   /** Barrel wander (yaw, pitch, radians) and how hard the last shot is still kicking, set by the owner each frame. */
   gunSway: [number, number] = [0, 0];
   gunKick = 0;
+  /**
+   * How the gun is being handled, set by the owner each frame: carried low across the chest (a sprint, or being drawn), pushed
+   * up and in against a wall, and what a reload or the working of a pump or bolt does: the gun canted, its muzzle moved, the
+   * support hand off to the belt, the slide or bolt travelling back. `bolt` makes the rack a bolt thrown by the right hand
+   * instead of a slide or pump worked by the left.
+   */
+  gunPose = { low: 0, high: 0, tilt: 0, pitch: 0, down: 0, rack: 0, bolt: false };
 
   update(dt: number, pose: PoseKind, speed: number, aim: number, crouch: number, lookPitch = 0, air = 0) {
     this.walkT += dt * (1.5 + speed * 1.1);
@@ -472,6 +552,7 @@ export class Humanoid {
         this.elbowR.rotation.x -= this.gunKick * 0.2;
         this.torso.rotation.x -= this.gunKick * 0.07;
       }
+      this.applyGunPose();
       this.head.rotation.x = lookPitch * 0.4 - this.torso.rotation.x * 0.6;
       if (this.swing > 0 && !this.carried) {
         // Wind up overhead, then chop down across the body.

@@ -7,7 +7,7 @@ import { Humanoid, type Held, type Palette } from '../render/humanoid';
 import { identityOf, lookOf } from '../render/outfit';
 import { makeCarryModel } from '../render/props';
 import { PLAYER_COLORS } from '../render/palette';
-import { clamp, damp, dampAngle, lerp } from '../core/math';
+import { clamp, damp, dampAngle, lerp, wrapAngle } from '../core/math';
 import type { Aabb } from '../world/layout';
 import { ENEMIES, gearDef, partDef, t } from '../data';
 import { roadX } from '../world/terrain';
@@ -20,6 +20,8 @@ import { DRUGS, DRUG_IDS, type DrugEvent, type DrugId, type DrugState } from '..
 import { BLEED, STAMINA, bind, bleedLabel, canSprint, jamChance, newBleed, newStamina, openWound, spendStamina, tickBleed, tickStamina, wearBy, WEAR, wearDamage, wearSpread, woundChance } from '../sim/vitals';
 import { ammoForGun } from '../sim/ballistics';
 import { HANDLING, kickVelocity, spring, stepSpring, swayAt, type Handling, type Spring } from '../sim/handling';
+import { ACCEL, READY, SPRINT_IN, SPRINT_OUT, WALL_BLOCK, REACH, approachVelocity, carryOf, drawLow, drawOf, landGait, newGait, newGaitOut, stepBlend, stepGait, strafeRoll, wallBlend } from '../sim/gait';
+import { RELOAD_KIND, cycleRack, cycleTime, newGunPose, reloadPose } from '../sim/weaponanim';
 import { MUZZLE, bloomAfterShot, bloomSettle, meleeFeel, reloadPlan, swingArc, type MeleeFeel } from '../sim/weaponfx';
 import type { ShellKind } from '../render/brass';
 import type { DriveInput } from '../physics/vehicle';
@@ -161,6 +163,29 @@ export class Player implements Pilot {
   /** Rounds when no gun is on the belt at all. Otherwise the rounds live on the gun, so each keeps its own magazine. */
   private looseMag = 12;
   reloadT = 0;
+  /** The view's bob in time with the steps, and the dip of a landing. */
+  readonly gait = newGait();
+  private gaitOut = newGaitOut();
+  /** Speed to the right of where the view faces (m/s), for leaning into a sidestep. */
+  private strafeV = 0;
+  private _vel: [number, number] = [0, 0];
+  /** How far the gun is carried low for a sprint (0 to 1), and how far a wall in front has pushed it up. `wallRaw` is the unsmoothed reading the trigger goes by. */
+  sprintBlend = 0;
+  wallBlend = 0;
+  private wallRaw = 0;
+  /** A draw in progress: seconds left and how long it takes. */
+  drawT = 0;
+  private drawDur = 0.3;
+  /** The gun lags behind a turn of the view, as springs. */
+  private lag = { yaw: spring(), pitch: spring() };
+  private prevAim: [number, number] | null = null;
+  /** The reload's length, and how much of the reload pose is showing (eased in and out). */
+  private reloadDur = 1;
+  private reloadBlend = 0;
+  /** A pump or bolt being worked after a shot: seconds left, and the stroke's length. */
+  private cycleT = 0;
+  private cycleDur = 1;
+  private pose = newGunPose();
   /** Seconds per round while a gun is being loaded a round at a time (a pump); 0 when the reload takes the lot at once. */
   private loadEach = 0;
   /** How far sustained fire has opened the spread, as a share of the gun's own. It closes up between shots. */
@@ -337,9 +362,17 @@ export class Player implements Pilot {
     }
     const uid = it?.uid ?? 'utility';
     if (uid !== this.heldUid) {
+      const had = this.heldUid !== '';
       this.heldUid = uid;
       this.reloadT = 0;
+      this.cycleT = 0;
       this.action = null;
+      // Bringing a new weapon up takes a moment, longer for a long gun; a gun cannot be fired until it is out.
+      if (had) {
+        this.drawDur = drawOf(this.heldModel());
+        this.drawT = this.drawDur;
+        if (this.equip === 'gun') this.fireCd = Math.max(this.fireCd, this.drawDur);
+      }
     }
   }
 
@@ -1061,6 +1094,8 @@ export class Player implements Pilot {
     if (this.swimming) speed = Math.min(speed, 2.0);
     if (aiming) speed = Math.min(speed, 2.3);
     if (this.equip === 'jerrycan') speed *= 0.82;
+    // A rifle is heavy to carry about, a knife is not.
+    speed *= carryOf(this.heldModel());
     if (this.carry) speed *= carrySlow(this.carry);
     if (this.pinned >= ENEMIES.zombieRules.pinAt) speed = 0;
     // Fatigue from watch duty slows the next day; heavy gear slows you and light shoes quicken you.
@@ -1076,7 +1111,16 @@ export class Player implements Pilot {
     if (this.firstPerson) this.yaw = dampAngle(this.yaw, this.aimYaw, 20, dt);
     else if (aiming || this.muzzleT > 0 || isHeld(it, Btn.RT)) this.yaw = dampAngle(this.yaw, this.aimYaw, 16, dt);
     else if (mag > 0.15 && speed > 0) this.yaw = dampAngle(this.yaw, Math.atan2(targetVx, targetVz), 12, dt);
-    this.moveBody(dt, targetVx, targetVz);
+    // The body has weight: it takes a moment to get up to speed and a moment to stop, a sprint longest of all.
+    let mvx = targetVx;
+    let mvz = targetVz;
+    if (this.grounded || this.swimming) {
+      const o = approachVelocity(this.hvx, this.hvz, targetVx, targetVz, dt, sprinting ? ACCEL.sprint : this.crouch ? ACCEL.crouch : ACCEL.walk, ACCEL.brake, this._vel);
+      mvx = o[0];
+      mvz = o[1];
+    }
+    this.moveBody(dt, mvx, mvz);
+    this.updateFeel(dt, sprinting);
 
     // Pin: break free with five left-stick rotations.
     if (this.pinned >= ENEMIES.zombieRules.pinAt) {
@@ -1110,6 +1154,33 @@ export class Player implements Pilot {
       if (!this.tryEnter()) this.note('No vehicle in reach', 'info');
     }
     // Ground hazards: spore clouds are handled by the zombie system.
+  }
+
+  /**
+   * What walking does to the view and the gun: the bob in time with the feet, the lean into a sidestep, the gun carried low
+   * for a sprint, and a wall in front of the muzzle pushing it up. Runs on foot every tick.
+   */
+  private updateFeel(dt: number, sprinting: boolean) {
+    const ctx = this.ctx;
+    const speed = Math.hypot(this.hvx, this.hvz);
+    stepGait(this.gait, dt, speed, sprinting, this.crouch, this.ads, this.grounded, this.gaitOut);
+    this.strafeV = this.hvx * -Math.cos(this.aimYaw) + this.hvz * Math.sin(this.aimYaw);
+    const gun = this.equip === 'gun' && !this.carry;
+    this.sprintBlend = stepBlend(this.sprintBlend, sprinting && gun ? 1 : 0, SPRINT_IN, SPRINT_OUT, dt);
+    if (!gun) {
+      this.wallRaw = 0;
+      this.wallBlend = damp(this.wallBlend, 0, 6, dt);
+      return;
+    }
+    // A wall within the gun's length: the muzzle comes up and in, and with it against the wall the gun cannot be fired.
+    const reach = REACH[this.gunModel()] ?? 0.8;
+    const cp = Math.cos(clamp(this.aimPitch, -0.4, 0.4));
+    const ex = this.pos.x;
+    const ey = this.pos.y + (this.crouch ? EYE_CROUCH : EYE_STAND);
+    const ez = this.pos.z;
+    const hit = ctx.P.raycast(ex, ey, ez, Math.sin(this.aimYaw) * cp, Math.sin(clamp(this.aimPitch, -0.4, 0.4)), Math.cos(this.aimYaw) * cp, reach + 0.6, RAY_STATIC);
+    this.wallRaw = hit ? wallBlend(hit.toi, reach) : 0;
+    this.wallBlend = stepBlend(this.wallBlend, this.wallRaw, 10, 6, dt);
   }
 
   /**
@@ -1176,6 +1247,7 @@ export class Player implements Pilot {
       if (!wasGrounded && fallV < -5 && !this.swimming) {
         // Landing: a thud and a puff of dust, louder the harder it came down.
         const k = clamp((-fallV - 5) / 12, 0, 1);
+        landGait(this.gait, -fallV);
         ctx.audio.play('thud', this.pos.x, this.pos.z, 0.15 + 0.3 * k);
         ctx.fx.puff(this.pos.x, this.pos.y + 0.05, this.pos.z, 0.62, 0.55, 0.44, 0.5 + 0.5 * k, 0.5);
         ctx.sig.emit(this.pos.x, this.pos.z, 6 + 8 * k, 'noise');
@@ -1283,6 +1355,7 @@ export class Player implements Pilot {
   /** Begin a reload for `t` seconds; `each` > 0 loads the gun a round at a time. Every reload starts here. */
   private setReload(t: number, each = 0) {
     this.reloadT = t;
+    this.reloadDur = Math.max(0.01, t);
     this.loadEach = each;
   }
 
@@ -1341,7 +1414,9 @@ export class Player implements Pilot {
       const wantFire = it.rt > 0.5;
       // Shells going in one at a time: pulling the trigger stops the loading and fires what is in.
       if (wantFire && this.fireCd <= 0 && this.reloadT > 0 && this.loadEach > 0 && this.mag > 0) this.setReload(0);
-      if (wantFire && this.fireCd <= 0 && this.reloadT <= 0) {
+      // The gun is carried low in a sprint and cannot be fired until it is back up; nor with the muzzle in a wall.
+      const handsReady = this.sprintBlend < READY && this.wallRaw < WALL_BLOCK;
+      if (wantFire && this.fireCd <= 0 && this.reloadT <= 0 && handsReady) {
         if (this.mag > 0 && this.jams()) {
           // A worn-out gun sticks: clear it (the same time as a reload) and try again.
           this.setReload(gun.reload * 0.8);
@@ -1478,7 +1553,11 @@ export class Player implements Pilot {
     const hd = HANDLING[gun.model];
     this.throwKick(hd);
     if (hd.eject === 'shot') this.ejectCase(hd.shell);
-    else if (hd.eject === 'cycle') this.brassQ.push({ t: hd.cycleDelay, kind: hd.shell });
+    else if (hd.eject === 'cycle') {
+      this.brassQ.push({ t: hd.cycleDelay, kind: hd.shell });
+      this.cycleDur = cycleTime(hd.cycleDelay);
+      this.cycleT = this.cycleDur;
+    }
     else this.spent++;
     ctx.phantoms.onShot(this, a.ox, a.oy, a.oz, a.dx, a.dy, a.dz);
     this.cam.addShake(0.02 + kick * 0.6);
@@ -1517,6 +1596,24 @@ export class Player implements Pilot {
     const ctx = this.ctx;
     const hd = this.handling();
     const k = this.kick;
+    if (this.drawT > 0) this.drawT -= dt;
+    if (this.cycleT > 0) this.cycleT -= dt;
+    // The gun lags behind a turn of the view and swings back: heavy things do not follow the eye exactly.
+    if (this.prevAim) {
+      const dy = wrapAngle(this.aimYaw - this.prevAim[0]);
+      const dp = this.aimPitch - this.prevAim[1];
+      this.lag.yaw.v -= clamp(dy, -0.3, 0.3) * 1.5;
+      this.lag.pitch.v += clamp(dp, -0.3, 0.3) * 1.2;
+    } else this.prevAim = [this.aimYaw, this.aimPitch];
+    this.prevAim[0] = this.aimYaw;
+    this.prevAim[1] = this.aimPitch;
+    stepSpring(this.lag.yaw, 0, 90, 0.55, dt);
+    stepSpring(this.lag.pitch, 0, 90, 0.55, dt);
+    if (this.state !== 'foot') {
+      this.sprintBlend = damp(this.sprintBlend, 0, SPRINT_OUT, dt);
+      this.wallBlend = damp(this.wallBlend, 0, 6, dt);
+      this.wallRaw = 0;
+    }
     stepSpring(k.pitch, 0, hd.settleK, hd.settleZeta, dt);
     stepSpring(k.yaw, 0, hd.settleK, hd.settleZeta, dt);
     stepSpring(k.roll, 0, hd.settleK * 0.8, hd.settleZeta, dt);
@@ -2325,7 +2422,7 @@ export class Player implements Pilot {
       lookBack: this.lookBack,
       zoom: this.ads,
       eye,
-      kick: { pitch: this.kick.pitch.x + this.sway[1], yaw: this.kick.yaw.x + this.sway[0], roll: this.kick.roll.x, back: this.kick.back.x },
+      kick: { pitch: this.kick.pitch.x + this.sway[1], yaw: this.kick.yaw.x + this.sway[0], roll: this.kick.roll.x + (first && this.state === 'foot' ? this.gaitOut.roll + strafeRoll(this.strafeV) : 0), back: this.kick.back.x },
     });
     if (this.showcase) this.orbitShowcase(dt, target);
   }
@@ -2381,9 +2478,11 @@ export class Player implements Pilot {
     }
     if (this.state !== 'foot') return e.set(target.x, target.y + 1.5, target.z);
     const want = this.swimming ? EYE_SWIM : this.crouch ? EYE_CROUCH : EYE_STAND;
-    this.eyeH = damp(this.eyeH, want, 14, dt);
-    // A hair forward of the neck so the near plane stays clear of the shoulders.
-    return e.set(target.x + Math.sin(this.aimYaw) * 0.08, target.y + this.eyeH, target.z + Math.cos(this.aimYaw) * 0.08);
+    // Standing up and crouching take a moment: the head does not snap between heights.
+    this.eyeH = damp(this.eyeH, want, 8, dt);
+    // A hair forward of the neck so the near plane stays clear of the shoulders. The head bobs and sways with the steps.
+    const g = this.gaitOut;
+    return e.set(target.x + Math.sin(this.aimYaw) * 0.08 - Math.cos(this.aimYaw) * g.x, target.y + this.eyeH + g.y, target.z + Math.cos(this.aimYaw) * 0.08 + Math.sin(this.aimYaw) * g.x);
   }
 
   /**
@@ -2426,16 +2525,50 @@ export class Player implements Pilot {
     const weapon = this.heldModel();
     h.setWeapon(lying || this.carry ? 'none' : weapon);
     h.swing = this.swingT;
-    h.gunSway[0] = this.sway[0];
-    h.gunSway[1] = this.sway[1];
+    // The barrel wanders, the gun lags behind a turn of the view and rocks with the steps.
+    h.gunSway[0] = this.sway[0] + clamp(this.lag.yaw.x, -0.08, 0.08) + this.gaitOut.armX;
+    h.gunSway[1] = this.sway[1] + clamp(this.lag.pitch.x, -0.08, 0.08) + this.gaitOut.armY;
+    if (this.syncGunPose(h, dt)) aim = Math.max(aim, 0.75);
+    h.fpAds = this.ads;
     h.gunKick = clamp(this.kick.pitch.x / 0.05, -0.4, 1.6);
     // First person: whatever is in hand is held up in front, where the camera can see it.
-    if (this.firstPerson && !this.carry && weapon !== 'none') aim = Math.max(aim, 0.75);
+    if (this.firstPerson && !this.carry && weapon !== 'none') aim = Math.max(aim, 1);
     this.syncCarryModel();
     this.airVis = damp(this.airVis, this.state === 'foot' && !this.grounded && !this.swimming && this.airT > 0.06 ? 1 : 0, 16, dt);
     h.update(dt, lying ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch, this.airVis);
     h.muzzle(this.muzzleT > 0.05);
     if (this.invuln > 0) h.root.visible = Math.floor(this.invuln * 12) % 2 === 0;
+  }
+
+  /** Hand the rig how the gun is being handled this frame. Returns whether the gun must be up in front of the body. */
+  private syncGunPose(h: Humanoid, dt: number): boolean {
+    const gp = h.gunPose;
+    const gun = this.equip === 'gun' && !this.carry && this.state === 'foot';
+    if (!gun) {
+      gp.low = gp.high = gp.tilt = gp.pitch = gp.down = gp.rack = 0;
+      this.reloadBlend = 0;
+      return false;
+    }
+    const model = this.gunModel();
+    const kind = RELOAD_KIND[model];
+    const reloading = this.reloadT > 0;
+    this.reloadBlend = damp(this.reloadBlend, reloading ? 1 : 0, 14, dt);
+    const p = this.pose;
+    p.tilt = p.pitch = p.down = p.rack = 0;
+    if (reloading) {
+      // A pump is loaded a shell at a time, the routine repeating for each; the rest take the reload through once.
+      const t = this.loadEach > 0 ? (this.reloadT > this.loadEach ? 0 : 1 - this.reloadT / this.loadEach) : 1 - this.reloadT / this.reloadDur;
+      reloadPose(kind, t, p);
+    } else if (this.cycleT > 0) p.rack = cycleRack(1 - this.cycleT / this.cycleDur);
+    const rb = reloading ? this.reloadBlend : 1;
+    gp.low = Math.max(this.sprintBlend, drawLow(this.drawT, this.drawDur)) * (1 - this.reloadBlend);
+    gp.high = this.wallBlend * (1 - gp.low) * (1 - this.reloadBlend);
+    gp.tilt = p.tilt * rb;
+    gp.pitch = p.pitch * rb;
+    gp.down = p.down * rb;
+    gp.rack = p.rack * rb;
+    gp.bolt = model === 'rifle';
+    return reloading;
   }
 
   private carryKey = '';

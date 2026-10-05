@@ -273,9 +273,10 @@ describe('guns', () => {
     expect(shoot).toHaveBeenCalledTimes(1);
     expect(shoot.mock.calls[0][6]).toMatchObject({ damage: 27, noise: 60, range: 75, pierce: undefined });
     shoot.mockClear();
-    p.fireCd = 0;
     equip(p, 'w_revolver', 3);
     expect(p.equip).toBe('gun');
+    // Bringing the revolver up takes a moment; this test is about its numbers.
+    p.fireCd = 0;
     fire(h, sc);
     expect(shoot).toHaveBeenCalledTimes(1);
     expect(shoot.mock.calls[0][6]).toMatchObject({ damage: 55, noise: 72, range: 90, pierce: 0.3 });
