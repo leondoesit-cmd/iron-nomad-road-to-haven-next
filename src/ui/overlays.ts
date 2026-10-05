@@ -2,6 +2,7 @@ import { ENCOUNTERS, LEGS, STRUCTURES, encounterById, legById, t, type LegDef } 
 import { FocusUI, type FocusItem } from './focus';
 import { LedgerPanel } from './ledger';
 import { ControlsMenu } from './controls';
+import { Guide } from './guide';
 import { PROMPT_ACTION, keyLabel, padLabel, padPhysical, viewSharesVehicle, type KeyMap } from '../input/bindings';
 import { escapeHtml } from './hud';
 import { hasSave, initSave, savedSolo } from '../save/save';
@@ -109,6 +110,10 @@ export class Overlays {
           <button data-fid="ctl">Control settings</button>
           <button data-fid="how">Controls</button>
         </div>
+        <div class="btnrow" style="margin-top:10px">
+          <button data-fid="learn" class="g-go">How to play</button>
+          <button data-fid="train" class="g-go">Training</button>
+        </div>
         <p style="font-size:.78em;margin-top:18px">${solo ? 'One player, full screen. Plug in a gamepad and press A, or use the keyboard (WASD with F, or the arrow keys with Right Shift).' : 'Two players, one screen. Plug in two gamepads and press A, or share the keyboard.'} Chrome or Edge recommended; gamepads need localhost or HTTPS.</p>
         ${g.input.nonStandard.size ? '<p style="color:var(--amber)">A controller without the standard mapping was detected. Controls may be wrong.</p>' : ''}
       </div></div>`;
@@ -122,6 +127,8 @@ export class Overlays {
       { el: el('set'), press: () => this.titleLock <= 0 && this.showSettings(() => this.showTitle()) },
       { el: el('ctl'), press: () => this.titleLock <= 0 && this.showControlSettings(() => this.showTitle()) },
       { el: el('how'), press: () => this.titleLock <= 0 && this.showControls(() => this.showTitle()) },
+      { el: el('learn'), press: () => this.titleLock <= 0 && this.showGuide(() => this.showTitle(), () => g.startTraining()) },
+      { el: el('train'), press: () => this.titleLock <= 0 && g.startTraining() },
     ];
     g.focus.setItems(items);
     const start = items.findIndex((i) => i.el === el('new'));
@@ -282,6 +289,14 @@ export class Overlays {
   }
 
   private controlsMenu: ControlsMenu | null = null;
+  private guide: Guide | null = null;
+
+  /** The illustrated guide. From the title it can lead straight into training. */
+  showGuide(back: () => void, onTrain?: () => void, page = 0) {
+    const g = this.game;
+    const paused = g.paused;
+    (this.guide ??= new Guide(g)).show(paused ? this.pauseEl! : this.root, paused ? this.pauseFocus : g.focus, back, { onTrain, page });
+  }
 
   /** Rebind every action and set the look and camera options. */
   showControlSettings(back: () => void) {
@@ -369,8 +384,10 @@ export class Overlays {
       <div class="item"><button data-fid="set">Settings</button></div>
       <div class="item"><button data-fid="ctl">Control settings</button></div>
       <div class="item"><button data-fid="how">Controls</button></div>
+      <div class="item"><button data-fid="learn">How to play</button></div>
+      ${g.tutorial ? '<div class="item"><button data-fid="skip">Skip this lesson</button></div>' : ''}
       ${g.solo ? '' : '<div class="item"><button data-fid="swap">Swap player seats</button></div>'}
-      <div class="item"><button data-fid="quit">Quit to title</button></div></div></div>`;
+      <div class="item"><button data-fid="quit">${g.tutorial ? 'Leave training' : 'Quit to title'}</button></div></div></div>`;
     (el.querySelectorAll('.menu button') as NodeListOf<HTMLElement>).forEach((b) => (b.style.pointerEvents = 'auto'));
     const q = (k: string) => el.querySelector<HTMLElement>(`[data-fid="${k}"]`)!;
     this.pauseFocus.setItems([
@@ -378,6 +395,8 @@ export class Overlays {
       { el: q('set'), press: () => this.showSettings(() => this.renderPause(by)) },
       { el: q('ctl'), press: () => this.showControlSettings(() => this.renderPause(by)) },
       { el: q('how'), press: () => this.showControls(() => this.renderPause(by)) },
+      { el: q('learn'), press: () => this.showGuide(() => this.renderPause(by)) },
+      ...(g.tutorial ? [{ el: q('skip'), press: () => (g.tutorial?.skip(), g.setPause(false, -1)) }] : []),
       ...(g.solo
         ? []
         : [
@@ -637,6 +656,26 @@ export class Overlays {
       { el: q('quit'), press: () => quit() },
     ]);
     g.focus.cursor = [hasSave() ? 0 : 1, hasSave() ? 0 : 1];
+    g.focus.active = true;
+    g.audio.setMusic('none');
+  }
+
+  /** Training is over: the lessons covered, and where to go from here. */
+  showTrainingDone(lessons: number) {
+    const g = this.game;
+    this.clear();
+    this.root.innerHTML = `<div class="enc panel paper" style="width:min(640px,92%)"><h2>Training complete</h2>
+      <p style="text-transform:none;letter-spacing:.01em">${lessons} lessons done: on foot, shooting, scavenging, driving, noise and dust, repairs and fuel, the map, your pack, and making camp. Out in the world the Dusk Bell is followed by a vote on a camp, three minutes to build, and a three-wave night raid. The illustrated guide covers that part, and the rest of the survival rules.</p>
+      <div class="btnrow"><button data-fid="new">Start a new convoy</button><button data-fid="guide">Illustrated guide</button><button data-fid="again">Train again</button><button data-fid="quit">Title</button></div></div>`;
+    this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));
+    const q = (k: string) => this.root.querySelector<HTMLElement>(`[data-fid="${k}"]`)!;
+    g.focus.setItems([
+      { el: q('new'), press: () => g.startNewGame() },
+      { el: q('guide'), press: () => this.showGuide(() => this.showTrainingDone(lessons), undefined, 7) },
+      { el: q('again'), press: () => g.startTraining() },
+      { el: q('quit'), press: () => g.toTitle() },
+    ]);
+    g.focus.cursor = [0, 0];
     g.focus.active = true;
     g.audio.setMusic('none');
   }

@@ -2085,3 +2085,293 @@ button:disabled {
   font-size: 0.7em;
   padding: 0 8px;
 }
+
+/* ------------------------------------------------------------------ illustrated guide */
+.guide {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(1120px, 96%);
+  max-height: 96%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 22px 14px;
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+.guide h2,
+.guide h3 {
+  color: var(--amber);
+}
+.g-head {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+.g-head h2 {
+  font-size: 1.15em;
+}
+.g-kick {
+  color: var(--paper-dim);
+  font-size: 0.78em;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.g-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  color: var(--paper-dim);
+}
+.g-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 20px;
+  min-height: 0;
+  overflow: hidden;
+  align-items: start;
+}
+.g-art {
+  border: 1px solid var(--panel-line);
+  background: #120d09;
+}
+.gart {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: var(--font);
+}
+.g-text {
+  min-height: 0;
+  font-size: 0.82em;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  overflow: hidden;
+}
+.g-text h3 {
+  font-size: 1.25em;
+  margin-bottom: 8px;
+}
+.g-text ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+.g-text li {
+  padding-left: 14px;
+  position: relative;
+  line-height: 1.38;
+}
+.g-text li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 6px;
+  height: 6px;
+  background: var(--amber);
+}
+.g-text b {
+  color: var(--amber);
+  font-weight: 600;
+}
+kbd {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.82em;
+  min-width: 1.7em;
+  padding: 0 6px;
+  margin: 0 2px;
+  text-align: center;
+  line-height: 1.55;
+  color: var(--paper);
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid var(--amber-dim);
+  border-bottom-width: 3px;
+  border-radius: 4px;
+}
+.g-kbs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+.g-kb {
+  border: 1px solid var(--panel-line);
+  padding: 5px 8px 6px;
+  background: rgba(0, 0, 0, 0.3);
+}
+.g-kb h4 {
+  margin: 0 0 3px;
+  font-size: 0.78em;
+  letter-spacing: 0.16em;
+  color: var(--amber);
+  font-weight: 600;
+}
+.g-kbrow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 0.8em;
+}
+.g-kbrow em {
+  font-style: normal;
+  color: var(--paper-dim);
+  text-align: right;
+  font-size: 0.86em;
+}
+.g-dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+.g-dots i {
+  width: 22px;
+  height: 4px;
+  background: rgba(233, 223, 199, 0.22);
+}
+.g-dots i.on {
+  background: var(--amber);
+}
+.g-foot {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.g-hint {
+  margin-left: auto;
+  font-size: 0.7em;
+  color: var(--paper-dim);
+  letter-spacing: 0.1em;
+}
+.g-go {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+@media (max-width: 900px) {
+  .g-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ------------------------------------------------------------------ training coach cards */
+.coach {
+  position: absolute;
+  /* Under the noise meter on the left: the compass, minimap, vitals and prompts keep their corners. */
+  left: 12px;
+  top: 96px;
+  width: clamp(210px, 38%, 360px);
+  padding: 8px 12px 9px;
+  font-size: 0.74em;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--paper);
+  background: rgba(18, 14, 10, 0.86);
+  border: 1px solid var(--panel-line);
+  border-top: 3px solid var(--pc, var(--amber));
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  z-index: 3;
+}
+/* The strips of a top and bottom split are short: a smaller card, higher up. */
+.half.h-top .coach,
+.half.h-bottom .coach {
+  top: 80px;
+  font-size: 0.6em;
+  width: clamp(220px, 36%, 340px);
+}
+.coach.ok {
+  border-color: var(--green);
+  border-top-color: var(--green);
+}
+.coach .c-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82em;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--paper-dim);
+}
+.coach .c-bar {
+  flex: 1;
+  height: 3px;
+  background: rgba(233, 223, 199, 0.18);
+}
+.coach .c-bar i {
+  display: block;
+  height: 100%;
+  background: var(--pc, var(--amber));
+}
+.coach .c-title {
+  margin: 3px 0 2px;
+  font-size: 1.3em;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+.coach.ok .c-title {
+  color: var(--green);
+}
+.coach .c-goals {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.coach .c-goals li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--paper);
+}
+.coach .c-goals li i {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--amber-dim);
+  font-style: normal;
+  font-size: 11px;
+  line-height: 12px;
+  text-align: center;
+  color: var(--ink);
+}
+.coach .c-goals li.done {
+  color: var(--paper-dim);
+  text-decoration: line-through;
+}
+.coach .c-goals li.done i {
+  background: var(--green);
+  border-color: var(--green);
+}
+.coach .c-wait,
+.coach .c-stuck {
+  margin-top: 5px;
+  color: var(--amber);
+}
+.coach .c-stuck {
+  color: var(--paper-dim);
+  font-size: 0.9em;
+}
+.coach b {
+  color: var(--amber);
+  font-weight: 600;
+}
+.g-or {
+  color: var(--paper-dim);
+  font-size: 0.8em;
+}
+.g-kbrow {
+  font-size: 0.74em;
+}
+.g-kbrow em {
+  white-space: nowrap;
+}
