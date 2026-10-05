@@ -1,6 +1,8 @@
 import { gearDef, t } from '../data';
 import { DRUGS } from '../sim/drugs';
 import { STAMINA, bleedLabel, wearLabel, wearOf } from '../sim/vitals';
+import { canRelieve, isNeedAct, needChips, type NeedAct } from '../sim/needs';
+import type { Campaign } from '../game/campaign';
 import { LABEL, whole } from '../sim/resources';
 import { loyaltyBand } from '../sim/loyalty';
 import { SALVAGE_STAGES } from '../sim/salvage';
@@ -388,8 +390,10 @@ export class Hud {
     if (p.bleed.level > 0 && p.state !== 'downed') chips.push(`<span class="chip bad">${bleedLabel(p.bleed.level)}</span>`);
     if (p.stamina.winded && p.state === 'foot') chips.push('<span class="chip warn">WINDED</span>');
     for (const s of p.drugs.status()) chips.push(`<span class="chip ${s.kind}">${s.text}</span>`);
+    if (p.state === 'foot' || p.state === 'driving' || p.state === 'gunner') for (const c of needChips(p.needs)) chips.push(`<span class="chip ${c.kind}">${c.text}</span>`);
     const qsel = p.quickSel;
-    const qn = scene.campaign.items[qsel];
+    // The body's chores are on the belt but not worth a standing chip: the need chips above say when one is due.
+    const qn = isNeedAct(qsel) ? 0 : scene.campaign.items[qsel];
     // A dressing is worth showing while hurt; a drug only while you have one.
     const dressing = qsel === 'bandage' || qsel === 'medkit';
     if ((p.state === 'foot' || p.state === 'driving') && !p.beltOpen && qn > 0 && (!dressing || p.hp < p.maxHp - 0.5 || p.bleed.level > 0)) {
@@ -752,16 +756,15 @@ export class Hud {
       h.setStyle('belt', 'display', 'none');
       return;
     }
-    const items = scene.campaign.items;
     const sel = p.quickSel;
     const slots = QUICK.map((id) => {
       const q = quickDef(id);
-      const n = items[id];
-      return `<div class="slot${id === sel ? ' sel' : ''}${n <= 0 ? ' none' : ''}" style="--dc:${q.color}"><b>${q.glyph}</b><i>${n}</i></div>`;
+      const n = quickCount(id, p, scene.campaign);
+      return `<div class="slot${id === sel ? ' sel' : ''}${n.none ? ' none' : ''}" style="--dc:${q.color}"><b>${q.glyph}</b><i>${n.slot}</i></div>`;
     }).join('');
     const def = quickDef(sel);
     const hint = p.state === 'driving' ? `hold to cycle · release, then tap ${btnLabel(slot, 'Down')} to take` : `◀ ▶ to choose · release to close · tap ${btnLabel(slot, 'Down')} to take`;
-    h.setHtml('belt', `<div class="slots">${slots}</div><div class="slotname" style="color:${def.color}">${def.name} ×${items[sel]}</div><div class="slotblurb">${def.blurb}</div><div class="slothint">${hint}</div>`);
+    h.setHtml('belt', `<div class="slots">${slots}</div><div class="slotname" style="color:${def.color}">${def.name} ${quickCount(sel, p, scene.campaign).label}</div><div class="slotblurb">${def.blurb}</div><div class="slothint">${hint}</div>`);
     h.setStyle('belt', 'display', 'flex');
   }
 
@@ -784,7 +787,10 @@ export class Hud {
           })
           .join('')
       : '<div style="opacity:.7">No crew yet. Hire at a Waypoint.</div>';
-    const items = `OIL ${(c.items.oil * 3).toFixed(1)} L · WATER ${c.items.water.toFixed(0)} L · FLARES ${c.items.flare} · MOLOTOVS ${c.items.molotov} · CHARGES ${c.items.charge} · MEDKITS ${c.items.medkit} · STIMS ${c.items.stim} · PAINKILLERS ${c.items.painkiller} · ADRENALINE ${c.items.adrenaline} · HAZE ${c.items.haze} · AMMO ${c.ammo}`;
+    const n = p.needs;
+    const pct = (v: number) => `${Math.round(v * 100)}%`;
+    const body = `FED ${pct(n.food)} · WATER ${pct(n.water)} · BLADDER ${pct(n.bladder)} · BOWELS ${pct(n.bowel)}`;
+    const items = `${body}<br>OIL ${(c.items.oil * 3).toFixed(1)} L · FLARES ${c.items.flare} · MOLOTOVS ${c.items.molotov} · CHARGES ${c.items.charge} · MEDKITS ${c.items.medkit} · STIMS ${c.items.stim} · PAINKILLERS ${c.items.painkiller} · ADRENALINE ${c.items.adrenaline} · HAZE ${c.items.haze} · AMMO ${c.ammo}`;
     const here = p.vehicle?.position ?? p.pos;
     const haven = leg?.leg.open ? leg.src.layout.end : null;
     const route = leg
@@ -805,11 +811,34 @@ export function escapeHtml(s: string) {
 
 void t;
 
-/** What a quick-belt slot shows: dressings are ours, everything else is a drug. */
+/** What a quick-belt slot shows: the body's chores and the dressings are ours, everything else is a drug. */
 function quickDef(id: QuickId): { name: string; glyph: string; color: string; blurb: string } {
+  if (id === 'eat') return { name: 'Eat', glyph: '🍖', color: '#d6a45a', blurb: 'Eat a ration from the stores: fills you up by half. Hungry slows your recovery, starving hurts. Your hands are busy for a moment.' };
+  if (id === 'drink') return { name: 'Drink', glyph: '🚰', color: '#5fb6e8', blurb: 'Drink three quarters of a litre from the water reserve, or from the lake if you stand at one: free, but raw water can upset your stomach.' };
+  if (id === 'piss') return { name: 'Piss', glyph: '💦', color: '#e6d34a', blurb: 'Empty your bladder. A few seconds standing still: walk off, fire or take a hit and it stops. Keys: see the Control settings.' };
+  if (id === 'shit') return { name: 'Shit', glyph: '💩', color: '#9b6a3a', blurb: 'Empty your bowels. A long squat with your guard down. A full bowel spoils your sprint and aim until you go.' };
   if (id === 'bandage') return { name: 'Bandage', glyph: '✚', color: '#e8e0c8', blurb: 'Stops bleeding and mends a little. Quick: your hands are busy for under a second.' };
   if (id === 'medkit') return { name: 'Medkit', glyph: '✜', color: '#ff6f5f', blurb: 'Stops bleeding and heals 60. Your hands are busy for over a second.' };
   return DRUGS[id];
+}
+/** What a belt slot counts: doses in the stores, or for the body's chores, a share of the stores or of the need. */
+function quickCount(id: QuickId, p: Player, c: Campaign): { slot: string; label: string; none: boolean } {
+  if (!isNeedAct(id)) {
+    const n = c.items[id];
+    return { slot: String(n), label: `×${n}`, none: n <= 0 };
+  }
+  const act: NeedAct = id;
+  const n = p.needs;
+  if (act === 'eat') {
+    const r = whole(c.stocks.rations);
+    return { slot: String(r), label: `×${r}`, none: r < 1 };
+  }
+  if (act === 'drink') {
+    const l = `${c.items.water.toFixed(0)} L`;
+    return { slot: l, label: l, none: c.items.water < 0.05 };
+  }
+  const v = `${Math.round((act === 'piss' ? n.bladder : n.bowel) * 100)}%`;
+  return { slot: v, label: `${v} full`, none: !canRelieve(n, act).ok };
 }
 function quickName(id: QuickId): string {
   return quickDef(id).name;

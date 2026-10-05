@@ -15,9 +15,10 @@ import { steerTo, newSteerState } from './aiDrive';
 import { applyRepair, planRepair } from '../sim/repair';
 import { STRAIGHT } from '../sim/bodywork';
 import { SALVAGE_STAGES } from '../sim/salvage';
-import { costText, spend } from '../sim/resources';
+import { costText, spend, whole } from '../sim/resources';
 import { DRUGS, DRUG_IDS, type DrugEvent, type DrugId, type DrugState } from '../sim/drugs';
 import { BLEED, STAMINA, bind, bleedLabel, canSprint, jamChance, newBleed, newStamina, openWound, spendStamina, tickBleed, tickStamina, wearBy, WEAR, wearDamage, wearSpread, woundChance } from '../sim/vitals';
+import { NEEDS, NEUTRAL_NEEDS, NEED_ACTS, canRelieve, isNeedAct, drink as drinkWater, eat as eatFood, needMods, reliefSeconds, relieve, tickNeeds, warnText, type NeedAct, type NeedEvent, type NeedMods, type Needs } from '../sim/needs';
 import { ammoForGun, cutOf } from '../sim/ballistics';
 import { HANDLING, kickVelocity, spring, stepSpring, swayAt, type Handling, type Spring } from '../sim/handling';
 import type { ShellKind } from '../render/brass';
@@ -65,9 +66,10 @@ export type PState = 'foot' | 'entering' | 'driving' | 'gunner' | 'downed' | 'de
 export type Equip = 'gun' | 'melee' | 'wrench' | 'crowbar' | 'jerrycan' | 'utility';
 export type Utility = 'flare' | 'charge' | 'molotov' | 'horn';
 export const UTILITIES: Utility[] = ['flare', 'molotov', 'charge', 'horn'];
-/** What the quick belt (hold the use button) holds: field dressings first, then the drugs. */
-export type QuickId = 'bandage' | 'medkit' | DrugId;
-export const QUICK: QuickId[] = ['bandage', 'medkit', ...DRUG_IDS];
+/** What the quick belt (hold the use button) holds: field dressings first, then the drugs, then the body's own chores. */
+export type QuickId = 'bandage' | 'medkit' | DrugId | NeedAct;
+export const QUICK: QuickId[] = ['bandage', 'medkit', ...DRUG_IDS, ...NEED_ACTS];
+const isDrugId = (id: QuickId): id is DrugId => (DRUG_IDS as string[]).includes(id);
 /** Medkits heal this much, from the belt or the inventory. */
 export const MEDKIT_HEAL = 60;
 
@@ -235,8 +237,13 @@ export class Player implements Pilot {
   stamina = newStamina();
   /** Open wounds. They drain health until they clot or are bound. */
   bleed = newBleed();
-  /** Set while the quick belt rests on a dressing; null means it rests on `drugs.selected`. */
-  private dressingSel: 'bandage' | 'medkit' | null = null;
+  /** Set while the quick belt rests on anything but a drug; null means it rests on `drugs.selected`. */
+  private dressingSel: Exclude<QuickId, DrugId> | null = null;
+  /** What hunger, thirst and a full bladder are doing to you right now, refreshed every tick. */
+  nm: NeedMods = { ...NEUTRAL_NEEDS };
+  /** A piss or a shit in progress. It runs on its own clock and walking off, firing or being hit cuts it short. */
+  relief: { kind: 'piss' | 'shit'; t: number; dur: number; from: number; stained: boolean; wasCrouch: boolean } | null = null;
+  private needSeed = 0x2545f491;
   private sprintingNow = false;
   private woundSeed = 0x9e3779b9;
   /** Seconds the use button has been down, to tell a tap (take) from a hold (open the belt). */
@@ -411,6 +418,10 @@ export class Player implements Pilot {
   get drugs(): DrugState {
     return this.ctx.campaign.drugs[this.index];
   }
+
+  get needs(): Needs {
+    return this.ctx.campaign.needs[this.index];
+  }
   get targetable() {
     return (this.state === 'foot' || this.state === 'entering' || this.state === 'downed') && this.invuln <= 0;
   }
@@ -488,7 +499,7 @@ export class Player implements Pilot {
     if (this.drugs.passedOut || this.stunT > 0) return { steer: 0, throttle: 0, brake: 0.25, handbrake: false };
     // Drunk driving: the wheel wanders.
     let steer = it.move[0];
-    const sway = this.drugs.mods().sway;
+    const sway = this.drugs.mods().sway + this.nm.sway;
     if (sway > 0.02) {
       const t = this.ctx.time + this.index * 7.3;
       steer = clamp(steer + (Math.sin(t * 1.1) + 0.6 * Math.sin(t * 2.7 + 0.9)) * 0.3 * sway, -1, 1);
@@ -511,6 +522,7 @@ export class Player implements Pilot {
     if (this.action && this.action.kind !== 'revive' && kind !== 'spore') {
       this.action = null;
     }
+    if (this.relief) this.endRelief('hit');
     if (this.state === 'downed') {
       // Hits on a downed player speed up the bleed-out.
       this.downT += dmg * 0.04;
@@ -757,6 +769,7 @@ export class Player implements Pilot {
     if (this.invuln > 0) this.invuln -= dt;
     this.sinceHit += dt;
     this.updateDrugs(dt, it);
+    if (this.relief && this.state !== 'foot') this.endRelief('quiet');
     this.sprintingNow = false;
     for (const n of this.notes) n.t -= dt;
     while (this.notes.length && this.notes[0].t <= 0) this.notes.shift();
@@ -842,11 +855,13 @@ export class Player implements Pilot {
       return;
     }
     const dm = this.drugs.mods();
+    this.updateNeeds(dt, dm.appetite);
+    const nm = this.nm;
     tickStamina(this.stamina, dt, {
       sprinting: this.sprintingNow,
       resting: this.moveSpeed < 0.5,
-      drain: (this.carry ? 1.4 : 1) / Math.max(0.7, dm.speed),
-      regen: dm.speed > 1.05 ? 1.2 : 1,
+      drain: ((this.carry ? 1.4 : 1) / Math.max(0.7, dm.speed)) * nm.drain,
+      regen: (dm.speed > 1.05 ? 1.2 : 1) * nm.regen,
     });
     if (this.bleed.level > 0) {
       const loss = tickBleed(this.bleed, dt);
@@ -878,7 +893,7 @@ export class Player implements Pilot {
   private stepQuick(dir: 1 | -1) {
     const i = QUICK.indexOf(this.quickSel);
     const next = QUICK[(i + dir + QUICK.length) % QUICK.length];
-    if (next === 'bandage' || next === 'medkit') this.dressingSel = next;
+    if (!isDrugId(next)) this.dressingSel = next;
     else {
       this.dressingSel = null;
       this.drugs.selected = next;
@@ -911,8 +926,18 @@ export class Player implements Pilot {
 
   /** Tap on the quick belt: take whatever it rests on. */
   private useQuick() {
-    if (this.quickSel === 'bandage' || this.quickSel === 'medkit') this.useDressing(this.quickSel);
-    else this.takeDrug(this.quickSel);
+    const sel = this.quickSel;
+    if (sel === 'bandage' || sel === 'medkit') this.useDressing(sel);
+    else if (isNeedAct(sel)) this.doNeed(sel);
+    else this.takeDrug(sel);
+  }
+
+  /** Eat, drink, piss or shit, from the belt or from its own key. Pressing piss or shit again stops one under way. */
+  private doNeed(act: NeedAct) {
+    if (this.relief) return void this.endRelief('moved');
+    if (act === 'eat') this.eatRation();
+    else if (act === 'drink') this.drinkUp();
+    else this.startRelief(act);
   }
 
   /**
@@ -924,6 +949,12 @@ export class Player implements Pilot {
     const items = this.ctx.campaign.items;
     const living = this.state === 'foot' || this.state === 'driving' || this.state === 'gunner';
     const can = living && !this.buildMode && !d.passedOut && this.stunT <= 0;
+    if (can) {
+      if (wasPressed(it, Btn.Eat)) this.doNeed('eat');
+      if (wasPressed(it, Btn.Drink)) this.doNeed('drink');
+      if (wasPressed(it, Btn.Piss)) this.doNeed('piss');
+      if (wasPressed(it, Btn.Shit)) this.doNeed('shit');
+    }
     const down = can && isHeld(it, Btn.Down);
     if (down) {
       const was = this.useHold;
@@ -949,7 +980,8 @@ export class Player implements Pilot {
     if (this.state === 'dead' || this.state === 'downed') return;
     const m = d.mods();
     if (m.regen > 0 && this.hp < this.maxHp && this.state === 'foot') this.heal(m.regen * dt);
-    if (m.shake > 0.05) this.cam.addShake(m.shake * 0.02 * dt * 60);
+    const shake = m.shake + this.nm.shake;
+    if (shake > 0.05) this.cam.addShake(shake * 0.02 * dt * 60);
     if (m.poison > 0) {
       this.poisonT -= dt;
       if (this.poisonT <= 0) {
@@ -977,6 +1009,151 @@ export class Player implements Pilot {
     for (const n of r.notes) this.note(n, 'warn');
     if (r.relieved) this.note('The shakes ease off', 'info');
     if (!r.overdose && this.drugs.toxicity > 0.7) this.note('Your hands are shaking: one more could be too many', 'warn');
+    return true;
+  }
+
+  // ------------------------------------------------------------------ eat, drink, piss, shit
+
+  /** A uniform [0,1) from the body's own dice, so a bad mouthful never shifts the world's. */
+  private rollNeed(): number {
+    this.needSeed = (Math.imul(this.needSeed, 1664525) + 1013904223) >>> 0;
+    return this.needSeed / 4294967296;
+  }
+
+  /** Hunger, thirst and the rest of it: tick the body, say what it wants, and work out what it does to you. */
+  private updateNeeds(dt: number, appetite: number) {
+    const n = this.needs;
+    const effort = this.sprintingNow ? 1 : this.moveSpeed > 2.2 ? 0.25 : 0;
+    for (const e of tickNeeds(n, dt, { appetite, effort, asleep: this.drugs.passedOut })) this.onNeedEvent(e);
+    const nm = (this.nm = needMods(n));
+    // Starving and parched hurt, but like a wound they never land the killing blow: health stops falling at a floor.
+    if (nm.hurt > 0) {
+      const floor = this.maxHp * NEEDS.hpFloor;
+      if (this.hp > floor) this.hp = Math.max(floor, this.hp - nm.hurt * dt);
+    }
+  }
+
+  private onNeedEvent(e: NeedEvent) {
+    const ctx = this.ctx;
+    const urgent = e.level === 'critical' || e.level === 'desperate';
+    this.note(warnText(e.need, e.level), urgent ? 'bad' : 'warn');
+    if (!ctx.campaign.flags['tip.needs']) {
+      ctx.campaign.flags['tip.needs'] = true;
+      ctx.tip('needs');
+    }
+  }
+
+  /** Eat a ration from the convoy's stores. Your hands are busy for a moment, as with a dressing. */
+  eatRation(): boolean {
+    const ctx = this.ctx;
+    const c = ctx.campaign;
+    const r = eatFood(this.needs, whole(c.stocks.rations));
+    if (!r.ok) {
+      this.note(r.reason!, 'warn');
+      ctx.audio.play('deny');
+      return false;
+    }
+    c.stocks.rations = Math.max(0, c.stocks.rations - (r.spent ?? 1));
+    this.reloadT = 0;
+    this.fireCd = Math.max(this.fireCd, 1.1);
+    this.meleeCd = Math.max(this.meleeCd, 1.1);
+    ctx.audio.play('munch', this.pos.x, this.pos.z, 0.5);
+    this.note(`You eat a ration (${whole(c.stocks.rations)} left)`, 'good');
+    return true;
+  }
+
+  /** Drink: from the lake if you are standing at one (free, and not always clean), else from the convoy's water reserve. */
+  drinkUp(): boolean {
+    const ctx = this.ctx;
+    const c = ctx.campaign;
+    const lake = this.state === 'foot' ? (ctx.waterAt(this.pos.x + Math.sin(this.aimYaw) * 1.2, this.pos.z + Math.cos(this.aimYaw) * 1.2) ?? ctx.waterAt(this.pos.x, this.pos.z)) : null;
+    const r = drinkWater(this.needs, c.items.water, { lake: !!lake, roll: this.rollNeed() });
+    if (!r.ok) {
+      this.note(r.reason!, 'warn');
+      ctx.audio.play('deny');
+      return false;
+    }
+    if (!lake) c.items.water = Math.max(0, c.items.water - (r.spent ?? 0));
+    this.reloadT = 0;
+    this.fireCd = Math.max(this.fireCd, 0.7);
+    this.meleeCd = Math.max(this.meleeCd, 0.7);
+    ctx.audio.play('gulp', this.pos.x, this.pos.z, 0.5);
+    if (lake) this.note(r.dirty ? 'You drink from the lake. It tastes of mud: your stomach turns' : 'You drink from the lake', r.dirty ? 'warn' : 'good');
+    else this.note(`You drink (${c.items.water.toFixed(0)} L left in the reserve)`, 'good');
+    return true;
+  }
+
+  /** Stop and go. Takes a few seconds standing still (a squat for a shit), cut short by walking off, firing or being hit. */
+  private startRelief(kind: 'piss' | 'shit'): boolean {
+    const ctx = this.ctx;
+    const deny = (why: string) => (this.note(why, 'info'), ctx.audio.play('deny'), false);
+    if (this.state !== 'foot') return deny('Get out of the vehicle first');
+    if (this.carry) return deny('Put down what you are carrying first');
+    if (this.swimming) return deny('Not while you are swimming');
+    const can = canRelieve(this.needs, kind);
+    if (!can.ok) return deny(can.reason!);
+    this.action = null;
+    this.reloadT = 0;
+    this.ads = 0;
+    this.relief = { kind, t: 0, dur: reliefSeconds(this.needs, kind), from: kind === 'piss' ? this.needs.bladder : this.needs.bowel, stained: false, wasCrouch: this.crouch };
+    if (kind === 'shit') this.crouch = true;
+    ctx.audio.play('trickle', this.pos.x, this.pos.z, kind === 'piss' ? 0.4 : 0.15);
+    ctx.sig.emit(this.pos.x, this.pos.z, kind === 'piss' ? 5 : 7, 'noise');
+    this.note(kind === 'piss' ? 'You take a piss (walk away to stop)' : 'You squat and take a shit (walk away to stop)', 'info');
+    return true;
+  }
+
+  private endRelief(why: 'done' | 'moved' | 'hit' | 'quiet') {
+    const r = this.relief;
+    if (!r) return;
+    this.relief = null;
+    if (r.kind === 'shit') this.crouch = r.wasCrouch;
+    // Cut short after the first moment still leaves its mark.
+    if (!r.stained && r.t > r.dur * 0.2) this.dropWaste(r.kind);
+    if (why === 'quiet') return;
+    const left = r.kind === 'piss' ? this.needs.bladder : this.needs.bowel;
+    if (why === 'done') this.note(r.kind === 'piss' ? 'Ahh. That is better' : 'You feel lighter', 'good');
+    else if (why === 'hit') {
+      this.note('You are interrupted', 'bad');
+      this.ctx.sig.emit(this.pos.x, this.pos.z, 14 * this.drugs.mods().noise, 'noise');
+    } else if (left > 0.1) this.note(`You stop with some left (${Math.round(left * 100)}%)`, 'info');
+  }
+
+  /** The mark it leaves: ahead of you for a piss, just behind for a shit. Nothing in the water. */
+  private dropWaste(kind: 'piss' | 'shit') {
+    if (this.waterDepth > 0.15) return;
+    const k = kind === 'piss' ? 0.8 : -0.4;
+    this.ctx.gore.waste(this.pos.x + Math.sin(this.yaw) * k, this.pos.z + Math.cos(this.yaw) * k, kind);
+    if (kind === 'shit') this.ctx.audio.play('plop', this.pos.x, this.pos.z, 0.3);
+    if (this.relief) this.relief.stained = true;
+  }
+
+  /** One tick of a piss or a shit under way. Returns whether it still has the player rooted. */
+  private updateRelief(dt: number, it: PlayerIntent): boolean {
+    const r = this.relief;
+    if (!r) return false;
+    if (this.drugs.passedOut) {
+      this.endRelief('quiet');
+      return false;
+    }
+    if (Math.hypot(it.move[0], it.move[1]) > 0.55 || it.rt > 0.3 || it.lt > 0.3) {
+      this.endRelief('moved');
+      return false;
+    }
+    r.t += dt;
+    relieve(this.needs, r.kind, (r.from / r.dur) * dt);
+    this.moveSpeed = damp(this.moveSpeed, 0, 12, dt);
+    if (!r.stained && r.t >= r.dur * 0.4) this.dropWaste(r.kind);
+    if (r.kind === 'piss' && this.waterDepth < 0.6 && Math.floor(r.t * 14) > Math.floor((r.t - dt) * 14)) {
+      const fx = Math.sin(this.yaw);
+      const fz = Math.cos(this.yaw);
+      this.ctx.fx.bloodSpray(this.pos.x + fx * 0.3, this.pos.y + 0.85, this.pos.z + fz * 0.3, fx, -0.35, fz, 1, 2.2, 0.08, [0.95, 0.85, 0.25]);
+    }
+    this.prompt = { text: `${r.kind === 'piss' ? 'Pissing' : 'Shitting'}… walk away to stop`, progress: clamp(r.t / r.dur, 0, 1), button: 'A' };
+    if (r.t >= r.dur) {
+      this.endRelief('done');
+      return false;
+    }
     return true;
   }
 
@@ -1022,6 +1199,7 @@ export class Player implements Pilot {
   private vomit(purge: boolean) {
     if (this.state !== 'foot' && this.state !== 'driving' && this.state !== 'gunner') return;
     const ctx = this.ctx;
+    if (this.relief) this.endRelief('quiet');
     this.stunT = purge ? 3 : 2.2;
     this.action = null;
     this.crouch = false;
@@ -1041,6 +1219,7 @@ export class Player implements Pilot {
   }
 
   private passOut() {
+    if (this.relief) this.endRelief('quiet');
     this.action = null;
     this.crouch = false;
     this.stunT = 0;
@@ -1099,8 +1278,8 @@ export class Player implements Pilot {
     const ctx = this.ctx;
     if (this.drugs.passedOut) return this.updateAsleep(dt);
     const dm = this.drugs.mods();
-    // Retching, or rummaging through the pockets for the next dose: the hands and feet are busy.
-    const busy = this.stunT > 0;
+    // Retching, rummaging through the pockets for the next dose, or squatting: the hands and feet are busy.
+    const busy = this.stunT > 0 || this.updateRelief(dt, it);
     this.updateAim(dt, it);
     // Movement relative to the camera.
     let mx = busy || this.beltOpen ? 0 : it.move[0];
@@ -1121,9 +1300,10 @@ export class Player implements Pilot {
     let wz = fz * my + rz * mx;
     const aiming = this.ads > 0.35;
     // Drunk: the body drifts sideways of where it is going, and a stumble throws it further.
-    if (dm.sway > 0.02 || this.lurchT > 0) {
+    const swayNow = dm.sway + this.nm.sway;
+    if (swayNow > 0.02 || this.lurchT > 0) {
       const t = ctx.time + this.index * 7.3;
-      const drift = (Math.sin(t * 1.3) + 0.6 * Math.sin(t * 2.9 + 1.7)) * 0.55 * dm.sway * Math.max(1, Math.hypot(wx, wz) * 3.4);
+      const drift = (Math.sin(t * 1.3) + 0.6 * Math.sin(t * 2.9 + 1.7)) * 0.55 * swayNow * Math.max(1, Math.hypot(wx, wz) * 3.4);
       const lurch = this.lurchT > 0 ? this.lurchDir * 3.2 * (this.lurchT / 0.45) : 0;
       wx += rx * (drift + lurch) * 0.3;
       wz += rz * (drift + lurch) * 0.3;
@@ -1133,6 +1313,7 @@ export class Player implements Pilot {
     if (this.ctx.input.settings.toggleCrouch?.[this.index] === false) this.crouch = isHeld(it, Btn.B);
     else if (wasPressed(it, Btn.B)) this.crouch = !this.crouch;
     if (wantSprint) this.crouch = false;
+    if (this.relief?.kind === 'shit') this.crouch = true;
     // Water: wading drags at the legs, deep water means swimming (slow, no sprint, no crouch).
     const wet = ctx.waterAt(this.pos.x, this.pos.z);
     this.waterDepth = wet ? wet.depth : 0;
@@ -1153,7 +1334,7 @@ export class Player implements Pilot {
     // Fatigue from watch duty slows the next day; heavy gear slows you and light shoes quicken you.
     speed *= 1 - clamp(this.fatigue, 0, 0.2);
     speed *= 1 + this.stats.speed;
-    speed *= dm.speed;
+    speed *= dm.speed * this.nm.speed;
     // Tripping is floaty: the feet take longer to agree with the stick.
     this.moveSpeed = damp(this.moveSpeed, Math.hypot(wx, wz) * speed, 14 / (1 + dm.trip * 1.2), dt);
     const targetVx = wx * speed;
@@ -1511,7 +1692,7 @@ export class Player implements Pilot {
     this.muzzleT = 0.12;
     const gi = this.gunItem();
     const spread =
-      lerp(gun.spread, gun.adsSpread, Math.min(1, this.ads)) * (this.crouch ? 0.7 : 1) * (this.moveSpeed > 3 ? 1.6 : 1) * this.drugs.mods().spread * wearSpread(gi?.cond) * (this.stamina.winded ? 1.3 : 1);
+      lerp(gun.spread, gun.adsSpread, Math.min(1, this.ads)) * (this.crouch ? 0.7 : 1) * (this.moveSpeed > 3 ? 1.6 : 1) * this.drugs.mods().spread * this.nm.spread * wearSpread(gi?.cond) * (this.stamina.winded ? 1.3 : 1);
     if (gi) gi.cond = wearBy(gi.cond, WEAR.shot);
     // A shotgun throws a handful of pellets from one shot. The first carries the noise and the aim assist.
     for (let n = 0; n < gun.pellets; n++) {
@@ -2325,7 +2506,7 @@ export class Player implements Pilot {
       aimPitch = clamp(aimPitch + pend[1] * k, first ? -1.3 : -0.55, first ? 1.3 : 0.8);
     }
     // Drunk and tripping hands: the aim wanders, a little less when braced against the sights.
-    const sway = this.drugs.mods().sway;
+    const sway = this.drugs.mods().sway + this.nm.sway;
     if (sway > 0.02 && (this.state === 'foot' || this.state === 'gunner')) {
       const t = this.ctx.time + this.index * 7.3;
       const k = sway * (1 - 0.35 * this.ads);
