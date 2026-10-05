@@ -6,6 +6,7 @@ import { GARAGE_MAX, PLAYER_PAINT, buildName, buildValue, dismantleYield, freshC
 import { newPart, newUid, scrapValue, seedUids, type PartItem, type Tyres } from '../sim/parts';
 import { addToBag, allItems, sanitizeLoadout, scrapOf, starterLoadout, type GearItem, type Loadout } from '../sim/gear';
 import { DrugState, type DrugId, type DrugSave } from '../sim/drugs';
+import { newNeeds, restoreNeeds, rest as restNeed, serializeNeeds, type Needs, type NeedsSave } from '../sim/needs';
 import type { WorldSave } from './worldMemory';
 import { fuelOf } from '../sim/engines';
 import { addReserve } from '../sim/fuel';
@@ -89,6 +90,8 @@ export class Campaign {
   items: Items = { medkit: 1, bandage: 2, molotov: 1, flare: 2, charge: 0, painkiller: 1, stim: 1, adrenaline: 0, alcohol: 1, weed: 0, haze: 0, mushrooms: 0, lsd: 0, ayahuasca: 0, oil: 1, diesel: 0, water: 30 };
   /** What each player has in their blood. Saved, so a trip survives a camp and a reload. */
   drugs: [DrugState, DrugState] = [new DrugState(), new DrugState()];
+  /** Hunger, thirst, bladder and bowels, one body each. Carried across camps and legs and saved. */
+  needs: [Needs, Needs] = [newNeeds(), newNeeds()];
   chassis = 0;
   fragments = new Set<number>();
   crew: Merc[] = [];
@@ -321,6 +324,7 @@ export class Campaign {
       hotCamp: this.hotCamp,
       difficulty: this.difficulty,
       drugs: this.drugs.map((d) => d.serialize()) as [DrugSave, DrugSave],
+      needs: this.needs.map(serializeNeeds) as [NeedsSave, NeedsSave],
       world: this.worldSave,
     };
   }
@@ -328,6 +332,11 @@ export class Campaign {
   /** A night's sleep: whatever was in the blood is gone, and the body half forgets. */
   restDrugs() {
     for (const d of this.drugs) d.rest();
+  }
+
+  /** The same night, for the belly: who had supper and a drink, and who wakes hollow. */
+  restNeeds(fed: boolean[], watered: boolean[]) {
+    this.needs.forEach((n, i) => restNeed(n, { fed: fed[i] ?? true, watered: watered[i] ?? true }));
   }
 
   static deserialize(d: ReturnType<Campaign['serialize']> | LegacySave): Campaign {
@@ -354,6 +363,9 @@ export class Campaign {
     c.difficulty = d.difficulty;
     c.worldSave = (d as { world?: WorldSave }).world;
     if (Array.isArray(d.drugs)) c.drugs = [DrugState.restore(d.drugs[0]), DrugState.restore(d.drugs[1])];
+    // Saves from before the body had chores have no needs: they start well fed.
+    const nd = (d as { needs?: NeedsSave[] }).needs;
+    c.needs = [restoreNeeds(nd?.[0]), restoreNeeds(nd?.[1])];
     if ('garage' in d && Array.isArray(d.garage)) {
       const m = d as ReturnType<Campaign['serialize']>;
       // Reserve every stored id before sanitizing can mint new ones (an old tyre set becomes four tyres), so a repaired item never collides with a saved one.

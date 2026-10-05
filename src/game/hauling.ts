@@ -333,6 +333,8 @@ export function guide(p: Player) {
     const { v: tv, sock, anchor } = hit;
     // Up close only the one you would fit it to (one wheel of four).
     ctx.work.ghost(`g${p.index}`, ghostAnchors(tv, sock, PER_WHEEL.includes(sock.slot) ? hit.index : undefined), gate.ok && !moving ? 'aimed' : 'blocked');
+    // The part itself snaps onto the mount as a see-through copy, so you see where it will sit before you bolt it.
+    if (!ctx.work.holding(p.index)) ctx.work.preview(p.index, item, handPos(p), [anchorWorld(tv, anchor)], gate.ok && !moving ? 'aimed' : 'blocked');
     if (!ctx.work.holding(p.index)) {
       const info = carryInfo(p, tv, p.carry);
       const cur = fittedAt(hit);
@@ -545,7 +547,7 @@ function fit(p: Player, v: Vehicle, c: Carried, hit: SocketHit | null, at: THREE
       ctx.work.swap({
         key: p.index,
         anchor,
-        from: handPos(p),
+        from: p.human.carryWorld(new THREE.Vector3()) ?? handPos(p),
         out: trunkPos(v),
         fresh: c.item,
         old: res.removed,

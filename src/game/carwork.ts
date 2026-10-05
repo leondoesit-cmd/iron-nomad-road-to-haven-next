@@ -109,6 +109,7 @@ export function wrenchCandidate(p: Player, repair: () => Cand | null): Cand | nu
     kind: 'unbolt',
     prompt: moving ? `${v.def.name} is moving` : `Unbolt ${partName(fitted)}`,
     dur: unboltSecs(slot),
+    at: pos,
     target: `${v.id}:${slot}:${index}`,
     ok: !moving,
     label: 'unbolt',

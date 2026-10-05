@@ -33,6 +33,8 @@ interface CarState {
 /** Cars appear as the convoy approaches and are put away again, with their state, once it has moved on. */
 const SPAWN_R = 175;
 const DESPAWN_R = 250;
+/** Chunks this far round a car (about half the longest one, with a margin) must be loaded before it appears. */
+const CLEAR_R = 3;
 
 /**
  * Every abandoned car in the world. They are spawned as real vehicles near the players (so they can be driven,
@@ -92,7 +94,7 @@ export class CarField {
       let d = Infinity;
       for (const p of pts) d = Math.min(d, Math.hypot(p.x - st.x, p.z - st.z));
       if (!st.live) {
-        if (!((this.everything || d < SPAWN_R) && (ctx.colliderReady?.(st.x, st.z) ?? true))) continue;
+        if (!((this.everything || d < SPAWN_R) && this.groundReady(st))) continue;
         // The small camp arena has a handful of cars and wants them all now.
         if (this.everything) {
           this.spawn(st);
@@ -122,9 +124,66 @@ export class CarField {
     return queued > 1;
   }
 
+  /** The ground under the whole car is loaded, not just its middle: a wall in the next chunk must exist before the car does. */
+  private groundReady(st: CarState): boolean {
+    const ready = this.ctx.colliderReady;
+    if (!ready) return true;
+    const r = CLEAR_R;
+    return ready.call(this.ctx, st.x, st.z) && ready.call(this.ctx, st.x - r, st.z - r) && ready.call(this.ctx, st.x + r, st.z - r) && ready.call(this.ctx, st.x - r, st.z + r) && ready.call(this.ctx, st.x + r, st.z + r);
+  }
+
+  /** Does a car of this size, standing here, sink into something solid? Its length is sampled as a row of circles. */
+  private clips(x: number, z: number, yaw: number, length: number, width: number): boolean {
+    const gy = this.ctx.groundAt(x, z);
+    const r = width / 2;
+    const n = Math.max(2, Math.ceil(length / width) + 1);
+    const sx = Math.sin(yaw);
+    const sz = Math.cos(yaw);
+    let hit = false;
+    for (let i = 0; i < n && !hit; i++) {
+      const off = (i / (n - 1) - 0.5) * (length - width);
+      const px = x + sx * off;
+      const pz = z + sz * off;
+      this.ctx.obs.near(px, pz, r + 0.5, (a) => {
+        // Other parked cars are the physics engine's to sort out; everything else that stands on the ground is not.
+        if (hit || a.kind === 'car' || a.kind === 'floor' || a.kind === 'stair' || a.kind === 'rock') return;
+        if (a.y1 < gy + 0.3 || a.y0 > gy + 1.5) return;
+        const dx = px - Math.max(a.minX, Math.min(px, a.maxX));
+        const dz = pz - Math.max(a.minZ, Math.min(pz, a.maxZ));
+        if (dx * dx + dz * dz < r * r) hit = true;
+      });
+    }
+    return hit;
+  }
+
+  /** Where this car can stand without clipping a wall: where it is, else the nearest clear spot, else nowhere. */
+  private clearSpot(st: CarState): { x: number; z: number } | null {
+    const def = chassisDef(st.build.chassis);
+    const { length, width } = def;
+    if (!this.clips(st.x, st.z, st.yaw, length, width)) return { x: st.x, z: st.z };
+    for (let ring = 1; ring <= 4; ring++) {
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        const x = st.x + Math.cos(a) * ring * 1.5;
+        const z = st.z + Math.sin(a) * ring * 1.5;
+        if (!this.clips(x, z, st.yaw, length, width)) return { x, z };
+      }
+    }
+    return null;
+  }
+
   private spawn(st: CarState) {
     const ctx = this.ctx;
-    const v = ctx.spawnVehicle({ build: st.build, x: st.x, y: st.y, z: st.z, yaw: st.yaw, ownerIndex: -1, faction: 'neutral', hulk: st.status === 'hulk' });
+    const spot = this.clearSpot(st);
+    if (!spot) {
+      // Nowhere clear nearby (a wreck wedged in a building): better gone than spawned inside the wall and thrown on its side.
+      this.states.delete(st.spawn.id);
+      return;
+    }
+    st.x = spot.x;
+    st.z = spot.z;
+    // The ground is asked for now, not remembered: a building raised or a chunk levelled since the car was placed moves it.
+    const v = ctx.spawnVehicle({ build: st.build, x: st.x, z: st.z, yaw: st.yaw, ownerIndex: -1, faction: 'neutral', hulk: st.status === 'hulk' });
     v.carId = st.spawn.id;
     v.salvaged = st.salvaged;
     st.live = v;
@@ -142,7 +201,8 @@ export class CarField {
     else v.commit();
     const p = v.position;
     st.x = p.x;
-    st.y = p.y;
+    // The ground under it, not the height of its body: this is what the car is put back on.
+    st.y = this.ctx.groundAt(p.x, p.z);
     st.z = p.z;
     st.yaw = v.yaw;
     st.salvaged = v.salvaged;

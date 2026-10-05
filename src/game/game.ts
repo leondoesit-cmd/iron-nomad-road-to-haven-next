@@ -19,6 +19,8 @@ import { saveCampaign, loadCampaign } from '../save/save';
 import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { Workbench } from '../ui/garage';
 import { InventoryScreen } from '../ui/inventory';
+import { TutorialDirector, TRAINING_STEPS } from './tutorial';
+import { CoachUI } from '../ui/coach';
 import type { Player } from './player';
 import type { Vehicle } from './vehicle';
 
@@ -67,6 +69,8 @@ export class Game {
   private aimHint!: HTMLElement;
   /** The title screen's choice, and the mode of the run in progress: one player, full screen. */
   solo = false;
+  /** Set while Training is running: the lessons, played in a quiet copy of the open world. */
+  tutorial: TutorialDirector | null = null;
 
   constructor() {
     this.debug = new URLSearchParams(location.search).has('debug');
@@ -125,6 +129,11 @@ export class Game {
       this.input.autoJoinKeyboard();
       this.newCampaign();
       this.beginLeg(jump);
+    }
+    // ?training goes straight into the lessons, the way ?leg skips to a map.
+    if (new URLSearchParams(location.search).has('training')) {
+      this.input.autoJoinKeyboard();
+      this.startTraining();
     }
     this.last = performance.now();
     requestAnimationFrame((n) => this.frame(n));
@@ -228,6 +237,10 @@ export class Game {
 
   disposeScene() {
     this.attract = false;
+    if (this.tutorial) {
+      this.tutorial.dispose(this.scene instanceof LegScene ? this.scene : null);
+      this.tutorial = null;
+    }
     if (this.delveParent) {
       const parent = this.delveParent;
       this.delveParent = null;
@@ -258,6 +271,51 @@ export class Game {
     this.hud.showBanner(leg.name.toUpperCase(), start ? `Day ${this.campaign.day}` : leg.subtitle, 5);
     this.audio.setMusic('travel');
     this.startLock = 0.5;
+  }
+
+  /** Training: the lessons, in a quiet copy of the open world that never touches a save or the run's own world. */
+  startTraining() {
+    this.input.autoJoinKeyboard();
+    this.disposeScene();
+    this.overlays.hideAll();
+    this.setSolo(this.solo);
+    this.campaign = new Campaign(this.overlays.heroes(), this.solo);
+    this.campaign.seed = 4242;
+    this.campaign.flags.training = true;
+    const leg = legById('W');
+    this.R.resize();
+    const svc = this.services();
+    svc.onTip = () => {};
+    const sc = new LegScene(svc, leg, { memory: new WorldMemory(), training: true });
+    sc.onResult = (r) => {
+      // Nothing out here ends the lesson but the Dusk Bell's camp: caves, encounters and the rest are not part of it.
+      if (r.type === 'dusk') this.tutorial?.note('camp', 0);
+    };
+    sc.openWorkbench = (p, v) => this.openWorkbench(p, v);
+    sc.openInventory = (p) => {
+      this.tutorial?.note('inventory', p.index);
+      this.openInventory(p);
+    };
+    this.scene = sc;
+    this.phase = 'leg';
+    this.paused = false;
+    this.hud.setVisible(true);
+    this.focus.active = false;
+    const halves = [document.getElementById('half0')!, document.getElementById('half1')!];
+    const tut = new TutorialDirector(new CoachUI(halves));
+    tut.onFinish = () => this.finishTraining();
+    this.tutorial = tut;
+    this.hud.showBanner('TRAINING', 'Follow the lesson card', 5);
+    this.audio.setMusic('travel');
+    this.startLock = 0.5;
+  }
+
+  private finishTraining() {
+    const sc = this.scene;
+    if (!(sc instanceof LegScene)) return;
+    this.phase = 'vote';
+    sc.paused = true;
+    this.overlays.showTrainingDone(TRAINING_STEPS);
   }
 
   /** Go down: the leg is put to sleep (kept whole, unseen and unticked) and a delve takes its place. */
@@ -547,6 +605,7 @@ export class Game {
       else if (!sc.paused) {
         this.handleCommandWheel(sc);
         sc.tick(step);
+        if (this.tutorial && sc instanceof LegScene) this.tutorial.tick(sc, step);
       }
     } else if (sc instanceof CampScene && this.phase === 'ledger') {
       sc.tickIdle(step);

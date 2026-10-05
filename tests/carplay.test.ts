@@ -85,6 +85,9 @@ describe('abandoned cars in a live leg', () => {
     expect(sc.vehicles.some((v) => v.carId === id)).toBe(false);
     expect(sc.cars.states.get(id)!.salvaged).toBe(1);
     expect(sc.cars.states.get(id)!.build.comp.tires[0]).toBe(0);
+    // It is put back on the ground, not dropped from the height its body hung at.
+    const put = sc.cars.states.get(id)!;
+    expect(put.y).toBeCloseTo(sc.groundAt(put.x, put.z), 2);
     for (const p of sc.players) p.vehicle!.body.setPose(st.x + 4, sc.groundAt(st.x + 4, st.z - 80) + 1.2, st.z - 80, 0);
     run(sc, 4);
     const back = sc.cars.states.get(id)!.live!;

@@ -39,6 +39,8 @@ export class WorldMemory {
   mapSeen = new Set<string>();
   delveRecords = new Map<string, DelveRecord>();
   ambushDone = new Set<string>();
+  /** Gang camp sentries that are dead, by key (`campId#index`). */
+  gangKilled = new Set<string>();
   zoneFired = new Set<string>();
   /** Containers searched, by id. The layout object carries the flag; this is what survives a reload. */
   searched = new Set<string>();
@@ -62,6 +64,7 @@ export class WorldMemory {
       seen: [...this.mapSeen],
       searched: [...this.searched],
       ambush: [...this.ambushDone],
+      gang: [...this.gangKilled],
       camp: this.camp,
     };
   }
@@ -76,6 +79,7 @@ export class WorldMemory {
     m.mapSeen = new Set(s.seen ?? []);
     m.searched = new Set(s.searched ?? []);
     m.ambushDone = new Set(s.ambush ?? []);
+    m.gangKilled = new Set(s.gang ?? []);
     m.camp = s.camp ?? null;
     return m;
   }
@@ -89,5 +93,7 @@ export interface WorldSave {
   seen: string[];
   searched: string[];
   ambush: string[];
+  /** Absent in saves from before gang camps. */
+  gang?: string[];
   camp: WorldPose | null;
 }

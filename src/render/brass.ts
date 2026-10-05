@@ -6,24 +6,32 @@ import * as THREE from 'three';
  */
 
 export type ShellKind = 'pistol' | 'rifle' | 'hull' | 'carbine' | 'magnum';
+/** The empty magazines a gun drops when it is reloaded. */
+export type MagKind = 'pistol' | 'smg';
 
 interface Spec {
-  /** Radius and length, metres. Drawn a little over life size so a case still reads from the chase camera. */
-  r: number;
-  len: number;
+  /** Scale of the unit shape along each axis, metres (the long axis is y). Drawn a little over life size so a case still reads from the camera. */
+  sx: number;
+  sy: number;
+  sz: number;
+  /** How high its centre rests above the floor. */
+  rest: number;
   color: [number, number, number];
 }
 
-const SPEC: Record<ShellKind, Spec> = {
-  pistol: { r: 0.0058, len: 0.022, color: [0.86, 0.62, 0.26] },
-  rifle: { r: 0.0068, len: 0.05, color: [0.82, 0.58, 0.24] },
-  hull: { r: 0.0115, len: 0.062, color: [0.62, 0.09, 0.07] },
-  // A short, slim rifle case (5.56) and a fat nickel-bright magnum case: each reads differently on the floor.
-  carbine: { r: 0.0057, len: 0.038, color: [0.8, 0.6, 0.28] },
-  magnum: { r: 0.0078, len: 0.034, color: [0.78, 0.78, 0.72] },
-};
-const KINDS: ShellKind[] = ['pistol', 'rifle', 'hull', 'carbine', 'magnum'];
+const cyl = (r: number, len: number, color: [number, number, number]): Spec => ({ sx: r, sy: len, sz: r, rest: r, color });
 
+const SHELLS: Spec[] = [cyl(0.0085, 0.032, [0.86, 0.62, 0.26]), cyl(0.0095, 0.062, [0.82, 0.58, 0.24]), cyl(0.0145, 0.075, [0.62, 0.09, 0.07]),
+  // A short, slim rifle case (5.56) and a fat nickel-bright magnum case: each reads differently on the floor.
+  cyl(0.0083, 0.055, [0.8, 0.6, 0.28]), cyl(0.0113, 0.049, [0.78, 0.78, 0.72])];
+const SHELL_INDEX: Record<ShellKind, number> = { pistol: 0, rifle: 1, hull: 2, carbine: 3, magnum: 4 };
+const MAGS: Spec[] = [
+  { sx: 0.036, sy: 0.12, sz: 0.024, rest: 0.012, color: [0.16, 0.16, 0.18] },
+  { sx: 0.04, sy: 0.22, sz: 0.027, rest: 0.0135, color: [0.17, 0.17, 0.19] },
+];
+
+/** Resting things sit a little above the collider's floor, so they are not lost in the relief of rough ground. */
+const LIFT = 0.018;
 const GRAVITY = 9.81;
 const REST_BOUNCE = 0.42;
 /** Seconds a shell lies before it starts to shrink away, and how long the shrinking takes. */
@@ -35,6 +43,8 @@ export interface BrassWorld {
   floorAt(x: number, y: number, z: number): number | null;
   /** A shell rang off the floor. */
   ring(x: number, y: number, z: number, loud: number): void;
+  /** An empty magazine hit the floor. */
+  clunk?(x: number, y: number, z: number, loud: number): void;
 }
 
 const _m = new THREE.Matrix4();
@@ -46,7 +56,8 @@ const _axis = new THREE.Vector3();
 const _c = new THREE.Color();
 const UP = new THREE.Vector3(0, 1, 0);
 
-export class Brass {
+/** One pool of thrown things sharing a shape: each tumbles, bounces off the floor, rolls to a stop and stays. One instanced mesh. */
+class Pool {
   readonly mesh: THREE.InstancedMesh;
   private n: number;
   private pos: Float32Array;
@@ -62,7 +73,16 @@ export class Brass {
   /** Shells in the world right now. */
   count = 0;
 
-  constructor(private world: BrassWorld, n = 140) {
+  constructor(
+    private world: BrassWorld,
+    private specs: Spec[],
+    geo: THREE.BufferGeometry,
+    mat: THREE.Material,
+    n: number,
+    /** How loudly a bounce rings, on the world's scale. */
+    private ringScale = 1,
+    private onRing?: (x: number, y: number, z: number, loud: number) => void,
+  ) {
     this.n = n;
     this.pos = new Float32Array(n * 3);
     this.vel = new Float32Array(n * 3);
@@ -73,8 +93,6 @@ export class Brass {
     this.bounces = new Uint8Array(n);
     this.kind = new Uint8Array(n);
     this.used = new Uint8Array(n);
-    const geo = new THREE.CylinderGeometry(1, 1, 1, 8, 1);
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.28, metalness: 0.85 });
     this.mesh = new THREE.InstancedMesh(geo, mat, n);
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.mesh.frustumCulled = false;
@@ -84,7 +102,7 @@ export class Brass {
   }
 
   /** Throw a shell out of the gun. The velocity is the ejection throw; the carrier's own motion should already be in it. */
-  eject(x: number, y: number, z: number, vx: number, vy: number, vz: number, kind: ShellKind) {
+  eject(x: number, y: number, z: number, vx: number, vy: number, vz: number, kind: number) {
     const i = this.next;
     this.next = (this.next + 1) % this.n;
     if (!this.used[i]) this.count++;
@@ -92,7 +110,7 @@ export class Brass {
     this.rest[i] = 0;
     this.bounces[i] = 0;
     this.age[i] = 0;
-    this.kind[i] = KINDS.indexOf(kind);
+    this.kind[i] = kind;
     this.pos[i * 3] = x;
     this.pos[i * 3 + 1] = y;
     this.pos[i * 3 + 2] = z;
@@ -108,7 +126,7 @@ export class Brass {
     this.spin[i * 3] = (Math.random() - 0.5) * w;
     this.spin[i * 3 + 1] = (Math.random() - 0.5) * w;
     this.spin[i * 3 + 2] = (Math.random() - 0.5) * w;
-    const col = SPEC[kind].color;
+    const col = this.specs[kind].color;
     this.mesh.setColorAt(i, _c.setRGB(col[0], col[1], col[2]));
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
   }
@@ -119,7 +137,7 @@ export class Brass {
       if (!this.used[i]) continue;
       top = i + 1;
       this.age[i] += dt;
-      const sp = SPEC[KINDS[this.kind[i]]];
+      const sp = this.specs[this.kind[i]];
       let fade = 1;
       if (this.age[i] > LIFE) {
         fade = 1 - (this.age[i] - LIFE) / FADE;
@@ -144,7 +162,7 @@ export class Brass {
         const nx = px + this.vel[o3] * dt;
         const nz = pz + this.vel[o3 + 2] * dt;
         const floor = this.vel[o3 + 1] <= 0 ? this.world.floorAt(nx, Math.max(py, ny) + 0.25, nz) : null;
-        const rest = sp.r;
+        const rest = sp.rest + LIFT;
         if (floor !== null && ny - rest <= floor) {
           ny = floor + rest;
           const impact = -this.vel[o3 + 1];
@@ -157,7 +175,9 @@ export class Brass {
             this.spin[o3 + 1] = (Math.random() - 0.5) * 30;
             this.spin[o3 + 2] = (Math.random() - 0.5) * 30;
             if (this.bounces[i] < 255) this.bounces[i]++;
-            this.world.ring(nx, ny, nz, Math.min(1, impact / 4) * (this.bounces[i] > 2 ? 0.5 : 1));
+            const loud = Math.min(1, impact / 4) * (this.bounces[i] > 2 ? 0.5 : 1) * this.ringScale;
+            if (this.onRing) this.onRing(nx, ny, nz, loud);
+            else this.world.ring(nx, ny, nz, loud);
           } else {
             this.vel[o3 + 1] = 0;
             this.vel[o3] *= 0.8;
@@ -189,7 +209,7 @@ export class Brass {
       }
       _q.set(this.quat[i * 4], this.quat[i * 4 + 1], this.quat[i * 4 + 2], this.quat[i * 4 + 3]);
       _p.set(this.pos[o3], this.pos[o3 + 1], this.pos[o3 + 2]);
-      _s.set(sp.r * fade, sp.len * fade, sp.r * fade);
+      _s.set(sp.sx * fade, sp.sy * fade, sp.sz * fade);
       _m.compose(_p, _q, _s);
       this.mesh.setMatrixAt(i, _m);
     }
@@ -228,5 +248,64 @@ export class Brass {
     this.mesh.geometry.dispose();
     (this.mesh.material as THREE.Material).dispose();
     this.mesh.dispose();
+  }
+}
+
+/**
+ * Spent brass and shotgun hulls, and the empty magazines a gun drops at a reload: two pools, one cylinder and one box, each
+ * one instanced mesh.
+ */
+export class Brass {
+  private shells: Pool;
+  private mags: Pool;
+
+  constructor(world: BrassWorld, n = 140, nMags = 36) {
+    this.shells = new Pool(world, SHELLS, new THREE.CylinderGeometry(1, 1, 1, 8, 1), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.28, metalness: 0.85 }), n);
+    this.mags = new Pool(world, MAGS, new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.45, metalness: 0.6 }), nMags, 1, (x, y, z, loud) => world.clunk?.(x, y, z, loud));
+  }
+
+  /** The meshes to add to a scene. */
+  get meshes(): THREE.InstancedMesh[] {
+    return [this.shells.mesh, this.mags.mesh];
+  }
+
+  /** The shell mesh. */
+  get mesh(): THREE.InstancedMesh {
+    return this.shells.mesh;
+  }
+
+  /** Shells in the world right now. */
+  get count(): number {
+    return this.shells.count;
+  }
+
+  /** Magazines in the world right now. */
+  get magCount(): number {
+    return this.mags.count;
+  }
+
+  /** Throw a shell out of the gun. The velocity is the ejection throw; the carrier's own motion should already be in it. */
+  eject(x: number, y: number, z: number, vx: number, vy: number, vz: number, kind: ShellKind) {
+    this.shells.eject(x, y, z, vx, vy, vz, kind === 'pistol' ? 0 : kind === 'rifle' ? 1 : 2);
+  }
+
+  /** An empty magazine leaves the gun. */
+  dropMag(x: number, y: number, z: number, vx: number, vy: number, vz: number, kind: MagKind) {
+    this.mags.eject(x, y, z, vx, vy, vz, kind === 'pistol' ? 0 : 1);
+  }
+
+  update(dt: number) {
+    this.shells.update(dt);
+    this.mags.update(dt);
+  }
+
+  clear() {
+    this.shells.clear();
+    this.mags.clear();
+  }
+
+  dispose() {
+    this.shells.dispose();
+    this.mags.dispose();
   }
 }

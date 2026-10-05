@@ -44,8 +44,15 @@ export type SoundId =
   | 'gulp'
   | 'toke'
   | 'pill'
+  | 'munch'
+  | 'trickle'
+  | 'plop'
   | 'shell'
-  | 'glass';
+  | 'glass'
+  | 'tink'
+  | 'chip'
+  | 'ricochet'
+  | 'slash';
 
 export type MusicState = 'none' | 'travel' | 'stealth' | 'combat' | 'camp' | 'raid';
 
@@ -56,6 +63,8 @@ export interface PlayOptions {
   indoor?: boolean;
   /** 0 to 1: dull the sound with a low-pass, as a suppressor does to a gunshot (1 is a thick pillow). */
   muffle?: number;
+  /** Pitch multiplier, for the cues that take one (a swing: a knife is higher than an axe). */
+  pitch?: number;
 }
 
 /**
@@ -337,6 +346,12 @@ export class AudioEngine {
         ? 0.04
         : id === 'shell'
         ? 0.035
+        : id === 'tink' || id === 'chip'
+        ? 0.045
+        : id === 'ricochet'
+        ? 0.08
+        : id === 'slash'
+        ? 0.05
         : id === 'yelp' || id === 'growl' || id === 'caw'
         ? 0.2
         : 0;
@@ -508,9 +523,44 @@ export class AudioEngine {
         this.burst(out, t0, 'lowpass', 400, 0.5, 0.35, 0.002, 0.12);
         break;
 
-      case 'swing':
-        this.burst(out, t0, 'bandpass', 700, 0.7, 0.3, 0.05, 0.12);
+      case 'swing': {
+        const k = opts.pitch ?? 1;
+        this.burst(out, t0, 'bandpass', 700 * k, 0.7, 0.3, 0.05, 0.12);
+        // A heavy weapon drags a low rush behind the whoosh.
+        if (k < 0.95) this.burst(out, t0 + 0.02, 'lowpass', 320, 0.6, 0.18, 0.06, 0.16);
         break;
+      }
+
+      case 'slash': {
+        // A blade biting: a wet, bright rip over a short dull thump.
+        this.burst(out, t0, 'bandpass', 1900, 0.9, 0.4, 0.001, 0.07);
+        this.burst(out, t0, 'lowpass', 500, 0.5, 0.3, 0.001, 0.09);
+        this.tone(out, t0, 'sine', 140, 60, 0.35, 0.002, 0.08);
+        break;
+      }
+
+      case 'tink': {
+        // A round striking metal: a dry slap and a short ring.
+        this.burst(out, t0, 'highpass', 2400, 0.8, 0.3, 0.001, 0.04);
+        const f = 1800 + Math.random() * 1400;
+        this.tone(out, t0, 'triangle', f, f * 0.93, 0.18, 0.001, 0.09);
+        break;
+      }
+
+      case 'chip': {
+        // A round in stone, plaster or wood: a dull crack and falling grit.
+        this.burst(out, t0, 'bandpass', 1100, 0.8, 0.35, 0.001, 0.06);
+        this.burst(out, t0 + 0.03, 'highpass', 3500, 0.7, 0.1, 0.002, 0.12);
+        break;
+      }
+
+      case 'ricochet': {
+        // The whine of a round skipping off steel: a falling, wavering note.
+        const f = 2600 + Math.random() * 900;
+        this.tone(out, t0, 'sine', f, f * 0.42, 0.22, 0.003, 0.34);
+        this.burst(out, t0, 'highpass', 3000, 0.8, 0.15, 0.001, 0.05);
+        break;
+      }
 
       case 'splash':
         this.burst(out, t0, 'bandpass', 1500, 0.8, 0.32, 0.01, 0.4);
@@ -712,6 +762,23 @@ export class AudioEngine {
       case 'pill':
         this.tone(out, t0, 'square', 1500, 1100, 0.15, 0.001, 0.03);
         this.burst(out, t0 + 0.05, 'bandpass', 2200, 1, 0.1, 0.002, 0.06);
+        break;
+
+      case 'munch':
+        for (let k = 0; k < 4; k++) {
+          this.burst(out, t0 + k * 0.17, 'bandpass', 1100 + Math.random() * 500, 1.2, 0.2, 0.004, 0.08);
+          this.tone(out, t0 + k * 0.17, 'triangle', 160, 90, 0.08, 0.004, 0.06);
+        }
+        break;
+
+      case 'trickle':
+        this.burst(out, t0, 'bandpass', 2600, 0.7, 0.14, 0.15, 1.6);
+        this.burst(out, t0 + 0.2, 'highpass', 4200, 0.5, 0.07, 0.2, 1.3);
+        break;
+
+      case 'plop':
+        this.tone(out, t0, 'sine', 180, 60, 0.25, 0.004, 0.14);
+        this.burst(out, t0, 'lowpass', 400, 0.8, 0.14, 0.004, 0.12);
         break;
 
       case 'radio':

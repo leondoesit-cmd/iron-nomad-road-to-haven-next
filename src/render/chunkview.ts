@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { appendProp } from './props';
 import { appendLandmark, LANDMARK_KINDS } from './landmarks';
+import { propCollisionMesh } from './propCollision';
 import { C } from './palette';
 import { makePavingMaterial, makeRoadMaterial, makeTerrainMaterial, ROAD_REPEAT, type GroundTheme } from './terrainMaterial';
 import { FacadeBuilder, facadeMaterial } from './facade';
@@ -1497,7 +1498,14 @@ export class ChunkView {
   private buildColliders(def: TerrainDef, x0: number, z0: number) {
     // Heightfield for the ground.
     this.colliders.push(this.phys.addHeightfield(x0, z0, CHUNK, CELLS, this.data.heights));
-    for (const a of this.data.aabbs) this.addAabb(a);
+    // Rocks are solid through their mesh below, not a box.
+    for (const a of this.data.aabbs) if (a.kind !== 'rock') this.addAabb(a);
+    // Every solid prop collides as its own drawn geometry (furniture group: solid to people and cars, invisible to the camera).
+    for (const p of this.data.props) {
+      const m = propCollisionMesh(p);
+      const c = m && this.phys.addPropCollider(m, GROUPS.furn);
+      if (c) this.colliders.push(c);
+    }
     for (const a of this.data.aabbs) {
       if (!a.pane || !a.paneN) continue;
       const [nx, nz] = a.paneN;

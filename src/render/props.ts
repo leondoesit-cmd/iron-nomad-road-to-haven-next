@@ -801,6 +801,48 @@ function cafeChairProto(seed: number): MeshBuilder {
   return b;
 }
 
+// ------------------------------------------------------------------------------------------ gang camps
+
+/** A raider's A-frame tent, 3 m long on z, with a band of the gang's colour along the ridge. The flap faces +Z. */
+function tentProto(seed: number, tag: number): MeshBuilder {
+  const b = new MeshBuilder();
+  b.seed(seed);
+  const c = TAG_COL[tag] ?? C.raiderFlag;
+  const canvas = [0x7a7258, 0x6a6a52, 0x8a7a5c, 0x5e6048][seed % 4];
+  const cloth = S.cloth(canvas, 0.6);
+  for (const sx of [-1, 1]) b.box(sx * 0.5, 0.78, 0, 0.04, 2.0, 3.0, cloth, 0, 0, sx * 0.66);
+  b.box(0, 1.52, 0, 0.16, 0.12, 3.05, S.cloth(c, 0.7));
+  // Closed back, open front with a bedroll and a pack.
+  b.box(0, 0.7, -1.5, 1.7, 1.4, 0.04, cloth);
+  b.rod(0, 0, 1.5, 0, 1.6, 1.5, 0.03, S.wood(0x3a2a1e), 6);
+  b.rod(0, 0, -1.5, 0, 1.6, -1.5, 0.03, S.wood(0x3a2a1e), 6);
+  b.rbox(0.3, 0.12, 0.2, 0.55, 0.16, 1.5, 0.07, S.cloth(0x4a5238, 0.5), 0, 0.05, 0);
+  b.rbox(-0.35, 0.2, -0.7, 0.4, 0.34, 0.3, 0.08, S.leather(0x5a4430));
+  for (const sx of [-1, 1]) for (const z of [-1, 0, 1]) b.rod(sx * 1.15, 0.0, z, sx * 1.2, 0.2, z, 0.025, S.wood(0x4a3a2a), 6);
+  b.groundShade(0, 0.25, 0.3);
+  return b;
+}
+
+/** A fire pit: a ring of stones, charred logs set like a wigwam, a bed of embers. The flames are particles. */
+function campfireProto(seed: number): MeshBuilder {
+  const b = new MeshBuilder();
+  const r = rng(seed + 12);
+  b.add('cyl14', 0, 0.02, 0, 1.5, 0.04, 1.5, S.concrete(0x1c1a18, 0.2));
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2 + r() * 0.2;
+    b.add('sphere', Math.sin(a) * 0.72, 0.12, Math.cos(a) * 0.72, 0.34 + r() * 0.1, 0.24, 0.3 + r() * 0.1, S.rock(0x6c6862), 0, a, 0);
+  }
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 + r() * 0.3;
+    b.rod(Math.sin(a) * 0.55, 0.05, Math.cos(a) * 0.55, Math.sin(a) * 0.08, 0.7, Math.cos(a) * 0.08, 0.06, S.wood(0x2a1e16), 6);
+  }
+  b.add('cyl10', 0, 0.07, 0, 0.7, 0.06, 0.7, S.glow(0xff5a1a, 1.4));
+  // Two log seats.
+  for (const a of [0.9, 3.6]) b.rod(Math.sin(a) * 2.1 - Math.cos(a) * 0.6, 0.18, Math.cos(a) * 2.1 + Math.sin(a) * 0.6, Math.sin(a) * 2.1 + Math.cos(a) * 0.6, 0.18, Math.cos(a) * 2.1 - Math.sin(a) * 0.6, 0.17, S.wood(0x4a3a2a), 7);
+  b.groundShade(0, 0.2, 0.35);
+  return b;
+}
+
 // ------------------------------------------------------------------------------------------ registry
 
 function build(kind: PropKind, seed: number, tag: number): MeshBuilder {
@@ -869,6 +911,10 @@ function build(kind: PropKind, seed: number, tag: number): MeshBuilder {
       return tramProto(seed);
     case 'floodlight':
       return floodlightProto();
+    case 'tent':
+      return tentProto(seed, tag);
+    case 'campfire':
+      return campfireProto(seed);
     default:
       return new MeshBuilder();
   }

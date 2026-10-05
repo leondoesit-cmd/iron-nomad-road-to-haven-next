@@ -53,8 +53,10 @@ function hold(h: ReturnType<typeof fakeServices>, sc: LegScene, who: number, btn
   it.pressed = 0;
   it.released = 1 << btn;
   it.heldTime[btn] = 0;
+  it.releasedAfter[btn] = secs;
   sc.tick(DT);
   it.released = 0;
+  it.releasedAfter[btn] = 0;
 }
 
 function tap(h: ReturnType<typeof fakeServices>, sc: LegScene, who: number, btn: number) {
@@ -66,8 +68,10 @@ function tap(h: ReturnType<typeof fakeServices>, sc: LegScene, who: number, btn:
   it.held &= ~(1 << btn);
   it.pressed = 0;
   it.released = 1 << btn;
+  it.releasedAfter[btn] = 0.05;
   sc.tick(DT);
   it.released = 0;
+  it.releasedAfter[btn] = 0;
   sc.tick(DT);
 }
 
@@ -259,5 +263,25 @@ describe('the boot', () => {
     run(sc, 1);
     expect(v.deckSpots().filter((s) => s.kind === 'part').map((s) => s.id).sort()).toEqual(['arm_sheet', 'whl_mt']);
     expect(c.inventory.every((i) => i.on === v.build!.uid)).toBe(true);
+  });
+});
+
+describe('fit preview', () => {
+  it('carrying a part to its mount shows it snapped on, and it is gone once the part is bolted on', () => {
+    const { h, sc } = leg();
+    const v = ownCar(sc);
+    const p = sc.players[0];
+    p.carry = { kind: 'part', item: newPart('eng_v8', 1) };
+    openPanel(v, 'hood');
+    standAt(sc, v, 'hood');
+    run(sc, 0.3);
+    sc.work.update(DT);
+    expect(sc.work.previewing(0)).toBe(true);
+    // Hold A through: the part sinks onto the mount and is bolted on.
+    hold(h, sc, 0, Btn.A, 5);
+    expect(v.build!.fit.engine?.id).toBe('eng_v8');
+    // The outline fades on render time, which these tests step by hand.
+    for (let i = 0; i < 60; i++) sc.work.update(DT);
+    expect(sc.work.previewing(0)).toBe(false);
   });
 });

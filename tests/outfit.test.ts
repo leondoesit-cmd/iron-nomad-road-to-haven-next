@@ -1,3 +1,4 @@
+import { CONTACT, swingArc } from '../src/sim/weaponfx';
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { GEAR, WEAR_SLOTS, gearDef } from '../src/data';
@@ -113,6 +114,37 @@ describe('what they hold', () => {
     h.update(0.016, 'stand', 0, 0, 0, 0);
     expect(up).toBeLessThan(-2);
     expect(h.armR.rotation.x).toBeGreaterThan(up + 1.5);
+  });
+});
+
+describe('a melee swing', () => {
+  const weaponDir = (swing: number) => {
+    const h = new Humanoid(identityOf(0));
+    h.setWeapon('axe');
+    h.swing = swing;
+    h.update(0.016, 'stand', 0, 0, 0, 0);
+    h.root.updateMatrixWorld(true);
+    return new THREE.Vector3(0, 0, 1).transformDirection(h.hand.matrixWorld);
+  };
+
+  it('starts with the weapon cocked back and up, and brings its head down in front', () => {
+    const start = weaponDir(0.99);
+    const contact = weaponDir(1 - CONTACT);
+    const end = weaponDir(0.01);
+    // Back and up at the start.
+    expect(start.z).toBeLessThan(-0.5);
+    expect(start.y).toBeGreaterThan(0);
+    // Forward and level or a little down as it lands.
+    expect(contact.z).toBeGreaterThan(0.8);
+    expect(contact.y).toBeLessThan(0.2);
+    // Chopped down at the end, not held up in the air.
+    expect(end.z).toBeGreaterThan(0.3);
+    expect(end.y).toBeLessThan(-0.5);
+  });
+
+  it('the streak is drawn from the same pose: the tip is behind the body at the start and ahead of it at contact', () => {
+    expect(swingArc(0, 0.86).r).toBeLessThan(0);
+    expect(swingArc(CONTACT, 0.86).r).toBeGreaterThan(1);
   });
 });
 

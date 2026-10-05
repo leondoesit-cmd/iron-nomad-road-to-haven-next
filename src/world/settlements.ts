@@ -155,7 +155,13 @@ export class SiteBuilder {
   rects: { x0: number; x1: number; z0: number; z1: number }[] = [];
   private bi = 0;
 
+  /** Footprints of the wrecks placed so far, so a building raised later keeps its walls and levelled pad off them. */
+  private carRects: { x0: number; x1: number; z0: number; z1: number }[] = [];
+
   free(x0: number, x1: number, z0: number, z1: number, m = 2.5) {
+    for (const r of this.carRects) {
+      if (x1 + m > r.x0 && x0 - m < r.x1 && z1 + m > r.z0 && z0 - m < r.z1) return false;
+    }
     for (const r of this.rects) {
       if (x1 + m > r.x0 && x0 - m < r.x1 && z1 + m > r.z0 && z0 - m < r.z1) return false;
     }
@@ -346,10 +352,23 @@ export class SiteBuilder {
 
   /** A car left standing: its condition comes from its seed and `grade`, and a part or a can may lie beside it. */
   wreck(x: number, z: number, grade?: CarGrade, loot = 0.4) {
-    if (!this.clearRoad(x - 2.5, x + 2.5, z - 3, z + 3, 6) || !this.free(x - 1.2, x + 1.2, z - 2.4, z + 2.4, 0.5)) return;
-    const yaw = this.rng.range(0, 6.28);
-    this.out.cars.push({ x, y: this.g(x, z), z, yaw, seed: this.rng.int(0, 9999), grade, reach: this.reach });
-    if (this.loot.chance(loot)) this.beside('car', x, z, 1.5, 'wreck');
+    // The longest car is 5.3 m by 2 m; leave room for its mirrors and for the suspension to settle.
+    const HL = 2.8;
+    const HW = 1.2;
+    const yaw0 = this.rng.range(0, 6.28);
+    const seed = this.rng.int(0, 9999);
+    // A car lying at an angle covers more ground than a box lying along z, and a wall it clips shoves it over on its side:
+    // try the drawn yaw, then the ones square to it, and give up on the spot if none of them is clear.
+    for (const yaw of [yaw0, yaw0 + Math.PI / 2, Math.round(yaw0 / (Math.PI / 2)) * (Math.PI / 2), Math.round(yaw0 / (Math.PI / 2)) * (Math.PI / 2) + Math.PI / 2]) {
+      const s = Math.abs(Math.sin(yaw));
+      const c = Math.abs(Math.cos(yaw));
+      const hx = s * HL + c * HW;
+      const hz = c * HL + s * HW;
+      if (!this.clearRoad(x - hx, x + hx, z - hz, z + hz, 6) || !this.free(x - hx, x + hx, z - hz, z + hz, 0.5)) continue;
+      this.carRects.push({ x0: x - hx, x1: x + hx, z0: z - hz, z1: z + hz });
+      this.out.cars.push({ x, y: this.g(x, z), z, yaw, seed });
+      return;
+    }
   }
 
   run() {
