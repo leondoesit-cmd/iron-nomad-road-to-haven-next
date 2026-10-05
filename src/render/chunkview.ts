@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { appendProp } from './props';
 import { appendLandmark, LANDMARK_KINDS } from './landmarks';
-import { PROP_DYNAMIC, instanceHullPoints, propCollisionMesh } from './propCollision';
+import { PROP_DYNAMIC, instanceHullPoints, propCollisionMesh, propSurface } from './propCollision';
 import { C } from './palette';
 import { makePavingMaterial, makeRoadMaterial, makeTerrainMaterial, ROAD_REPEAT, type GroundTheme } from './terrainMaterial';
 import { FacadeBuilder, facadeMaterial } from './facade';
@@ -584,7 +584,7 @@ export class ChunkView {
     let n = 0;
     for (const im of [...set.pebbles, ...set.boulders]) {
       for (let i = 0; i < im.count; i++) {
-        const c = this.phys.addStaticHull(instanceHullPoints(im, i), GROUPS.furn);
+        const c = this.phys.tag(this.phys.addStaticHull(instanceHullPoints(im, i), GROUPS.furn), 'stone');
         if (c) this.colliders.push(c);
         if (++n % 24 === 0) yield;
       }
@@ -1516,7 +1516,7 @@ export class ChunkView {
     for (const p of this.data.props) {
       const m = propCollisionMesh(p);
       const c = m && this.phys.addPropCollider(m, GROUPS.furn);
-      if (c) this.colliders.push(c);
+      if (c) this.colliders.push(this.phys.tag(c, propSurface(p.kind)));
     }
     for (const a of this.data.aabbs) {
       if (!a.pane || !a.paneN) continue;

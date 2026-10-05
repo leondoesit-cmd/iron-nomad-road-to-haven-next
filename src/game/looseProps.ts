@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RAPIER, GROUPS, type Collider, type RigidBody } from '../physics/physics';
 import { kitMaterial } from '../render/materials';
-import { PROP_DYNAMIC, propBuilder } from '../render/propCollision';
+import { PROP_DYNAMIC, propBuilder, propSurface } from '../render/propCollision';
 import type { PropSpawn } from '../world/layout';
 import type { Ctx } from './ctx';
 
@@ -96,6 +96,7 @@ export class LooseProps {
         .setCollisionGroups(GROUPS.loose),
       body,
     );
+    P.tag(collider, propSurface(p.kind));
     const mesh = new THREE.Mesh(shape.geo, kitMaterial());
     mesh.castShadow = true;
     mesh.receiveShadow = true;

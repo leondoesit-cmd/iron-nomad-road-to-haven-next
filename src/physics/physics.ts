@@ -48,6 +48,8 @@ export const FIXED_STEP = 1 / 60;
 export class PhysicsWorld {
   world: RAPIER.World;
   private pending: (() => void)[] = [];
+  /** What a collider is made of (a ballistics Surface name), by handle, for things that are not boxes of the world: props, stones. */
+  surfaces = new Map<number, string>();
 
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -100,6 +102,12 @@ export class PhysicsWorld {
     return m.shape === 'hull' || !m.indices ? this.addStaticHull(m.vertices, collisionGroups) : this.addStaticTrimesh(m.vertices, m.indices, collisionGroups);
   }
 
+  /** Note what a collider is made of, so a bullet that hits it knows. Returns the collider for chaining. */
+  tag<T extends Collider | null>(c: T, surface: string): T {
+    if (c) this.surfaces.set(c.handle, surface);
+    return c;
+  }
+
   /** Static convex hull of world-space vertices (x,y,z triples), or null when they are degenerate. */
   addStaticHull(vertices: Float32Array, collisionGroups = GROUPS.static): Collider | null {
     const desc = RAPIER.ColliderDesc.convexHull(vertices);
@@ -120,6 +128,7 @@ export class PhysicsWorld {
   }
 
   removeCollider(c: Collider) {
+    this.surfaces.delete(c.handle);
     this.world.removeCollider(c, false);
   }
 

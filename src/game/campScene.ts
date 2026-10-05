@@ -4,7 +4,7 @@ import { ENEMIES, LEGS, MERCS, STRUCTURES, VEHICLES, t, type BuildElementDef, ty
 import { MeshBuilder, S } from '../render/builder';
 import { drum, heavyGun, plate, spareTyre } from '../render/parts';
 import { appendProp } from '../render/props';
-import { PROP_DYNAMIC, instanceHullPoints, propCollisionMesh } from '../render/propCollision';
+import { PROP_DYNAMIC, instanceHullPoints, propCollisionMesh, propSurface } from '../render/propCollision';
 import type { PropSpawn } from '../world/layout';
 import { kitMaterial } from '../render/materials';
 import { CampArena } from '../render/campArena';
@@ -292,7 +292,7 @@ export class CampScene extends Scene {
       if (PROP_DYNAMIC[spec.kind]) this.looseProps.add('camp', [spec]);
       else appendProp(decor, spec);
       const cm = propCollisionMesh(spec);
-      if (cm) this.P.addPropCollider(cm, GROUPS.furn);
+      if (cm) this.P.tag(this.P.addPropCollider(cm, GROUPS.furn), propSurface(spec.kind));
     }
     const dm = new THREE.Mesh(decor.build(), kitMaterial());
     dm.castShadow = true;
@@ -301,7 +301,7 @@ export class CampScene extends Scene {
     // A fire ring for the hot camp, and ground cover everywhere else.
     arena.fireRing(0, 1.5);
     arena.scatter(solid, QUALITY[this.R.quality].scatter);
-    for (const im of arena.stones) for (let i = 0; i < im.count; i++) this.P.addStaticHull(instanceHullPoints(im, i), GROUPS.furn);
+    for (const im of arena.stones) for (let i = 0; i < im.count; i++) this.P.tag(this.P.addStaticHull(instanceHullPoints(im, i), GROUPS.furn), 'stone');
     arena.finish();
   }
 

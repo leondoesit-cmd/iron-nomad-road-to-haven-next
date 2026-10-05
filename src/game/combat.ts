@@ -70,7 +70,7 @@ type Hit =
   | { t: 'animal'; dist: number; animal: Animal }
   | { t: 'player'; dist: number; player: Player };
 
-const RAY_FILTER = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
+const RAY_FILTER = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN | G.LOOSE);
 /** The thickest slab a round is measured through. Anything more is a wall to the other side of the world. */
 const MAX_SLAB = 2.5;
 /** How far through a hollow box (a shipping container) a round is followed to find its far skin. */
@@ -360,12 +360,19 @@ export class Combat {
         } else if (o.side === 'raider') {
           ctx.structureHit?.(h.handle, o.damage * frac * ctx.campaign.difficulty.damage);
         }
-        const box = v ? null : this.boxAt(h.x, h.y, h.z);
+        const tagged = v ? undefined : (ctx.P.surfaces.get(h.handle) as Surface | undefined);
+        // A tagged collider (a prop, a stone) is its own thing: not the box of the world that happens to stand beside it.
+        const box = v || tagged ? null : this.boxAt(h.x, h.y, h.z);
         const boxThin = box ? Math.min(box.maxX - box.minX, box.maxZ - box.minZ) : 0;
-        const surface: Surface = v ? 'car' : box ? surfaceOfBox(box.kind, boxThin, box.mat) : h.ny > 0.6 ? 'dirt' : 'stone';
+        const surface: Surface = v ? 'car' : tagged ? tagged : box ? surfaceOfBox(box.kind, boxThin, box.mat) : h.ny > 0.6 ? 'dirt' : 'stone';
         const info = SURFACES[surface];
         // Round things (rocks, tanks, pillars) are boxed roughly, so a mark put on the box would hang in the air beside them.
-        const exact = !box || !ROUGH_KINDS.has(box.kind);
+        const exact = tagged ? true : !box || !ROUGH_KINDS.has(box.kind);
+        // A loose prop (a drum, a tyre) is shoved by the round's momentum.
+        if (!v) {
+          const body = ctx.P.world.getCollider(h.handle)?.parent();
+          if (body && body.isDynamic()) body.applyImpulseAtPoint({ x: dx * spec.mass * speed, y: dy * spec.mass * speed, z: dz * spec.mass * speed }, { x: h.x, y: h.y, z: h.z }, true);
+        }
         ctx.gore.impact(surface, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dz, (speed / spec.speed) * (o.damage / 30), { moving: !!v, size: spec.hole, heavy: spec.hole >= 0.15, mark: exact });
         // How far through it goes is worked out before the blow is dealt: a pane that breaks or a wall that gives way is
         // not there to be measured afterwards, and the round should carry on through it.

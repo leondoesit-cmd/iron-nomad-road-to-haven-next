@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { LooseProps } from '../src/game/looseProps';
-import { GROUPS, initPhysics, PhysicsWorld, RAPIER } from '../src/physics/physics';
+import { G, GROUPS, groups, initPhysics, PhysicsWorld, RAPIER } from '../src/physics/physics';
 import { PROP_COLLISION, PROP_DYNAMIC } from '../src/render/propCollision';
 import type { PropKind } from '../src/world/layout';
 
@@ -70,6 +70,17 @@ describe('loose props', () => {
       out.push(shove(P, field, 400, 5));
     }
     expect(out[1]).toBeGreaterThan(out[0]);
+  });
+
+  it('a shot hits a drum as sheet metal, and the drum feels it', async () => {
+    const { P, field } = await world();
+    field.add('a', [{ kind: 'barrel', x: 0, y: 0, z: 0, yaw: 0, scale: 1, seed: 1 }]);
+    P.step();
+    const r = P.raycast(-5, 0.4, 0, 1, 0, 0, 20, groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN | G.LOOSE));
+    expect(r).not.toBeNull();
+    expect(P.surfaces.get(r!.collider.handle)).toBe('sheet');
+    // The combat ray set has to include loose props, or bullets pass straight through them.
+    expect(P.raycast(-5, 0.4, 0, 1, 0, 0, 20, groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN))).toBeNull();
   });
 
   it('release removes bodies', async () => {

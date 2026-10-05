@@ -32,7 +32,8 @@ export const PROP_COLLISION: Record<PropKind, 'mesh' | 'hull' | 'dynamic' | 'non
   banner: 'none',
   chain: 'none',
   pump: 'hull',
-  container: 'hull',
+  // Always placed with its own exact box (a container is a box); a second collider would only double it.
+  container: 'none',
   fence: 'mesh',
   waterTower: 'mesh',
   silo: 'hull',
@@ -154,3 +155,45 @@ export function instanceHullPoints(im: THREE.InstancedMesh, i: number): Float32A
   }
   return out;
 }
+
+/** What each prop is made of, for bullets (default: stone). */
+const PROP_SURFACE: Partial<Record<PropKind, string>> = {
+  barrel: 'sheet',
+  tires: 'wood',
+  pole: 'wood',
+  deadTree: 'wood',
+  crateStack: 'wood',
+  bench: 'wood',
+  cafeTable: 'wood',
+  cafeChair: 'wood',
+  sign: 'sheet',
+  wreck: 'sheet',
+  container: 'sheet',
+  dumpster: 'sheet',
+  shelf: 'sheet',
+  locker: 'sheet',
+  pump: 'sheet',
+  fuelTank: 'sheet',
+  silo: 'sheet',
+  bus: 'sheet',
+  tram: 'sheet',
+  busShelter: 'sheet',
+  billboard: 'sheet',
+  gasSign: 'sheet',
+  canopy: 'sheet',
+  streetlight: 'steel',
+  floodlight: 'steel',
+  pylon: 'steel',
+  mast: 'steel',
+  powerTower: 'steel',
+  windTurbine: 'steel',
+  windpump: 'steel',
+  waterTower: 'steel',
+  fence: 'steel',
+  overpass: 'concrete',
+  lighthouse: 'concrete',
+  fountain: 'concrete',
+  metroEntrance: 'concrete',
+  bunkerHatch: 'concrete',
+};
+export const propSurface = (kind: PropKind): string => PROP_SURFACE[kind] ?? 'stone';
