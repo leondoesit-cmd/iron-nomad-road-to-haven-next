@@ -20,7 +20,7 @@ import type { Vehicle } from '../game/vehicle';
 import { promptLabel, type Slot } from '../input/input';
 import type { MapFrame } from './mapdata';
 import { MapPainter, PIN_COLOR } from './minimap';
-import { stormLabel, stormMapRadius } from '../sim/weather';
+import { heatLabel, stormLabel, stormMapRadius } from '../sim/weather';
 
 /** The key or button a prompt names, as this seat has it bound. */
 export function btnLabel(slot: Slot | null, btn: string): string {
@@ -405,7 +405,7 @@ export class Hud {
       h.setStyle('legdusk', 'display', leg.leg.open ? 'none' : '');
       const sec = leg.clock.secondsToDark;
       h.setText('clock', leg.clock.night ? '+' + formatClock((leg.clock.t - 1) * leg.clock.dayLength) : formatClock(sec));
-      const dust = stormLabel(leg.storm, leg.stormRising);
+      const dust = stormLabel(leg.storm, leg.stormRising) || heatLabel(leg.heat);
       h.setText('daytag', leg.clock.dusk ? (leg.clock.night ? 'INTO THE NIGHT' : 'TO DARK') : dust ? `TO DUSK BELL · ${dust}` : 'TO DUSK BELL');
       h.setStyle('legbar', 'display', '');
     } else {

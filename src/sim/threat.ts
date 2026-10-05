@@ -47,6 +47,11 @@ const ELITE_Z: ZombieKind[] = ['brute', 'bloater', 'stalker'];
 
 /** Spend a budget on units. Total weight tracks the budget; elites are fewer but heavier. */
 export function spendBudget(budget: number, kind: RaidKind, elite: number, wave: number, rng: Rng) {
+  return spendBudgetLeft(budget, kind, elite, wave, rng).spec;
+}
+
+/** As `spendBudget`, but also returns the weight that went unspent (a unit too heavy for the remainder stops the spend). */
+export function spendBudgetLeft(budget: number, kind: RaidKind, elite: number, wave: number, rng: Rng) {
   const zombies: ZombieKind[] = [];
   const raiders: RaiderKind[] = [];
   const split = kind === 'both' ? 0.5 : kind === 'infected' ? 1 : 0;
@@ -83,7 +88,7 @@ export function spendBudget(budget: number, kind: RaidKind, elite: number, wave:
       rb -= w;
     }
   }
-  return { zombies, raiders };
+  return { spec: { zombies, raiders }, left: Math.max(0, zb) * (split > 0 ? 1 : 0) + Math.max(0, rb) * (split < 1 ? 1 : 0) };
 }
 
 export function planRaid(opts: {
@@ -97,9 +102,14 @@ export function planRaid(opts: {
   const rng = new Rng(opts.seed);
   const T = raidThreat(opts.base, opts.signature, opts.notoriety);
   const elite = eliteShare(opts.power);
+  // What a wave cannot spend (the next unit is too heavy for the remainder) rolls into the next one, so the night's total
+  // tracks the threat instead of quietly shrinking.
+  let carry = 0;
   const waves: WaveSpec[] = STRUCTURES.raids.waves.map((name, i) => {
-    const budget = T * WAVE_SHARE[i] * WAVE_SCALE;
-    const { zombies, raiders } = spendBudget(budget, opts.kind, elite, i, rng);
+    const budget = T * WAVE_SHARE[i] * WAVE_SCALE + carry;
+    const { spec, left } = spendBudgetLeft(budget, opts.kind, elite, i, rng);
+    carry = left;
+    const { zombies, raiders } = spec;
     const nSectors = i === 0 ? 1 : i === 1 ? 2 : 3;
     const sectors: number[] = [];
     const used = new Set<number>();

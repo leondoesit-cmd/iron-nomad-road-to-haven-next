@@ -33,6 +33,8 @@ export interface ThermalIn {
   running: boolean;
   /** Water in the cooling system, 0..1. Missing means full. */
   coolant?: number;
+  /** Share of the radiator's normal cooling left by the weather (a heat wave lowers it). Missing means 1. */
+  ambient?: number;
 }
 
 /** The temperature an engine settles at if the conditions hold. */
@@ -41,7 +43,7 @@ export function steadyTemp(i: ThermalIn): number {
   const gen = i.heat * (0.12 + 0.88 * clamp(i.load, 0, 1));
   // A fan keeps half the airflow at a standstill; the rest comes with speed.
   const flow = 0.5 + 0.5 * clamp(i.speed / 14, 0, 1);
-  const shed = i.cooling * (0.25 + 0.75 * clamp(i.radiator, 0, 1)) * coolantFactor(i.coolant ?? 1) * clamp(i.airflow, 0.3, 1.5) * flow + i.heat * 0.05;
+  const shed = i.cooling * (0.25 + 0.75 * clamp(i.radiator, 0, 1)) * coolantFactor(i.coolant ?? 1) * clamp(i.airflow, 0.3, 1.5) * flow * clamp(i.ambient ?? 1, 0.5, 1.2) + i.heat * 0.05;
   return clamp(0.5 * (gen / shed), T_COLD, 2.2);
 }
 

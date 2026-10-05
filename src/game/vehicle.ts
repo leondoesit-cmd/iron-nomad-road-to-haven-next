@@ -6,7 +6,7 @@ import { boatFx, waterTick } from './waterfx';
 import { applyHit, collisionDamage, facingOf, newHealth, performance, repairStep, tickHazards, type DamageEvent, type VehicleHealth } from '../sim/damage';
 import { effectiveStats, terrainDrag, terrainGrip, type PartItem, type Stats } from '../sim/parts';
 import { fromHealth, toHealth, type VehicleBuild } from '../sim/garage';
-import { stormOilMult } from '../sim/weather';
+import { heatCoolingMult, stormOilMult } from '../sim/weather';
 import { oilBurn, oilState, oilWear, type OilState } from '../sim/oil';
 import { gearboxPower, gearboxRatingNow, gearboxWear } from '../sim/drivetrain';
 import { COOLANT_LOW, COOLANT_CRITICAL, coolantLoss, coolantState, type CoolantState } from '../sim/fluids';
@@ -468,7 +468,7 @@ export class Vehicle {
     const thr = Math.max(0, this.lastIntent.throttle);
     const load = this.engineOn ? clamp(0.12 + 0.62 * thr + 0.26 * clamp(speed / top, 0, 1) * (thr > 0.1 ? 1 : 0.4), 0, 1) : 0;
     const comp = this.health.comp;
-    this.temp = thermalStep(this.temp, { heat: st.heat, cooling: st.coolKw, radiator: comp.radiator ?? 1, airflow: st.airflow, load, speed, running: this.engineOn, coolant: comp.coolant ?? 1 }, dt);
+    this.temp = thermalStep(this.temp, { heat: st.heat, cooling: st.coolKw, radiator: comp.radiator ?? 1, airflow: st.airflow, load, speed, running: this.engineOn, coolant: comp.coolant ?? 1, ambient: heatCoolingMult(this.ctx.heat) }, dt);
     const T = this.temp;
     // Water: a little evaporates, a holed radiator leaks, a cooking engine boils it away.
     comp.coolant = Math.max(0, (comp.coolant ?? 1) - coolantLoss({ T, radiator: comp.radiator ?? 1, coolantL: st.coolantL, running: this.engineOn, dt }));
