@@ -399,6 +399,8 @@ export function haulCandidate(p: Player): Cand | null {
   const slot = c.kind === 'part' ? partDef(c.item.id).slot : null;
   const pick = slot && !hit ? pickMount(p, v, slot) : null;
   const away = hit ? false : (!!pick && !pick.near);
+  // The part stays in the arms while it is bolted on: the body reaches for the spot with the real model held out to it.
+  const workSpot = c.kind !== 'part' ? undefined : hit ? anchorWorld(v, hit.anchor) : (pick?.mount.pos ?? sitePos(v, slotSite(c.item.id)));
   const where = slot ? PARTS.labels[slot].toLowerCase() : '';
   if (pick && c.kind === 'part') {
     const mk = Math.min(3, Math.max(1, partDef(c.item.id).mk));
@@ -413,8 +415,8 @@ export function haulCandidate(p: Player): Cand | null {
     label: 'fit',
     noise: c.kind === 'part' ? 22 : 14,
     run: () => fit(p, v, c, hit),
+    at: workSpot,
     tick: () => {
-      if (c.kind === 'part') ctx.work.hold(p.index, c.item, handPos(p), hit ? anchorWorld(v, hit.anchor) : (pick?.mount.pos ?? sitePos(v, slotSite(c.item.id))), p.action ? p.action.t / p.action.dur : 0);
       if (c.kind === 'part' && Math.random() < 0.18) ctx.fx.spark(v.position.x + (Math.random() - 0.5), v.position.y + 0.8, v.position.z + (Math.random() - 0.5), 2, 3);
       return true;
     },
@@ -498,7 +500,7 @@ function fit(p: Player, v: Vehicle, c: Carried, hit: SocketHit | null) {
       ctx.work.swap({
         key: p.index,
         anchor,
-        from: handPos(p),
+        from: p.human.carryWorld(new THREE.Vector3()) ?? handPos(p),
         out: trunkPos(v),
         fresh: c.item,
         old: res.removed,

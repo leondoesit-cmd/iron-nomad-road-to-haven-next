@@ -48,6 +48,8 @@ export interface Cand {
   tick?: () => boolean;
   /** Signature the finished action emits. */
   noise?: number;
+  /** Where in the world the hands are at work while this runs, so the body can reach for it. */
+  at?: THREE.Vector3;
 }
 
 /** Eye height above the feet on foot: standing, crouched, and treading water. */
@@ -89,6 +91,8 @@ export interface PromptAlt {
   ok: boolean;
 }
 
+/** Seconds to climb into a vehicle: reach, step up, duck, sit. */
+const ENTER_SECS = 0.8;
 const WALK = 3.4;
 const SPRINT = 5.9;
 const CROUCH = 1.7;
@@ -182,6 +186,8 @@ export class Player implements Pilot {
   pinned = 0;
   pinBreak = 0;
   enterT = 0;
+  /** Where the hands are working while a hold-action runs (null otherwise): the body reaches for it. */
+  private workAt: THREE.Vector3 | null = null;
   private enterFrom = new THREE.Vector3();
   private enterTo: Vehicle | null = null;
   private enterSeat: 'driver' | 'gunner' = 'driver';
@@ -1676,12 +1682,14 @@ export class Player implements Pilot {
       }
     }
 
+    this.workAt = null;
     if (cand) {
       if (this.action && this.action.kind === cand.kind && this.action.target === cand.target) {
         if (!heldA || !cand.ok) {
           this.action = null;
         } else {
           this.action.t += dt;
+          this.workAt = cand.at ?? null;
           this.moveSpeed = Math.min(this.moveSpeed, 0.5);
           if (cand.tick && cand.tick() === false) this.action = null;
           else if (this.action.t >= this.action.dur) {
@@ -1967,9 +1975,16 @@ export class Player implements Pilot {
       this.state = 'foot';
       return;
     }
-    const k = clamp(this.enterT / 0.45, 0, 1);
+    const k = clamp(this.enterT / ENTER_SECS, 0, 1);
     const seat = this.enterSeat === 'driver' ? v.body.toWorld(0, -0.4, -0.1) : v.gunnerPos();
-    this.pos.set(lerp(this.enterFrom.x, seat[0], k), lerp(this.enterFrom.y, seat[1] - 0.6, k), lerp(this.enterFrom.z, seat[2], k));
+    // Walk to the door first, then step up and drop in: the height only changes once the body is at the frame.
+    const mx = k * k * (3 - 2 * k);
+    const my = clamp((k - 0.35) / 0.65, 0, 1);
+    this.pos.set(lerp(this.enterFrom.x, seat[0], mx), lerp(this.enterFrom.y, seat[1] - 0.6, my * my * (3 - 2 * my)), lerp(this.enterFrom.z, seat[2], mx));
+    // Turn to face the way in.
+    const dx = seat[0] - this.enterFrom.x;
+    const dz = seat[2] - this.enterFrom.z;
+    if (Math.hypot(dx, dz) > 0.3) this.yaw = dampAngle(this.yaw, Math.atan2(dx, dz), 10, dt);
     this.body.setTranslation({ x: this.pos.x, y: this.pos.y + BODY_H / 2, z: this.pos.z }, false);
     this.moveSpeed = 0;
     if (k >= 1) this.finishEnter();
@@ -2348,12 +2363,29 @@ export class Player implements Pilot {
     if (this.firstPerson && !this.carry && weapon !== 'none') aim = Math.max(aim, 0.75);
     this.syncCarryModel();
     this.airVis = damp(this.airVis, this.state === 'foot' && !this.grounded && !this.swimming && this.airT > 0.06 ? 1 : 0, 16, dt);
+    h.enter = this.state === 'entering' ? clamp(this.enterT / ENTER_SECS, 0.001, 1) : 0;
+    this.syncWork(h, lying);
     h.update(dt, lying ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch, this.airVis);
     h.muzzle(this.muzzleT > 0.05);
     if (this.invuln > 0) h.root.visible = Math.floor(this.invuln * 12) % 2 === 0;
   }
 
   private carryKey = '';
+
+  /** Tell the body where its hands are working, in its own frame, while a job on a car runs. */
+  private syncWork(h: Humanoid, lying: boolean) {
+    const at = this.workAt;
+    if (!at || lying || this.state !== 'foot') {
+      h.workAmt = 0;
+      return;
+    }
+    h.workAmt = 1;
+    const dx = at.x - this.pos.x;
+    const dz = at.z - this.pos.z;
+    const cy = Math.cos(this.yaw);
+    const sy = Math.sin(this.yaw);
+    h.workAt.set(dx * cy - dz * sy, at.y - this.pos.y, dx * sy + dz * cy);
+  }
 
   /** Show what is in the arms, rebuilding the model only when it changes kind. */
   private syncCarryModel() {

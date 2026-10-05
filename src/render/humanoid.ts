@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { C } from './palette';
-import { lerp } from '../core/math';
+import { clamp, damp, lerp } from '../core/math';
 import { shared } from './dispose';
 import { kitMaterial } from './materials';
 import {
@@ -313,6 +313,20 @@ export class Humanoid {
   /** 1 at the start of a melee swing, counting down to 0: raises the weapon arm overhead and brings it down. */
   swing = 0;
   private walkT = 0;
+  /** Smoothed gait: how much of a stride the legs take (0 standing, 1 moving) and how hard it is a sprint. */
+  private moveK = 0;
+  private sprintK = 0;
+  private idleT = Math.random() * 6;
+  private workK = 0;
+  private workT = 0;
+  /** 0..1 while climbing into a vehicle: a step to the door, a duck under the frame and a drop into the seat. */
+  enter = 0;
+  /**
+   * Hands at work on something at `workAt` (root space: x to the left, y up from the feet, z ahead). `workAmt` is 1 while
+   * the job runs; the owner sets both every frame. What is carried is held out to the spot, a tool is worked on it.
+   */
+  workAmt = 0;
+  workAt = new THREE.Vector3(0, 0.9, 0.7);
   meshes: THREE.Mesh[] = [];
   /** Everything but the arms and what they hold: hidden from the owner's own first-person view. */
   private bodyMeshes: THREE.Mesh[] = [];
@@ -398,6 +412,13 @@ export class Humanoid {
 
   private carried: THREE.Object3D | null = null;
 
+  /** Where the load in the arms is right now, in world space (null when empty-handed). */
+  carryWorld(out: THREE.Vector3): THREE.Vector3 | null {
+    if (!this.carried) return null;
+    this.carried.updateWorldMatrix(true, false);
+    return out.setFromMatrixPosition(this.carried.matrixWorld);
+  }
+
   /** Hold something in both arms in front of the chest (null to let go). The caller owns the object's geometry. */
   setCarry(obj: THREE.Object3D | null) {
     if (obj === this.carried) return;
@@ -424,15 +445,29 @@ export class Humanoid {
   gunKick = 0;
 
   update(dt: number, pose: PoseKind, speed: number, aim: number, crouch: number, lookPitch = 0, air = 0) {
+    const enter = this.enter;
+    if (enter > 0) speed = 2.4 * (1 - smooth(0.35, 0.55, enter));
     this.walkT += dt * (1.5 + speed * 1.1);
-    const run = Math.min(1, speed / 3.5) * (1 - air);
-    const sw = Math.sin(this.walkT * 2) * run;
-    const bob = Math.abs(Math.cos(this.walkT * 2)) * run;
+    this.idleT += dt;
+    // Gait eases in and out, so starting, stopping and breaking into a sprint never snap the legs.
+    this.moveK = damp(this.moveK, clamp(speed / 1.2, 0, 1) * (1 - air), 12, dt);
+    this.sprintK = damp(this.sprintK, clamp((speed - 3.8) / 2, 0, 1) * (1 - air), 8, dt);
+    this.workK = damp(this.workK, this.workAmt, 9, dt);
+    if (this.workAmt > 0) this.workT += dt;
+    const mv = this.moveK;
+    const sp = this.sprintK;
+    // Stride grows with speed: short steps at a stroll, long driving ones at a sprint.
+    const amp = mv * clamp(0.4 + speed * 0.12, 0, 1.15) * (1 - crouch * 0.35);
+    const ph = this.walkT * 2;
+    const s = Math.sin(ph);
+    const c = Math.cos(ph);
+    const sw = s * amp;
     const r = this.root;
     const h = this.hips;
     r.rotation.x = 0;
     // The owner places the root (feet height, saddle offset); the pose must not touch its position.
     h.position.z = 0;
+    h.rotation.set(0, 0, 0);
     this.torso.rotation.set(0, 0, 0);
     this.head.rotation.set(0, 0, 0);
     this.armL.rotation.set(0, 0, 0);
@@ -440,21 +475,47 @@ export class Humanoid {
     this.elbowL.rotation.set(0, 0, 0);
     this.elbowR.rotation.set(0, 0, 0);
     this.hand.rotation.set(0, 0, 0);
+    this.legL.rotation.set(0, 0, 0);
+    this.legR.rotation.set(0, 0, 0);
+    this.kneeL.rotation.set(0, 0, 0);
+    this.kneeR.rotation.set(0, 0, 0);
     if (pose === 'stand' || pose === 'gun') {
-      h.position.y = 0.92 - crouch * 0.32 + bob * 0.03;
-      const bend = crouch * 1.1;
-      this.legL.rotation.x = sw * 0.75 - bend * 0.4;
-      this.legR.rotation.x = -sw * 0.75 - bend * 0.4;
-      this.kneeL.rotation.x = Math.max(0, -sw) * 0.9 + bend + run * 0.15;
-      this.kneeR.rotation.x = Math.max(0, sw) * 0.9 + bend + run * 0.15;
-      this.torso.rotation.x = crouch * 0.35 + (speed > 5 ? 0.18 : 0.04);
-      this.torso.rotation.y = sw * 0.12 * (1 - aim);
-      this.armL.rotation.x = -sw * 0.65 * (1 - aim);
-      this.armR.rotation.x = aim > 0.1 ? -1.4 * aim + lookPitch * 0.5 : sw * 0.65;
-      this.armL.rotation.z = 0.08;
-      this.armR.rotation.z = -0.08;
-      this.elbowL.rotation.x = -0.25 - run * 0.5;
-      this.elbowR.rotation.x = aim > 0.1 ? -0.1 : -0.25 - run * 0.5;
+      const wk = this.workK;
+      // Working low on a car (a wheel, a sill) squats; the body goes down rather than bending at the waist alone.
+      const low = wk * clamp((0.35 - this.workAt.y) / 0.9, 0, 1) * 1.0;
+      const cr = Math.max(crouch, low);
+      // Lowest at double support, up as the legs pass under the body; a sprint bounces more.
+      h.position.y = 0.92 - cr * 0.32 - Math.abs(s) * amp * (0.03 + sp * 0.03);
+      const bend = cr * 1.1;
+      const stride = 0.8 + sp * 0.35;
+      this.legL.rotation.x = sw * stride - bend * 0.4;
+      this.legR.rotation.x = -sw * stride - bend * 0.4;
+      // The knee folds as the leg swings forward under the body, the heel kicking up harder when running.
+      const flex = 0.55 + sp * 0.95;
+      this.kneeL.rotation.x = Math.max(0, -c) * flex * amp + 0.12 * amp + bend;
+      this.kneeR.rotation.x = Math.max(0, c) * flex * amp + 0.12 * amp + bend;
+      // Hips roll over the standing leg and turn with the stride; the shoulders turn against them.
+      const hipYaw = s * 0.1 * amp * (1 - aim);
+      h.rotation.y = hipYaw;
+      h.rotation.z = c * 0.035 * amp;
+      this.torso.rotation.z = -c * 0.03 * amp;
+      this.torso.rotation.x = cr * 0.35 + 0.03 + sp * 0.2 + mv * 0.03;
+      this.torso.rotation.y = -hipYaw * 2.2 + s * 0.1 * amp * (1 - aim);
+      this.armL.rotation.x = -sw * (0.55 + sp * 0.45) * (1 - aim);
+      this.armR.rotation.x = aim > 0.1 ? -1.4 * aim + lookPitch * 0.5 : sw * (0.55 + sp * 0.45);
+      this.armL.rotation.z = 0.08 + sp * 0.05;
+      this.armR.rotation.z = -0.08 - sp * 0.05;
+      this.elbowL.rotation.x = -0.2 - mv * 0.25 - sp * 0.9 - Math.max(0, sw) * 0.2;
+      this.elbowR.rotation.x = aim > 0.1 ? -0.1 : -0.2 - mv * 0.25 - sp * 0.9 - Math.max(0, -sw) * 0.2;
+      // Standing still the chest breathes and the arms hang with a little life.
+      const idle = 1 - mv;
+      if (idle > 0.01) {
+        const br = Math.sin(this.idleT * 1.7);
+        this.torso.rotation.x += br * 0.012 * idle;
+        this.armL.rotation.z += br * 0.015 * idle;
+        this.armR.rotation.z -= br * 0.015 * idle;
+        this.head.rotation.y = Math.sin(this.idleT * 0.43) * 0.04 * idle;
+      }
       // Raised, the forearm points down the sights; the hand turns back so the weapon points the same way instead of at the sky.
       if (aim > 0.1) this.hand.rotation.x = 1.4 * aim + 0.1;
       if (aim > 0.1) {
@@ -473,6 +534,7 @@ export class Humanoid {
         this.torso.rotation.x -= this.gunKick * 0.07;
       }
       this.head.rotation.x = lookPitch * 0.4 - this.torso.rotation.x * 0.6;
+      this.head.rotation.y -= this.torso.rotation.y * 0.5;
       if (this.swing > 0 && !this.carried) {
         // Wind up overhead, then chop down across the body.
         const e = 1 - this.swing;
@@ -499,7 +561,11 @@ export class Humanoid {
         this.elbowR.rotation.x = -0.65;
         this.torso.rotation.x -= 0.06;
         this.torso.rotation.y = 0;
+        this.carried.position.set(0, 0.1, 0.42);
+        this.carried.rotation.set(0, 0, 0);
       }
+      if (wk > 0.01 && air < 0.5) this.workPose(wk, aim);
+      if (enter > 0) this.enterPose(enter);
     } else if (pose === 'ride') {
       // Astride a moped: hips down, knees bent, arms out to the bars.
       h.position.y = 0.45;
@@ -548,9 +614,105 @@ export class Humanoid {
     }
   }
 
+  /**
+   * Hands on a job at `workAt`: the body squares up to the spot, the arms reach for it and whatever is in them goes out
+   * there. A load is held against the spot and worked into place; a tool turns on it; bare hands tug at it.
+   */
+  private workPose(k: number, aim: number) {
+    const t = this.workAt;
+    const t0 = this.workT;
+    // Where the spot is from the shoulders: ahead, to the side, and how far up or down.
+    const dx = t.x;
+    const dz = Math.max(0.25, t.z);
+    const dy = t.y - (this.hips.position.y + 0.42);
+    const fwd = Math.hypot(dx, dz);
+    const elev = clamp(Math.atan2(dy, fwd), -1.0, 1.0);
+    const face = clamp(Math.atan2(dx, dz), -0.9, 0.9);
+    this.torso.rotation.y = lerp(this.torso.rotation.y, face * 0.8, k);
+    this.torso.rotation.x += k * (0.18 + Math.max(0, -dy) * 0.25);
+    this.head.rotation.y = lerp(this.head.rotation.y, face * 0.2, k);
+    this.head.rotation.x = lerp(this.head.rotation.x, 0.15 + Math.max(0, -elev) * 0.35 - this.torso.rotation.x * 0.5, k);
+    // A planted step toward the work, the other foot back.
+    this.legL.rotation.x = lerp(this.legL.rotation.x, this.legL.rotation.x - 0.18, k);
+    this.legR.rotation.x = lerp(this.legR.rotation.x, this.legR.rotation.x + 0.14, k);
+    const reachX = -(Math.PI / 2 + elev * 0.85);
+    const out = clamp((fwd - 0.2) / 0.7, 0, 1);
+    if (this.carried) {
+      const tug = Math.sin(t0 * 11) * 0.025 + Math.sin(t0 * 5.3) * 0.012;
+      // The load goes out toward the spot, but never past arm's reach.
+      const reach = Math.min(0.62, 0.34 + fwd * 0.3);
+      const px = clamp(dx, -0.45, 0.45) * 0.55;
+      const pz = Math.min(dz, reach) + tug;
+      const py = clamp(dy + 0.12, -0.55, 0.5);
+      this.carried.position.set(lerp(0, px, k), lerp(0.1, py, k), lerp(0.42, pz, k));
+      // Rocked into place: it turns a little as the bolts catch.
+      this.carried.rotation.set(Math.sin(t0 * 7) * 0.08 * k, Math.sin(t0 * 5) * 0.12 * k, 0);
+      const arms = reachX * 0.9 - 0.12 * out;
+      this.armL.rotation.set(lerp(-1.05, arms, k), 0, lerp(-0.28, -0.14, k));
+      this.armR.rotation.set(lerp(-1.05, arms, k), 0, lerp(0.28, 0.14, k));
+      this.elbowL.rotation.x = lerp(-0.65, -0.55 + out * 0.4 + tug * 6, k);
+      this.elbowR.rotation.x = lerp(-0.65, -0.55 + out * 0.4 - tug * 6, k);
+    } else if (this.held !== 'none') {
+      // Tool in the right hand turning on the spot, ratcheting; the left hand steadies against the work.
+      const turn = Math.sin(t0 * 9);
+      this.armR.rotation.x = lerp(this.armR.rotation.x, reachX + 0.05, k);
+      this.armR.rotation.y = lerp(this.armR.rotation.y, -0.1, k);
+      this.armR.rotation.z = lerp(this.armR.rotation.z, -0.08, k);
+      this.elbowR.rotation.x = lerp(this.elbowR.rotation.x, -0.4 + out * 0.3 + turn * 0.12, k);
+      this.hand.rotation.x = lerp(this.hand.rotation.x, 1.2, k);
+      this.hand.rotation.z = lerp(this.hand.rotation.z, turn * 0.5, k);
+      this.armL.rotation.x = lerp(this.armL.rotation.x, reachX * 0.85, k);
+      this.armL.rotation.z = lerp(this.armL.rotation.z, -0.2, k);
+      this.elbowL.rotation.x = lerp(this.elbowL.rotation.x, -0.6 + out * 0.3, k);
+    } else {
+      // Bare hands: both reach the spot and heave on it.
+      const tug = Math.sin(t0 * 8) * 0.07;
+      this.armL.rotation.x = lerp(this.armL.rotation.x, reachX + tug, k);
+      this.armR.rotation.x = lerp(this.armR.rotation.x, reachX - tug, k);
+      this.armL.rotation.z = lerp(this.armL.rotation.z, -0.1, k);
+      this.armR.rotation.z = lerp(this.armR.rotation.z, 0.1, k);
+      this.elbowL.rotation.x = lerp(this.elbowL.rotation.x, -0.45 + out * 0.3, k);
+      this.elbowR.rotation.x = lerp(this.elbowR.rotation.x, -0.45 + out * 0.3, k);
+    }
+    void aim;
+  }
+
+  /**
+   * Climbing into a car, `k` 0..1: reach for the handle, step up with the near foot, duck the head under the frame and drop
+   * into the seat. Blends the standing pose into the seated one so it ends exactly where the driver model begins.
+   */
+  private enterPose(k: number) {
+    const seat = smooth(0.4, 1, k);
+    const duck = Math.sin(Math.PI * clamp((k - 0.3) / 0.6, 0, 1));
+    const step = Math.sin(Math.PI * clamp((k - 0.32) / 0.4, 0, 1));
+    const reach = Math.sin(Math.PI * clamp(k / 0.4, 0, 1));
+    const h = this.hips;
+    h.position.y = lerp(h.position.y, 0.4, seat) - duck * 0.07;
+    // Near leg lifts over the sill while the other takes the weight.
+    this.legL.rotation.x = lerp(lerp(this.legL.rotation.x, -1.0, step), -1.4, seat);
+    this.kneeL.rotation.x = lerp(lerp(this.kneeL.rotation.x, 1.2, step), 1.5, seat);
+    this.legR.rotation.x = lerp(this.legR.rotation.x, -1.4, seat);
+    this.kneeR.rotation.x = lerp(this.kneeR.rotation.x, 1.5, seat);
+    this.torso.rotation.y *= 1 - seat;
+    this.torso.rotation.x = lerp(this.torso.rotation.x, 0.1, seat) + duck * 0.5;
+    this.head.rotation.x = lerp(this.head.rotation.x, -0.05, seat) - duck * 0.45;
+    // The far hand reaches for the door or the grab handle, then both come to the wheel.
+    this.armR.rotation.x = lerp(lerp(this.armR.rotation.x, -1.15, reach), -0.75, seat);
+    this.elbowR.rotation.x = lerp(lerp(this.elbowR.rotation.x, -0.5, reach), -0.7, seat);
+    this.armL.rotation.x = lerp(this.armL.rotation.x, -0.75, seat);
+    this.elbowL.rotation.x = lerp(this.elbowL.rotation.x, -0.7, seat);
+    this.armL.rotation.z = lerp(this.armL.rotation.z, 0.15, seat);
+    this.armR.rotation.z = lerp(this.armR.rotation.z, -0.15, seat);
+  }
+
   dispose() {
     // Geometry is shared per palette and per weapon; nothing to free per instance.
   }
+}
+
+function smooth(a: number, b: number, x: number) {
+  const t = clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
 }
 
 export { basicLight };

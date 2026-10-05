@@ -271,11 +271,13 @@ export class WorkFx {
       const obj = taken?.obj ?? this.model(modelKey(o.fresh));
       if (taken) obj.remove(taken.glow);
       const start = taken ? taken.pos : (o.from ?? o.anchor.clone().add(new THREE.Vector3(0, 1.4, 0)));
-      landed = taken ? 0.13 : 0.3;
+      // From the arms (or a hover) the part is already at the spot: it only snaps the last stretch home.
+      const direct = taken || o.from;
+      landed = direct ? 0.13 : 0.3;
       this.fly(obj, start, o.anchor, {
         dur: landed,
-        arc: taken ? 0 : 0.5,
-        spin: taken ? 0 : 5,
+        arc: direct ? 0 : 0.5,
+        spin: direct ? 0 : 5,
         s0: taken ? 1.1 : 1,
         s1: 0.45,
         done: () => {
