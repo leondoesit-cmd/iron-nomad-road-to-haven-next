@@ -390,15 +390,21 @@ const _p = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 
-/** Append one landmark prop into a merged builder. A power span's `scale` is its length in metres. */
-export function appendLandmark(target: MeshBuilder, p: { kind: PropKind; x: number; y: number; z: number; yaw: number; scale: number; seed: number; tag?: number; dy?: number }) {
-  const v = Math.abs(p.seed) % 4;
-  const key = `${p.kind}:${v}:${p.tag ?? 0}`;
+/** The cached prototype for a landmark kind (4 variants by seed), or null when the kind draws nothing. */
+export function landmarkProto(kind: PropKind, seed: number, tag = 0): MeshBuilder | null {
+  const v = Math.abs(seed) % 4;
+  const key = `${kind}:${v}:${tag}`;
   let proto = cache.get(key);
   if (proto === undefined) {
-    proto = buildLandmark(p.kind, v + 1 + (p.tag ?? 0) * 7, p.tag ?? 0);
+    proto = buildLandmark(kind, v + 1 + tag * 7, tag);
     cache.set(key, proto);
   }
+  return proto;
+}
+
+/** Append one landmark prop into a merged builder. A power span's `scale` is its length in metres. */
+export function appendLandmark(target: MeshBuilder, p: { kind: PropKind; x: number; y: number; z: number; yaw: number; scale: number; seed: number; tag?: number; dy?: number }) {
+  const proto = landmarkProto(p.kind, p.seed, p.tag ?? 0);
   if (!proto) return;
   if (p.kind === 'powerSpan') {
     _p.set(p.x, p.y, p.z);

@@ -85,6 +85,24 @@ export class PhysicsWorld {
     return this.world.createCollider(desc);
   }
 
+  /** Static triangle-mesh collider from world-space vertices (x,y,z triples) and triangle indices. */
+  addStaticTrimesh(vertices: Float32Array, indices: Uint32Array, collisionGroups = GROUPS.static): Collider {
+    const desc = RAPIER.ColliderDesc.trimesh(vertices, indices).setCollisionGroups(collisionGroups).setFriction(0.8);
+    return this.world.createCollider(desc);
+  }
+
+  /** Either of the two above, picked by `shape`. */
+  addPropCollider(m: { shape: 'trimesh' | 'hull'; vertices: Float32Array; indices?: Uint32Array }, collisionGroups = GROUPS.static): Collider | null {
+    return m.shape === 'hull' || !m.indices ? this.addStaticHull(m.vertices, collisionGroups) : this.addStaticTrimesh(m.vertices, m.indices, collisionGroups);
+  }
+
+  /** Static convex hull of world-space vertices (x,y,z triples), or null when they are degenerate. */
+  addStaticHull(vertices: Float32Array, collisionGroups = GROUPS.static): Collider | null {
+    const desc = RAPIER.ColliderDesc.convexHull(vertices);
+    if (!desc) return null;
+    return this.world.createCollider(desc.setCollisionGroups(collisionGroups).setFriction(0.8));
+  }
+
   /**
    * Heightfield over [x0, x0+size] x [z0, z0+size]. `heights` is (n+1)*(n+1) in column-major order:
    * index = col*(n+1)+row with col along x and row along z. Verified against Rapier 0.21.

@@ -4,6 +4,8 @@ import { ENEMIES, LEGS, MERCS, STRUCTURES, VEHICLES, t, type BuildElementDef, ty
 import { MeshBuilder, S } from '../render/builder';
 import { drum, heavyGun, plate, spareTyre } from '../render/parts';
 import { appendProp } from '../render/props';
+import { propCollisionMesh } from '../render/propCollision';
+import type { PropSpawn } from '../world/layout';
 import { kitMaterial } from '../render/materials';
 import { CampArena } from '../render/campArena';
 import { QUALITY } from '../render/renderer';
@@ -284,8 +286,12 @@ export class CampScene extends Scene {
       const x = Math.cos(a) * d;
       const z = Math.sin(a) * d;
       if (solid(x, z, 2)) continue;
-      if (city) appendProp(decor, { kind: r.pick(['rubble', 'barrel', 'tires', 'dumpster']), x, y: 0, z, yaw: r.range(0, 6), scale: 1, seed: r.int(0, 99) });
-      else appendProp(decor, { kind: r.pick(['rock', 'rock', 'bones', 'deadTree', 'tires']), x, y: 0, z, yaw: r.range(0, 6), scale: r.range(0.8, 1.8), seed: r.int(0, 99) });
+      const spec: PropSpawn = city
+        ? { kind: r.pick(['rubble', 'barrel', 'tires', 'dumpster']), x, y: 0, z, yaw: r.range(0, 6), scale: 1, seed: r.int(0, 99) }
+        : { kind: r.pick(['rock', 'rock', 'bones', 'deadTree', 'tires']), x, y: 0, z, yaw: r.range(0, 6), scale: r.range(0.8, 1.8), seed: r.int(0, 99) };
+      appendProp(decor, spec);
+      const cm = propCollisionMesh(spec);
+      if (cm) this.P.addPropCollider(cm, GROUPS.furn);
     }
     const dm = new THREE.Mesh(decor.build(), kitMaterial());
     dm.castShadow = true;
