@@ -64,6 +64,8 @@ export const PROP_COLLISION: Record<PropKind, 'mesh' | 'hull' | 'dynamic' | 'non
   bus: 'hull',
   busShelter: 'hull',
   floodlight: 'mesh',
+  campfire: 'none',
+  tent: 'hull',
 };
 
 /**

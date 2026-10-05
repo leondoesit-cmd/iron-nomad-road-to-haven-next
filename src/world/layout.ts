@@ -9,6 +9,8 @@ import { isLakeSite, lakeAt } from './lakes';
 import { delveName, delveSiteKind, type DelveSite } from './delveSites';
 import { planById } from './plans';
 import { districtAt, nearestRoad, type District } from './openWorld';
+import { GANGS } from '../data';
+import { dressGangCamp, fitSpot, newCampSpec, planFreeCamps, type GangCampSpec } from './gangCamps';
 import type { BuildingRole, CityPlan, Facing, LandmarkKind, PlannedPlace, PlannedStreet } from './cityPlan';
 
 export type AabbKind = 'building' | 'wall' | 'car' | 'rock' | 'barricade' | 'crate' | 'pillar' | 'tower' | 'partition' | 'furniture' | 'stair' | 'floor' | 'dock';
@@ -95,7 +97,9 @@ export type PropKind =
   | 'tram'
   | 'bus'
   | 'busShelter'
-  | 'floodlight';
+  | 'floodlight'
+  | 'tent'
+  | 'campfire';
 
 export interface PropSpawn {
   kind: PropKind;
@@ -202,6 +206,8 @@ export interface AmbushSpec {
   wagon: number;
   triggerRadius: number;
   canyon: boolean;
+  /** A gang camp's id: the ambush is the camp's reinforcements, called out when its sentries raise the alarm. */
+  camp?: string;
 }
 
 export interface EncounterSpot {
@@ -287,6 +293,8 @@ export interface LegLayout {
   landmarks: LandmarkBuilding[];
   zones: ScavZone[];
   ambushes: AmbushSpec[];
+  /** Raider gang camps in the open world: banners, tents, a stash and sentries. */
+  gangCamps: GangCampSpec[];
   encounters: EncounterSpot[];
   tips: TipSpot[];
   mines: MineSpawn[];
@@ -344,6 +352,7 @@ export class LegLayoutImpl implements LegLayout {
   landmarks: LandmarkBuilding[] = [];
   zones: ScavZone[] = [];
   ambushes: AmbushSpec[] = [];
+  gangCamps: GangCampSpec[] = [];
   encounters: EncounterSpot[] = [];
   tips: TipSpot[] = [];
   mines: MineSpawn[] = [];
@@ -405,6 +414,21 @@ export class LegLayoutImpl implements LegLayout {
     // Later passes (parked cars, rocks) may overlap earlier spawns: nothing spawns inside an obstacle.
     this.zombies = this.zombies.filter((z) => !this.blockedAt(z.x, z.z, 0.3));
     this.pickups = this.pickups.filter((p) => !this.blockedAt(p.x, p.z, 0.2) || p.kind === 'fragment' || p.kind === 'chassis');
+    // Nor does a car: one that overlaps a wall is shoved out by the physics and lands tilted against it.
+    this.cars = this.cars.filter((c) => !this.carClips(c));
+  }
+
+  /** Would a car placed here sink into a wall, a barricade or a building? Its length is sampled as three circles. */
+  private carClips(c: CarSpawn): boolean {
+    for (const o of [-1.8, 0, 1.8]) {
+      const px = c.x + Math.sin(c.yaw) * o;
+      const pz = c.z + Math.cos(c.yaw) * o;
+      for (const a of this.aabbs) {
+        if (a.kind === 'car' || a.kind === 'floor' || a.kind === 'stair' || a.kind === 'rock') continue;
+        if (px > a.minX - 0.9 && px < a.maxX + 0.9 && pz > a.minZ - 0.9 && pz < a.maxZ + 0.9 && a.y1 > c.y + 0.3 && a.y0 < c.y + 1.5) return true;
+      }
+    }
+    return false;
   }
 
   // ---------------------------------------------------------------- the open world
@@ -432,12 +456,15 @@ export class LegLayoutImpl implements LegLayout {
     this.roadsideJams();
     this.roadsideKit();
     this.sideRoadKit();
-    const inSite = (x: number, z: number) => T.sites.some((s) => s.radius > 0 && Math.hypot(x - s.x, z - s.z) < s.radius * 0.95);
+    // Nor does the scatter of rocks, cars and the dead stand in a gang camp.
+    const inCamp = (x: number, z: number) => this.gangCamps.some((c) => Math.hypot(x - c.x, z - c.z) < c.radius + 6);
+    const inSite = (x: number, z: number) => inCamp(x, z) || T.sites.some((s) => s.radius > 0 && Math.hypot(x - s.x, z - s.z) < s.radius * 0.95);
     this.props = this.props.filter((p, i) => i < n0[0] || !inSite(p.x, p.z));
     this.pickups = this.pickups.filter((p, i) => i < n0[1] || !inSite(p.x, p.z));
     this.aabbs = this.aabbs.filter((a, i) => i < n0[2] || !inSite((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2));
+    this.zombies = this.zombies.filter((q) => !inCamp(q.x, q.z));
     this.buildLakes();
-    this.cars = this.cars.filter((c) => !waterAt(T, c.x, c.z));
+    this.cars = this.cars.filter((c) => !waterAt(T, c.x, c.z) && !inCamp(c.x, c.z));
     // Nothing of the desert stands inside a city.
     const outside = (x: number, z: number) => !districtAt(o, x, z);
     this.props = this.props.filter((p) => outside(p.x, p.z));
@@ -465,6 +492,7 @@ export class LegLayoutImpl implements LegLayout {
     this.landmarks.push(...sub.landmarks);
     this.zones.push(...sub.zones);
     this.ambushes.push(...sub.ambushes);
+    this.gangCamps.push(...sub.gangCamps);
     this.encounters.push(...sub.encounters);
     this.tips.push(...sub.tips);
     this.mines.push(...sub.mines);
@@ -1371,24 +1399,39 @@ export class LegLayoutImpl implements LegLayout {
   }
 
   /**
-   * Raiders hole up in some of the places off the highway. Come near one and they hear the engines: the same ambush the
-   * authored ones are, but wherever the convoy happens to be going, and stronger the further from the start.
+   * Raider gangs hold camps: beside some of the places off the highway and out on their own in the open country. Each
+   * is a ring of tents and fence under the gang's banners, with a stash and sentries (`game/gangCamps.ts`). When the
+   * sentries raise the alarm the camp's ambush rolls out: the same buggies the old hidden ambushes sent, stronger the
+   * further from the start.
    */
   private raiderCamps() {
     const rng = new Rng(this.leg.seed ^ 0x2a1d);
     const T = this.terrain;
+    const spots: { x: number; z: number }[] = [];
     for (const s of T.sites) {
       if (!(s.kind === 'depot' || s.kind === 'gasStop' || s.kind === 'motel' || s.kind === 'mastHill' || s.kind === 'farm')) continue;
       if (Math.abs(s.x - roadX(T, s.z)) < 250 || !rng.chance(0.5)) continue;
-      const reach = Math.hypot(s.x, s.z - 12);
+      // Beside the place, on the side away from the road, clear of its pad.
+      const away = Math.sign(s.x - roadX(T, s.z)) || 1;
+      const x = s.x + away * (s.radius + 34);
+      const z = s.z + rng.range(-12, 12);
+      if (fitSpot(T, x, z)) spots.push({ x, z });
+    }
+    const free = planFreeCamps(T, this.leg.seed, 6, spots);
+    for (const p of [...spots, ...free]) {
+      const spec = newCampSpec(this.leg.seed, this.id('gang'), p.x, p.z, rng);
+      this.gangCamps.push(spec);
+      dressGangCamp(T, spec, GANGS[spec.gang].tag, { props: this.props, pickups: this.pickups, aabbs: this.aabbs, id: (k) => this.id(k), aabbId: newAabbId });
+      const reach = Math.hypot(p.x, p.z - 12);
       this.ambushes.push({
         id: this.id('a'),
-        x: s.x,
-        z: s.z,
+        x: p.x,
+        z: p.z,
         buggies: Math.min(5, 2 + Math.floor(reach / 1200)),
         wagon: reach > 1800 && rng.chance(0.5) ? 1 : 0,
-        triggerRadius: 170,
+        triggerRadius: 0,
         canyon: false,
+        camp: spec.id,
       });
     }
   }

@@ -34,7 +34,11 @@ export type ActionId =
   | 'nextBuild'
   | 'sheet'
   | 'map'
-  | 'use';
+  | 'use'
+  | 'eat'
+  | 'drink'
+  | 'piss'
+  | 'shit';
 
 export interface ActionDef {
   id: ActionId;
@@ -79,8 +83,12 @@ export const ACTIONS: ActionDef[] = [
   { id: 'prevBuild', label: 'Build: previous', hint: 'Camp build mode on keys (a pad uses LB)', group: 'team', btn: [Btn.Left], devices: ['kb'], optional: true },
   { id: 'nextBuild', label: 'Build: next', hint: 'Camp build mode on keys (a pad uses RB)', group: 'team', btn: [Btn.Right], devices: ['kb'], optional: true },
   { id: 'use', label: 'Take drug', hint: 'Tap to take the selected drug · hold to pick the next one', group: 'combat', pad: Btn.Down, btn: [Btn.Down], devices: ALL, optional: true },
+  { id: 'eat', label: 'Eat', hint: 'Eat a ration (a pad uses the quick belt: hold D-pad ↓)', group: 'team', btn: [Btn.Eat], devices: ['kb'], optional: true },
+  { id: 'drink', label: 'Drink', hint: 'Drink from the water reserve, or the lake', group: 'team', btn: [Btn.Drink], devices: ['kb'], optional: true },
+  { id: 'piss', label: 'Piss', hint: 'Take a piss: press again or walk off to stop', group: 'team', btn: [Btn.Piss], devices: ['kb'], optional: true },
+  { id: 'shit', label: 'Shit', hint: 'Take a shit: press again or walk off to stop', group: 'team', btn: [Btn.Shit], devices: ['kb'], optional: true },
   { id: 'sheet', label: 'Convoy sheet', hint: 'Hold for the convoy sheet', group: 'team', pad: Btn.Back, btn: [Btn.Back], devices: ALL, optional: true },
-  { id: 'map', label: 'Map', hint: 'Tap to open the map: a closer look, then the whole leg, then close', group: 'team', pad: Btn.Map, btn: [Btn.Map], devices: ALL, optional: true },
+  { id: 'map', label: 'Map', hint: 'Tap to open the map: a closer look, then the whole leg, then close · Hold next to a friend for a high five', group: 'team', pad: Btn.Map, btn: [Btn.Map], devices: ALL, optional: true },
 ];
 
 export const ACTION_BY_ID = Object.fromEntries(ACTIONS.map((a) => [a.id, a])) as Record<ActionId, ActionDef>;
@@ -131,13 +139,13 @@ const KB_DEFAULT: [KeyMap, KeyMap] = [
     moveUp: 'KeyW', moveDown: 'KeyS', moveLeft: 'KeyA', moveRight: 'KeyD',
     turnLeft: 'KeyZ', turnRight: 'KeyX', fire: 'KeyT', interact: 'KeyE', jump: 'Space', vehicle: 'KeyF', crouch: 'KeyC',
     sprint: 'ShiftLeft', wheel: 'KeyG', reload: 'KeyR', horn: 'KeyH', swap: 'KeyQ', prevBuild: 'Digit1', nextBuild: 'Digit2',
-    view: 'KeyB', camera: 'KeyY', sheet: 'Digit3', map: 'KeyV', inventory: 'Tab', use: 'Digit4',
+    view: 'KeyB', camera: 'KeyY', sheet: 'Digit3', map: 'KeyV', inventory: 'Tab', use: 'Digit4', eat: 'Digit5', drink: 'Digit6', piss: 'Digit7', shit: 'Digit8',
   },
   {
     moveUp: 'ArrowUp', moveDown: 'ArrowDown', moveLeft: 'ArrowLeft', moveRight: 'ArrowRight',
     turnLeft: 'BracketLeft', turnRight: 'BracketRight', fire: 'ShiftRight', interact: 'Slash', jump: 'KeyO', vehicle: 'Enter', crouch: 'Period',
     sprint: 'ControlRight', wheel: 'Backspace', reload: 'Comma', horn: 'KeyM', swap: 'KeyN', prevBuild: 'Semicolon', nextBuild: 'Quote',
-    view: 'KeyP', camera: 'KeyL', sheet: 'Backslash', map: 'KeyK', inventory: 'KeyI', use: 'KeyU',
+    view: 'KeyP', camera: 'KeyL', sheet: 'Backslash', map: 'KeyK', inventory: 'KeyI', use: 'KeyU', eat: 'Digit9', drink: 'Digit0', piss: 'Minus', shit: 'Equal',
   },
 ];
 

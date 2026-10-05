@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { ENEMIES, t, type ZombieDef, type ZombieKind } from '../data';
 import { clamp, damp, dist2, lerp, wrapAngle } from '../core/math';
 import type { Aabb } from '../world/layout';
+import type { Animal } from './wildlife';
 import { armDamageMult, damageFraction, legSpeedMult, limbsGone, maskOf, massOf, newWounds, staggerSpeed, wound, zoneOf, type AmmoSpec, type Wounds, type Zone } from '../sim/ballistics';
+import { MELEE, knockFor, type MeleeFeel } from '../sim/weaponfx';
 import type { ZombieRenderer } from '../render/zombieRender';
 import type { Ctx } from './ctx';
 import type { Player } from './player';
@@ -69,6 +71,27 @@ export class Zombie {
   biteMult = 1;
   /** Which way and how hard the last bullet hit: a corpse is thrown that way. */
   lastHit: { dx: number; dz: number; power: number } | null = null;
+  /** Standing still, looking about, for this long before it moves on; and how long before it may stop again. */
+  idleT = 0;
+  restCd = 0;
+  /** Places it will still go and check after losing someone. */
+  search = 0;
+  /** Which side it likes to come in on when hunting, -1 to 1, so a crowd fans out instead of queueing. */
+  flank: number;
+  /** Brutes: winding up for a charge, charging, and the pause before the next one. A charge holds the heading it started on. */
+  charge: 'none' | 'wind' | 'run' = 'none';
+  chargeT = 0;
+  chargeCd = 2 + Math.random() * 3;
+  cx = 0;
+  cz = 1;
+  /** A burst of speed: a runner's lunge, a stalker pouncing when it is no longer watched. */
+  burstT = 0;
+  leapCd = 0;
+  /** A stalker that is being looked straight at. */
+  watched = false;
+  /** The carcass it is walking to or eating, and for how much longer. */
+  feed: Animal | null = null;
+  feedT = 0;
 
   constructor(
     public kind: ZombieKind,
@@ -89,6 +112,7 @@ export class Zombie {
     this.yaw = Math.random() * Math.PI * 2;
     this.phase = Math.random() * 6.28;
     this.variant = Math.floor(Math.random() * 5);
+    this.flank = (Math.floor(Math.random() * 5) - 2) / 2;
     this.aiT = Math.random() * 0.05;
     this.lastX = x;
     this.lastZ = z;
@@ -204,6 +228,9 @@ export class ZombieSystem {
   private alert(zb: Zombie, x: number, z: number, killer: number) {
     const p = killer >= 0 ? this.ctx.players[killer] : null;
     zb.state = 'chase';
+    zb.idleT = 0;
+    zb.feed = null;
+    zb.feedT = 0;
     zb.chase = Math.max(zb.chase, 0.3);
     zb.tx = x;
     zb.tz = z;
@@ -345,6 +372,9 @@ export class ZombieSystem {
         zb.tx = toX;
         zb.tz = toZ;
         zb.hasTarget = true;
+        zb.idleT = 0;
+        zb.feed = null;
+        zb.feedT = 0;
         n++;
       }
     }
@@ -377,7 +407,11 @@ export class ZombieSystem {
     this.kill(zb, killer);
   }
 
-  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number) {
+  /**
+   * A swing of a weapon: everything in front of the player and within reach takes the blow, up to what the weapon can cleave
+   * through. Each body is shoved back (a heavy one moves less) and staggered. `cut` is how well the weapon takes limbs off (see `cutOf`). Returns how many it landed on.
+   */
+  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number, feel: MeleeFeel = MELEE.fist, cut = 0): number {
     let hit = 0;
     for (const zb of this.list) {
       if (zb.dead) continue;
@@ -388,17 +422,36 @@ export class ZombieSystem {
       const ang = Math.abs(wrapAngle(Math.atan2(dx, dz) - yaw));
       if (ang > 1.0) continue;
       const k = zb.def.armor > 0 ? 1 - zb.def.armor : 1;
-      this.damage(zb, dmg * k, { fromX: p.pos.x, fromZ: p.pos.z, killer: p.index });
-      zb.vx += (dx / (d || 1)) * 4;
-      zb.vz += (dz / (d || 1)) * 4;
-      zb.stun = Math.max(zb.stun, 0.35);
+      const ux = dx / (d || 1);
+      const uz = dz / (d || 1);
+      zb.lastHit = { dx: ux, dz: uz, power: (dmg * k * Math.max(0.3, cut)) / zb.def.hp };
+      const killed = this.damage(zb, dmg * k, { fromX: p.pos.x, fromZ: p.pos.z, killer: p.index });
+      if (cut > 0) this.cutOff(zb, ux, uz, dmg * k, cut, killed, p.index);
+      const push = knockFor(feel, massOf(zb.def.scale));
+      zb.vx += (dx / (d || 1)) * push;
+      zb.vz += (dz / (d || 1)) * push;
+      zb.stun = Math.max(zb.stun, feel.stun);
       hit++;
-      if (hit >= 2) break;
+      if (hit >= feel.cleave) break;
     }
     if (hit) {
       this.ctx.fx.blood(hx, p.pos.y + 1.1, hz, 4);
       this.ctx.audio.play('thud', hx, hz, 0.7);
     }
+    return hit;
+  }
+
+  /** A blade lands somewhere on the body, at random: an arm, a leg, now and then the head. Takes off what it cut through. */
+  private cutOff(zb: Zombie, dx: number, dz: number, dealt: number, cut: number, killed: boolean, killer: number) {
+    const ctx = this.ctx;
+    const r = ctx.rng.next();
+    const zone: Zone = r < 0.18 ? 'head' : r < 0.5 ? (ctx.rng.next() < 0.5 ? 'armL' : 'armR') : r < 0.8 ? (ctx.rng.next() < 0.5 ? 'legL' : 'legR') : 'torso';
+    const res = wound(zb.wounds, zone, dealt, cut, zb.def.hp, killed, ctx.rng.next());
+    if (!res.off.length) return;
+    this.refreshWounds(zb);
+    const power = (dealt * cut) / zb.def.hp;
+    for (const part of res.off) ctx.gore.sever(zb, part, dx, 0.3, dz, power);
+    if (res.off.includes('head') && !zb.dead) this.kill(zb, killer);
   }
 
   /** Free a pinned player: grabbers are knocked back and stunned. */
@@ -442,6 +495,8 @@ export class ZombieSystem {
       const dmg = (22 + sp * 6.5) * (v.def.tier >= 3 ? 1.5 : v.def.tier === 2 ? 1.0 : 0.65) * (1 + pl);
       const res = zb.def.armor > 0 ? 1 - zb.def.armor : 1;
       const killed = this.damage(zb, dmg * res, { fromX: p.x, fromZ: p.z, killer: v.driver?.isPlayer ? v.driver.index : -1, explosive: false });
+      // Hit hard enough, a body comes apart on the bumper.
+      if (killed && dmg * res >= zb.def.hp * 1.1) this.tear(zb, fx, fz, (dmg * res) / zb.def.hp);
       zb.vx += fx * sp * 0.6 - fz * lx * 0.3;
       zb.vz += fz * sp * 0.6 + fx * lx * 0.3;
       zb.stun = 0.5;
@@ -696,11 +751,21 @@ export class ZombieSystem {
     zb.stateT += dt;
     zb.attackCd -= dt;
     zb.shriekCd -= dt;
+    zb.restCd -= dt;
+    zb.chargeCd -= dt;
+    zb.leapCd -= dt;
+    if (zb.burstT > 0) zb.burstT -= dt;
+    if (zb.idleT > 0) zb.idleT -= dt;
     if (zb.stun > 0) zb.stun -= dt;
     if (zb.stagger > 0) zb.stagger = Math.max(0, zb.stagger - dt * 2.4);
     if (zb.burn > 0) {
       zb.burn -= dt;
       if (Math.random() < 0.4) ctx.fx.fire(zb.x, zb.y + 1.0, zb.z, 0.4);
+    }
+    // Shot or shoved out of a charge, a brute loses it.
+    if (zb.charge === 'run' && zb.stun > 0.3) {
+      zb.charge = 'none';
+      zb.chargeCd = 4;
     }
 
     // ---- decisions at 20 Hz
@@ -709,6 +774,16 @@ export class ZombieSystem {
       zb.aiT += 0.05;
       this.think(zb);
     }
+
+    // ---- eating: it stands over the body with its head down, and what it eats is gone for the hunter
+    let eating = false;
+    if (zb.feedT > 0 && zb.feed && !zb.chasing) {
+      zb.feedT -= dt;
+      eating = true;
+      ctx.wildlife?.gnaw(zb.feed, dt * 0.8);
+      zb.yaw += wrapAngle(Math.atan2(zb.feed.x - zb.x, zb.feed.z - zb.z) - zb.yaw) * Math.min(1, dt * 3);
+      if (zb.feedT <= 0) zb.feed = null;
+    } else if (zb.feedT > 0) zb.feedT = 0;
 
     // ---- movement
     let speed = 0;
@@ -735,6 +810,13 @@ export class ZombieSystem {
       }
       if (zb.hesitating) speed *= 0.12;
       speed *= zb.moveMult;
+      // Standing about, looking round or eating: not walking. The hunt does not wait.
+      if ((zb.idleT > 0 && !zb.chasing) || eating) speed = 0;
+      // The dead do not walk evenly: a walker lurches and drags, a runner surges.
+      speed *= this.gait(zb);
+      // A stalker that is looked at creeps; the moment it is not, it pounces.
+      if (zb.watched) speed *= 0.1;
+      if (zb.burstT > 0) speed *= zb.kind === 'stalker' ? 1.5 : 1.8;
       if (zb.hasTarget && speed > 0) {
         let aimX = zb.tx;
         let aimZ = zb.tz;
@@ -745,13 +827,69 @@ export class ZombieSystem {
             aimZ = zb.routeZ;
           }
         }
-        const dx = aimX - zb.x;
-        const dz = aimZ - zb.z;
-        const d = Math.hypot(dx, dz);
+        let dx = aimX - zb.x;
+        let dz = aimZ - zb.z;
+        let d = Math.hypot(dx, dz);
+        // Hunters spread across the target's front instead of queueing up on one line.
+        if (zb.chasing && !zb.raid && zb.routeT <= 0 && zb.flank !== 0 && d > 6 && zb.kind !== 'brute' && zb.kind !== 'bloater') {
+          const off = zb.flank * Math.min(4.5, d * 0.25);
+          aimX += (-dz / d) * off;
+          aimZ += (dx / d) * off;
+          dx = aimX - zb.x;
+          dz = aimZ - zb.z;
+          d = Math.hypot(dx, dz);
+        }
         if (d > 0.4) {
           wantX = dx / d;
           wantZ = dz / d;
         } else speed = 0;
+        // A screamer keeps its distance: it is there to call the rest, not to fight.
+        if (zb.kind === 'screamer' && zb.chasing && zb.routeT <= 0) {
+          const dt2 = Math.hypot(zb.tx - zb.x, zb.tz - zb.z);
+          if (dt2 < 8) {
+            wantX = -wantX;
+            wantZ = -wantZ;
+            speed *= 0.85;
+          } else if (dt2 < 12) speed = 0;
+        }
+        // A runner closing on someone throws itself the last few metres.
+        if (zb.kind === 'runner' && zb.chasing && zb.leapCd <= 0 && zb.burstT <= 0 && !zb.hesitating) {
+          const dt2 = Math.hypot(zb.tx - zb.x, zb.tz - zb.z);
+          if (dt2 > 2.2 && dt2 < 4.4) {
+            zb.burstT = 0.3;
+            zb.leapCd = 3.5;
+            zb.vx += wantX * 4;
+            zb.vz += wantZ * 4;
+          }
+        }
+      }
+      // A brute winds up (it stops and roars, head down), then runs flat out along a line it has locked.
+      if (zb.charge !== 'none') {
+        zb.chargeT -= dt;
+        if (zb.charge === 'wind') {
+          speed = 0;
+          wantX = wantZ = 0;
+          zb.yaw += wrapAngle(Math.atan2(zb.tx - zb.x, zb.tz - zb.z) - zb.yaw) * Math.min(1, dt * 6);
+          if (zb.chargeT <= 0) {
+            zb.charge = 'run';
+            zb.chargeT = 1.5;
+            const l = Math.hypot(zb.tx - zb.x, zb.tz - zb.z) || 1;
+            zb.cx = (zb.tx - zb.x) / l;
+            zb.cz = (zb.tz - zb.z) / l;
+          }
+        } else {
+          const l = Math.hypot(zb.tx - zb.x, zb.tz - zb.z) || 1;
+          zb.cx += ((zb.tx - zb.x) / l - zb.cx) * dt * 0.8;
+          zb.cz += ((zb.tz - zb.z) / l - zb.cz) * dt * 0.8;
+          const n = Math.hypot(zb.cx, zb.cz) || 1;
+          wantX = zb.cx / n;
+          wantZ = zb.cz / n;
+          speed = def.chase * 2.1;
+          if (zb.chargeT <= 0) {
+            zb.charge = 'none';
+            zb.chargeCd = 6 + Math.random() * 3;
+          }
+        }
       }
     }
     if (zb.sideT > 0) {
@@ -761,6 +899,8 @@ export class ZombieSystem {
       wantX = wantX * 0.3 + sx;
       wantZ = wantZ * 0.3 + sz;
     }
+    // Looking about: standing, it turns its head and shoulders slowly one way and the other.
+    if (zb.idleT > 0 && !zb.chasing && !eating) zb.yaw += Math.sin(this.time * 1.1 + zb.phase * 4) * dt * 1.1;
     // Separation from neighbours.
     let sepX = 0;
     let sepZ = 0;
@@ -787,8 +927,8 @@ export class ZombieSystem {
     // Wire and slow zones.
     const slow = zb.slow;
     const sp = speed * slow;
-    zb.vx = damp(zb.vx, wantX * sp, 8, dt);
-    zb.vz = damp(zb.vz, wantZ * sp, 8, dt);
+    zb.vx = damp(zb.vx, wantX * sp, zb.charge === 'run' ? 3 : 8, dt);
+    zb.vz = damp(zb.vz, wantZ * sp, zb.charge === 'run' ? 3 : 8, dt);
     // knockback decays naturally via damping above.
     const p = { x: zb.x + zb.vx * dt + sepX * 0.5, z: zb.z + zb.vz * dt + sepZ * 0.5 };
     // The dead do not swim: deep water stops them at the shore, shallows slow them.
@@ -808,10 +948,19 @@ export class ZombieSystem {
     zb.x = p.x;
     zb.z = p.z;
     zb.slow = 1;
-    if (hit && hit.breakable && zb.hasTarget && speed > 0) this.onObstacleHit(hit, (def.damage * dt * (zb.kind === 'brute' ? 3 : 0.6)), zb);
+    if (hit && hit.breakable && zb.hasTarget && speed > 0) this.onObstacleHit(hit, def.damage * dt * (zb.kind === 'brute' ? 3 : 0.6), zb);
+    // A charge that meets a wall ends in a dazed brute (and, if the wall is a barricade, a broken one).
+    if (hit && zb.charge === 'run' && Math.hypot(zb.vx, zb.vz) > 3) {
+      zb.charge = 'none';
+      zb.chargeCd = 7;
+      zb.stun = 1.1;
+      zb.vx = zb.vz = 0;
+      if (hit.breakable) this.onObstacleHit(hit, def.damage * 2.5, zb);
+      ctx.audio.play('crash', zb.x, zb.z, 0.8);
+    }
     // Facing.
     const spd = Math.hypot(zb.vx, zb.vz);
-    if (spd > 0.15) {
+    if (spd > 0.15 && zb.charge !== 'wind') {
       const want = Math.atan2(zb.vx, zb.vz);
       zb.yaw += wrapAngle(want - zb.yaw) * Math.min(1, dt * 8);
     }
@@ -837,13 +986,28 @@ export class ZombieSystem {
     if (zb.chasing && zb.stun <= 0) this.attack(zb, dt);
   }
 
+  /** How evenly it walks. Averages out to 1, so none of this changes how long a crowd takes to arrive. */
+  private gait(zb: Zombie): number {
+    const t = this.time;
+    switch (zb.kind) {
+      case 'walker':
+      case 'bloater':
+        return 1 + 0.38 * Math.sin(t * 2.3 + zb.phase * 2);
+      case 'runner':
+        return 1 + 0.2 * Math.sin(t * 4.1 + zb.phase);
+      default:
+        return 1;
+    }
+  }
+
   private think(zb: Zombie) {
     const ctx = this.ctx;
     const def = zb.def;
     const aggro = ctx.campaign.difficulty.aggro;
     const heard = this.hear(zb);
     const tgt = this.pickTarget(zb);
-    const sight = (zb.kind === 'stalker' ? 30 : 13) * aggro;
+    // Head down over a meal it notices less.
+    const sight = (zb.kind === 'stalker' ? 30 : 13) * aggro * (zb.feedT > 0 ? 0.6 : 1);
     // Friendly fire-support ring: stalkers hesitate within an armed, crewed vehicle's cover.
     zb.hesitating = false;
     if (zb.kind === 'stalker') {
@@ -860,6 +1024,17 @@ export class ZombieSystem {
     // The stoned are easy to miss; the drunk are easy to find.
     const notice = tgt?.player ? tgt.player.drugs.mods().aggro : 1;
     const seesTarget = !!tgt && tgt.d < sight * notice * (tgt.vehicle ? 1.4 : tgt.player && tgt.player.crouch ? 0.5 : 1) && !ctx.obs.segmentBlocked(zb.x, zb.z, tgt.x, tgt.z, 1.1);
+    // A stalker that someone is looking straight at holds back, and the instant they look away it is on them.
+    if (zb.kind === 'stalker') {
+      const was = zb.watched;
+      zb.watched = false;
+      if (zb.chasing && tgt?.player && tgt.d > 6.5 && tgt.d < 40) {
+        const tx = (zb.x - tgt.x) / tgt.d;
+        const tz = (zb.z - tgt.z) / tgt.d;
+        zb.watched = Math.sin(tgt.player.aimYaw) * tx + Math.cos(tgt.player.aimYaw) * tz > 0.86 && !ctx.obs.segmentBlocked(zb.x, zb.z, tgt.x, tgt.z, 1.1);
+      }
+      if (was && !zb.watched && zb.burstT <= 0 && tgt && tgt.d < 28) zb.burstT = 0.8;
+    }
     switch (zb.state) {
       case 'dormant':
         if (seesTarget && tgt && tgt.d < 4.5) this.startChase(zb, tgt);
@@ -869,6 +1044,7 @@ export class ZombieSystem {
           zb.tz = heard.z;
           zb.hasTarget = true;
           zb.stateT = 0;
+          zb.search = 1;
         }
         break;
       case 'wander':
@@ -879,7 +1055,40 @@ export class ZombieSystem {
           zb.tz = heard.z;
           zb.hasTarget = true;
           zb.stateT = 0;
-        } else if (!zb.hasTarget || zb.stateT > 4 + (zb.id % 5) || dist2(zb.x, zb.z, zb.tx, zb.tz) < 1) {
+          zb.search = 1;
+          zb.feed = null;
+          zb.feedT = 0;
+        } else if (zb.feed) {
+          // Walking to a body, or eating one.
+          const c = zb.feed;
+          if (!c.dead || c.butchered || zb.stateT > 25) {
+            zb.feed = null;
+            zb.feedT = 0;
+            zb.hasTarget = false;
+          } else if (zb.feedT <= 0 && dist2(zb.x, zb.z, c.x, c.z) < 2.25) {
+            zb.feedT = 6 + Math.random() * 8;
+            zb.stateT = 0;
+          }
+        } else if (zb.idleT <= 0 && (!zb.hasTarget || zb.stateT > 4 + (zb.id % 5) || dist2(zb.x, zb.z, zb.tx, zb.tz) < 1)) {
+          // Between places it often just stands for a while, swaying and looking about.
+          if (zb.restCd <= 0 && zb.kind !== 'stalker' && Math.random() < 0.5) {
+            zb.idleT = 1.5 + Math.random() * 3.5;
+            zb.restCd = 6;
+            zb.stateT = 0;
+            zb.hasTarget = false;
+            break;
+          }
+          // A body lying near draws the plodding kinds in to eat.
+          const c = zb.kind === 'stalker' || zb.kind === 'screamer' ? null : ctx.wildlife?.carcassNear(zb.x, zb.z, 30);
+          if (c && Math.random() < 0.5) {
+            const a = Math.random() * 6.28;
+            zb.feed = c;
+            zb.tx = c.x + Math.cos(a) * 0.9;
+            zb.tz = c.z + Math.sin(a) * 0.9;
+            zb.hasTarget = true;
+            zb.stateT = 0;
+            break;
+          }
           const a = Math.random() * 6.28;
           const r = 3 + Math.random() * 10;
           zb.tx = zb.homeX + Math.cos(a) * r;
@@ -901,11 +1110,22 @@ export class ZombieSystem {
             zb.tz = heard.z;
             if (heard.level * aggro > 80) zb.state = 'chase';
           }
-          if (dist2(zb.x, zb.z, zb.tx, zb.tz) < 2 && zb.stateT > 1.5) {
-            zb.state = 'wander';
-            zb.hasTarget = false;
-            zb.homeX = zb.x;
-            zb.homeZ = zb.z;
+          if (zb.idleT <= 0 && dist2(zb.x, zb.z, zb.tx, zb.tz) < 2 && zb.stateT > 1.5) {
+            if (zb.search > 0) {
+              // Nothing here: stand and look, then check a little further on.
+              zb.search--;
+              zb.idleT = 1.2 + Math.random() * 1.8;
+              const a = Math.random() * 6.28;
+              const r = 5 + Math.random() * 5;
+              zb.tx = zb.x + Math.cos(a) * r;
+              zb.tz = zb.z + Math.sin(a) * r;
+              zb.stateT = 0;
+            } else {
+              zb.state = 'wander';
+              zb.hasTarget = false;
+              zb.homeX = zb.x;
+              zb.homeZ = zb.z;
+            }
           }
           if (zb.stateT > 20) zb.state = 'wander';
         }
@@ -913,8 +1133,9 @@ export class ZombieSystem {
       case 'chase':
       case 'swarm': {
         // Keep the closest valid target; lose interest after a while.
+        let visible = false;
         if (tgt && (tgt.d < 45 * aggro || (zb.targetPlayer && tgt.player === zb.targetPlayer))) {
-          const visible = !ctx.obs.segmentBlocked(zb.x, zb.z, tgt.x, tgt.z, 1.1);
+          visible = !ctx.obs.segmentBlocked(zb.x, zb.z, tgt.x, tgt.z, 1.1);
           if (visible || tgt.d < 25) {
             zb.tx = tgt.x;
             zb.tz = tgt.z;
@@ -935,9 +1156,22 @@ export class ZombieSystem {
           zb.hasTarget = true;
           zb.lostT = 0;
         }
+        // A screamer keeps calling as long as it can see someone.
+        if (zb.kind === 'screamer' && visible && tgt && zb.shriekCd <= 0) this.shriek(zb, tgt.x, tgt.z, false);
+        // A brute that has someone in the open stops, roars and runs them down.
+        if (zb.kind === 'brute' && visible && tgt && zb.charge === 'none' && zb.chargeCd <= 0 && zb.stun <= 0 && tgt.d > 5 && tgt.d < 16 && !zb.grabbing) {
+          zb.charge = 'wind';
+          zb.chargeT = 0.75;
+          ctx.audio.play('growl', zb.x, zb.z, 1);
+          ctx.fx.puff(zb.x, zb.y + 1.2, zb.z, 0.6, 0.55, 0.5, 1.4, 0.5);
+        }
         if (zb.lostT > 8) {
+          // Lost them. Go to where they were last seen and look around there.
           zb.state = 'investigate';
           zb.stateT = 0;
+          zb.search = 2;
+          zb.charge = 'none';
+          zb.watched = false;
         }
         break;
       }
@@ -945,7 +1179,6 @@ export class ZombieSystem {
   }
 
   private startChase(zb: Zombie, tgt: { x: number; z: number; player: Player | null }) {
-    const ctx = this.ctx;
     const was = zb.chasing;
     zb.state = 'chase';
     zb.tx = tgt.x;
@@ -954,15 +1187,41 @@ export class ZombieSystem {
     zb.targetPlayer = tgt.player;
     zb.lostT = 0;
     zb.stateT = 0;
-    if (zb.kind === 'screamer' && !was && zb.shriekCd <= 0) {
-      zb.shriekCd = 12;
-      // Shriek: triples the alert radius. Everything within 60 m wakes and converges.
-      ctx.sig.emit(zb.x, zb.z, 100, 'noise');
-      const n = this.hordeAlert(zb.x, zb.z, (ENEMIES.zombies.screamer.shriek ?? 3) * 20, tgt.x, tgt.z);
-      ctx.audio.play('scream', zb.x, zb.z, 1);
-      ctx.fx.puff(zb.x, zb.y + 1.5, zb.z, 0.8, 0.8, 1, 3, 0.8);
-      if (n > 2) ctx.radio(t('radio.horde'));
-      for (const p of ctx.players) p.note('A Screamer spotted you!', 'warn');
+    zb.idleT = 0;
+    zb.feed = null;
+    zb.feedT = 0;
+    if (zb.kind === 'screamer' && !was && zb.shriekCd <= 0) this.shriek(zb, tgt.x, tgt.z, true);
+    // The ones around it have seen it turn: they look, and then they come.
+    if (!was) this.rally(zb, tgt.x, tgt.z);
+  }
+
+  /** Shriek: triples the alert radius. Everything within 60 m wakes and converges. */
+  private shriek(zb: Zombie, x: number, z: number, first: boolean) {
+    const ctx = this.ctx;
+    zb.shriekCd = first ? 12 : 9;
+    ctx.sig.emit(zb.x, zb.z, 100, 'noise');
+    const n = this.hordeAlert(zb.x, zb.z, (ENEMIES.zombies.screamer.shriek ?? 3) * 20, x, z);
+    ctx.audio.play('scream', zb.x, zb.z, 1);
+    ctx.fx.puff(zb.x, zb.y + 1.5, zb.z, 0.8, 0.8, 1, 3, 0.8);
+    if (n > 2) ctx.radio(t('radio.horde'));
+    if (first) for (const p of ctx.players) p.note('A Screamer spotted you!', 'warn');
+  }
+
+  /** One of them has found someone: those within a few strides turn toward it, each after a moment of its own, and follow. */
+  private rally(zb: Zombie, x: number, z: number) {
+    for (const o of this.list) {
+      if (o === zb || o.dead || !o.active || o.chasing) continue;
+      const d2 = (o.x - zb.x) ** 2 + (o.z - zb.z) ** 2;
+      if (d2 > 81 || (o.state === 'dormant' && d2 > 25)) continue;
+      o.state = 'investigate';
+      o.tx = x;
+      o.tz = z;
+      o.hasTarget = true;
+      o.stateT = 0;
+      o.idleT = 0.15 + Math.random() * 0.7;
+      o.search = 1;
+      o.feed = null;
+      o.feedT = 0;
     }
   }
 
@@ -1036,7 +1295,7 @@ export class ZombieSystem {
       const legs = limbsGone(zb.wounds.mask).legs;
       // Without legs a body drops to the ground and drags itself; with one it lists to the side.
       const drop = zb.dead ? 0 : legs >= 2 ? 0.78 * sc : legs === 1 ? 0.06 * sc : 0;
-      zr.push(zb.kind, sc, zb.x, zb.y - sink + (zb.dead ? 0.1 : 0) - drop, zb.z, zb.yaw, zb.phase, zb.dead ? 0 : zb.stride, zb.dead ? 0 : zb.chase, tilt, zb.variant, 1, zb.wounds.mask, zb.stagger, legs >= 2 ? 0.75 : legs === 1 ? 0.12 : 0);
+      zr.push(zb.kind, sc, zb.x, zb.y - sink + (zb.dead ? 0.1 : 0) - drop, zb.z, zb.yaw, zb.phase, zb.dead ? 0 : zb.stride, zb.dead ? 0 : zb.chase, tilt, zb.variant, 1, zb.wounds.mask, zb.stagger, (legs >= 2 ? 0.75 : legs === 1 ? 0.12 : 0) + (zb.charge !== 'none' ? 0.35 : 0) + (zb.feedT > 0 ? 0.55 : 0));
     }
     zr.end(time);
   }

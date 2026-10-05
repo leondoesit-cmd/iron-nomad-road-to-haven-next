@@ -8,11 +8,11 @@ import { QUALITY, type GameRenderer } from '../render/renderer';
 import { SignatureGrid } from '../sim/signature';
 import { splitLoot, whole } from '../sim/resources';
 import { DayClock, lightMix } from '../sim/dayclock';
-import { groundDamp, stormLevel, stormWindow, STORM_WIND, type StormWindow } from '../sim/weather';
+import { groundDamp, heatLevel, stormImminent, stormLevel, stormWindow, STORM_WIND, type StormWindow } from '../sim/weather';
 import { TANK_DREGS, takeReserve } from '../sim/fuel';
 import { Rng } from '../core/rng';
 import { clamp, clamp01, smoothstep } from '../core/math';
-import { LEGS, VEHICLES, STOCK_IDS, gearDef, type Stocks } from '../data';
+import { LEGS, VEHICLES, STOCK_IDS, gearDef, t, type Stocks } from '../data';
 import type { GearItem } from '../sim/gear';
 import type { Surface, TerrainDef } from '../world/terrain';
 import type { Aabb } from '../world/layout';
@@ -96,8 +96,12 @@ export abstract class Scene implements Ctx {
   storm = 0;
   /** True while the storm is still building, false once it has peaked and is blowing out. */
   stormRising = true;
+  /** Heat wave strength, 0 mild to 1 the full swelter. Smoothed, and always 0 away from a leg. */
+  heat = 0;
+  private heatTold = 0;
   private stormWin: StormWindow | null | undefined;
   private stormTold = 0;
+  private stormForeTold = false;
   players: Player[] = [];
   vehicles: Vehicle[] = [];
   zombies: ZombieSystem;
@@ -617,7 +621,8 @@ export abstract class Scene implements Ctx {
     this.sigDecayT += dt;
     this.sig.decay(dt);
     this.modeTick(dt);
-    this.clock.tick(dt);
+    const tick = this.clock.tick(dt);
+    if (tick.warn && this.mode === 'leg') this.radio(t('radio.duskWarn'));
     this.tickWeather(dt);
     // Loot popups
     if (this.lootAccT > 0) {
@@ -657,6 +662,22 @@ export abstract class Scene implements Ctx {
       this.radio('The dust is settling. Visibility is coming back.');
     }
     if (this.storm > 0.15) this.stirDust(dt);
+    // The sky gives a storm away a little before the first gust.
+    if (this.mode === 'leg' && !this.stormForeTold && stormImminent(this.clock.t, win)) {
+      this.stormForeTold = true;
+      this.radio(t('radio.stormSoon'));
+    }
+    // Heat waves: the day's level follows the clock, smoothed like the storm.
+    const heatTarget = this.mode === 'leg' ? heatLevel(this.campaign.seed, this.campaign.day, this.clock.t) : 0;
+    this.heat += (heatTarget - this.heat) * Math.min(1, dt * 0.8);
+    if (Math.abs(this.heat - heatTarget) < 0.002) this.heat = heatTarget;
+    if (this.heat > 0.4 && this.heatTold === 0) {
+      this.heatTold = 1;
+      this.radio(t('radio.heat'));
+    } else if (this.heat < 0.15 && this.heatTold === 1 && this.clock.t > 0.45) {
+      this.heatTold = 2;
+      this.radio(t('radio.heatEasing'));
+    }
   }
 
   private stirDust(dt: number) {

@@ -1,6 +1,8 @@
 import { gearDef, t } from '../data';
 import { DRUGS } from '../sim/drugs';
 import { STAMINA, bleedLabel, wearLabel, wearOf } from '../sim/vitals';
+import { canRelieve, isNeedAct, needChips, type NeedAct } from '../sim/needs';
+import type { Campaign } from '../game/campaign';
 import { LABEL, whole } from '../sim/resources';
 import { loyaltyBand } from '../sim/loyalty';
 import { SALVAGE_STAGES } from '../sim/salvage';
@@ -20,7 +22,7 @@ import type { Vehicle } from '../game/vehicle';
 import { promptLabel, type Slot } from '../input/input';
 import type { MapFrame } from './mapdata';
 import { MapPainter, PIN_COLOR } from './minimap';
-import { stormLabel, stormMapRadius } from '../sim/weather';
+import { heatLabel, stormLabel, stormMapRadius } from '../sim/weather';
 
 /** The key or button a prompt names, as this seat has it bound. */
 export function btnLabel(slot: Slot | null, btn: string): string {
@@ -47,32 +49,43 @@ class PlayerHud {
       <div class="drugfx" data-k="drugfx"></div>
       <div class="belt" data-k="belt"></div>
       <div class="corner tl">
-        <div class="tag"><span class="pcolor" style="background:${color}"></span><span data-k="name"></span></div>
-        <div class="sigrow"><div class="sig" data-k="sigbar"><div class="fill" data-k="sigfill"></div></div><span class="val" data-k="sigval">0</span></div>
-        <div class="tag" data-k="siglabel">NOISE</div>
+        <div class="pane ident">
+          <div class="who"><span class="pcolor" style="background:${color}"></span><span data-k="name"></span></div>
+          <div class="sighead"><span data-k="siglabel">NOISE</span><span class="val" data-k="sigval">0</span></div>
+          <div class="sig" data-k="sigbar"><div class="fill" data-k="sigfill"></div></div>
+          <div class="sighint" data-k="sighint"></div>
+        </div>
         <div class="chips" data-k="chips"></div>
       </div>
-      <div class="corner tr">
+      <div class="corner tc">
         <canvas class="compass" data-k="compass"></canvas>
-        <div class="legbar" data-k="legbar"><div class="fill" data-k="legfill"></div><div class="dusk" data-k="legdusk"></div><div class="me" data-k="legme"></div></div>
-        <div class="tag"><span class="clock" data-k="clock"></span> <span data-k="daytag"></span></div>
+        <div class="pane trip">
+          <div class="tline"><span class="clock" data-k="clock"></span><span class="daytag" data-k="daytag"></span></div>
+          <div class="legbar" data-k="legbar"><div class="fill" data-k="legfill"></div><div class="dusk" data-k="legdusk"></div><div class="me" data-k="legme"></div></div>
+        </div>
+      </div>
+      <div class="corner tr">
         <canvas class="minimap" data-k="minimap"></canvas>
       </div>
       <div class="corner bl">
-        <div class="tag" data-k="vname">ON FOOT</div>
-        <div class="bar" data-k="hpbar"><div class="fill" data-k="hpfill"></div></div>
-        <div class="bar stam" data-k="stambar"><div class="fill" data-k="stamfill"></div></div>
-        <div class="row" data-k="fuelrow"><div class="bar fuel" data-k="fuelbar"><div class="fill" data-k="fuelfill"></div></div><span class="val" data-k="fuelval"></span></div>
-        <div class="row" data-k="oilrow"><div class="bar oil" data-k="oilbar"><div class="fill" data-k="oilfill"></div></div><span class="val" data-k="oilval">OIL</span></div>
-        <div class="row" data-k="waterrow"><div class="bar water" data-k="waterbar"><div class="fill" data-k="waterfill"></div></div><span class="val" data-k="waterval">WATER</span></div>
-        <div class="row" data-k="temprow"><div class="bar temp" data-k="tempbar"><div class="fill" data-k="tempfill"></div></div><span class="val" data-k="tempval">TEMP</span></div>
-        <div class="row"><div class="speed" data-k="speed">0<small>km/h</small></div><div class="comp" data-k="comp"></div></div>
+        <div class="pane vitals">
+          <div class="vhead"><span data-k="vname">ON FOOT</span><div class="speed" data-k="speed">0<small>km/h</small></div></div>
+          <div class="gauge hp" data-k="hprow"><span class="gl" data-k="hplabel">HEALTH</span><div class="bar" data-k="hpbar"><div class="fill" data-k="hpfill"></div></div><span class="val" data-k="hpval"></span></div>
+          <div class="gauge stamina" data-k="stamrow"><span class="gl">STAMINA</span><div class="bar stam" data-k="stambar"><div class="fill" data-k="stamfill"></div></div><span class="val" data-k="stamval"></span></div>
+          <div class="gauge" data-k="fuelrow"><span class="gl">FUEL</span><div class="bar fuel" data-k="fuelbar"><div class="fill" data-k="fuelfill"></div></div><span class="val" data-k="fuelval"></span></div>
+          <div class="gauge" data-k="oilrow"><span class="gl">OIL</span><div class="bar oil" data-k="oilbar"><div class="fill" data-k="oilfill"></div></div><span class="val" data-k="oilval"></span></div>
+          <div class="gauge" data-k="waterrow"><span class="gl">COOLANT</span><div class="bar water" data-k="waterbar"><div class="fill" data-k="waterfill"></div></div><span class="val" data-k="waterval"></span></div>
+          <div class="gauge" data-k="temprow"><span class="gl">ENGINE</span><div class="bar temp" data-k="tempbar"><div class="fill" data-k="tempfill"></div></div><span class="val" data-k="tempval"></span></div>
+          <div class="faults" data-k="comp"></div>
+        </div>
       </div>
       <div class="corner br">
-        <div class="tag" data-k="wname">PISTOL</div>
-        <div class="ammo" data-k="ammo">12<small>/90</small></div>
-        <div class="equip" data-k="equip"></div>
-        <div class="tag" data-k="stocks"></div>
+        <div class="pane gunbox">
+          <div class="wname" data-k="wname">PISTOL</div>
+          <div class="ammo" data-k="ammo">12<small>/90</small></div>
+          <div class="equip" data-k="equip"></div>
+        </div>
+        <div class="supplies" data-k="stocks"></div>
       </div>
       <div class="bc">
         <div class="vread" data-k="vread"></div>
@@ -132,10 +145,10 @@ class PlayerHud {
 
   drawCompass(camYaw: number, pins: CompassPin[], from: { x: number; z: number }, partner: { x: number; z: number } | null, pcolor: string, partnerColor: string, scale: number) {
     const c = this.compass;
-    // Fit the compass to the half it lives in so the corners never collide in a narrow left/right view.
+    // Centred between the noise panel and the minimap, so it narrows in a half-width view instead of colliding with them.
     const hostW = this.root.clientWidth || 640;
-    const W = Math.round(Math.max(150, Math.min(320 * scale, hostW * 0.46)));
-    const H = Math.round(46 * scale);
+    const W = Math.round(Math.max(140, Math.min(340 * scale, hostW - 2 * 190 * scale)));
+    const H = Math.round(42 * scale);
     c.style.width = `${W}px`;
     c.style.height = `${H}px`;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -363,10 +376,12 @@ export class Hud {
     h.setStyle('sigfill', 'width', `${clamp(sig, 0, 100)}%`);
     h.setClass('sigbar', sig >= 60 ? 'high' : sig >= 30 ? 'mid' : '');
     h.setText('sigval', String(Math.round(sig)));
-    h.setText('siglabel', scene.mode === 'delve' ? 'NOISE · THE DEAD LISTEN' : scene.biome === 'city' ? 'NOISE · HEARD IN CITIES' : 'DUST · SEEN ON THE ROAD');
+    const dust = scene.mode !== 'delve' && scene.biome !== 'city';
+    h.setText('siglabel', dust ? 'DUST' : 'NOISE');
+    h.setText('sighint', scene.mode === 'delve' ? 'the dead are listening' : dust ? 'seen from the road' : 'heard across the city');
     const chips: string[] = [];
     if (leg && leg.gap > 150) chips.push(`<span class="chip ${leg.gap > 250 ? 'bad' : 'warn'}">PARTNER ${Math.round(leg.gap)}m</span>`);
-    if (scene.night > 0.4) chips.push('<span class="chip warn">NIGHT: 2x SIGNATURE WITH LIGHTS</span>');
+    if (scene.night > 0.4) chips.push('<span class="chip warn">NIGHT · LIGHTS DOUBLE NOISE</span>');
     if (v && v.lights) chips.push('<span class="chip">LIGHTS</span>');
     if (p.state === 'driving' && v && !v.engineOn) chips.push('<span class="chip">ENGINE OFF</span>');
     if (p.pinned >= 2) chips.push('<span class="chip bad">PINNED</span>');
@@ -375,8 +390,10 @@ export class Hud {
     if (p.bleed.level > 0 && p.state !== 'downed') chips.push(`<span class="chip bad">${bleedLabel(p.bleed.level)}</span>`);
     if (p.stamina.winded && p.state === 'foot') chips.push('<span class="chip warn">WINDED</span>');
     for (const s of p.drugs.status()) chips.push(`<span class="chip ${s.kind}">${s.text}</span>`);
+    if (p.state === 'foot' || p.state === 'driving' || p.state === 'gunner') for (const c of needChips(p.needs)) chips.push(`<span class="chip ${c.kind}">${c.text}</span>`);
     const qsel = p.quickSel;
-    const qn = scene.campaign.items[qsel];
+    // The body's chores are on the belt but not worth a standing chip: the need chips above say when one is due.
+    const qn = isNeedAct(qsel) ? 0 : scene.campaign.items[qsel];
     // A dressing is worth showing while hurt; a drug only while you have one.
     const dressing = qsel === 'bandage' || qsel === 'medkit';
     if ((p.state === 'foot' || p.state === 'driving') && !p.beltOpen && qn > 0 && (!dressing || p.hp < p.maxHp - 0.5 || p.bleed.level > 0)) {
@@ -405,7 +422,7 @@ export class Hud {
       h.setStyle('legdusk', 'display', leg.leg.open ? 'none' : '');
       const sec = leg.clock.secondsToDark;
       h.setText('clock', leg.clock.night ? '+' + formatClock((leg.clock.t - 1) * leg.clock.dayLength) : formatClock(sec));
-      const dust = stormLabel(leg.storm, leg.stormRising);
+      const dust = stormLabel(leg.storm, leg.stormRising) || heatLabel(leg.heat);
       h.setText('daytag', leg.clock.dusk ? (leg.clock.night ? 'INTO THE NIGHT' : 'TO DARK') : dust ? `TO DUSK BELL · ${dust}` : 'TO DUSK BELL');
       h.setStyle('legbar', 'display', '');
     } else {
@@ -432,8 +449,10 @@ export class Hud {
     const cur = v ?? p.ownVehicle;
     if (v && (p.state === 'driving' || p.state === 'gunner')) {
       h.setText('vname', v.def.name.toUpperCase());
-      h.setStyle('stambar', 'display', 'none');
+      h.setStyle('stamrow', 'display', 'none');
       const f = v.hpFrac;
+      h.setText('hplabel', 'HULL');
+      h.setText('hpval', `${Math.round(f * 100)}%`);
       h.setStyle('hpfill', 'width', `${f * 100}%`);
       h.setClass('hpbar', f < 0.25 ? 'crit' : f < 0.55 ? 'low' : '');
       h.setStyle('fuelrow', 'display', 'flex');
@@ -444,21 +463,34 @@ export class Hud {
       this.oilGauge(h, v);
       this.waterGauge(h, v);
       this.tempGauge(h, v);
-      h.setText('speed', `${Math.round(Math.abs(v.speed) * 3.6)}`);
+      h.setStyle('speed', 'display', '');
       h.el('speed').innerHTML = `${Math.round(Math.abs(v.speed) * 3.6)}<small>km/h</small>`;
+      // Only what is broken is listed, in words, so a healthy vehicle has a quiet corner.
       const c = v.health.comp;
-      const cls = (x: number) => (x <= 0.001 ? 'bad' : x < 0.99 ? 'mid' : '');
-      h.setHtml(
-        'comp',
-        `<i class="${cls(c.engine)}" title="engine">E</i><i class="${c.tires.some((x) => x <= 0) ? 'bad' : ''}">T</i><i class="${v.health.leaking ? 'bad' : ''}">F</i><i class="${cls(c.mount)}">W</i><i class="${c.oil < OIL_CRITICAL ? 'bad' : c.oil < OIL_LOW ? 'mid' : ''}" title="oil">O</i><i class="${(c.coolant ?? 1) < COOLANT_CRITICAL ? 'bad' : (c.coolant ?? 1) < COOLANT_LOW ? 'mid' : ''}" title="water">C</i><i class="${v.stats.noDrive || (c.gearbox ?? 1) < 0.25 ? 'bad' : (c.gearbox ?? 1) < 0.5 ? 'mid' : ''}" title="gearbox">G</i>${v.health.burning ? '<i class="bad">🔥</i>' : ''}`,
-      );
+      const faults: string[] = [];
+      const fault = (txt: string, cls: string) => faults.push(`<span class="chip ${cls}">${txt}</span>`);
+      if (v.health.burning) fault('ON FIRE', 'bad');
+      if (c.engine <= 0.001) fault('ENGINE DEAD', 'bad');
+      else if (c.engine < 0.99) fault(`ENGINE ${Math.round(c.engine * 100)}%`, c.engine < 0.5 ? 'bad' : 'warn');
+      const flats = c.tires.filter((x) => x <= 0).length;
+      if (flats) fault(`${flats} FLAT TYRE${flats > 1 ? 'S' : ''}`, 'bad');
+      if (v.health.leaking) fault('FUEL LEAK', 'bad');
+      if (c.mount <= 0.001) fault('GUN MOUNT GONE', 'bad');
+      else if (c.mount < 0.99) fault('GUN MOUNT DAMAGED', 'warn');
+      const gb = c.gearbox ?? 1;
+      if (v.stats.noDrive || gb < 0.25) fault('GEARBOX FAILING', 'bad');
+      else if (gb < 0.5) fault('GEARBOX WORN', 'warn');
+      h.setHtml('comp', faults.join(''));
     } else if (p.state === 'foot' || p.state === 'entering' || p.state === 'downed' || p.state === 'dead') {
       h.setText('vname', p.state === 'dead' ? 'DOWN FOR GOOD' : 'ON FOOT');
       // Stamina shows only while it is being used, so a rested survivor has a clean corner.
       const wind = p.stamina.value / STAMINA.max;
-      h.setStyle('stambar', 'display', p.state === 'foot' && (wind < 0.995 || p.stamina.winded) ? 'block' : 'none');
+      h.setStyle('stamrow', 'display', p.state === 'foot' && (wind < 0.995 || p.stamina.winded) ? 'flex' : 'none');
       h.setStyle('stamfill', 'width', `${wind * 100}%`);
       h.setClass('stambar', p.stamina.winded ? 'stam winded' : 'stam');
+      h.setText('stamval', p.stamina.winded ? 'WINDED' : `${Math.round(wind * 100)}%`);
+      h.setText('hplabel', 'HEALTH');
+      h.setText('hpval', p.bleed.level > 0 ? bleedLabel(p.bleed.level).toUpperCase() : String(Math.ceil(p.hp)));
       h.setStyle('hpfill', 'width', `${(p.hp / p.maxHp) * 100}%`);
       h.setClass('hpbar', p.bleed.level > 0 ? 'bleed' : p.hp < 25 ? 'crit' : p.hp < 55 ? 'low' : '');
       h.setStyle('fuelrow', 'display', cur && !cur.wreck ? 'flex' : 'none');
@@ -471,7 +503,7 @@ export class Hud {
       this.oilGauge(h, cur && !cur.wreck ? cur : null);
       this.waterGauge(h, cur && !cur.wreck ? cur : null);
       this.tempGauge(h, cur && !cur.wreck ? cur : null);
-      h.el('speed').innerHTML = `${Math.round(p.moveSpeed * 3.6)}<small>km/h</small>`;
+      h.setStyle('speed', 'display', 'none');
       h.setHtml('comp', '');
     } else {
       this.oilGauge(h, null);
@@ -490,8 +522,8 @@ export class Hud {
         h.setText('wname', 'BED MG · PARTNER GUNS');
         h.el('ammo').innerHTML = `${camp.ammo}<small> rds</small>`;
       } else {
-        h.setText('wname', 'UNARMED');
-        h.el('ammo').innerHTML = `—`;
+        h.setText('wname', 'NO WEAPON');
+        h.el('ammo').innerHTML = '';
       }
       h.setHtml('equip', `<span class="on">${btnLabel(slot, 'X')} HORN</span><span>${btnLabel(slot, 'B')} LIGHTS</span>`);
     } else if (p.state === 'gunner' && v) {
@@ -517,9 +549,15 @@ export class Hud {
       const belt = p.gear.belt.map((it, i) => (it ? `<span class="${eq !== 'utility' && p.gear.sel === i ? 'on' : ''}">${gearDef(it.id).short}</span>` : '')).join('');
       h.setHtml('equip', `${belt}<span class="${eq === 'utility' ? 'on' : ''}">${p.utility.toUpperCase()}</span>`);
     }
-    h.setText(
+    // Convoy supplies: label dim, number bright. Oil and water live on the convoy sheet and the jerrycan readout.
+    const supply = (label: string, n: string, low = false) => `<span${low ? ' class="low"' : ''}><i>${label}</i>${n}</span>`;
+    h.setHtml(
       'stocks',
-      `FUEL ${camp.stocks.fuel.toFixed(0)}${camp.items.diesel > 0.05 ? ` · DIESEL ${camp.items.diesel.toFixed(0)}` : ''} · OIL ${(camp.items.oil * 3).toFixed(1)} L · WATER ${camp.items.water.toFixed(0)} L · RATIONS ${whole(camp.stocks.rations)} · SCRAP ${whole(camp.stocks.scrap)} · PARTS ${whole(camp.stocks.parts)}`,
+      supply('FUEL', camp.stocks.fuel.toFixed(0), camp.stocks.fuel < 4) +
+        (camp.items.diesel > 0.05 ? supply('DIESEL', camp.items.diesel.toFixed(0)) : '') +
+        supply('RATIONS', String(whole(camp.stocks.rations)), camp.stocks.rations < 3) +
+        supply('SCRAP', String(whole(camp.stocks.scrap))) +
+        supply('PARTS', String(whole(camp.stocks.parts))),
     );
 
     // The vehicle you are standing next to: what it is and what is wrong with it.
@@ -548,7 +586,7 @@ export class Hud {
     // Reticle: on foot aiming or manning the bed gun.
     const showRet = (p.state === 'foot' && p.equip === 'gun' && !p.carry) || p.state === 'gunner';
     h.setStyle('reticle', 'display', showRet ? 'block' : 'none');
-    h.setStyle('reticle', 'transform', `scale(${1 + (1 - p.ads) * 0.4})`);
+    h.setStyle('reticle', 'transform', `scale(${((1 + (1 - p.ads) * 0.4) * (1 + p.bloom * 0.5)).toFixed(3)})`);
 
     // Damage / downed overlays
     const hurt = clamp(1 - p.hp / p.maxHp, 0, 1);
@@ -601,7 +639,7 @@ export class Hud {
     const T = v.temp;
     h.setStyle('tempfill', 'width', `${clamp(T / T_MAX, 0, 1) * 100}%`);
     h.setClass('tempbar', T >= T_OVERHEAT ? 'temp crit' : T >= T_HOT ? 'temp low' : 'temp');
-    h.setText('tempval', T >= T_OVERHEAT ? 'OVERHEATING' : T >= T_HOT ? 'HOT' : 'TEMP');
+    h.setText('tempval', T >= T_OVERHEAT ? 'OVERHEATING' : T >= T_HOT ? 'HOT' : 'NORMAL');
   }
 
   /** The oil bar under the fuel bar: shown for a convoy vehicle with an engine that burns it. */
@@ -612,7 +650,7 @@ export class Hud {
     const o = v.health.comp.oil;
     h.setStyle('oilfill', 'width', `${clamp(o, 0, 1) * 100}%`);
     h.setClass('oilbar', o < OIL_CRITICAL ? 'oil crit' : o < OIL_LOW ? 'oil low' : 'oil');
-    h.setText('oilval', `OIL ${Math.round(o * 100)}`);
+    h.setText('oilval', o < OIL_CRITICAL ? 'DRY' : o < OIL_LOW ? `LOW ${Math.round(o * 100)}%` : `${Math.round(o * 100)}%`);
   }
 
   /** The cooling-system bar: shown with the oil bar, for a convoy vehicle with a radiator to fill. */
@@ -623,7 +661,7 @@ export class Hud {
     const w = v.health.comp.coolant ?? 1;
     h.setStyle('waterfill', 'width', `${clamp(w, 0, 1) * 100}%`);
     h.setClass('waterbar', w < COOLANT_CRITICAL ? 'water crit' : w < COOLANT_LOW ? 'water low' : 'water');
-    h.setText('waterval', `WATER ${Math.round(w * 100)}`);
+    h.setText('waterval', w < COOLANT_CRITICAL ? 'DRY' : w < COOLANT_LOW ? `LOW ${Math.round(w * 100)}%` : `${Math.round(w * 100)}%`);
   }
 
   /** A card for the nearest vehicle when on foot: name, owner, and condition chips so it is clear what needs doing. */
@@ -633,40 +671,50 @@ export class Hud {
     if (!v) return '';
     const c = v.health.comp;
     const tag = scene.cars.describe(v);
-    const chip = (txt: string, cls = '') => `<span class="chip ${cls}">${txt}</span>`;
     const parts: string[] = [];
+    const chip = (txt: string, cls = '') => parts.push(`<span class="chip ${cls}">${txt}</span>`);
+    // Healthy systems are folded into one chip; only what needs doing is spelled out.
+    let trouble = 0;
+    const flag = (txt: string, cls: 'warn' | 'bad') => {
+      trouble++;
+      chip(txt, cls);
+    };
     if (v.wreck) {
       const left = SALVAGE_STAGES.length - v.salvaged;
-      parts.push(chip(left > 0 ? `${left} STAGE${left > 1 ? 'S' : ''} TO STRIP` : 'NOTHING LEFT', left > 0 ? 'good' : ''));
+      chip(left > 0 ? `${left} STAGE${left > 1 ? 'S' : ''} TO STRIP` : 'NOTHING LEFT', left > 0 ? 'good' : '');
     } else {
-      parts.push(c.engine < 0.1 ? chip('ENGINE DEAD', 'bad') : c.engine < 0.999 ? chip(`ENGINE ${Math.round(c.engine * 100)}%`, c.engine < 0.5 ? 'warn' : '') : chip('ENGINE OK'));
+      if (c.engine < 0.1) flag('ENGINE DEAD', 'bad');
+      else if (c.engine < 0.999) flag(`ENGINE ${Math.round(c.engine * 100)}%`, 'warn');
       const flats = c.tires.filter((x) => x <= 0.001).length;
-      parts.push(flats ? chip(`${flats} FLAT`, 'bad') : chip('TYRES OK'));
-      if (v.convoyEngine && v.stats.noEngine) parts.push(chip('NO ENGINE', 'bad'));
-      parts.push(chip(`${v.fuelType.toUpperCase()} ${Math.round((v.fuel / Math.max(0.01, v.tankMax)) * 100)}%`, v.fuel < 0.5 ? 'bad' : v.fuel / v.tankMax < 0.25 ? 'warn' : ''));
-      if (this.wrongFuel(v)) parts.push(chip(`ENGINE WANTS ${v.stats.fuel.toUpperCase()}`, 'bad'));
-      if (v.convoyEngine && v.temp >= T_HOT) parts.push(chip(v.temp >= T_OVERHEAT ? 'OVERHEATED' : 'HOT', v.temp >= T_OVERHEAT ? 'bad' : 'warn'));
-      if (c.oil < OIL_LOW) parts.push(chip(c.oil < OIL_CRITICAL ? 'OIL DRY' : 'OIL LOW', c.oil < OIL_CRITICAL ? 'bad' : 'warn'));
-      else parts.push(chip(`OIL ${Math.round(c.oil * 100)}%`));
+      if (flats) flag(`${flats} FLAT TYRE${flats > 1 ? 'S' : ''}`, 'bad');
+      if (v.convoyEngine && v.stats.noEngine) flag('NO ENGINE', 'bad');
+      const fuelPct = v.fuel / Math.max(0.01, v.tankMax);
+      chip(`${v.fuelType === 'diesel' ? 'DIESEL' : 'PETROL'} TANK ${Math.round(fuelPct * 100)}%`, v.fuel < 0.5 ? 'bad' : fuelPct < 0.25 ? 'warn' : '');
+      if (this.wrongFuel(v)) flag(`ENGINE WANTS ${v.stats.fuel.toUpperCase()}`, 'bad');
+      if (v.convoyEngine && v.temp >= T_HOT) flag(v.temp >= T_OVERHEAT ? 'OVERHEATED' : 'HOT', v.temp >= T_OVERHEAT ? 'bad' : 'warn');
+      if (c.oil < OIL_LOW) flag(c.oil < OIL_CRITICAL ? 'OIL DRY' : 'OIL LOW', c.oil < OIL_CRITICAL ? 'bad' : 'warn');
+      else if (c.oil < 0.99) chip(`OIL ${Math.round(c.oil * 100)}%`);
       const water = c.coolant ?? 1;
-      if (v.convoyEngine) parts.push(water < COOLANT_LOW ? chip(water < COOLANT_CRITICAL ? 'WATER DRY' : 'WATER LOW', water < COOLANT_CRITICAL ? 'bad' : 'warn') : chip(`WATER ${Math.round(water * 100)}%`));
-      if (v.convoyEngine && v.stats.noDrive) parts.push(chip('NO GEARBOX', 'bad'));
-      else if (v.convoyEngine && (c.gearbox ?? 1) < 0.5) parts.push(chip(`GEARBOX ${Math.round((c.gearbox ?? 1) * 100)}%`, (c.gearbox ?? 1) < 0.25 ? 'bad' : 'warn'));
-      if (v.stats.overload > 1.08) parts.push(chip('SAGGING', 'warn'));
-      if (v.stats.tyresGone) parts.push(chip(`${v.stats.tyresGone} BARE WHEEL${v.stats.tyresGone > 1 ? 'S' : ''}`, 'bad'));
-      if (v.stats.hoodOff) parts.push(chip('NO BONNET', 'warn'));
-      if (v.stats.doorsOff) parts.push(chip(`${v.stats.doorsOff} DOOR${v.stats.doorsOff > 1 ? 'S' : ''} OFF`, 'warn'));
-      parts.push(chip(`BODY ${Math.round(v.hpFrac * 100)}%`, v.hpFrac < 0.35 ? 'bad' : v.hpFrac < 0.65 ? 'warn' : ''));
+      if (v.convoyEngine && water < COOLANT_LOW) flag(water < COOLANT_CRITICAL ? 'COOLANT DRY' : 'COOLANT LOW', water < COOLANT_CRITICAL ? 'bad' : 'warn');
+      else if (v.convoyEngine && water < 0.99) chip(`COOLANT ${Math.round(water * 100)}%`);
+      if (v.convoyEngine && v.stats.noDrive) flag('NO GEARBOX', 'bad');
+      else if (v.convoyEngine && (c.gearbox ?? 1) < 0.5) flag(`GEARBOX ${Math.round((c.gearbox ?? 1) * 100)}%`, (c.gearbox ?? 1) < 0.25 ? 'bad' : 'warn');
+      if (v.stats.overload > 1.08) flag('SAGGING UNDER LOAD', 'warn');
+      if (v.stats.tyresGone) flag(`${v.stats.tyresGone} BARE WHEEL${v.stats.tyresGone > 1 ? 'S' : ''}`, 'bad');
+      if (v.stats.hoodOff) flag('NO BONNET', 'warn');
+      if (v.stats.doorsOff) flag(`${v.stats.doorsOff} DOOR${v.stats.doorsOff > 1 ? 'S' : ''} OFF`, 'warn');
+      if (v.hpFrac < 0.65) flag(`BODY ${Math.round(v.hpFrac * 100)}%`, v.hpFrac < 0.35 ? 'bad' : 'warn');
       const bent = v.bodywork.dentLevel();
-      if (bent > 0.5) parts.push(chip('CRUMPLED', 'warn'));
-      else if (bent > 0.06) parts.push(chip('DENTED'));
+      if (bent > 0.5) flag('CRUMPLED', 'warn');
+      else if (bent > 0.06) chip('DENTED');
       const off = v.bodywork.missing();
-      if (off) parts.push(chip(`${off} PANEL${off > 1 ? 'S' : ''} OFF`, 'warn'));
-      if (v.health.leaking) parts.push(chip('LEAKING', 'bad'));
-      if (v.health.burning) parts.push(chip('ON FIRE', 'bad'));
+      if (off) flag(`${off} PANEL${off > 1 ? 'S' : ''} OFF`, 'warn');
+      if (v.health.leaking) flag('LEAKING', 'bad');
+      if (v.health.burning) flag('ON FIRE', 'bad');
+      if (!trouble) chip('ALL SYSTEMS OK', 'good');
     }
     const fitted = v.build ? Object.keys(v.build.fit).length : 0;
-    if (fitted) parts.push(chip(`${fitted} PART${fitted > 1 ? 'S' : ''} FITTED`));
+    if (fitted) chip(`${fitted} PART${fitted > 1 ? 'S' : ''} FITTED`);
     return `<div class="vcard"><b>${escapeHtml(v.def.name.toUpperCase())}</b> <em>${tag}</em></div><div class="chips">${parts.join('')}</div>`;
   }
 
@@ -708,16 +756,15 @@ export class Hud {
       h.setStyle('belt', 'display', 'none');
       return;
     }
-    const items = scene.campaign.items;
     const sel = p.quickSel;
     const slots = QUICK.map((id) => {
       const q = quickDef(id);
-      const n = items[id];
-      return `<div class="slot${id === sel ? ' sel' : ''}${n <= 0 ? ' none' : ''}" style="--dc:${q.color}"><b>${q.glyph}</b><i>${n}</i></div>`;
+      const n = quickCount(id, p, scene.campaign);
+      return `<div class="slot${id === sel ? ' sel' : ''}${n.none ? ' none' : ''}" style="--dc:${q.color}"><b>${q.glyph}</b><i>${n.slot}</i></div>`;
     }).join('');
     const def = quickDef(sel);
     const hint = p.state === 'driving' ? `hold to cycle · release, then tap ${btnLabel(slot, 'Down')} to take` : `◀ ▶ to choose · release to close · tap ${btnLabel(slot, 'Down')} to take`;
-    h.setHtml('belt', `<div class="slots">${slots}</div><div class="slotname" style="color:${def.color}">${def.name} ×${items[sel]}</div><div class="slotblurb">${def.blurb}</div><div class="slothint">${hint}</div>`);
+    h.setHtml('belt', `<div class="slots">${slots}</div><div class="slotname" style="color:${def.color}">${def.name} ${quickCount(sel, p, scene.campaign).label}</div><div class="slotblurb">${def.blurb}</div><div class="slothint">${hint}</div>`);
     h.setStyle('belt', 'display', 'flex');
   }
 
@@ -740,7 +787,10 @@ export class Hud {
           })
           .join('')
       : '<div style="opacity:.7">No crew yet. Hire at a Waypoint.</div>';
-    const items = `FLARES ${c.items.flare} · MOLOTOVS ${c.items.molotov} · CHARGES ${c.items.charge} · MEDKITS ${c.items.medkit} · STIMS ${c.items.stim} · PAINKILLERS ${c.items.painkiller} · ADRENALINE ${c.items.adrenaline} · HAZE ${c.items.haze} · AMMO ${c.ammo}`;
+    const n = p.needs;
+    const pct = (v: number) => `${Math.round(v * 100)}%`;
+    const body = `FED ${pct(n.food)} · WATER ${pct(n.water)} · BLADDER ${pct(n.bladder)} · BOWELS ${pct(n.bowel)}`;
+    const items = `${body}<br>OIL ${(c.items.oil * 3).toFixed(1)} L · FLARES ${c.items.flare} · MOLOTOVS ${c.items.molotov} · CHARGES ${c.items.charge} · MEDKITS ${c.items.medkit} · STIMS ${c.items.stim} · PAINKILLERS ${c.items.painkiller} · ADRENALINE ${c.items.adrenaline} · HAZE ${c.items.haze} · AMMO ${c.ammo}`;
     const here = p.vehicle?.position ?? p.pos;
     const haven = leg?.leg.open ? leg.src.layout.end : null;
     const route = leg
@@ -761,11 +811,34 @@ export function escapeHtml(s: string) {
 
 void t;
 
-/** What a quick-belt slot shows: dressings are ours, everything else is a drug. */
+/** What a quick-belt slot shows: the body's chores and the dressings are ours, everything else is a drug. */
 function quickDef(id: QuickId): { name: string; glyph: string; color: string; blurb: string } {
+  if (id === 'eat') return { name: 'Eat', glyph: '🍖', color: '#d6a45a', blurb: 'Eat a ration from the stores: fills you up by half. Hungry slows your recovery, starving hurts. Your hands are busy for a moment.' };
+  if (id === 'drink') return { name: 'Drink', glyph: '🚰', color: '#5fb6e8', blurb: 'Drink three quarters of a litre from the water reserve, or from the lake if you stand at one: free, but raw water can upset your stomach.' };
+  if (id === 'piss') return { name: 'Piss', glyph: '💦', color: '#e6d34a', blurb: 'Empty your bladder. A few seconds standing still: walk off, fire or take a hit and it stops. Keys: see the Control settings.' };
+  if (id === 'shit') return { name: 'Shit', glyph: '💩', color: '#9b6a3a', blurb: 'Empty your bowels. A long squat with your guard down. A full bowel spoils your sprint and aim until you go.' };
   if (id === 'bandage') return { name: 'Bandage', glyph: '✚', color: '#e8e0c8', blurb: 'Stops bleeding and mends a little. Quick: your hands are busy for under a second.' };
   if (id === 'medkit') return { name: 'Medkit', glyph: '✜', color: '#ff6f5f', blurb: 'Stops bleeding and heals 60. Your hands are busy for over a second.' };
   return DRUGS[id];
+}
+/** What a belt slot counts: doses in the stores, or for the body's chores, a share of the stores or of the need. */
+function quickCount(id: QuickId, p: Player, c: Campaign): { slot: string; label: string; none: boolean } {
+  if (!isNeedAct(id)) {
+    const n = c.items[id];
+    return { slot: String(n), label: `×${n}`, none: n <= 0 };
+  }
+  const act: NeedAct = id;
+  const n = p.needs;
+  if (act === 'eat') {
+    const r = whole(c.stocks.rations);
+    return { slot: String(r), label: `×${r}`, none: r < 1 };
+  }
+  if (act === 'drink') {
+    const l = `${c.items.water.toFixed(0)} L`;
+    return { slot: l, label: l, none: c.items.water < 0.05 };
+  }
+  const v = `${Math.round((act === 'piss' ? n.bladder : n.bowel) * 100)}%`;
+  return { slot: v, label: `${v} full`, none: !canRelieve(n, act).ok };
 }
 function quickName(id: QuickId): string {
   return quickDef(id).name;

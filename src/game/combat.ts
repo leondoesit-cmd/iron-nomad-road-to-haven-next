@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { G, groups } from '../physics/physics';
 import {
   AMMO,
@@ -13,6 +14,7 @@ import {
   type Surface,
 } from '../sim/ballistics';
 import { structuralMul } from '../sim/breach';
+import { IMPACT_SOUND, MUZZLE_LIGHT_LIFE, SKIP_DAMAGE, TRACER, skipOf, tracerTint } from '../sim/weaponfx';
 import { windAt } from '../sim/weather';
 import type { Ctx } from './ctx';
 import type { Vehicle } from './vehicle';
@@ -61,6 +63,10 @@ interface Bullet {
   range: number;
   travelled: number;
   dead: boolean;
+  /** Whether this round gets a streak drawn for it (a share of them do, by ammo). */
+  trace: boolean;
+  /** Skipped off a hard surface already: it only does so once. */
+  skipped: boolean;
 }
 
 type Hit =
@@ -86,7 +92,22 @@ export class Combat {
   /** Called when a round lands on something, for tests and the audio. */
   onImpact: ((e: { surface: Surface | 'flesh'; x: number; y: number; z: number; speed: number; penetrated: boolean }) => void) | null = null;
 
-  constructor(private ctx: Ctx) {}
+  /** One shared light that flashes at the latest muzzle, so night fights light the people in them without a light per gun. */
+  light = new THREE.PointLight(0xffb468, 0, 16, 1.8);
+  private lightT = 0;
+  private lightPeak = 0;
+
+  constructor(private ctx: Ctx) {
+    ctx.root.add(this.light);
+  }
+
+  /** A gun went off here: flash the shared light, brightest at the moment of the shot. */
+  muzzleLight(x: number, y: number, z: number, strength: number) {
+    this.light.position.set(x, y, z);
+    this.lightPeak = Math.max(strength * 38, this.lightT > 0 ? this.light.intensity : 0);
+    this.lightT = MUZZLE_LIGHT_LIFE;
+    this.light.intensity = this.lightPeak;
+  }
 
   /** Nudge a shot direction toward the nearest enemy in a narrow cone, leading a target that is moving. Stronger assist on keyboard. */
   assist(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, strength: number, speed = 300): [number, number, number] {
@@ -166,12 +187,17 @@ export class Combat {
     dx /= l;
     dy /= l;
     dz /= l;
-    this.bullets.push({ x: ox, y: oy, z: oz, vx: dx * spec.speed, vy: dy * spec.speed, vz: dz * spec.speed, spec, kind, o, ox, oz, range, travelled: 0, dead: false });
+    const trace = o.tracer !== false && Math.random() < TRACER[kind].chance;
+    this.bullets.push({ x: ox, y: oy, z: oz, vx: dx * spec.speed, vy: dy * spec.speed, vz: dz * spec.speed, spec, kind, o, ox, oz, range, travelled: 0, dead: false, trace, skipped: false });
     if (o.noise) ctx.sig.emit(ox, oz, o.noise * ctx.signatureMult, 'noise');
   }
 
   /** Fly every round in the air one tick. */
   update(dt: number) {
+    if (this.lightT > 0) {
+      this.lightT -= dt;
+      this.light.intensity = this.lightT > 0 ? this.lightPeak * (this.lightT / MUZZLE_LIGHT_LIFE) : 0;
+    }
     if (!this.bullets.length) return;
     const ctx = this.ctx;
     this.wind = windAt(ctx.storm, ctx.time);
@@ -187,6 +213,8 @@ export class Combat {
 
   clear() {
     this.bullets.length = 0;
+    this.lightT = 0;
+    this.light.intensity = 0;
   }
 
   private advance(b: Bullet, dt: number) {
@@ -241,9 +269,10 @@ export class Combat {
       }
     }
     b.travelled += len;
-    if (b.o.tracer !== false) {
-      const raider = b.o.side === 'raider';
-      ctx.tracers.add(x0, y0, z0, cx, cy, cz, 1, raider ? 0.5 : 0.85, raider ? 0.3 : 0.45);
+    if (b.trace) {
+      const style = TRACER[b.kind];
+      const [tr, tg, tb] = tracerTint(style, b.o.side === 'raider');
+      ctx.tracers.add(x0, y0, z0, cx, cy, cz, tr, tg, tb, style.life);
     }
     if (!b.dead) {
       b.x = cx;
@@ -334,8 +363,10 @@ export class Combat {
       case 'animal': {
         const a = h.animal;
         const dmg = o.damage * frac * (1 - a.def.armor * (1 - (o.pierce ?? 0)));
-        ctx.wildlife.damage(a, dmg, { fromX: b.ox, fromZ: b.oz, killer: owner });
-        ctx.gore.flesh(x, y, z, dx, dy, dz, dmg / Math.max(1, a.def.hp));
+        const res = ctx.wildlife.bulletHit(a, { dmg, dx, dy, dz, x, y, z, spec, speed, fromX: b.ox, fromZ: b.oz, killer: owner });
+        const power = dmg / Math.max(1, a.def.hp);
+        ctx.gore.flesh(x, y, z, dx, dy, dz, power);
+        for (const part of res.off) ctx.gore.severAnimal(a, part, dx, dy, dz, power * Math.max(0.5, spec.gore));
         this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
         after = throughFlesh(spec, speed);
         thickRun = 0.6;
@@ -394,6 +425,8 @@ export class Combat {
           }
         }
         this.onImpact?.({ surface, x: h.x, y: h.y, z: h.z, speed, penetrated: exit > 0 });
+        const sound = IMPACT_SOUND[surface];
+        if (sound && speed > 60) ctx.audio.play(sound, h.x, h.z, 0.2 + 0.3 * Math.min(1, o.damage / 60));
         // Whatever it hit may give way: glass breaks, a plank wall opens, a barricade splinters. A pistol cannot bring down a
         // wall, but it shatters a pane and chews sheet metal. Done after the round's own marks are laid, so a wall that falls
         // takes them with it.
@@ -428,6 +461,21 @@ export class Combat {
           return { x: px, y: py, z: pz, dx: ndx, dy: ndy, dz: ndz, run };
         }
         strike();
+        // A glancing blow on something hard skips off it, weaker and flying wide, with a spark and a whine. Only once.
+        if (!v && !b.skipped && exact) {
+          const jit: [number, number, number] = [ctx.rng.next() * 2 - 1, ctx.rng.next() * 2 - 1, ctx.rng.next() * 2 - 1];
+          const sk = skipOf(b.kind, surface, speed, [dx, dy, dz], [h.nx, h.ny, h.nz], ctx.rng.next(), jit);
+          if (sk) {
+            b.skipped = true;
+            b.vx = sk.dx * sk.speed;
+            b.vy = sk.dy * sk.speed;
+            b.vz = sk.dz * sk.speed;
+            b.o = { ...o, damage: o.damage * SKIP_DAMAGE, pierce: 0, noise: 0 };
+            ctx.fx.spark(h.x, h.y, h.z, 7, 5);
+            ctx.audio.play('ricochet', h.x, h.z, 0.35);
+            return { x: h.x + sk.dx * 0.06, y: h.y + sk.dy * 0.06, z: h.z + sk.dz * 0.06, dx: sk.dx, dy: sk.dy, dz: sk.dz, run: 0.06 };
+          }
+        }
         b.dead = true;
         return null;
       }

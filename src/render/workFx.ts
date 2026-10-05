@@ -123,6 +123,18 @@ export interface GhostAnchor {
   size: [number, number, number];
 }
 
+/** A see-through copy of a carried part, snapped onto the mount it would go on. */
+interface Preview {
+  key: string;
+  objs: THREE.Group[];
+  targets: THREE.Vector3[];
+  from: THREE.Vector3;
+  state: GhostState;
+  age: number;
+  seen: number;
+  a: number;
+}
+
 interface Ghost {
   group: THREE.Group;
   boxes: { edges: THREE.LineSegments; fill: THREE.Mesh }[];
@@ -138,6 +150,17 @@ const edgeGeo = shared(new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)));
 const fillGeo = shared(new THREE.BoxGeometry(1, 1, 1));
 const ease = (k: number) => 1 - (1 - k) * (1 - k);
 const GLOW_MATS = new Map<number, THREE.SpriteMaterial>();
+const PREVIEW_MATS = new Map<GhostState, THREE.MeshBasicMaterial>();
+
+/** The see-through look of a part previewed on its mount: one shared material per state, faded by the preview itself. */
+function previewMat(state: GhostState) {
+  let m = PREVIEW_MATS.get(state);
+  if (!m) {
+    m = shared(new THREE.MeshBasicMaterial({ color: GHOST_RGB[state === 'idle' ? 'aimed' : state], transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, fog: false }));
+    PREVIEW_MATS.set(state, m);
+  }
+  return m;
+}
 
 function glowMat(mk: number) {
   let m = GLOW_MATS.get(mk);
@@ -204,6 +227,7 @@ export class WorkFx {
   private focuses = new Map<number, Focus>();
   private tags = new Map<string, Tag>();
   private ghosts = new Map<string, Ghost>();
+  private previews = new Map<number, Preview>();
   private clock = 0;
 
   constructor(private fx: Particles) {}
@@ -271,11 +295,13 @@ export class WorkFx {
       const obj = taken?.obj ?? this.model(modelKey(o.fresh));
       if (taken) obj.remove(taken.glow);
       const start = taken ? taken.pos : (o.from ?? o.anchor.clone().add(new THREE.Vector3(0, 1.4, 0)));
-      landed = taken ? 0.13 : 0.3;
+      // From the arms (or a hover) the part is already at the spot: it only snaps the last stretch home.
+      const direct = taken || o.from;
+      landed = direct ? 0.13 : 0.3;
       this.fly(obj, start, o.anchor, {
         dur: landed,
-        arc: taken ? 0 : 0.5,
-        spin: taken ? 0 : 5,
+        arc: direct ? 0 : 0.5,
+        spin: direct ? 0 : 5,
         s0: taken ? 1.1 : 1,
         s1: 0.45,
         done: () => {
@@ -434,6 +460,59 @@ export class WorkFx {
     this.labels.push({ sprite, t: 0, life: 2, y0: at.y, rise: 0.9 });
   }
 
+  // ------------------------------------------------------------------ preview
+
+  /**
+   * Kept alive by calling this every tick while a player carries a part within reach of the place it goes: a see-through
+   * copy of the part slides out of the hands and settles on each of `at` (one for most parts, every wheel for a set of
+   * tyres), green when it can go on and red when it cannot. Stops showing when the calls stop.
+   */
+  preview(key: number, part: PartItem, hand: THREE.Vector3, at: THREE.Vector3[], state: GhostState) {
+    const id = `${modelKey(part)}|${at.length}`;
+    let pv = this.previews.get(key);
+    if (pv && pv.key !== id) {
+      this.dropPreview(key);
+      pv = undefined;
+    }
+    if (!pv) {
+      const objs = at.map(() => {
+        const g = this.model(modelKey(part));
+        g.rotation.y = 0;
+        g.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (m.isMesh) {
+            m.material = previewMat(state);
+            m.castShadow = false;
+          }
+        });
+        g.visible = false;
+        this.root.add(g);
+        return g;
+      });
+      pv = { key: id, objs, targets: at.map((q) => q.clone()), from: hand.clone(), state, age: 0, seen: 0, a: 0 };
+      this.previews.set(key, pv);
+    }
+    if (pv.state !== state) {
+      pv.state = state;
+      for (const g of pv.objs) g.traverse((o) => ((o as THREE.Mesh).isMesh ? ((o as THREE.Mesh).material = previewMat(state)) : undefined));
+    }
+    at.forEach((q, i) => pv!.targets[i].copy(q));
+    pv.from.copy(hand);
+    pv.seen = 0;
+  }
+
+  /** True while a part preview is showing for this player. */
+  previewing(key: number) {
+    return this.previews.has(key);
+  }
+
+  private dropPreview(key: number) {
+    const pv = this.previews.get(key);
+    if (!pv) return;
+    for (const g of pv.objs) g.removeFromParent();
+    this.previews.delete(key);
+  }
+
   // ------------------------------------------------------------------ tags and ghosts
 
   /** Socket outlines currently showing (for tests and the debug readout). */
@@ -566,6 +645,26 @@ export class WorkFx {
       g.fillMat.opacity = 0.07 * g.a;
       if (g.a <= 0 && g.seen > 0.12) this.dropGhost(id);
     }
+    for (const [key, pv] of this.previews) {
+      pv.seen += dt;
+      pv.age += dt;
+      const gone = pv.seen > 0.12 || this.hovers.has(key);
+      pv.a = gone ? Math.max(0, pv.a - dt * 7) : Math.min(1, pv.a + dt * 8);
+      if (pv.a <= 0 && gone) {
+        this.dropPreview(key);
+        continue;
+      }
+      // Out of the hands and onto the mount in a quick snap, then it breathes there.
+      const k = ease(Math.min(1, pv.age / 0.22));
+      const pulse = 1 + Math.sin(this.clock * 5) * 0.03;
+      pv.objs.forEach((g, i) => {
+        g.visible = true;
+        g.position.lerpVectors(pv.from, pv.targets[i], k);
+        g.position.y += Math.sin(k * Math.PI) * 0.25;
+        g.scale.setScalar((0.55 + 0.45 * k) * pulse);
+      });
+      previewMat(pv.state).opacity = (pv.state === 'blocked' ? 0.3 : 0.42) * pv.a * (0.8 + 0.2 * Math.sin(this.clock * 6));
+    }
     for (const [key, h] of this.hovers) {
       h.seen += dt;
       h.age += dt;
@@ -580,7 +679,8 @@ export class WorkFx {
       } else {
         // Out of the arms and up over the mount, bobbing; it shakes as the last bolts go in.
         const tx = h.anchor.x;
-        const ty = h.anchor.y + 0.6 + Math.sin(this.clock * 4) * 0.04;
+        // It floats just over the mount and sinks onto it as the bolts go in.
+        const ty = h.anchor.y + (0.1 + 0.4 * (1 - h.p)) + Math.sin(this.clock * 4) * 0.03 * (1 - h.p);
         const tz = h.anchor.z;
         const k = 1 - Math.exp(-9 * dt);
         h.pos.x += (tx - h.pos.x) * k;
@@ -645,6 +745,7 @@ export class WorkFx {
   dispose() {
     for (const id of [...this.tags.keys()]) this.dropTag(id);
     for (const id of [...this.ghosts.keys()]) this.dropGhost(id);
+    for (const key of [...this.previews.keys()]) this.dropPreview(key);
     for (const l of this.labels) {
       const m = l.sprite.material as THREE.SpriteMaterial;
       m.map?.dispose();

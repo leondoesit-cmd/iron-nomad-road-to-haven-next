@@ -1,13 +1,15 @@
 import * as THREE from 'three';
 import { G, groups } from '../physics/physics';
 import { SURFACES, type Surface, type Zone } from '../sim/ballistics';
-import { Brass, type ShellKind } from '../render/brass';
+import { Brass, type MagKind, type ShellKind } from '../render/brass';
 import { CELL, Decals } from '../render/decals';
 import { roadLift } from '../render/chunkview';
 import { Gibs } from '../render/gibs';
-import type { ZombieKind } from '../data';
+import type { AnimalKind, ZombieKind } from '../data';
 import type { Ctx } from './ctx';
+import { BODY, type AnimalPart } from '../sim/anatomy';
 import type { Zombie } from './zombies';
+import type { Animal } from './wildlife';
 
 const RAY = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
 const _c = new THREE.Color();
@@ -16,9 +18,22 @@ const _c = new THREE.Color();
 const SKIN: Record<ZombieKind, number> = { walker: 0x6f7660, runner: 0x7a7660, screamer: 0x8e889a, bloater: 0x87904e, brute: 0x7a5a4c, stalker: 0x5c6670 };
 const CLOTH = [0x5a5446, 0x3e4a58, 0x6a3a32, 0x7a7262, 0x2e3a2c, 0x4a3a52];
 const TROUSERS = [0x2e3036, 0x3a3a2e, 0x4a4238, 0x252830];
+/** Coat of each animal, as the animal renderer draws it. */
+const COAT: Record<AnimalKind, number> = { hare: 0x9a8460, deer: 0xa87e50, vulture: 0x2b2622, dog: 0x6a5846, wolf: 0x6e7174, boar: 0x54443a, bear: 0x4c443e };
+
+/** Anything with a body that can bleed from a stump: where it stands, which way it faces, and whether it is down. */
+interface Bleedable {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  dead: boolean;
+  deadT: number;
+  fall: number;
+}
 
 interface Bleeder {
-  zb: Zombie;
+  zb: Bleedable;
   /** Stump position in the body's own frame (x to its left, z ahead). */
   lx: number;
   ly: number;
@@ -60,6 +75,12 @@ export class Gore {
       ring: (x, _y, z, loud) => {
         if (loud > 0.06) ctx.audio.play('shell', x, z, 0.12 + loud * 0.2);
       },
+      clunk: (x, _y, z, loud) => {
+        if (loud > 0.08) {
+          ctx.audio.play('thud', x, z, 0.1 + loud * 0.25);
+          ctx.audio.play('tink', x, z, 0.08 + loud * 0.15);
+        }
+      },
     });
     this.gibs = new Gibs({
       floorAt,
@@ -81,29 +102,40 @@ export class Gore {
   attach(root: THREE.Object3D) {
     root.add(this.decals.mesh);
     root.add(this.marks.mesh);
-    root.add(this.brass.mesh);
+    for (const m of this.brass.meshes) root.add(m);
     root.add(this.gibs.group);
   }
 
   // ------------------------------------------------------------------ blood on surfaces
 
-  private place(x: number, y: number, z: number, nx: number, ny: number, nz: number, w: number, h: number, cell: number, opacity: number, dx?: number, dy?: number, dz?: number) {
+  private place(x: number, y: number, z: number, nx: number, ny: number, nz: number, w: number, h: number, cell: number, opacity: number, dx?: number, dy?: number, dz?: number, tint?: [number, number, number]) {
     const k = 0.75 + Math.random() * 0.4;
     // On level ground the mark lies on the road if there is one.
     if (ny > 0.7 && this.ctx.terrain) y += roadLift(this.ctx.terrain, x, z);
-    this.decals.add(x, y, z, { cell, w, h, nx, ny, nz, dx, dy, dz, r: 0.4 * k, g: 0.02, b: 0.022, opacity });
+    this.decals.add(x, y, z, tint ? { cell, w, h, nx, ny, nz, dx, dy, dz, r: tint[0] * k, g: tint[1] * k, b: tint[2] * k, opacity } : { cell, w, h, nx, ny, nz, dx, dy, dz, r: 0.4 * k, g: 0.02, b: 0.022, opacity });
     this.placed++;
   }
 
   /** A splat on the ground at a spot, dropped on whatever floor is there. */
-  groundSplat(x: number, z: number, size: number, cell: number, opacity = 0.85, dirX?: number, dirZ?: number, fromY?: number) {
+  groundSplat(x: number, z: number, size: number, cell: number, opacity = 0.85, dirX?: number, dirZ?: number, fromY?: number, tint?: [number, number, number]) {
     const ctx = this.ctx;
     const y0 = (fromY ?? ctx.groundAt(x, z)) + 1;
     const r = ctx.P.raycast(x, y0, z, 0, -1, 0, 4, RAY);
     const gy = r ? y0 - r.toi : ctx.groundAt(x, z);
     const n = r?.normal ?? { x: 0, y: 1, z: 0 };
     const stretch = dirX !== undefined && dirZ !== undefined && Math.hypot(dirX, dirZ) > 0.2 ? 1.5 : 1;
-    this.place(x, gy, z, n.x, n.y, n.z, size * stretch, size, cell, opacity, dirX, 0, dirZ);
+    this.place(x, gy, z, n.x, n.y, n.z, size * stretch, size, cell, opacity, dirX, 0, dirZ, tint);
+  }
+
+  /** What the body leaves on the ground: a dark yellow puddle, or a brown pile. */
+  waste(x: number, z: number, kind: 'piss' | 'shit') {
+    if (kind === 'piss') this.groundSplat(x, z, 0.5 + Math.random() * 0.25, CELL.pool, 0.6, undefined, undefined, undefined, [0.62, 0.52, 0.1]);
+    else this.groundSplat(x, z, 0.26 + Math.random() * 0.08, CELL.splat0 + Math.floor(Math.random() * 4), 0.95, undefined, undefined, undefined, [0.3, 0.19, 0.08]);
+  }
+
+  /** A drop of blood on the ground where something hurt walked. */
+  drip(x: number, z: number, size = 0.2) {
+    this.groundSplat(x, z, size, CELL.drops, 0.8);
   }
 
   /**
@@ -367,6 +399,63 @@ export class Gore {
     this.bleeders.push({ zb, lx, ly, lz, t: zone === 'head' ? 3.2 : 2.4, power: p, pulse: 0, dx, dz, head: zone === 'head' });
   }
 
+  /** Where an animal's part joins it, in its own frame (x to its left, z ahead), already scaled to the animal. */
+  private animalJoint(a: Animal, part: AnimalPart): [number, number, number] {
+    const b = BODY[a.kind];
+    const k = a.def.size;
+    switch (part) {
+      case 'head':
+        return [0, b.headY * k, b.headZ * k];
+      case 'wingL':
+        return [0.12 * k, 0.06 * k, 0.05 * k];
+      case 'wingR':
+        return [-0.12 * k, 0.06 * k, 0.05 * k];
+      default: {
+        const lx = b.w * 0.62 * k;
+        const lz = b.len * 0.5 * 0.66 * k;
+        return [part === 'legLF' || part === 'legLB' ? lx : -lx, (b.leg + 0.02) * k * 0.75, part === 'legLF' || part === 'legRF' ? lz : -lz];
+      }
+    }
+  }
+
+  /**
+   * Something came off an animal. The part is thrown (a leg or a head in the colour of its coat, a wing as feathers), the
+   * stump sprays, and it goes on bleeding for as long as it is alive.
+   */
+  severAnimal(a: Animal, part: AnimalPart, dx: number, dy: number, dz: number, power: number) {
+    const ctx = this.ctx;
+    const [lx, ly, lz] = this.animalJoint(a, part);
+    const rx = Math.cos(a.yaw);
+    const rz = -Math.sin(a.yaw);
+    const fx = Math.sin(a.yaw);
+    const fz = Math.cos(a.yaw);
+    const x = a.x + rx * lx + fx * lz;
+    const z = a.z + rz * lx + fz * lz;
+    const y = a.y + ly;
+    const p = Math.max(0.4, Math.min(3, power));
+    const size = a.def.size * Math.max(0.35, Math.min(1.5, (a.def.radius + 0.1) * 1.9));
+    const throwSpeed = 2.4 + p * 2.2;
+    const vx = dx * throwSpeed + (Math.random() - 0.5) * 1.4;
+    const vz = dz * throwSpeed + (Math.random() - 0.5) * 1.4;
+    const vy = 1.8 + Math.random() * 2 + dy * throwSpeed * 0.4;
+    // The coat colour of each species, a shade darker for the leg.
+    const c = COAT[a.kind];
+    _c.setHex(c).multiplyScalar(a.tint);
+    if (part === 'head') this.gibs.throw('head', x, y + 0.05, z, vx, vy + 0.8, vz, size, _c.r, _c.g, _c.b);
+    else if (part === 'wingL' || part === 'wingR') {
+      for (let i = 0; i < 6; i++) this.gibs.throw('shard', x, y, z, vx * 0.5 + (Math.random() - 0.5) * 2.4, vy * 0.6 + Math.random(), vz * 0.5 + (Math.random() - 0.5) * 2.4, 1.4 + Math.random(), 0.12, 0.1, 0.09);
+    } else this.gibs.throw('limb', x, y - 0.1 * a.def.size, z, vx, vy, vz, size * 0.8, _c.r * 0.85, _c.g * 0.85, _c.b * 0.85);
+    const chunks = 2 + Math.round(p * 2);
+    for (let i = 0; i < chunks; i++) {
+      _c.setRGB(0.3 + Math.random() * 0.15, 0.02, 0.02);
+      this.gibs.throw('chunk', x, y, z, vx * (0.5 + Math.random()) + (Math.random() - 0.5) * 3, vy * (0.4 + Math.random() * 0.8), vz * (0.5 + Math.random()) + (Math.random() - 0.5) * 3, 0.5 + Math.random() * 0.6, _c.r, _c.g, _c.b);
+    }
+    ctx.fx.bloodSpray(x, y, z, dx, 0.6, dz, 6 + Math.round(p * 4), 4 + p * 2, 0.8);
+    ctx.audio.play('thud', x, z, 0.3);
+    this.groundSplat(x, z, 0.5 + p * 0.25, CELL.splat0 + Math.floor(Math.random() * 4), 0.9, dx, dz, y);
+    this.bleeders.push({ zb: a, lx, ly, lz, t: part === 'head' ? 3 : 4.5, power: p, pulse: 0, dx, dz, head: part === 'head' });
+  }
+
   // ------------------------------------------------------------------ brass
 
   /** Throw an empty case out of a gun held at (x, y, z) facing `yaw`, with the shooter's own motion carried over. */
@@ -387,6 +476,11 @@ export class Gore {
       rz * out + fz * back + vz * 0.5 + (Math.random() - 0.5) * 0.6,
       kind,
     );
+  }
+
+  /** An empty magazine falls out of a gun at (x, y, z): it drops with a little of the hand's push and tumbles to the floor. */
+  dropMag(kind: MagKind, x: number, y: number, z: number, vx = 0, vz = 0) {
+    this.brass.dropMag(x, y, z, vx * 0.5 + (Math.random() - 0.5) * 0.5, -0.3 - Math.random() * 0.4, vz * 0.5 + (Math.random() - 0.5) * 0.5, kind);
   }
 
   // ------------------------------------------------------------------ per tick

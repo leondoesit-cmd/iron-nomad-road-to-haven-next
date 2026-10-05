@@ -278,6 +278,11 @@ describe('maps in a running scene', () => {
       h.intents[0].pressed |= 1 << Btn.Map;
       sc.tick(1 / 60);
       h.intents[0].pressed = 0;
+      // The map steps on a short release: a long hold is a high five.
+      h.intents[0].released |= 1 << Btn.Map;
+      h.intents[0].releasedAfter[Btn.Map] = 0.08;
+      sc.tick(1 / 60);
+      h.intents[0].released = 0;
       sc.tick(1 / 60);
     };
     tap();

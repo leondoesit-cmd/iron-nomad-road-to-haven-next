@@ -27,6 +27,7 @@ import { DRUGS, DRUG_IDS } from '../sim/drugs';
 import type { DelveSite } from '../world/delveSites';
 import { newDelveRecord, type DelveRecord, type PlayerCarry } from './delveScene';
 import { districtMask } from '../world/openWorld';
+import { GangCamps } from './gangCamps';
 import type { WorldMemory, WorldPose } from './worldMemory';
 import { LegMapBaker, SITE_LABEL, minefieldOutline, newFrame, openRoadLines, roadLine, type MapFrame } from '../ui/mapdata';
 
@@ -95,6 +96,9 @@ export class LegScene extends Scene {
   landscape: Landscape;
   pickups = new Map<string, PickupEntity>();
   takenPickups = new Set<string>();
+  /** Gang camp sentries killed, by key; the world memory keeps them dead. */
+  private gangKilled = new Set<string>();
+  gangCamps!: GangCamps;
   spawnedChunks = new Set<number>();
   brokenAabbs = new Set<number>();
   mines: MineView[] = [];
@@ -108,6 +112,10 @@ export class LegScene extends Scene {
   private placesShown = new Set<string>();
   private placeAt = -99;
   bellBanner = 0;
+  /** Training mode: a quiet, forgiving copy of the open world, driven by a TutorialDirector. */
+  readonly training: boolean;
+  /** Markers the training director wants on the compass and the map. */
+  trainingPins: CompassPin[] = [];
   pendingResult = false;
   endReached = false;
   gap = 0;
@@ -119,6 +127,7 @@ export class LegScene extends Scene {
   pings: { x: number; z: number; t: number; who: number }[] = [];
   private mineT = 0;
   private fuelTip = false;
+  private fuelWarned = new Set<Vehicle>();
   private repairTip = false;
   /** When the last car or parts tip was shown, so they never talk over each other. */
   private carTipAt = -99;
@@ -137,12 +146,15 @@ export class LegScene extends Scene {
   constructor(
     svc: SceneServices,
     public leg: LegDef,
-    opts: { memory?: WorldMemory; start?: WorldPose } = {},
+    opts: { memory?: WorldMemory; start?: WorldPose; training?: boolean } = {},
   ) {
     super(svc);
+    this.training = !!opts.training;
     this.biome = leg.biome;
     if (leg.open) this.cityMix = 0;
-    this.clock = new DayClock(leg.dayLength, 0.1);
+    // Training holds the sun at midday until the last lesson rings the Dusk Bell.
+    this.clock = new DayClock(leg.dayLength, this.training ? 0.4 : 0.1);
+    if (this.training) this.clock.frozen = true;
     this.src = opts.memory?.src ?? new ChunkSource(leg);
     if (opts.memory) this.adoptMemory(opts.memory);
     this.terrain = this.src.layout.terrain;
@@ -197,7 +209,9 @@ export class LegScene extends Scene {
       drop: (x, z, c) => this.looseDrop(x, z, c),
     };
     this.src.layout.ambushes.forEach((spec) => this.ambushes.push({ spec, state: this.memory?.ambushDone.has(spec.id) ? 'done' : 'idle', tries: 0, waiting: [], t: 0 }));
-    this.src.layout.zones.forEach((zone) => this.zones.push({ zone, noise: 0, horde: 0, fired: !!this.memory?.zoneFired.has(zone.id) }));
+    this.gangCamps = new GangCamps(this, this.src.layout.gangCamps, this.gangKilled, this.mapSeen);
+    this.raiders.onAlarm = (camp) => this.campAlarm(camp);
+    this.src.layout.zones.forEach((zone) => this.zones.push({ zone, noise: 0, horde: 0, fired: this.training || !!this.memory?.zoneFired.has(zone.id) }));
     this.buildMines();
     this.registerDelves();
     this.spawnBoats();
@@ -206,7 +220,8 @@ export class LegScene extends Scene {
     const st = opts.start ? this.freeSpot(opts.start) : this.src.layout.start;
     this.loadAround([{ x: st.x, z: st.z }], 1, 99);
     this.P.step();
-    this.spawnConvoy(st.x, st.z, st.yaw, 3.6, true);
+    // Training starts on foot beside the mopeds: getting in is the first lesson.
+    this.spawnConvoy(st.x, st.z, st.yaw, 3.6, !this.training);
     for (const m of this.campaign.crewLive) this.crew.spawn(m, st.x, st.z - 9, st.yaw);
     this.crew.mode = 'follow';
     this.lastLead = st.z;
@@ -220,7 +235,7 @@ export class LegScene extends Scene {
       // What the last day left on the road: tyre marks, and parts that were torn off and not picked up.
       if (this.memory?.tracks) this.marks.restore(this.memory.tracks);
       for (const d of this.memory?.drops ?? []) this.looseDrop(d.x, d.z, d.carried);
-      this.radio(opts.start ? t('radio.open.again', { day: this.campaign.day }) : t('radio.open.start'));
+      if (!this.training) this.radio(opts.start ? t('radio.open.again', { day: this.campaign.day }) : t('radio.open.start'));
       return;
     }
     this.radio(leg.index === 1 ? t('radio.intro1') : leg.index === 2 ? t('radio.l2.start') : t('radio.l3.start'));
@@ -252,6 +267,7 @@ export class LegScene extends Scene {
     this.brokenAabbs = m.brokenAabbs;
     this.spawnedChunks = m.spawnedChunks;
     this.mapSeen = m.mapSeen;
+    this.gangKilled = m.gangKilled;
     this.delveRecords = m.delveRecords;
     if (m.cars) this.cars.states = m.cars;
     // After a reload the layout is new: containers that were searched are marked on it again.
@@ -521,6 +537,7 @@ export class LegScene extends Scene {
       this.spawnedChunks.add(key);
       const scale = this.campaign.difficulty.aggro;
       for (const z of data.zombies) {
+        if (this.training) break;
         if (z.kind === 'stalker' && this.leg.index < 2) continue;
         this.zombies.spawn(z.kind, z.x, z.z, z.dormant, z.cluster);
       }
@@ -1031,6 +1048,43 @@ export class LegScene extends Scene {
     return true;
   }
 
+  // ------------------------------------------------------------------ training kit
+
+  private trainSeq = 0;
+
+  /** Training: goods on the ground, taken by hand like any other pickup. */
+  trainingGoods(kind: 'scrap' | 'rations' | 'ammo' | 'medicine', amount: number, x: number, z: number): string {
+    const id = `train${this.trainSeq++}`;
+    this.spawnPickup({ id, kind, amount, x, y: this.groundAt(x, z) + 0.6, z });
+    return id;
+  }
+
+  /** Training: a petrol can set down in the road. */
+  trainingCan(x: number, z: number): string {
+    this.looseDrop(x, z, { kind: 'fuel', amount: 6, fuel: 'petrol' });
+    return `drop${this.dropSeq - 1}`;
+  }
+
+  /** Training: whether a pickup placed by the kit is still lying there. */
+  hasPickup(id: string) {
+    return this.pickups.has(id);
+  }
+
+  /** Training: where a pickup lies, or null once it has been taken. */
+  pickupAt(id: string): { x: number; z: number } | null {
+    const e = this.pickups.get(id);
+    return e ? { x: e.spawn.x, z: e.spawn.z } : null;
+  }
+
+  /** Training: a shelf to search, with its glint, that never raises a horde. */
+  trainingCrate(x: number, z: number): ScavContainer {
+    const c: ScavContainer = { id: `train-crate${this.trainSeq++}`, x, z, depth: 0, loot: { scrap: 6, rations: 2 }, taken: false, label: 'the supply crate' };
+    const zone: ScavZone = { id: `train-zone${this.trainSeq}`, kind: 'shack', x, z, w: 4, d: 4, open: 1, containers: [c], pin: false };
+    this.zones.push({ zone, noise: 0, horde: 0, fired: true });
+    this.addContainer(zone, c);
+    return c;
+  }
+
   private looseDrop(x: number, z: number, c: Carried) {
     const id = `drop${this.dropSeq++}`;
     const y = this.groundAt(x, z);
@@ -1142,6 +1196,18 @@ export class LegScene extends Scene {
         if (!a.waiting.length) a.state = 'done';
       }
     }
+  }
+
+  /** A camp's sentries have seen someone: its buggies, which the layout parked as an ambush, roll out. */
+  private campAlarm(camp: string) {
+    this.radio(t('radio.ambush'));
+    for (const p of this.players) p.note('Gang sentries raised the alarm!', 'warn');
+    const a = this.ambushes.find((q) => q.spec.camp === camp);
+    if (!a || a.state !== 'idle') return;
+    a.state = 'pending';
+    a.tries = 0;
+    a.t = 0;
+    this.prepareAmbush(a);
   }
 
   private prepareAmbush(a: AmbushState) {
@@ -1298,6 +1364,15 @@ export class LegScene extends Scene {
       if (v && v.fuel < v.tankMax * 0.2 && !this.shownTips.has('tip-fuel')) {
         this.shownTips.add('tip-fuel');
         this.tip('fuel');
+      }
+      // Nearly dry: say so over the radio, once per tank (it re-arms once the tank is refilled past a quarter).
+      if (v) {
+        const frac = v.tankMax > 0 ? v.fuel / v.tankMax : 1;
+        if (frac > 0.25) this.fuelWarned.delete(v);
+        else if (frac < 0.07 && v.engineOn && !this.fuelWarned.has(v)) {
+          this.fuelWarned.add(v);
+          this.radio(t('radio.fuelCritical', { name: p.index === 0 ? 'Player 1' : 'Player 2' }));
+        }
       }
       if (v && v.hpFrac < 0.5 && !this.shownTips.has('tip-repair')) {
         this.shownTips.add('tip-repair');
@@ -1509,14 +1584,20 @@ export class LegScene extends Scene {
     this.updatePickups(dt);
     this.updateMines(dt);
     this.updateRamming();
-    this.updateZones(dt);
-    this.wildlife.ambient(dt, this.biome, this.leg.theme ?? 'dust', this.leg.index);
-    this.updateAmbushes(dt);
-    this.updateEncounters();
-    this.updateTips();
+    // Training is quiet: no hordes, raiders, wildlife, encounters, tips from the road, nor an end to the day.
+    if (!this.training) {
+      this.updateZones(dt);
+      this.wildlife.ambient(dt, this.biome, this.leg.theme ?? 'dust', this.leg.index);
+      this.updateAmbushes(dt);
+      this.gangCamps.update(dt);
+      this.updateEncounters();
+      this.updateTips();
+    }
     this.updateTether(dt);
-    this.updateEnd(dt);
-    this.updateFail(dt);
+    if (!this.training) {
+      this.updateEnd(dt);
+      this.updateFail(dt);
+    }
     for (let i = this.pings.length - 1; i >= 0; i--) {
       this.pings[i].t -= dt;
       if (this.pings[i].t <= 0) this.pings.splice(i, 1);
@@ -1673,7 +1754,9 @@ export class LegScene extends Scene {
       pins.push({ x: roadX(this.terrain!, z), z, kind: 'threat', label: 'MINES' });
     }
     for (const v of this.vehicles) if (v.faction === 'raider' && !v.wreck) pins.push({ x: v.position.x, z: v.position.z, kind: 'ambush', label: '' });
+    for (const g of this.gangCamps.pins()) pins.push({ x: g.x, z: g.z, kind: 'threat', label: g.label });
     for (const p of this.pings) pins.push({ x: p.x, z: p.z, kind: 'ping', label: '' });
+    if (this.training) pins.push(...this.trainingPins);
     // Lakes and ways down only show once you are within a few hundred metres.
     const nearAny = (x: number, z: number, r: number) => this.players.some((p) => Math.hypot((p.vehicle?.position.x ?? p.pos.x) - x, (p.vehicle?.position.z ?? p.pos.z) - z) < r);
     for (const l of this.terrain!.lakes) if (l.dock && nearAny(l.dock.shoreX, l.dock.shoreZ, 420)) pins.push({ x: l.dock.shoreX, z: l.dock.shoreZ, kind: 'dock', label: 'DOCK' });

@@ -7,7 +7,7 @@ import { Humanoid, type Held, type Palette } from '../render/humanoid';
 import { identityOf, lookOf } from '../render/outfit';
 import { makeCarryModel } from '../render/props';
 import { PLAYER_COLORS } from '../render/palette';
-import { clamp, damp, dampAngle, lerp } from '../core/math';
+import { clamp, damp, dampAngle, lerp, wrapAngle } from '../core/math';
 import type { Aabb } from '../world/layout';
 import { ENEMIES, gearDef, partDef, t } from '../data';
 import { roadX } from '../world/terrain';
@@ -15,11 +15,15 @@ import { steerTo, newSteerState } from './aiDrive';
 import { applyRepair, planRepair } from '../sim/repair';
 import { STRAIGHT } from '../sim/bodywork';
 import { SALVAGE_STAGES } from '../sim/salvage';
-import { costText, spend } from '../sim/resources';
+import { costText, spend, whole } from '../sim/resources';
 import { DRUGS, DRUG_IDS, type DrugEvent, type DrugId, type DrugState } from '../sim/drugs';
 import { BLEED, STAMINA, bind, bleedLabel, canSprint, jamChance, newBleed, newStamina, openWound, spendStamina, tickBleed, tickStamina, wearBy, WEAR, wearDamage, wearSpread, woundChance } from '../sim/vitals';
-import { ammoForGun } from '../sim/ballistics';
+import { NEEDS, NEUTRAL_NEEDS, NEED_ACTS, canRelieve, isNeedAct, drink as drinkWater, eat as eatFood, needMods, reliefSeconds, relieve, tickNeeds, warnText, type NeedAct, type NeedEvent, type NeedMods, type Needs } from '../sim/needs';
+import { ammoForGun, cutOf } from '../sim/ballistics';
 import { HANDLING, kickVelocity, spring, stepSpring, swayAt, type Handling, type Spring } from '../sim/handling';
+import { ACCEL, READY, SPRINT_IN, SPRINT_OUT, WALL_BLOCK, REACH, approachVelocity, carryOf, drawLow, drawOf, landGait, newGait, newGaitOut, stepBlend, stepGait, strafeRoll, wallBlend } from '../sim/gait';
+import { DROPS_MAG, RELOAD_KIND, cycleRack, cycleTime, dropAt, newGunPose, reloadPose } from '../sim/weaponanim';
+import { MUZZLE, bloomAfterShot, bloomSettle, meleeFeel, reloadPlan, swingArc, type MeleeFeel } from '../sim/weaponfx';
 import type { ShellKind } from '../render/brass';
 import type { DriveInput } from '../physics/vehicle';
 import type { Ctx } from './ctx';
@@ -27,9 +31,9 @@ import type { Pilot, Vehicle } from './vehicle';
 import type { Interactable } from './interact';
 import { carryModelKey, carrySlow, type Carried } from '../sim/carry';
 import { UTILITY_SLOT, damageTaken, effectiveGun, effectiveMelee, heldItem, statsOf, stepSel, type EffectiveGun, type GearItem, type HurtKind, type Loadout, type Resolved } from '../sim/gear';
-import type { MeleeStats } from '../data';
+import type { GunModel, MeleeStats } from '../data';
 import { OIL_LOW, pourOil } from '../sim/oil';
-import { wrenchCandidate } from './carwork';
+import { cycleMount, wrenchCandidate } from './carwork';
 import { COOLANT_LOW, WATER_CAN, WATER_RESERVE_MAX, pourWater } from '../sim/fluids';
 import { TANK_DREGS, addReserve, planDrain, reserveOf, takeReserve } from '../sim/fuel';
 import { dropCarry, guide, sitePos, haulCandidate, haulKey, haulPrompt, pryCandidate, returnCarry, stashBeforeEntering } from './hauling';
@@ -48,6 +52,8 @@ export interface Cand {
   tick?: () => boolean;
   /** Signature the finished action emits. */
   noise?: number;
+  /** Where in the world the hands are at work while this runs, so the body can reach for it. */
+  at?: THREE.Vector3;
 }
 
 /** Eye height above the feet on foot: standing, crouched, and treading water. */
@@ -63,9 +69,10 @@ export type PState = 'foot' | 'entering' | 'driving' | 'gunner' | 'downed' | 'de
 export type Equip = 'gun' | 'melee' | 'wrench' | 'crowbar' | 'jerrycan' | 'utility';
 export type Utility = 'flare' | 'charge' | 'molotov' | 'horn';
 export const UTILITIES: Utility[] = ['flare', 'molotov', 'charge', 'horn'];
-/** What the quick belt (hold the use button) holds: field dressings first, then the drugs. */
-export type QuickId = 'bandage' | 'medkit' | DrugId;
-export const QUICK: QuickId[] = ['bandage', 'medkit', ...DRUG_IDS];
+/** What the quick belt (hold the use button) holds: field dressings first, then the drugs, then the body's own chores. */
+export type QuickId = 'bandage' | 'medkit' | DrugId | NeedAct;
+export const QUICK: QuickId[] = ['bandage', 'medkit', ...DRUG_IDS, ...NEED_ACTS];
+const isDrugId = (id: QuickId): id is DrugId => (DRUG_IDS as string[]).includes(id);
 /** Medkits heal this much, from the belt or the inventory. */
 export const MEDKIT_HEAL = 60;
 
@@ -89,6 +96,13 @@ export interface PromptAlt {
   ok: boolean;
 }
 
+/** Seconds to climb into a vehicle: reach, step up, duck, sit. */
+const ENTER_SECS = 0.8;
+/** Seconds to climb out, a high five, and how long the map button is held to offer one. */
+const EXIT_SECS = 0.55;
+const FIVE_SECS = 1.3;
+const FIVE_HOLD = 0.5;
+const MAP_TAP = 0.45;
 const WALK = 3.4;
 const SPRINT = 5.9;
 const CROUCH = 1.7;
@@ -160,6 +174,44 @@ export class Player implements Pilot {
   /** Rounds when no gun is on the belt at all. Otherwise the rounds live on the gun, so each keeps its own magazine. */
   private looseMag = 12;
   reloadT = 0;
+  /** The view's bob in time with the steps, and the dip of a landing. */
+  readonly gait = newGait();
+  private gaitOut = newGaitOut();
+  /** Speed to the right of where the view faces (m/s), for leaning into a sidestep. */
+  private strafeV = 0;
+  private _vel: [number, number] = [0, 0];
+  /** How far the gun is carried low for a sprint (0 to 1), and how far a wall in front has pushed it up. `wallRaw` is the unsmoothed reading the trigger goes by. */
+  sprintBlend = 0;
+  wallBlend = 0;
+  private wallRaw = 0;
+  /** A draw in progress: seconds left and how long it takes. */
+  drawT = 0;
+  private drawDur = 0.3;
+  /** The gun lags behind a turn of the view, as springs. */
+  private lag = { yaw: spring(), pitch: spring() };
+  private prevAim: [number, number] | null = null;
+  /** The reload's length, and how much of the reload pose is showing (eased in and out). */
+  private reloadDur = 1;
+  private reloadBlend = 0;
+  /** A pump or bolt being worked after a shot: seconds left, and the stroke's length. */
+  private cycleT = 0;
+  private cycleDur = 1;
+  private pose = newGunPose();
+  /** Whether this reload's empty magazine has dropped yet, and seconds of smoke still curling off the gun. */
+  private magDropped = false;
+  private smokeT = 0;
+  /** Seconds per round while a gun is being loaded a round at a time (a pump); 0 when the reload takes the lot at once. */
+  private loadEach = 0;
+  /** How far sustained fire has opened the spread, as a share of the gun's own. It closes up between shots. */
+  bloom = 0;
+  /** A swing that has started but has not landed yet: the weapon is still coming round. */
+  private swingPend: { t: number; dmg: number; reach: number; yaw: number; feel: MeleeFeel; cut: number } | null = null;
+  /** The weapon of the swing in progress, for its streak, and how far it reaches. */
+  private swingFeel: MeleeFeel | null = null;
+  /** Seconds the swing animation runs, which is the weapon's own. */
+  private swingDur = 0.28;
+  /** Seconds the arm hangs on a blow that landed. */
+  private hitStop = 0;
   fireCd = 0;
   meleeCd = 0;
   notes: Note[] = [];
@@ -182,6 +234,14 @@ export class Player implements Pilot {
   pinned = 0;
   pinBreak = 0;
   enterT = 0;
+  /** Where the hands are working while a hold-action runs (null otherwise): the body reaches for it. */
+  private workAt: THREE.Vector3 | null = null;
+  /** A high five under way with a friend: who, which style, how far along. */
+  private five: { t: number; style: 1 | 2 | 3; partner: Player; hit: boolean; lead: boolean } | null = null;
+  private fiveSent = false;
+  /** Visual only: climbing out of a vehicle. The player is already on foot; the body is eased from the seat to the ground. */
+  private exitT = 0;
+  private exitSeat = new THREE.Vector3();
   private enterFrom = new THREE.Vector3();
   private enterTo: Vehicle | null = null;
   private enterSeat: 'driver' | 'gunner' = 'driver';
@@ -218,8 +278,13 @@ export class Player implements Pilot {
   stamina = newStamina();
   /** Open wounds. They drain health until they clot or are bound. */
   bleed = newBleed();
-  /** Set while the quick belt rests on a dressing; null means it rests on `drugs.selected`. */
-  private dressingSel: 'bandage' | 'medkit' | null = null;
+  /** Set while the quick belt rests on anything but a drug; null means it rests on `drugs.selected`. */
+  private dressingSel: Exclude<QuickId, DrugId> | null = null;
+  /** What hunger, thirst and a full bladder are doing to you right now, refreshed every tick. */
+  nm: NeedMods = { ...NEUTRAL_NEEDS };
+  /** A piss or a shit in progress. It runs on its own clock and walking off, firing or being hit cuts it short. */
+  relief: { kind: 'piss' | 'shit'; t: number; dur: number; from: number; stained: boolean; wasCrouch: boolean } | null = null;
+  private needSeed = 0x2545f491;
   private sprintingNow = false;
   private woundSeed = 0x9e3779b9;
   /** Seconds the use button has been down, to tell a tap (take) from a hold (open the belt). */
@@ -326,9 +391,17 @@ export class Player implements Pilot {
     }
     const uid = it?.uid ?? 'utility';
     if (uid !== this.heldUid) {
+      const had = this.heldUid !== '';
       this.heldUid = uid;
       this.reloadT = 0;
+      this.cycleT = 0;
       this.action = null;
+      // Bringing a new weapon up takes a moment, longer for a long gun; a gun cannot be fired until it is out.
+      if (had) {
+        this.drawDur = drawOf(this.heldModel());
+        this.drawT = this.drawDur;
+        if (this.equip === 'gun') this.fireCd = Math.max(this.fireCd, this.drawDur);
+      }
     }
   }
 
@@ -395,6 +468,10 @@ export class Player implements Pilot {
   /** What this body has taken, and what it is doing about it. It lives on the campaign, so it outlasts the scene. */
   get drugs(): DrugState {
     return this.ctx.campaign.drugs[this.index];
+  }
+
+  get needs(): Needs {
+    return this.ctx.campaign.needs[this.index];
   }
   get targetable() {
     return (this.state === 'foot' || this.state === 'entering' || this.state === 'downed') && this.invuln <= 0;
@@ -473,7 +550,7 @@ export class Player implements Pilot {
     if (this.drugs.passedOut || this.stunT > 0) return { steer: 0, throttle: 0, brake: 0.25, handbrake: false };
     // Drunk driving: the wheel wanders.
     let steer = it.move[0];
-    const sway = this.drugs.mods().sway;
+    const sway = this.drugs.mods().sway + this.nm.sway;
     if (sway > 0.02) {
       const t = this.ctx.time + this.index * 7.3;
       steer = clamp(steer + (Math.sin(t * 1.1) + 0.6 * Math.sin(t * 2.7 + 0.9)) * 0.3 * sway, -1, 1);
@@ -496,6 +573,7 @@ export class Player implements Pilot {
     if (this.action && this.action.kind !== 'revive' && kind !== 'spore') {
       this.action = null;
     }
+    if (this.relief) this.endRelief('hit');
     if (this.state === 'downed') {
       // Hits on a downed player speed up the bleed-out.
       this.downT += dmg * 0.04;
@@ -632,6 +710,8 @@ export class Player implements Pilot {
       }
     }
     const speed = Math.abs(v.speed);
+    // Where the body sat, so it can be eased out of the seat rather than popping to the kerb.
+    const seatW = this.state === 'driving' ? v.body.toWorld(0, -0.4, -0.1) : v.gunnerPos();
     if (this.state === 'driving') {
       v.driver = null;
       v.setEngine(false);
@@ -650,11 +730,84 @@ export class Player implements Pilot {
     this.yaw = v.yaw;
     this.aimYaw = v.yaw;
     this.cam.snap();
+    if (!bail && !boat) {
+      this.exitT = EXIT_SECS;
+      this.exitSeat.set(seatW[0], seatW[1] - 0.6, seatW[2]);
+    } else this.exitT = 0;
     if (bail && speed > 3 && !boat) {
       const dmg = 10 + clamp(speed / 20, 0, 1) * 20;
       this.hurt(dmg, spot.x, spot.z, 'fall');
       this.note(`Bailed out at ${(speed * 3.6).toFixed(0)} km/h`, 'warn');
     }
+  }
+
+  // ------------------------------------------------------------------ high five
+
+  private canFive() {
+    return this.state === 'foot' && !this.five && !this.carry && !this.action && !this.drugs.passedOut && !this.swimming && this.grounded && this.ads < 0.3 && this.swingT <= 0 && !this.buildMode && !this.beltOpen && this.stunT <= 0;
+  }
+
+  /** Hold the map button next to a friend: the two turn to face each other and slap hands, in one of three styles. */
+  private offerFive() {
+    const others = this.ctx.players.filter((q) => q !== this && q.state !== 'dead');
+    if (!others.length) return;
+    if (!this.canFive()) return;
+    let best: Player | null = null;
+    let bd = 4.5;
+    for (const q of others) {
+      const d = Math.hypot(q.pos.x - this.pos.x, q.pos.z - this.pos.z);
+      if (d < bd && Math.abs(q.pos.y - this.pos.y) < 1.2 && q.canFive()) {
+        bd = d;
+        best = q;
+      }
+    }
+    if (!best) {
+      this.note('No friend close enough for a high five', 'info');
+      return;
+    }
+    const style = (1 + Math.floor(Math.random() * 3)) as 1 | 2 | 3;
+    this.five = { t: 0, style, partner: best, hit: false, lead: true };
+    best.five = { t: 0, style, partner: this, hit: false, lead: false };
+    const name = style === 1 ? 'High five!' : style === 2 ? 'Fist bump!' : 'Double slap!';
+    this.note(name, 'good');
+    best.note(name, 'good');
+  }
+
+  private updateFive(dt: number) {
+    const f = this.five;
+    if (!f) return;
+    const q = f.partner;
+    const d = Math.hypot(q.pos.x - this.pos.x, q.pos.z - this.pos.z);
+    // Over if either is hurt, driving off, or the two are pulled apart.
+    if (this.state !== 'foot' || q.state !== 'foot' || q.five?.partner !== this || d > 6 || this.sinceHit < 0.15 || this.swimming) {
+      this.five = null;
+      return;
+    }
+    f.t += dt;
+    const p = f.t / FIVE_SECS;
+    // Square up to the friend, and close the gap to arm's length (each takes half).
+    const toward = Math.atan2(q.pos.x - this.pos.x, q.pos.z - this.pos.z);
+    this.yaw = dampAngle(this.yaw, toward, 14, dt);
+    this.aimYaw = dampAngle(this.aimYaw, toward, 10, dt);
+    if (d > 1.15 && p < 0.5) {
+      const step = Math.min(d - 1.15, 2.4 * dt) * 0.5;
+      this.pos.x += ((q.pos.x - this.pos.x) / d) * step;
+      this.pos.z += ((q.pos.z - this.pos.z) / d) * step;
+      this.body.setTranslation({ x: this.pos.x, y: this.pos.y + BODY_H / 2, z: this.pos.z }, true);
+    }
+    if (!f.hit && p >= 0.5) {
+      f.hit = true;
+      if (f.lead) {
+        const ctx = this.ctx;
+        const hx = (this.pos.x + q.pos.x) / 2;
+        const hy = this.pos.y + (f.style === 2 ? 1.25 : 1.65);
+        const hz = (this.pos.z + q.pos.z) / 2;
+        ctx.fx.spark(hx, hy, hz, f.style === 2 ? 8 : 14, 3);
+        ctx.fx.puff(hx, hy, hz, 0.9, 0.85, 0.7, 0.5, 0.4);
+        ctx.audio.play(f.style === 2 ? 'thud' : 'hit', hx, hz, 0.35);
+      }
+    }
+    if (f.t >= FIVE_SECS) this.five = null;
   }
 
   // ------------------------------------------------------------------ tick
@@ -667,18 +820,30 @@ export class Player implements Pilot {
     if (this.invuln > 0) this.invuln -= dt;
     this.sinceHit += dt;
     this.updateDrugs(dt, it);
+    if (this.relief && this.state !== 'foot') this.endRelief('quiet');
     this.sprintingNow = false;
     for (const n of this.notes) n.t -= dt;
     while (this.notes.length && this.notes[0].t <= 0) this.notes.shift();
     this.commandWheel = isHeld(it, Btn.Up) && this.state !== 'dead';
     this.sheet = isHeld(it, Btn.Back) && heldFor(it, Btn.Back) > 0.25;
     const beltBusy = this.useHold > 0 || this.beltOpen;
-    if (wasPressed(it, Btn.Map) && !beltBusy && this.state !== 'dead') this.mapMode = (this.mapMode + 1) % this.ctx.mapModes;
-    else if (this.mapMode >= this.ctx.mapModes) this.mapMode = 0;
+    // The map button: a short tap steps the map; holding it offers a high five to a friend standing close.
+    if (wasReleased(it, Btn.Map)) {
+      if (!this.fiveSent && it.releasedAfter[Btn.Map] < MAP_TAP && !beltBusy && this.state !== 'dead') this.mapMode = (this.mapMode + 1) % this.ctx.mapModes;
+      this.fiveSent = false;
+    } else if (isHeld(it, Btn.Map) && !this.fiveSent && heldFor(it, Btn.Map) >= FIVE_HOLD) {
+      this.fiveSent = true;
+      if (!beltBusy) this.offerFive();
+    }
+    if (this.mapMode >= this.ctx.mapModes) this.mapMode = 0;
+    this.updateFive(dt);
+    if (this.exitT > 0) this.exitT = Math.max(0, this.exitT - dt);
     if (this.fireCd > 0) this.fireCd -= dt;
     if (this.meleeCd > 0) this.meleeCd -= dt;
     if (this.muzzleT > 0) this.muzzleT -= dt;
-    if (this.swingT > 0) this.swingT = Math.max(0, this.swingT - dt / 0.28);
+    if (this.hitStop > 0) this.hitStop -= dt;
+    else if (this.swingT > 0) this.swingT = Math.max(0, this.swingT - dt / this.swingDur);
+    this.updateSwing(dt);
     if (this.reloadT > 0) {
       this.reloadT -= dt;
       if (this.reloadT <= 0) this.finishReload();
@@ -702,7 +867,8 @@ export class Player implements Pilot {
 
     switch (this.state) {
       case 'foot':
-        this.updateFoot(dt, it);
+        // Mid high five the feet stay put.
+        this.updateFoot(dt, this.five ? { ...it, move: [0, 0] as [number, number], pressed: 0 } : it);
         break;
       case 'entering':
         this.updateEntering(dt);
@@ -742,11 +908,13 @@ export class Player implements Pilot {
       return;
     }
     const dm = this.drugs.mods();
+    this.updateNeeds(dt, dm.appetite);
+    const nm = this.nm;
     tickStamina(this.stamina, dt, {
       sprinting: this.sprintingNow,
       resting: this.moveSpeed < 0.5,
-      drain: (this.carry ? 1.4 : 1) / Math.max(0.7, dm.speed),
-      regen: dm.speed > 1.05 ? 1.2 : 1,
+      drain: ((this.carry ? 1.4 : 1) / Math.max(0.7, dm.speed)) * nm.drain,
+      regen: (dm.speed > 1.05 ? 1.2 : 1) * nm.regen,
     });
     if (this.bleed.level > 0) {
       const loss = tickBleed(this.bleed, dt);
@@ -778,7 +946,7 @@ export class Player implements Pilot {
   private stepQuick(dir: 1 | -1) {
     const i = QUICK.indexOf(this.quickSel);
     const next = QUICK[(i + dir + QUICK.length) % QUICK.length];
-    if (next === 'bandage' || next === 'medkit') this.dressingSel = next;
+    if (!isDrugId(next)) this.dressingSel = next;
     else {
       this.dressingSel = null;
       this.drugs.selected = next;
@@ -811,8 +979,18 @@ export class Player implements Pilot {
 
   /** Tap on the quick belt: take whatever it rests on. */
   private useQuick() {
-    if (this.quickSel === 'bandage' || this.quickSel === 'medkit') this.useDressing(this.quickSel);
-    else this.takeDrug(this.quickSel);
+    const sel = this.quickSel;
+    if (sel === 'bandage' || sel === 'medkit') this.useDressing(sel);
+    else if (isNeedAct(sel)) this.doNeed(sel);
+    else this.takeDrug(sel);
+  }
+
+  /** Eat, drink, piss or shit, from the belt or from its own key. Pressing piss or shit again stops one under way. */
+  private doNeed(act: NeedAct) {
+    if (this.relief) return void this.endRelief('moved');
+    if (act === 'eat') this.eatRation();
+    else if (act === 'drink') this.drinkUp();
+    else this.startRelief(act);
   }
 
   /**
@@ -824,6 +1002,12 @@ export class Player implements Pilot {
     const items = this.ctx.campaign.items;
     const living = this.state === 'foot' || this.state === 'driving' || this.state === 'gunner';
     const can = living && !this.buildMode && !d.passedOut && this.stunT <= 0;
+    if (can) {
+      if (wasPressed(it, Btn.Eat)) this.doNeed('eat');
+      if (wasPressed(it, Btn.Drink)) this.doNeed('drink');
+      if (wasPressed(it, Btn.Piss)) this.doNeed('piss');
+      if (wasPressed(it, Btn.Shit)) this.doNeed('shit');
+    }
     const down = can && isHeld(it, Btn.Down);
     if (down) {
       const was = this.useHold;
@@ -849,7 +1033,8 @@ export class Player implements Pilot {
     if (this.state === 'dead' || this.state === 'downed') return;
     const m = d.mods();
     if (m.regen > 0 && this.hp < this.maxHp && this.state === 'foot') this.heal(m.regen * dt);
-    if (m.shake > 0.05) this.cam.addShake(m.shake * 0.02 * dt * 60);
+    const shake = m.shake + this.nm.shake;
+    if (shake > 0.05) this.cam.addShake(shake * 0.02 * dt * 60);
     if (m.poison > 0) {
       this.poisonT -= dt;
       if (this.poisonT <= 0) {
@@ -877,6 +1062,151 @@ export class Player implements Pilot {
     for (const n of r.notes) this.note(n, 'warn');
     if (r.relieved) this.note('The shakes ease off', 'info');
     if (!r.overdose && this.drugs.toxicity > 0.7) this.note('Your hands are shaking: one more could be too many', 'warn');
+    return true;
+  }
+
+  // ------------------------------------------------------------------ eat, drink, piss, shit
+
+  /** A uniform [0,1) from the body's own dice, so a bad mouthful never shifts the world's. */
+  private rollNeed(): number {
+    this.needSeed = (Math.imul(this.needSeed, 1664525) + 1013904223) >>> 0;
+    return this.needSeed / 4294967296;
+  }
+
+  /** Hunger, thirst and the rest of it: tick the body, say what it wants, and work out what it does to you. */
+  private updateNeeds(dt: number, appetite: number) {
+    const n = this.needs;
+    const effort = this.sprintingNow ? 1 : this.moveSpeed > 2.2 ? 0.25 : 0;
+    for (const e of tickNeeds(n, dt, { appetite, effort, asleep: this.drugs.passedOut })) this.onNeedEvent(e);
+    const nm = (this.nm = needMods(n));
+    // Starving and parched hurt, but like a wound they never land the killing blow: health stops falling at a floor.
+    if (nm.hurt > 0) {
+      const floor = this.maxHp * NEEDS.hpFloor;
+      if (this.hp > floor) this.hp = Math.max(floor, this.hp - nm.hurt * dt);
+    }
+  }
+
+  private onNeedEvent(e: NeedEvent) {
+    const ctx = this.ctx;
+    const urgent = e.level === 'critical' || e.level === 'desperate';
+    this.note(warnText(e.need, e.level), urgent ? 'bad' : 'warn');
+    if (!ctx.campaign.flags['tip.needs']) {
+      ctx.campaign.flags['tip.needs'] = true;
+      ctx.tip('needs');
+    }
+  }
+
+  /** Eat a ration from the convoy's stores. Your hands are busy for a moment, as with a dressing. */
+  eatRation(): boolean {
+    const ctx = this.ctx;
+    const c = ctx.campaign;
+    const r = eatFood(this.needs, whole(c.stocks.rations));
+    if (!r.ok) {
+      this.note(r.reason!, 'warn');
+      ctx.audio.play('deny');
+      return false;
+    }
+    c.stocks.rations = Math.max(0, c.stocks.rations - (r.spent ?? 1));
+    this.reloadT = 0;
+    this.fireCd = Math.max(this.fireCd, 1.1);
+    this.meleeCd = Math.max(this.meleeCd, 1.1);
+    ctx.audio.play('munch', this.pos.x, this.pos.z, 0.5);
+    this.note(`You eat a ration (${whole(c.stocks.rations)} left)`, 'good');
+    return true;
+  }
+
+  /** Drink: from the lake if you are standing at one (free, and not always clean), else from the convoy's water reserve. */
+  drinkUp(): boolean {
+    const ctx = this.ctx;
+    const c = ctx.campaign;
+    const lake = this.state === 'foot' ? (ctx.waterAt(this.pos.x + Math.sin(this.aimYaw) * 1.2, this.pos.z + Math.cos(this.aimYaw) * 1.2) ?? ctx.waterAt(this.pos.x, this.pos.z)) : null;
+    const r = drinkWater(this.needs, c.items.water, { lake: !!lake, roll: this.rollNeed() });
+    if (!r.ok) {
+      this.note(r.reason!, 'warn');
+      ctx.audio.play('deny');
+      return false;
+    }
+    if (!lake) c.items.water = Math.max(0, c.items.water - (r.spent ?? 0));
+    this.reloadT = 0;
+    this.fireCd = Math.max(this.fireCd, 0.7);
+    this.meleeCd = Math.max(this.meleeCd, 0.7);
+    ctx.audio.play('gulp', this.pos.x, this.pos.z, 0.5);
+    if (lake) this.note(r.dirty ? 'You drink from the lake. It tastes of mud: your stomach turns' : 'You drink from the lake', r.dirty ? 'warn' : 'good');
+    else this.note(`You drink (${c.items.water.toFixed(0)} L left in the reserve)`, 'good');
+    return true;
+  }
+
+  /** Stop and go. Takes a few seconds standing still (a squat for a shit), cut short by walking off, firing or being hit. */
+  private startRelief(kind: 'piss' | 'shit'): boolean {
+    const ctx = this.ctx;
+    const deny = (why: string) => (this.note(why, 'info'), ctx.audio.play('deny'), false);
+    if (this.state !== 'foot') return deny('Get out of the vehicle first');
+    if (this.carry) return deny('Put down what you are carrying first');
+    if (this.swimming) return deny('Not while you are swimming');
+    const can = canRelieve(this.needs, kind);
+    if (!can.ok) return deny(can.reason!);
+    this.action = null;
+    this.reloadT = 0;
+    this.ads = 0;
+    this.relief = { kind, t: 0, dur: reliefSeconds(this.needs, kind), from: kind === 'piss' ? this.needs.bladder : this.needs.bowel, stained: false, wasCrouch: this.crouch };
+    if (kind === 'shit') this.crouch = true;
+    ctx.audio.play('trickle', this.pos.x, this.pos.z, kind === 'piss' ? 0.4 : 0.15);
+    ctx.sig.emit(this.pos.x, this.pos.z, kind === 'piss' ? 5 : 7, 'noise');
+    this.note(kind === 'piss' ? 'You take a piss (walk away to stop)' : 'You squat and take a shit (walk away to stop)', 'info');
+    return true;
+  }
+
+  private endRelief(why: 'done' | 'moved' | 'hit' | 'quiet') {
+    const r = this.relief;
+    if (!r) return;
+    this.relief = null;
+    if (r.kind === 'shit') this.crouch = r.wasCrouch;
+    // Cut short after the first moment still leaves its mark.
+    if (!r.stained && r.t > r.dur * 0.2) this.dropWaste(r.kind);
+    if (why === 'quiet') return;
+    const left = r.kind === 'piss' ? this.needs.bladder : this.needs.bowel;
+    if (why === 'done') this.note(r.kind === 'piss' ? 'Ahh. That is better' : 'You feel lighter', 'good');
+    else if (why === 'hit') {
+      this.note('You are interrupted', 'bad');
+      this.ctx.sig.emit(this.pos.x, this.pos.z, 14 * this.drugs.mods().noise, 'noise');
+    } else if (left > 0.1) this.note(`You stop with some left (${Math.round(left * 100)}%)`, 'info');
+  }
+
+  /** The mark it leaves: ahead of you for a piss, just behind for a shit. Nothing in the water. */
+  private dropWaste(kind: 'piss' | 'shit') {
+    if (this.waterDepth > 0.15) return;
+    const k = kind === 'piss' ? 0.8 : -0.4;
+    this.ctx.gore.waste(this.pos.x + Math.sin(this.yaw) * k, this.pos.z + Math.cos(this.yaw) * k, kind);
+    if (kind === 'shit') this.ctx.audio.play('plop', this.pos.x, this.pos.z, 0.3);
+    if (this.relief) this.relief.stained = true;
+  }
+
+  /** One tick of a piss or a shit under way. Returns whether it still has the player rooted. */
+  private updateRelief(dt: number, it: PlayerIntent): boolean {
+    const r = this.relief;
+    if (!r) return false;
+    if (this.drugs.passedOut) {
+      this.endRelief('quiet');
+      return false;
+    }
+    if (Math.hypot(it.move[0], it.move[1]) > 0.55 || it.rt > 0.3 || it.lt > 0.3) {
+      this.endRelief('moved');
+      return false;
+    }
+    r.t += dt;
+    relieve(this.needs, r.kind, (r.from / r.dur) * dt);
+    this.moveSpeed = damp(this.moveSpeed, 0, 12, dt);
+    if (!r.stained && r.t >= r.dur * 0.4) this.dropWaste(r.kind);
+    if (r.kind === 'piss' && this.waterDepth < 0.6 && Math.floor(r.t * 14) > Math.floor((r.t - dt) * 14)) {
+      const fx = Math.sin(this.yaw);
+      const fz = Math.cos(this.yaw);
+      this.ctx.fx.bloodSpray(this.pos.x + fx * 0.3, this.pos.y + 0.85, this.pos.z + fz * 0.3, fx, -0.35, fz, 1, 2.2, 0.08, [0.95, 0.85, 0.25]);
+    }
+    this.prompt = { text: `${r.kind === 'piss' ? 'Pissing' : 'Shitting'}… walk away to stop`, progress: clamp(r.t / r.dur, 0, 1), button: 'A' };
+    if (r.t >= r.dur) {
+      this.endRelief('done');
+      return false;
+    }
     return true;
   }
 
@@ -922,6 +1252,7 @@ export class Player implements Pilot {
   private vomit(purge: boolean) {
     if (this.state !== 'foot' && this.state !== 'driving' && this.state !== 'gunner') return;
     const ctx = this.ctx;
+    if (this.relief) this.endRelief('quiet');
     this.stunT = purge ? 3 : 2.2;
     this.action = null;
     this.crouch = false;
@@ -941,6 +1272,7 @@ export class Player implements Pilot {
   }
 
   private passOut() {
+    if (this.relief) this.endRelief('quiet');
     this.action = null;
     this.crouch = false;
     this.stunT = 0;
@@ -999,8 +1331,8 @@ export class Player implements Pilot {
     const ctx = this.ctx;
     if (this.drugs.passedOut) return this.updateAsleep(dt);
     const dm = this.drugs.mods();
-    // Retching, or rummaging through the pockets for the next dose: the hands and feet are busy.
-    const busy = this.stunT > 0;
+    // Retching, rummaging through the pockets for the next dose, or squatting: the hands and feet are busy.
+    const busy = this.stunT > 0 || this.updateRelief(dt, it);
     this.updateAim(dt, it);
     // Movement relative to the camera.
     let mx = busy || this.beltOpen ? 0 : it.move[0];
@@ -1021,9 +1353,10 @@ export class Player implements Pilot {
     let wz = fz * my + rz * mx;
     const aiming = this.ads > 0.35;
     // Drunk: the body drifts sideways of where it is going, and a stumble throws it further.
-    if (dm.sway > 0.02 || this.lurchT > 0) {
+    const swayNow = dm.sway + this.nm.sway;
+    if (swayNow > 0.02 || this.lurchT > 0) {
       const t = ctx.time + this.index * 7.3;
-      const drift = (Math.sin(t * 1.3) + 0.6 * Math.sin(t * 2.9 + 1.7)) * 0.55 * dm.sway * Math.max(1, Math.hypot(wx, wz) * 3.4);
+      const drift = (Math.sin(t * 1.3) + 0.6 * Math.sin(t * 2.9 + 1.7)) * 0.55 * swayNow * Math.max(1, Math.hypot(wx, wz) * 3.4);
       const lurch = this.lurchT > 0 ? this.lurchDir * 3.2 * (this.lurchT / 0.45) : 0;
       wx += rx * (drift + lurch) * 0.3;
       wz += rz * (drift + lurch) * 0.3;
@@ -1033,6 +1366,7 @@ export class Player implements Pilot {
     if (this.ctx.input.settings.toggleCrouch?.[this.index] === false) this.crouch = isHeld(it, Btn.B);
     else if (wasPressed(it, Btn.B)) this.crouch = !this.crouch;
     if (wantSprint) this.crouch = false;
+    if (this.relief?.kind === 'shit') this.crouch = true;
     // Water: wading drags at the legs, deep water means swimming (slow, no sprint, no crouch).
     const wet = ctx.waterAt(this.pos.x, this.pos.z);
     this.waterDepth = wet ? wet.depth : 0;
@@ -1048,12 +1382,14 @@ export class Player implements Pilot {
     if (this.swimming) speed = Math.min(speed, 2.0);
     if (aiming) speed = Math.min(speed, 2.3);
     if (this.equip === 'jerrycan') speed *= 0.82;
+    // A rifle is heavy to carry about, a knife is not.
+    speed *= carryOf(this.heldModel());
     if (this.carry) speed *= carrySlow(this.carry);
     if (this.pinned >= ENEMIES.zombieRules.pinAt) speed = 0;
     // Fatigue from watch duty slows the next day; heavy gear slows you and light shoes quicken you.
     speed *= 1 - clamp(this.fatigue, 0, 0.2);
     speed *= 1 + this.stats.speed;
-    speed *= dm.speed;
+    speed *= dm.speed * this.nm.speed;
     // Tripping is floaty: the feet take longer to agree with the stick.
     this.moveSpeed = damp(this.moveSpeed, Math.hypot(wx, wz) * speed, 14 / (1 + dm.trip * 1.2), dt);
     const targetVx = wx * speed;
@@ -1063,7 +1399,16 @@ export class Player implements Pilot {
     if (this.firstPerson) this.yaw = dampAngle(this.yaw, this.aimYaw, 20, dt);
     else if (aiming || this.muzzleT > 0 || isHeld(it, Btn.RT)) this.yaw = dampAngle(this.yaw, this.aimYaw, 16, dt);
     else if (mag > 0.15 && speed > 0) this.yaw = dampAngle(this.yaw, Math.atan2(targetVx, targetVz), 12, dt);
-    this.moveBody(dt, targetVx, targetVz);
+    // The body has weight: it takes a moment to get up to speed and a moment to stop, a sprint longest of all.
+    let mvx = targetVx;
+    let mvz = targetVz;
+    if (this.grounded || this.swimming) {
+      const o = approachVelocity(this.hvx, this.hvz, targetVx, targetVz, dt, sprinting ? ACCEL.sprint : this.crouch ? ACCEL.crouch : ACCEL.walk, ACCEL.brake, this._vel);
+      mvx = o[0];
+      mvz = o[1];
+    }
+    this.moveBody(dt, mvx, mvz);
+    this.updateFeel(dt, sprinting);
 
     // Pin: break free with five left-stick rotations.
     if (this.pinned >= ENEMIES.zombieRules.pinAt) {
@@ -1097,6 +1442,33 @@ export class Player implements Pilot {
       if (!this.tryEnter()) this.note('No vehicle in reach', 'info');
     }
     // Ground hazards: spore clouds are handled by the zombie system.
+  }
+
+  /**
+   * What walking does to the view and the gun: the bob in time with the feet, the lean into a sidestep, the gun carried low
+   * for a sprint, and a wall in front of the muzzle pushing it up. Runs on foot every tick.
+   */
+  private updateFeel(dt: number, sprinting: boolean) {
+    const ctx = this.ctx;
+    const speed = Math.hypot(this.hvx, this.hvz);
+    stepGait(this.gait, dt, speed, sprinting, this.crouch, this.ads, this.grounded, this.gaitOut);
+    this.strafeV = this.hvx * -Math.cos(this.aimYaw) + this.hvz * Math.sin(this.aimYaw);
+    const gun = this.equip === 'gun' && !this.carry;
+    this.sprintBlend = stepBlend(this.sprintBlend, sprinting && gun ? 1 : 0, SPRINT_IN, SPRINT_OUT, dt);
+    if (!gun) {
+      this.wallRaw = 0;
+      this.wallBlend = damp(this.wallBlend, 0, 6, dt);
+      return;
+    }
+    // A wall within the gun's length: the muzzle comes up and in, and with it against the wall the gun cannot be fired.
+    const reach = REACH[this.gunModel()] ?? 0.8;
+    const cp = Math.cos(clamp(this.aimPitch, -0.4, 0.4));
+    const ex = this.pos.x;
+    const ey = this.pos.y + (this.crouch ? EYE_CROUCH : EYE_STAND);
+    const ez = this.pos.z;
+    const hit = ctx.P.raycast(ex, ey, ez, Math.sin(this.aimYaw) * cp, Math.sin(clamp(this.aimPitch, -0.4, 0.4)), Math.cos(this.aimYaw) * cp, reach + 0.6, RAY_STATIC);
+    this.wallRaw = hit ? wallBlend(hit.toi, reach) : 0;
+    this.wallBlend = stepBlend(this.wallBlend, this.wallRaw, 10, 6, dt);
   }
 
   /**
@@ -1163,6 +1535,7 @@ export class Player implements Pilot {
       if (!wasGrounded && fallV < -5 && !this.swimming) {
         // Landing: a thud and a puff of dust, louder the harder it came down.
         const k = clamp((-fallV - 5) / 12, 0, 1);
+        landGait(this.gait, -fallV);
         ctx.audio.play('thud', this.pos.x, this.pos.z, 0.15 + 0.3 * k);
         ctx.fx.puff(this.pos.x, this.pos.y + 0.05, this.pos.z, 0.62, 0.55, 0.44, 0.5 + 0.5 * k, 0.5);
         ctx.sig.emit(this.pos.x, this.pos.z, 6 + 8 * k, 'noise');
@@ -1267,8 +1640,40 @@ export class Player implements Pilot {
     this.note(`Utility: ${utilityName(this.utility)}`, 'info');
   }
 
+  /** Begin a reload for `t` seconds; `each` > 0 loads the gun a round at a time. Every reload starts here. */
+  private setReload(t: number, each = 0) {
+    this.reloadT = t;
+    this.reloadDur = Math.max(0.01, t);
+    this.loadEach = each;
+    this.magDropped = false;
+  }
+
+  /** The reload the gun in hand needs: quicker with a round still in it, a shell at a time for a pump. */
+  private startReload(gun: EffectiveGun) {
+    const plan = reloadPlan(gun.model, gun.reload, gun.mag, this.mag);
+    this.setReload(plan.first, plan.each);
+    this.dumpCases();
+    this.ctx.audio.play('reload', this.pos.x, this.pos.z, 0.5);
+  }
+
   private finishReload() {
     const camp = this.ctx.campaign;
+    if (this.loadEach > 0) {
+      // One shell goes in; the next follows until the gun is full or the pouch is empty. The trigger cuts it short.
+      const gun = this.gun();
+      if (this.mag < gun.mag && camp.ammo > 0) {
+        this.mag++;
+        camp.ammo--;
+        this.ctx.audio.play('click', this.pos.x, this.pos.z, 0.35);
+      }
+      if (this.mag < gun.mag && camp.ammo > 0) {
+        this.reloadT = this.loadEach;
+        return;
+      }
+      this.loadEach = 0;
+      if (this.mag === 0) this.note('Out of ammo: craft more at camp', 'warn');
+      return;
+    }
     const need = this.gun().mag - this.mag;
     const take = Math.min(need, camp.ammo);
     this.mag += take;
@@ -1294,22 +1699,22 @@ export class Player implements Pilot {
     if (this.carry) return;
     if (this.equip === 'gun') {
       const gun = this.gun();
-      if (wasPressed(it, Btn.X) && this.mag < gun.mag && this.reloadT <= 0 && ctx.campaign.ammo > 0) {
-        this.reloadT = gun.reload;
-        this.dumpCases();
-        ctx.audio.play('reload', this.pos.x, this.pos.z, 0.5);
-      }
+      if (wasPressed(it, Btn.X) && this.mag < gun.mag && this.reloadT <= 0 && ctx.campaign.ammo > 0) this.startReload(gun);
       const wantFire = it.rt > 0.5;
-      if (wantFire && this.fireCd <= 0 && this.reloadT <= 0) {
+      // Shells going in one at a time: pulling the trigger stops the loading and fires what is in.
+      if (wantFire && this.fireCd <= 0 && this.reloadT > 0 && this.loadEach > 0 && this.mag > 0) this.setReload(0);
+      // The gun is carried low in a sprint and cannot be fired until it is back up; nor with the muzzle in a wall.
+      const handsReady = this.sprintBlend < READY && this.wallRaw < WALL_BLOCK;
+      if (wantFire && this.fireCd <= 0 && this.reloadT <= 0 && handsReady) {
         if (this.mag > 0 && this.jams()) {
           // A worn-out gun sticks: clear it (the same time as a reload) and try again.
-          this.reloadT = gun.reload * 0.8;
+          this.setReload(gun.reload * 0.8);
           this.fireCd = 0.3;
           this.note('Jammed: clearing it', 'warn');
           ctx.audio.play('deny', this.pos.x, this.pos.z, 0.5);
         } else if (this.mag > 0) this.fireGun(gun);
         else if (ctx.campaign.ammo > 0) {
-          this.reloadT = gun.reload;
+          this.startReload(gun);
         } else if (this.fireCd <= 0) {
           this.fireCd = 0.4;
           this.note('Out of ammo: craft more at camp', 'warn');
@@ -1340,7 +1745,7 @@ export class Player implements Pilot {
     if (this.fireCd > 0 || this.reloadT > 0) return;
     if (this.mag <= 0) {
       if (ctx.campaign.ammo > 0) {
-        this.reloadT = 1.3;
+        this.setReload(1.3);
         ctx.audio.play('reload', this.pos.x, this.pos.z, 0.5);
       } else {
         this.fireCd = 0.4;
@@ -1411,7 +1816,8 @@ export class Player implements Pilot {
     this.muzzleT = 0.12;
     const gi = this.gunItem();
     const spread =
-      lerp(gun.spread, gun.adsSpread, Math.min(1, this.ads)) * (this.crouch ? 0.7 : 1) * (this.moveSpeed > 3 ? 1.6 : 1) * this.drugs.mods().spread * wearSpread(gi?.cond) * (this.stamina.winded ? 1.3 : 1);
+      lerp(gun.spread, gun.adsSpread, Math.min(1, this.ads)) * (this.crouch ? 0.7 : 1) * (this.moveSpeed > 3 ? 1.6 : 1) * this.drugs.mods().spread * this.nm.spread * wearSpread(gi?.cond) * (this.stamina.winded ? 1.3 : 1) * (1 + this.bloom);
+    this.bloom = bloomAfterShot(gun.model, this.bloom, this.ads);
     if (gi) gi.cond = wearBy(gi.cond, WEAR.shot);
     // A shotgun throws a handful of pellets from one shot. The first carries the noise and the aim assist.
     for (let n = 0; n < gun.pellets; n++) {
@@ -1428,13 +1834,22 @@ export class Player implements Pilot {
         owner: this,
       });
     }
-    ctx.fx.flash(mx, my, mz, 0.9 + (gun.pellets > 1 ? 0.3 : 0));
+    const mfx = MUZZLE[gun.model];
+    // The flash, the smoke and the light come from the gun itself as it is drawn, not from where the body thinks it is.
+    const [vx, vy, vz] = this.gunPoint('muzzle', [mx, my, mz]);
+    ctx.fx.muzzle(vx, vy, vz, dx, dy, dz, mfx);
+    ctx.combat.muzzleLight(vx, vy, vz, mfx.light);
+    this.smokeT = Math.min(3.5, this.smokeT + 1.2 + (gun.pellets > 1 ? 0.8 : 0));
     ctx.audio.play(gun.sound, mx, mz, 0.8, { occluded: 0 });
     const kick = Math.min(0.14, (gun.dmg * gun.pellets) / 700);
     const hd = HANDLING[gun.model];
     this.throwKick(hd);
     if (hd.eject === 'shot') this.ejectCase(hd.shell);
-    else if (hd.eject === 'cycle') this.brassQ.push({ t: hd.cycleDelay, kind: hd.shell });
+    else if (hd.eject === 'cycle') {
+      this.brassQ.push({ t: hd.cycleDelay, kind: hd.shell });
+      this.cycleDur = cycleTime(hd.cycleDelay);
+      this.cycleT = this.cycleDur;
+    }
     else this.spent++;
     ctx.phantoms.onShot(this, a.ox, a.oy, a.oz, a.dx, a.dy, a.dz);
     this.cam.addShake(0.02 + kick * 0.6);
@@ -1442,6 +1857,11 @@ export class Player implements Pilot {
   }
 
   // ------------------------------------------------------------------ handling
+
+  /** The model of the gun in hand: the pistol's if there is none. */
+  private gunModel(): GunModel {
+    return gearDef(this.gunItem()?.id ?? 'w_pistol').gun!.model;
+  }
 
   /** How the gun in hand feels: the pistol's if there is none. */
   private handling(): Handling {
@@ -1468,10 +1888,30 @@ export class Player implements Pilot {
     const ctx = this.ctx;
     const hd = this.handling();
     const k = this.kick;
+    if (this.drawT > 0) this.drawT -= dt;
+    this.updateGunEffects(dt);
+    if (this.cycleT > 0) this.cycleT -= dt;
+    // The gun lags behind a turn of the view and swings back: heavy things do not follow the eye exactly.
+    if (this.prevAim) {
+      const dy = wrapAngle(this.aimYaw - this.prevAim[0]);
+      const dp = this.aimPitch - this.prevAim[1];
+      this.lag.yaw.v -= clamp(dy, -0.3, 0.3) * 1.5;
+      this.lag.pitch.v += clamp(dp, -0.3, 0.3) * 1.2;
+    } else this.prevAim = [this.aimYaw, this.aimPitch];
+    this.prevAim[0] = this.aimYaw;
+    this.prevAim[1] = this.aimPitch;
+    stepSpring(this.lag.yaw, 0, 90, 0.55, dt);
+    stepSpring(this.lag.pitch, 0, 90, 0.55, dt);
+    if (this.state !== 'foot') {
+      this.sprintBlend = damp(this.sprintBlend, 0, SPRINT_OUT, dt);
+      this.wallBlend = damp(this.wallBlend, 0, 6, dt);
+      this.wallRaw = 0;
+    }
     stepSpring(k.pitch, 0, hd.settleK, hd.settleZeta, dt);
     stepSpring(k.yaw, 0, hd.settleK, hd.settleZeta, dt);
     stepSpring(k.roll, 0, hd.settleK * 0.8, hd.settleZeta, dt);
     stepSpring(k.back, 0, hd.settleK * 1.3, 0.8, dt);
+    if (this.bloom > 0) this.bloom = bloomSettle(this.gunModel(), this.bloom, dt);
     const armed = this.equip === 'gun' && !this.carry && (this.state === 'foot' || this.state === 'gunner') && !this.drugs.passedOut;
     if (armed) {
       const [sx, sy] = swayAt(hd, ctx.time, this.index * 3.7, this.moveSpeed, this.ads, this.crouch, this.stamina.winded);
@@ -1494,7 +1934,45 @@ export class Player implements Pilot {
   private ejectCase(kind: ShellKind) {
     const [mx, my, mz] = this.muzzlePos();
     const f = this.aimYaw;
-    this.ctx.gore.eject(kind, mx - Math.sin(f) * 0.32, my - 0.06, mz - Math.cos(f) * 0.32, f);
+    // Out of the ejection port on the gun, with a wisp of smoke from the breech and the shooter's own motion carried over.
+    const [px, py, pz] = this.gunPoint('port', [mx - Math.sin(f) * 0.32, my - 0.06, mz - Math.cos(f) * 0.32]);
+    this.ctx.gore.eject(kind, px, py, pz, f, this.hvx, this.hvz);
+    this.ctx.fx.wisp(px, py, pz, 1);
+  }
+
+  /**
+   * A point on the gun in the world: read off the rig as it was last drawn (the owner's own first-person pose included), or
+   * `fallback` where the body thinks it is when the gun has not been drawn.
+   */
+  private gunPoint(which: 'muzzle' | 'port' | 'well', fallback: [number, number, number]): [number, number, number] {
+    const pts = this.human.points;
+    if (!pts.valid || !this.human.root.visible) return fallback;
+    const v = pts[which];
+    return [v.x, v.y, v.z];
+  }
+
+  /** The empty magazine falls out of the gun at the right moment of a reload, and the barrel keeps smoking for a while after a shot. */
+  private updateGunEffects(dt: number) {
+    const ctx = this.ctx;
+    if (this.reloadT > 0 && !this.magDropped && this.loadEach === 0 && this.equip === 'gun') {
+      const model = this.gunModel();
+      const mag = DROPS_MAG[model];
+      const at = dropAt(RELOAD_KIND[model]);
+      if (mag && 1 - this.reloadT / this.reloadDur >= at) {
+        this.magDropped = true;
+        const [wx, wy, wz] = this.gunPoint('well', [this.pos.x, this.pos.y + 1.0, this.pos.z]);
+        ctx.gore.dropMag(mag, wx, wy, wz, this.hvx, this.hvz);
+        ctx.audio.play('click', wx, wz, 0.4);
+      }
+    }
+    if (this.smokeT > 0) {
+      this.smokeT -= dt;
+      if (this.equip === 'gun' && this.state === 'foot' && Math.random() < dt * 14 * Math.min(1, this.smokeT)) {
+        const [mx, my, mz] = this.muzzlePos();
+        const [wx, wy, wz] = this.gunPoint('muzzle', [mx, my, mz]);
+        ctx.fx.wisp(wx, wy, wz, Math.min(1, this.smokeT));
+      }
+    }
   }
 
   /** The gun is opened to reload: a revolver or a break-action drops what it fired. */
@@ -1563,18 +2041,51 @@ export class Player implements Pilot {
     spendStamina(this.stamina, STAMINA.swing);
     if (held) held.cond = wearBy(held.cond, WEAR.swing);
     this.swingT = 1;
-    const f = this.aimYaw;
+    this.hitStop = 0;
+    const feel = meleeFeel(this.meleeWeapon()?.model);
+    const dm = this.drugs.mods();
+    ctx.audio.play('swing', this.pos.x, this.pos.z, 0.5, { pitch: feel.pitch });
+    // The weapon has to come round before it lands: the blow resolves part-way through the swing, as the arm comes down.
+    this.swingFeel = feel;
+    this.swingDur = feel.swing;
+    this.swingPend = { t: feel.windup, dmg: w.dmg * dm.melee, reach: w.reach, yaw: this.aimYaw, feel, cut: cutOf(w.model) };
+    ctx.sig.emit(this.pos.x, this.pos.z, w.noise * dm.noise, 'noise');
+    this.cam.addShake(0.03);
+  }
+
+  /** The swing in progress: the streak the weapon draws through the air, and the blow landing when the weapon gets there. */
+  private updateSwing(dt: number) {
+    const feel = this.swingFeel;
+    if (feel && this.swingT > 0 && this.state === 'foot') {
+      const e = 1 - this.swingT;
+      // Several samples a tick, so the streak is a ribbon and not a string of beads.
+      for (const back of [0, 0.025, 0.05, 0.075]) {
+        const a = swingArc(e - back, feel.blade);
+        const yaw = this.aimYaw + a.yaw;
+        const r = a.r;
+        this.ctx.fx.glow.emit(this.pos.x + Math.sin(yaw) * r, this.pos.y + a.y, this.pos.z + Math.cos(yaw) * r, 0, 0, 0, 0.17, 0.16, 0.04, feel.trail[0], feel.trail[1], feel.trail[2], feel.trailAlpha, 0, 0);
+      }
+    }
+    const s = this.swingPend;
+    if (!s) return;
+    s.t -= dt;
+    if (s.t > 0) return;
+    this.swingPend = null;
+    if (this.state !== 'foot') return;
+    const ctx = this.ctx;
+    const f = s.yaw;
     const hx = this.pos.x + Math.sin(f) * 1.0;
     const hz = this.pos.z + Math.cos(f) * 1.0;
-    ctx.audio.play('swing', this.pos.x, this.pos.z, 0.5);
-    const dm = this.drugs.mods();
-    ctx.zombies.meleeHit(this, hx, hz, f, w.reach, w.dmg * dm.melee);
-    ctx.wildlife.meleeHit(this, hx, hz, f, w.reach, w.dmg * dm.melee);
-    ctx.raiders.meleeHit(this, hx, hz, f, w.reach, w.dmg * dm.melee);
-    this.smashGlass(hx, hz, w.reach, w.dmg * dm.melee);
+    const hits = (ctx.zombies.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.wildlife.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel, s.cut) ?? 0) + (ctx.raiders.meleeHit(this, hx, hz, f, s.reach, s.dmg, s.feel) ?? 0);
+    this.smashGlass(hx, hz, s.reach, s.dmg);
     ctx.phantoms.onSwing(this, hx, hz);
-    ctx.sig.emit(this.pos.x, this.pos.z, w.noise * dm.noise, 'noise');
-    this.cam.addShake(0.08);
+    if (hits <= 0) return;
+    // A blow that lands: the arm hangs on it a moment, the view jolts, and what it hit sprays back along the swing.
+    this.hitStop = s.feel.hitStop;
+    this.cam.addShake(s.feel.shake);
+    ctx.input.rumble(this.index, 0.2 + s.feel.shake, 0.3 + s.feel.shake, 60);
+    ctx.gore.flesh(hx, this.pos.y + 1.1, hz, Math.sin(f), 0.15, Math.cos(f), clamp(s.dmg / 70, 0.15, 1.2));
+    ctx.audio.play(s.feel.hit, hx, hz, 0.6);
   }
 
   private useUtility() {
@@ -1643,6 +2154,8 @@ export class Player implements Pilot {
     if (!cand && !this.carry && this.equip === 'wrench') cand = wrenchCandidate(this, () => this.repairCandidate()) ?? this.repairCandidate();
     else if (!cand && !this.carry && this.equip === 'crowbar') cand = this.salvageCandidate() ?? pryCandidate(this);
     else if (!cand && !this.carry && this.equip === 'jerrycan') cand = this.fuelCandidate();
+    // A quick tap of A with the wrench (not a hold) moves to the next mount stacked under your hands: engine, then the gun on top.
+    if (this.equip === 'wrench' && !this.carry && wasReleased(it, Btn.A) && it.releasedAfter[Btn.A] < 0.25 && cycleMount(this)) ctx.audio.play('pickup', this.pos.x, this.pos.z, 0.35);
     // X with the wrench: open the field workbench for a convoy vehicle.
     if (this.equip === 'wrench' && !this.carry && wasPressed(it, Btn.X) && !this.action) {
       const bv = this.nearestVehicle(3.8, (q) => (q.faction === 'convoy' || q.faction === 'neutral') && !!q.build && !q.wreck && q.kind !== 'crew');
@@ -1678,12 +2191,14 @@ export class Player implements Pilot {
       }
     }
 
+    this.workAt = null;
     if (cand) {
       if (this.action && this.action.kind === cand.kind && this.action.target === cand.target) {
         if (!heldA || !cand.ok) {
           this.action = null;
         } else {
           this.action.t += dt;
+          this.workAt = cand.at ?? null;
           this.moveSpeed = Math.min(this.moveSpeed, 0.5);
           if (cand.tick && cand.tick() === false) this.action = null;
           else if (this.action.t >= this.action.dur) {
@@ -1741,7 +2256,7 @@ export class Player implements Pilot {
     const ctx = this.ctx;
     const v = this.nearestVehicle(3.8, (q) => !q.wreck && q.faction !== 'raider' && q.kind !== 'crew');
     if (!v) return null;
-    const bench = v.faction === 'convoy' && v.build ? '  ·  X: paint & oil bench' : '';
+    const bench = (v.faction === 'convoy' || v.faction === 'neutral') && v.build ? '  ·  X: paint & oil bench' : '';
     const job = planRepair(v.health, ctx.campaign.stocks, { spare: v.stats.spare, weapon: !!v.weapon, dents: v.bodywork.dentLevel(), missing: v.bodywork.missing(), glass: v.glass.broken() });
     if (!job) return { kind: 'repair', prompt: `${v.def.name} is in good shape${bench}`, dur: 1, target: v, ok: false, label: 'repair', run: () => {} };
     const cost = Object.keys(job.cost).length ? ` (${costText(job.cost)})` : '';
@@ -1969,9 +2484,16 @@ export class Player implements Pilot {
       this.state = 'foot';
       return;
     }
-    const k = clamp(this.enterT / 0.45, 0, 1);
+    const k = clamp(this.enterT / ENTER_SECS, 0, 1);
     const seat = this.enterSeat === 'driver' ? v.body.toWorld(0, -0.4, -0.1) : v.gunnerPos();
-    this.pos.set(lerp(this.enterFrom.x, seat[0], k), lerp(this.enterFrom.y, seat[1] - 0.6, k), lerp(this.enterFrom.z, seat[2], k));
+    // Walk to the door first, then step up and drop in: the height only changes once the body is at the frame.
+    const mx = k * k * (3 - 2 * k);
+    const my = clamp((k - 0.35) / 0.65, 0, 1);
+    this.pos.set(lerp(this.enterFrom.x, seat[0], mx), lerp(this.enterFrom.y, seat[1] - 0.6, my * my * (3 - 2 * my)), lerp(this.enterFrom.z, seat[2], mx));
+    // Turn to face the way in.
+    const dx = seat[0] - this.enterFrom.x;
+    const dz = seat[2] - this.enterFrom.z;
+    if (Math.hypot(dx, dz) > 0.3) this.yaw = dampAngle(this.yaw, Math.atan2(dx, dz), 10, dt);
     this.body.setTranslation({ x: this.pos.x, y: this.pos.y + BODY_H / 2, z: this.pos.z }, false);
     this.moveSpeed = 0;
     if (k >= 1) this.finishEnter();
@@ -2213,7 +2735,7 @@ export class Player implements Pilot {
       aimPitch = clamp(aimPitch + pend[1] * k, first ? -1.3 : -0.55, first ? 1.3 : 0.8);
     }
     // Drunk and tripping hands: the aim wanders, a little less when braced against the sights.
-    const sway = this.drugs.mods().sway;
+    const sway = this.drugs.mods().sway + this.nm.sway;
     if (sway > 0.02 && (this.state === 'foot' || this.state === 'gunner')) {
       const t = this.ctx.time + this.index * 7.3;
       const k = sway * (1 - 0.35 * this.ads);
@@ -2242,7 +2764,7 @@ export class Player implements Pilot {
       lookBack: this.lookBack,
       zoom: this.ads,
       eye,
-      kick: { pitch: this.kick.pitch.x + this.sway[1], yaw: this.kick.yaw.x + this.sway[0], roll: this.kick.roll.x, back: this.kick.back.x },
+      kick: { pitch: this.kick.pitch.x + this.sway[1], yaw: this.kick.yaw.x + this.sway[0], roll: this.kick.roll.x + (first && this.state === 'foot' ? this.gaitOut.roll + strafeRoll(this.strafeV) : 0), back: this.kick.back.x },
     });
     if (this.showcase) this.orbitShowcase(dt, target);
   }
@@ -2298,9 +2820,11 @@ export class Player implements Pilot {
     }
     if (this.state !== 'foot') return e.set(target.x, target.y + 1.5, target.z);
     const want = this.swimming ? EYE_SWIM : this.crouch ? EYE_CROUCH : EYE_STAND;
-    this.eyeH = damp(this.eyeH, want, 14, dt);
-    // A hair forward of the neck so the near plane stays clear of the shoulders.
-    return e.set(target.x + Math.sin(this.aimYaw) * 0.08, target.y + this.eyeH, target.z + Math.cos(this.aimYaw) * 0.08);
+    // Standing up and crouching take a moment: the head does not snap between heights.
+    this.eyeH = damp(this.eyeH, want, 8, dt);
+    // A hair forward of the neck so the near plane stays clear of the shoulders. The head bobs and sways with the steps.
+    const g = this.gaitOut;
+    return e.set(target.x + Math.sin(this.aimYaw) * 0.08 - Math.cos(this.aimYaw) * g.x, target.y + this.eyeH + g.y, target.z + Math.cos(this.aimYaw) * 0.08 + Math.sin(this.aimYaw) * g.x);
   }
 
   /**
@@ -2309,7 +2833,11 @@ export class Player implements Pilot {
    */
   beginOwnView() {
     if (!this.firstPerson) return;
-    if (this.state === 'foot') this.human.setFirstPerson(true);
+    if (this.state === 'foot') {
+      this.human.setFirstPerson(true);
+      // The gun as this view will draw it: where its muzzle, port and magazine well really are.
+      this.human.capturePoints();
+    }
     const v = this.vehicle;
     const occ = this.state === 'driving' ? v?.visual.driver : this.state === 'gunner' ? v?.visual.passenger : null;
     if (occ) {
@@ -2343,19 +2871,98 @@ export class Player implements Pilot {
     const weapon = this.heldModel();
     h.setWeapon(lying || this.carry ? 'none' : weapon);
     h.swing = this.swingT;
-    h.gunSway[0] = this.sway[0];
-    h.gunSway[1] = this.sway[1];
+    // The barrel wanders, the gun lags behind a turn of the view and rocks with the steps.
+    h.gunSway[0] = this.sway[0] + clamp(this.lag.yaw.x, -0.08, 0.08) + this.gaitOut.armX;
+    h.gunSway[1] = this.sway[1] + clamp(this.lag.pitch.x, -0.08, 0.08) + this.gaitOut.armY;
+    if (this.syncGunPose(h, dt)) aim = Math.max(aim, 0.75);
+    this.syncSight(h);
+    h.fpAds = this.ads;
     h.gunKick = clamp(this.kick.pitch.x / 0.05, -0.4, 1.6);
     // First person: whatever is in hand is held up in front, where the camera can see it.
-    if (this.firstPerson && !this.carry && weapon !== 'none') aim = Math.max(aim, 0.75);
+    if (this.firstPerson && !this.carry && weapon !== 'none') aim = Math.max(aim, 1);
     this.syncCarryModel();
     this.airVis = damp(this.airVis, this.state === 'foot' && !this.grounded && !this.swimming && this.airT > 0.06 ? 1 : 0, 16, dt);
+    h.enter = this.state === 'entering' ? clamp(this.enterT / ENTER_SECS, 0.001, 1) : 0;
+    h.fiveStyle = this.five && this.state === 'foot' ? this.five.style : 0;
+    h.five = this.five ? clamp(this.five.t / FIVE_SECS, 0, 1) : 0;
+    // Climbing out: the body leaves the seat and settles on the ground, the climb-in pose played backwards.
+    if (this.exitT > 0 && this.state === 'foot') {
+      const k = this.exitT / EXIT_SECS;
+      const w = k * k * (3 - 2 * k);
+      const ey = lerp(y, this.exitSeat.y, w);
+      h.root.position.set(lerp(x, this.exitSeat.x, w * w), ey, lerp(z, this.exitSeat.z, w * w));
+      h.enter = Math.max(0.001, k);
+    } else this.exitT = 0;
+    this.syncWork(h, lying);
     h.update(dt, lying ? 'downed' : 'stand', this.moveSpeed, aim, this.crouch ? 1 : 0, this.aimPitch, this.airVis);
     h.muzzle(this.muzzleT > 0.05);
+    h.capturePoints();
     if (this.invuln > 0) h.root.visible = Math.floor(this.invuln * 12) % 2 === 0;
   }
 
+  /** In first person, aimed: tell the rig where the eye is and which way it looks, so it can line the sights up on that. */
+  private syncSight(h: Humanoid) {
+    const s = h.sight;
+    const gp = h.gunPose;
+    const on = this.firstPerson && this.state === 'foot' && this.equip === 'gun' && !this.carry;
+    s.k = on ? clamp(this.ads, 0, 1) * (1 - gp.low) * (1 - gp.high) * (1 - this.reloadBlend) : 0;
+    if (s.k <= 0) return;
+    const cp = Math.cos(this.aimPitch);
+    s.ex = this.cam.pos.x;
+    s.ey = this.cam.pos.y;
+    s.ez = this.cam.pos.z;
+    s.fx = Math.sin(this.aimYaw) * cp;
+    s.fy = Math.sin(this.aimPitch);
+    s.fz = Math.cos(this.aimYaw) * cp;
+  }
+
+  /** Hand the rig how the gun is being handled this frame. Returns whether the gun must be up in front of the body. */
+  private syncGunPose(h: Humanoid, dt: number): boolean {
+    const gp = h.gunPose;
+    const gun = this.equip === 'gun' && !this.carry && this.state === 'foot';
+    if (!gun) {
+      gp.low = gp.high = gp.tilt = gp.pitch = gp.down = gp.rack = 0;
+      this.reloadBlend = 0;
+      return false;
+    }
+    const model = this.gunModel();
+    const kind = RELOAD_KIND[model];
+    const reloading = this.reloadT > 0;
+    this.reloadBlend = damp(this.reloadBlend, reloading ? 1 : 0, 14, dt);
+    const p = this.pose;
+    p.tilt = p.pitch = p.down = p.rack = 0;
+    if (reloading) {
+      // A pump is loaded a shell at a time, the routine repeating for each; the rest take the reload through once.
+      const t = this.loadEach > 0 ? (this.reloadT > this.loadEach ? 0 : 1 - this.reloadT / this.loadEach) : 1 - this.reloadT / this.reloadDur;
+      reloadPose(kind, t, p);
+    } else if (this.cycleT > 0) p.rack = cycleRack(1 - this.cycleT / this.cycleDur);
+    const rb = reloading ? this.reloadBlend : 1;
+    gp.low = Math.max(this.sprintBlend, drawLow(this.drawT, this.drawDur)) * (1 - this.reloadBlend);
+    gp.high = this.wallBlend * (1 - gp.low) * (1 - this.reloadBlend);
+    gp.tilt = p.tilt * rb;
+    gp.pitch = p.pitch * rb;
+    gp.down = p.down * rb;
+    gp.rack = p.rack * rb;
+    gp.bolt = model === 'rifle';
+    return reloading;
+  }
+
   private carryKey = '';
+
+  /** Tell the body where its hands are working, in its own frame, while a job on a car runs. */
+  private syncWork(h: Humanoid, lying: boolean) {
+    const at = this.workAt;
+    if (!at || lying || this.state !== 'foot') {
+      h.workAmt = 0;
+      return;
+    }
+    h.workAmt = 1;
+    const dx = at.x - this.pos.x;
+    const dz = at.z - this.pos.z;
+    const cy = Math.cos(this.yaw);
+    const sy = Math.sin(this.yaw);
+    h.workAt.set(dx * cy - dz * sy, at.y - this.pos.y, dx * sy + dz * cy);
+  }
 
   /** Show what is in the arms, rebuilding the model only when it changes kind. */
   private syncCarryModel() {

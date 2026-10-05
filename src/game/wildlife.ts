@@ -2,17 +2,34 @@ import * as THREE from 'three';
 import { WILDLIFE, t, type AnimalDef, type AnimalKind } from '../data';
 import { clamp, damp, wrapAngle } from '../core/math';
 import { Rng } from '../core/rng';
-import type { AnimalRenderer } from '../render/animalRender';
+import { animalSpeedMult, animalZoneOf, LEGS, newAnimalWounds, PART_BIT, partsGone, woundAnimal, type AnimalPart, type AnimalWounds, type AnimalZone } from '../sim/anatomy';
+import { damageFraction, staggerSpeed, type AmmoSpec } from '../sim/ballistics';
+import type { AnimalPose, AnimalRenderer } from '../render/animalRender';
 import type { Ctx } from './ctx';
 import type { Player } from './player';
 import type { Vehicle } from './vehicle';
+import { MELEE, knockFor, type MeleeFeel } from '../sim/weaponfx';
 
-export type AState = 'idle' | 'wander' | 'flee' | 'chase' | 'stalk' | 'windup' | 'charge' | 'rest' | 'fly';
+/**
+ * idle: grazing or standing about. alert: head up, frozen, watching something it does not trust yet (prey) or warning it off
+ * (a bear). feed: head down over a carcass. land: a bird coming down to one.
+ */
+export type AState = 'idle' | 'wander' | 'alert' | 'flee' | 'chase' | 'stalk' | 'windup' | 'charge' | 'rest' | 'fly' | 'land' | 'feed';
 
 /** Standing height of each species, for shots and the frustum test (metres, before scale). */
 const HEIGHT: Record<AnimalKind, number> = { hare: 0.35, deer: 1.3, vulture: 0.4, dog: 0.7, wolf: 0.9, boar: 0.85, bear: 1.6 };
 
+/** How far each species lowers its head to graze or to eat (radians): a deer's neck is long, a boar's head hangs low already. */
+const HEAD_DOWN: Record<AnimalKind, number> = { hare: 0.6, deer: 1.3, vulture: 0, dog: 0.8, wolf: 0.8, boar: 0.5, bear: 0.75 };
+
 let aid = 1;
+const _pose: AnimalPose = {};
+
+/** Rations on a carcass: big game that has lost legs to the shot has less on it. */
+function meatOf(a: Animal) {
+  const g = partsGone(a.wounds.mask).legs;
+  return a.def.meat >= 4 ? Math.max(2, Math.round(a.def.meat * (1 - 0.1 * g))) : a.def.meat;
+}
 
 /** Hides and tusks fetch scrap from the big game. */
 function hideScrap(a: Animal) {
@@ -63,6 +80,35 @@ export class Animal {
   dirX = 0;
   dirZ = 1;
   idleFor = 2;
+  /** What heavy rounds have taken off, and how fast it is bleeding for it. */
+  wounds: AnimalWounds = newAnimalWounds();
+  /** Share of its speed left once legs are gone. */
+  moveMult = 1;
+  /** Who landed the last hit, so a bleed-out is still their kill. */
+  lastKiller = -1;
+  bleedT = 0;
+  /** Pose, eased toward what it is doing: head pitch (+ down), head turn, front lifted, wings tucked. */
+  head = 0;
+  look = 0;
+  rear = 0;
+  fold = 0;
+  /** How long it stands watching before it bolts or relaxes. */
+  alertFor = 2;
+  /** A hare jinks: which way, and how long until it jinks the other. */
+  zig = 1;
+  zigT = 0;
+  /** After a bite a hunter darts back and circles for this long. */
+  retreatT = 0;
+  packSide = 1;
+  /** The carcass it is walking to or feeding on. */
+  feedOn: Animal | null = null;
+  feedFor = 8;
+  /** The way a herd's leader is heading, radians. */
+  migrate = Math.random() * 6.28;
+  /** Next time to look for zombies about, and what it saw. */
+  scanT = Math.random() * 0.4;
+  zfear: { x: number; z: number } | null = null;
+  calloutT = 0;
 
   constructor(
     public kind: AnimalKind,
@@ -116,6 +162,8 @@ export class WildlifeSystem {
   private rng: Rng;
   private spawnT = 0;
   private grid: Animal[] = [];
+  /** Who leads each herd (the oldest still alive): the rest graze and travel around it. */
+  private lead = new Map<number, Animal>();
 
   constructor(private ctx: Ctx) {
     this.rng = ctx.rng.fork('wildlife');
@@ -267,6 +315,7 @@ export class WildlifeSystem {
   damage(a: Animal, amount: number, info: { fromX: number; fromZ: number; killer?: number; fire?: boolean; explosive?: boolean }): boolean {
     if (a.dead) return false;
     a.hp -= amount;
+    if (info.killer !== undefined && info.killer >= 0) a.lastKiller = info.killer;
     if (a.hp <= 0) {
       this.kill(a, info.killer ?? -1);
       return true;
@@ -276,6 +325,64 @@ export class WildlifeSystem {
     if (!info.fire) ctx.audio.play(a.def.temper === 'bird' ? 'caw' : 'yelp', a.x, a.z, 0.8);
     this.provoke(a, info.fromX, info.fromZ, info.killer ?? -1);
     return false;
+  }
+
+  /** Shove a body: it is thrown back at `speed` m/s along (dx, dz) and loses its feet for a moment, a bear barely. */
+  private shove(a: Animal, dx: number, dz: number, speed: number) {
+    if (a.dead || a.flying || speed <= 0) return;
+    const l = Math.hypot(dx, dz) || 1;
+    a.vx += (dx / l) * speed;
+    a.vz += (dz / l) * speed;
+    const moving = Math.hypot(a.vx, a.vz);
+    if (a.def.temper !== 'brute' || moving > 3) a.stun = Math.max(a.stun, Math.min(0.5, 0.05 + moving * 0.06));
+  }
+
+  /** What it can still do on the legs it has left. */
+  private refreshWounds(a: Animal) {
+    const g = partsGone(a.wounds.mask);
+    a.moveMult = animalSpeedMult(g.legs, a.def.hp >= 90);
+  }
+
+  /**
+   * A round struck. Deals the damage, shoves the body along the shot, works out which part was hit and takes off what a round
+   * that heavy can: a leg that has taken enough, a head that has taken a hard hit, a wing. Returns what happened so the
+   * caller can throw the pieces.
+   */
+  bulletHit(
+    a: Animal,
+    h: { dmg: number; dx: number; dy: number; dz: number; x: number; y: number; z: number; spec: AmmoSpec; speed: number; fromX: number; fromZ: number; killer: number },
+  ): { killed: boolean; zone: AnimalZone; off: AnimalPart[] } {
+    // Where on the body: how far ahead of its middle, how far to its left, and how high.
+    const ox = h.x - a.x;
+    const oz = h.z - a.z;
+    const fwd = ox * Math.sin(a.yaw) + oz * Math.cos(a.yaw);
+    const lateral = ox * Math.cos(a.yaw) - oz * Math.sin(a.yaw);
+    const relY = (h.y - a.y) / Math.max(0.1, a.height);
+    const zone = animalZoneOf(a.kind, fwd, lateral, relY, a.def.size);
+    const dmg = h.dmg * (zone === 'head' ? 1.8 : 1);
+    const killed = this.damage(a, dmg, { fromX: h.fromX, fromZ: h.fromZ, killer: h.killer });
+    const mass = Math.max(4, a.def.hp * 0.9 * a.def.size ** 3);
+    this.shove(a, h.dx, h.dz, Math.min(5, staggerSpeed(h.spec, h.speed, mass) * damageFraction(h.speed / h.spec.speed)));
+    const res = woundAnimal(a.wounds, a.kind, zone, dmg * h.spec.gore, a.def.hp, killed, this.ctx.rng.next());
+    if (res.off.length) {
+      this.refreshWounds(a);
+      if (res.fatal && !a.dead) this.kill(a, h.killer);
+    }
+    return { killed: killed || a.dead, zone, off: res.off };
+  }
+
+  /** Rip one to three pieces off a body that a blast or a bumper has just killed, and throw them. */
+  private tearAnimal(a: Animal, dx: number, dz: number, power: number) {
+    const ctx = this.ctx;
+    const pool: AnimalPart[] = a.flying ? ['wingL', 'wingR'] : [...LEGS, 'head'];
+    const n = 1 + Math.min(2, Math.floor(power / 1.5));
+    for (let i = 0; i < n; i++) {
+      const part = pool[Math.floor(ctx.rng.next() * pool.length)];
+      if (a.wounds.mask & PART_BIT[part]) continue;
+      a.wounds.mask |= PART_BIT[part];
+      ctx.gore?.severAnimal(a, part, dx, 0.5, dz, power);
+    }
+    this.refreshWounds(a);
   }
 
   /** Something hurt it: prey bolts, hunters turn on whoever it was. */
@@ -306,6 +413,7 @@ export class WildlifeSystem {
       if (o === a || (o.herd === a.herd && o.def.temper !== 'pack' && o.def.temper !== 'brute' && o.def.temper !== 'charger')) {
         o.fearX = fromX;
         o.fearZ = fromZ;
+        o.feedOn = null;
         if (o.state !== 'flee') {
           o.state = 'flee';
           o.stateT = 0;
@@ -328,10 +436,60 @@ export class WildlifeSystem {
     ctx.audio.play(a.def.temper === 'bird' ? 'caw' : a.def.temper === 'prey' ? 'yelp' : 'growl', a.x, a.z, 0.9);
     if (a.flying) a.y = ctx.groundAt(a.x, a.z) + 0.15;
     if (a.def.meat > 0) this.leaveCarcass(a);
+    if (a.def.temper === 'pack') this.morale(a, killer);
+  }
+
+  /** A pack that has lost half of itself, or its leader, breaks and runs. */
+  private morale(dead: Animal, killer: number) {
+    let alive = 0;
+    let total = 0;
+    for (const o of this.list) {
+      if (o.herd !== dead.herd || o.def.temper !== 'pack') continue;
+      total++;
+      if (!o.dead) alive++;
+    }
+    if (!alive) return;
+    const leader = this.lead.get(dead.herd) === dead;
+    if (alive / total > 0.5 && !leader) return;
+    const p = killer >= 0 ? this.ctx.players[killer] : null;
+    const fx = p ? p.pos.x : dead.x;
+    const fz = p ? p.pos.z : dead.z;
+    for (const o of this.list) {
+      if (o.dead || o.herd !== dead.herd || o.def.temper !== 'pack' || o.state === 'flee') continue;
+      // Losing the leader scatters most of them; losing half scatters all.
+      if (leader && alive / total > 0.5 && this.rng.next() > 0.6) continue;
+      o.fearX = fx;
+      o.fearZ = fz;
+      o.state = 'flee';
+      o.stateT = 0;
+      o.hasTarget = false;
+      o.feedOn = null;
+      this.ctx.audio.play('yelp', o.x, o.z, 0.7);
+    }
+  }
+
+  /** The nearest carcass still worth eating within a radius: dead meat that nobody has butchered. */
+  carcassNear(x: number, z: number, r: number): Animal | null {
+    let best: Animal | null = null;
+    let bd = r;
+    for (const o of this.list) {
+      if (!o.dead || o.butchered || o.def.meat <= 0 || o.deadT > o.keepFor * 0.7) continue;
+      const d = Math.hypot(o.x - x, o.z - z);
+      if (d < bd) {
+        bd = d;
+        best = o;
+      }
+    }
+    return best;
+  }
+
+  /** Scavengers eat a carcass away: it is gone sooner for whoever was going to butcher it. */
+  gnaw(a: Animal, seconds: number) {
+    if (a.dead && !a.butchered) a.deadT += seconds;
   }
 
   private butcherTime(a: Animal) {
-    return 0.8 + a.def.meat * 0.25;
+    return 0.8 + meatOf(a) * 0.25;
   }
 
   /** The kill leaves a carcass to hold A on. Without an interact registry (tests) it is taken on the spot. */
@@ -347,7 +505,7 @@ export class WildlifeSystem {
       x: a.x,
       z: a.z,
       r: 2.4,
-      prompt: `Hold to butcher ${a.def.name} (${a.def.meat} rations${hideScrap(a) ? `, ${hideScrap(a)} scrap` : ''})`,
+      prompt: `Hold to butcher ${a.def.name} (${meatOf(a)} rations${hideScrap(a) ? `, ${hideScrap(a)} scrap` : ''})`,
       dur: this.butcherTime(a),
       priority: 1,
       enabled: () => a.dead && !a.butchered,
@@ -365,13 +523,13 @@ export class WildlifeSystem {
     a.butchered = true;
     const ctx = this.ctx;
     ctx.interact?.remove(`carcass:${a.id}`);
-    const gross: Partial<Record<'rations' | 'scrap', number>> = { rations: a.def.meat };
+    const gross: Partial<Record<'rations' | 'scrap', number>> = { rations: meatOf(a) };
     const scrap = hideScrap(a);
     if (scrap) gross.scrap = scrap;
     ctx.addLoot(gross, 'hunt');
     ctx.fx.blood(a.x, a.y + 0.3, a.z, 3);
     ctx.audio.play('pickup', a.x, a.z, 0.8);
-    ctx.notify(-1, t('hunt.meat', { name: a.def.name, n: a.def.meat }) + (scrap ? ` +${scrap} scrap from the hide.` : ''), 'good');
+    ctx.notify(-1, t('hunt.meat', { name: a.def.name, n: meatOf(a) }) + (scrap ? ` +${scrap} scrap from the hide.` : ''), 'good');
     if (by) a.deadT = Math.max(a.deadT, a.keepFor - 4);
   }
 
@@ -381,11 +539,13 @@ export class WildlifeSystem {
       const d = Math.hypot(a.x - x, a.z - z);
       if (d > radius) continue;
       const f = 1 - (d / radius) ** 2 * 0.7;
-      this.damage(a, damage * f, { fromX: x, fromZ: z, killer, explosive: true });
+      const killed = this.damage(a, damage * f, { fromX: x, fromZ: z, killer, explosive: true });
       const k = (1 - d / radius) * 5;
       const l = d || 1;
       a.vx += ((a.x - x) / l) * k;
       a.vz += ((a.z - z) / l) * k;
+      // A blast that more than kills tears pieces off.
+      if (killed && damage * f >= a.def.hp * 1.2) this.tearAnimal(a, (a.x - x) / l, (a.z - z) / l, (damage * f) / a.def.hp);
     }
   }
 
@@ -399,7 +559,8 @@ export class WildlifeSystem {
     }
   }
 
-  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number) {
+  /** `cut` is how well the weapon takes limbs off (see `cutOf`): a blade takes a leg or the head, a bat only breaks. */
+  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number, feel: MeleeFeel = MELEE.fist, cut = 0): number {
     let hit = 0;
     for (const a of this.list) {
       if (a.dead || a.flying) continue;
@@ -408,17 +569,32 @@ export class WildlifeSystem {
       const d = Math.hypot(dx, dz);
       if (d > reach + a.def.radius * a.def.size) continue;
       if (Math.abs(wrapAngle(Math.atan2(dx, dz) - yaw)) > 1.0) continue;
-      this.damage(a, dmg * (1 - a.def.armor), { fromX: p.pos.x, fromZ: p.pos.z, killer: p.index });
-      a.vx += (dx / (d || 1)) * 3;
-      a.vz += (dz / (d || 1)) * 3;
-      a.stun = Math.max(a.stun, 0.25);
+      const dealt = dmg * (1 - a.def.armor);
+      const killed = this.damage(a, dealt, { fromX: p.pos.x, fromZ: p.pos.z, killer: p.index });
+      if (cut > 0) {
+        // A swing lands low or high at random: mostly a leg, now and then the head.
+        const r = this.ctx.rng.next();
+        const zone: AnimalZone = r < 0.15 ? 'head' : r < 0.75 ? LEGS[Math.floor(this.ctx.rng.next() * 4)] : 'torso';
+        const res = woundAnimal(a.wounds, a.kind, zone, dealt * cut, a.def.hp, killed, this.ctx.rng.next());
+        if (res.off.length) {
+          this.refreshWounds(a);
+          for (const part of res.off) this.ctx.gore?.severAnimal(a, part, dx / (d || 1), 0.3, dz / (d || 1), (dealt * cut) / a.def.hp);
+          if (res.fatal && !a.dead) this.kill(a, p.index);
+        }
+      }
+      // A beast is shoved by what it weighs: hp stands in for its mass.
+      const push = knockFor(feel, Math.max(20, a.def.hp * 0.8)) * 0.8;
+      a.vx += (dx / (d || 1)) * push;
+      a.vz += (dz / (d || 1)) * push;
+      a.stun = Math.max(a.stun, feel.stun * 0.8);
       hit++;
-      if (hit >= 2) break;
+      if (hit >= feel.cleave) break;
     }
     if (hit) {
       this.ctx.fx.blood(hx, p.pos.y + 0.8, hz, 3);
       this.ctx.audio.play('thud', hx, hz, 0.6);
     }
+    return hit;
   }
 
   // ------------------------------------------------------------------ vehicles
@@ -444,7 +620,9 @@ export class WildlifeSystem {
       if (lz < front - 1.1 || lz > front + 1.3 || Math.abs(lx) > w + rad) continue;
       const dmg = (30 + sp * 7.5) * (v.def.tier >= 3 ? 1.5 : v.def.tier === 2 ? 1.0 : 0.7) * (1 + pl);
       const killer = v.driver?.isPlayer ? v.driver.index : -1;
-      this.damage(a, dmg * (1 - a.def.armor), { fromX: p.x, fromZ: p.z, killer });
+      const dealt = dmg * (1 - a.def.armor);
+      const killed = this.damage(a, dealt, { fromX: p.x, fromZ: p.z, killer });
+      if (killed && dealt >= a.def.hp * 1.1) this.tearAnimal(a, fx, fz, dealt / a.def.hp);
       a.vx += fx * sp * 0.7 - fz * lx * 0.3;
       a.vz += fz * sp * 0.7 + fx * lx * 0.3;
       a.stun = Math.max(a.stun, 0.6);
@@ -477,6 +655,13 @@ export class WildlifeSystem {
     const anyone = ctx.players.some((p) => p.alive);
     if (!anyone) return;
     const act = WILDLIFE.rules.activeRadius;
+    // Who leads each herd: the oldest still alive.
+    this.lead.clear();
+    for (const a of this.list) {
+      if (a.dead || a.flying) continue;
+      const l = this.lead.get(a.herd);
+      if (!l || a.id < l.id) this.lead.set(a.herd, a);
+    }
     for (let i = this.list.length - 1; i >= 0; i--) {
       const a = this.list[i];
       if (a.dead) {
@@ -511,6 +696,21 @@ export class WildlifeSystem {
         this.damage(a, 6 * dt, { fromX: a.x, fromZ: a.z, fire: true });
         if (a.dead) continue;
       }
+      // An open wound bleeds it out, and leaves a trail to follow.
+      if (a.wounds.bleed > 0) {
+        a.hp -= a.wounds.bleed * dt;
+        a.bleedT -= dt;
+        if (a.bleedT <= 0) {
+          a.bleedT = 0.4;
+          ctx.fx.blood(a.x, a.y + a.height * 0.4, a.z, 1);
+          ctx.gore?.drip(a.x, a.z, 0.14 + Math.random() * 0.14);
+        }
+        if (a.hp <= 0) {
+          this.kill(a, a.lastKiller);
+          continue;
+        }
+      }
+      if (a.state === 'feed' && a.feedOn) this.gnaw(a.feedOn, dt * 1.5);
       a.aiT -= dt;
       if (a.aiT <= 0) {
         a.aiT += a.flying ? 0.2 : 0.08;
@@ -518,6 +718,7 @@ export class WildlifeSystem {
       }
       if (a.flying) this.fly(a, dt);
       else this.walk(a, dt);
+      this.animate(a, dt);
     }
     // Keep ground animals from stacking.
     this.grid.length = 0;
@@ -555,6 +756,33 @@ export class WildlifeSystem {
     return src && src.level >= min ? src : null;
   }
 
+  /** Where the dead are, if enough of them are moving within `r` to run from. Looked up a few times a second, not every think. */
+  private scanZombies(a: Animal, r: number, min: number, huntingOnly = false) {
+    a.scanT -= 0.08;
+    if (a.scanT > 0) return a.zfear;
+    a.scanT = 0.35 + Math.random() * 0.2;
+    a.zfear = null;
+    const zs = this.ctx.zombies?.list;
+    if (!zs || !zs.length) return null;
+    const r2 = r * r;
+    let n = 0;
+    let sx = 0;
+    let sz = 0;
+    for (const z of zs) {
+      if (z.dead || !z.active || z.state === 'dormant') continue;
+      const dx = z.x - a.x;
+      const dz = z.z - a.z;
+      const d2 = dx * dx + dz * dz;
+      // Ones that are only shuffling about must be close to matter; ones that are hunting, anywhere in range.
+      if (d2 > r2 || (!z.chasing && (huntingOnly || d2 > r2 * 0.25))) continue;
+      n++;
+      sx += z.x;
+      sz += z.z;
+    }
+    if (n >= min) a.zfear = { x: sx / n, z: sz / n };
+    return a.zfear;
+  }
+
   private visible(a: Animal, x: number, z: number) {
     return !this.ctx.obs.segmentBlocked(a.x, a.z, x, z, Math.max(0.4, a.height * 0.7));
   }
@@ -576,14 +804,32 @@ export class WildlifeSystem {
     }
   }
 
-  /** Graze: stand about, drift to a nearby spot, stand again. */
+  /**
+   * Graze: stand about, drift to a nearby spot, stand again. A herd goes about it together: its leader picks a heading and
+   * bends it slowly, and the rest stay in a loose ring around it instead of each wandering off on its own.
+   */
   private graze(a: Animal, range = 7) {
     if (a.state === 'idle') {
       if (a.stateT > a.idleFor) {
-        const ang = Math.random() * 6.28;
-        const r = 2 + Math.random() * range;
-        a.tx = a.homeX + Math.cos(ang) * r;
-        a.tz = a.homeZ + Math.sin(ang) * r;
+        const L = this.lead.get(a.herd);
+        if (L && L !== a && !L.dead) {
+          const d = Math.hypot(L.x - a.x, L.z - a.z);
+          // Near enough to the leader: carry on grazing where it stands.
+          if (d < 4 + (a.id % 3) * 1.5) {
+            a.stateT = 0;
+            a.idleFor = 1.5 + Math.random() * 4;
+            return;
+          }
+          const ang = a.id * 2.4;
+          const r = 1.5 + (a.id % 4);
+          a.tx = L.x + Math.cos(ang) * r;
+          a.tz = L.z + Math.sin(ang) * r;
+        } else {
+          a.migrate += (Math.random() - 0.5) * 1.3;
+          const r = 2 + Math.random() * range * 1.2;
+          a.tx = a.homeX + Math.cos(a.migrate) * r;
+          a.tz = a.homeZ + Math.sin(a.migrate) * r;
+        }
         a.hasTarget = true;
         a.state = 'wander';
         a.stateT = 0;
@@ -601,12 +847,18 @@ export class WildlifeSystem {
     }
   }
 
+  /**
+   * Prey does not just run. It grazes with its head down, and when something it does not trust comes into sight it stops and
+   * stares (the whole herd goes still and lifts its heads) before deciding: bolt, if the thing keeps coming, or settle again.
+   * A hare freezes far longer than a deer, and only bolts when it is nearly stepped on.
+   */
   private thinkPrey(a: Animal) {
     const th = this.threat(a, true, true);
     const noise = this.heard(a, 38);
-    const near = th && th.d < a.def.sight * 0.5;
+    const sight = a.def.sight;
+    const zf = this.scanZombies(a, sight * 0.45, 1);
     if (a.state === 'flee') {
-      const quiet = !th || th.d > a.def.sight * 1.1;
+      const quiet = (!th || th.d > sight * 1.1) && !zf;
       if (a.stateT > 3 && quiet && !noise) {
         a.state = 'idle';
         a.stateT = 0;
@@ -616,18 +868,79 @@ export class WildlifeSystem {
       } else if (th) {
         a.fearX = th.x;
         a.fearZ = th.z;
+      } else if (zf) {
+        a.fearX = zf.x;
+        a.fearZ = zf.z;
       }
       return;
     }
-    if (th && (near || (th.vehicle && th.vehicle.speed > 1.5) || th.d < a.def.sight * 0.75)) {
+    // The dead are always a reason to go, and a hunting pack too.
+    if (zf) {
+      this.scare(a, zf.x, zf.z);
+      return;
+    }
+    const hunter = this.hunterNear(a, 20);
+    if (hunter) {
+      this.scare(a, hunter.x, hunter.z);
+      return;
+    }
+    const bolt = a.kind === 'hare' ? 0.4 : 0.75;
+    const fast = !!th && !!th.vehicle && th.vehicle.speed > 1.5;
+    if (th && (fast || th.d < sight * bolt)) {
       this.scare(a, th.x, th.z);
       return;
     }
-    if (noise) {
+    if (noise && noise.level >= 60) {
       this.scare(a, noise.x, noise.z);
       return;
     }
+    if (a.state === 'alert') {
+      if (th) {
+        a.fearX = th.x;
+        a.fearZ = th.z;
+      }
+      if (a.stateT > a.alertFor) {
+        if (th) this.scare(a, th.x, th.z);
+        else {
+          a.state = 'idle';
+          a.stateT = 0;
+          a.idleFor = 1 + Math.random() * 2;
+        }
+      }
+      return;
+    }
+    if (th || noise) {
+      const src = th ?? noise!;
+      this.alertHerd(a, src.x, src.z);
+      return;
+    }
     this.graze(a);
+  }
+
+  /** A hunting animal (a pack in full cry, a bear after something) close enough to be run from. */
+  private hunterNear(a: Animal, r: number): { x: number; z: number } | null {
+    for (const o of this.list) {
+      if (o.dead || o === a || !o.chasing || o.def.temper === 'prey' || o.def.temper === 'bird') continue;
+      if (Math.hypot(o.x - a.x, o.z - a.z) < r) return o;
+    }
+    return null;
+  }
+
+  /** Something is not right: it and the herd mates near it freeze and look. */
+  private alertHerd(a: Animal, x: number, z: number) {
+    const hare = a.kind === 'hare';
+    for (const o of this.list) {
+      if (o.dead || o.flying) continue;
+      if (o !== a && (o.herd !== a.herd || o.def.temper !== a.def.temper)) continue;
+      if (o.state !== 'idle' && o.state !== 'wander') continue;
+      if (o !== a && Math.random() > 0.7) continue;
+      o.state = 'alert';
+      o.stateT = 0;
+      o.hasTarget = false;
+      o.fearX = x;
+      o.fearZ = z;
+      o.alertFor = (hare ? 3.5 : 1.8) + Math.random() * (hare ? 3 : 2);
+    }
   }
 
   private thinkBird(a: Animal) {
@@ -642,9 +955,24 @@ export class WildlifeSystem {
       }
       return;
     }
-    if ((th && th.d < 9) || (noise && Math.hypot(noise.x - a.x, noise.z - a.z) < 45)) {
+    // A bird on the ground is warier than one overhead.
+    const near = a.state === 'feed' || a.state === 'land' ? 14 : 9;
+    if ((th && th.d < near) || (noise && Math.hypot(noise.x - a.x, noise.z - a.z) < 45)) {
+      a.feedOn = null;
       this.scare(a, th ? th.x : noise!.x, th ? th.z : noise!.z);
       this.ctx.audio.play('caw', a.x, a.z, 0.8);
+      return;
+    }
+    if (a.state === 'feed' || a.state === 'land') {
+      const c = a.feedOn;
+      if (!c || !c.dead || c.butchered || (a.state === 'feed' && a.stateT > a.feedFor)) {
+        // Done, or beaten to it: back up into the air.
+        a.feedOn = null;
+        a.state = 'flee';
+        a.stateT = 0;
+        a.fearX = a.x + (Math.random() - 0.5) * 4;
+        a.fearZ = a.z + (Math.random() - 0.5) * 4;
+      }
       return;
     }
     // Wheel over the freshest carcass nearby, else drift with the herd.
@@ -663,6 +991,8 @@ export class WildlifeSystem {
       a.orbit.cx += (carcass.x - a.orbit.cx) * 0.06;
       a.orbit.cz += (carcass.z - a.orbit.cz) * 0.06;
       a.orbit.alt += (baseAlt * 0.45 - a.orbit.alt) * 0.04;
+      // Once the body has lain quiet a few seconds, a couple of them come down to it.
+      if (carcass.deadT > 6 && !carcass.butchered && bd < 45 && Math.random() < 0.05) this.land(a, carcass);
     } else {
       a.orbit.alt += (baseAlt - a.orbit.alt) * 0.02;
       // Slowly follow whoever is closest so the sky is not empty behind the convoy.
@@ -682,7 +1012,24 @@ export class WildlifeSystem {
     }
   }
 
-  /** Dogs and wolves: hunt people on foot, trail engines for a while, break when hurt. */
+  /** A bird comes down to a carcass, if there is room for it: three at a body is a crowd. */
+  private land(a: Animal, c: Animal) {
+    let there = 0;
+    for (const o of this.list) if (o !== a && !o.dead && o.feedOn === c && (o.state === 'land' || o.state === 'feed')) there++;
+    if (there >= 3) return;
+    const ang = Math.random() * 6.28;
+    a.feedOn = c;
+    a.state = 'land';
+    a.stateT = 0;
+    a.feedFor = 10 + Math.random() * 14;
+    a.tx = c.x + Math.cos(ang) * (1.3 + Math.random() * 1.2);
+    a.tz = c.z + Math.sin(ang) * (1.3 + Math.random() * 1.2);
+  }
+
+  /**
+   * Dogs and wolves: hunt people on foot, trail engines for a while, break when hurt (or when the pack is) and run from a
+   * horde of the dead. Left alone they scavenge: a carcass draws them in to feed, and what they eat is gone for the hunter.
+   */
   private thinkPack(a: Animal) {
     const ctx = this.ctx;
     const def = a.def;
@@ -694,6 +1041,8 @@ export class WildlifeSystem {
     }
     const noise = this.heard(a, 60);
     const wolf = a.kind === 'wolf';
+    // Only a big pack of the dead that is actually hunting is worth running from, and not with a target already in its teeth.
+    const horde = this.scanZombies(a, 16, 6, true);
     if (a.state === 'flee') {
       if (a.stateT > 6) {
         a.state = 'idle';
@@ -704,11 +1053,13 @@ export class WildlifeSystem {
       }
       return;
     }
-    if (a.hp < def.hp * 0.25 && a.chasing) {
-      a.fearX = a.tx;
-      a.fearZ = a.tz;
+    // Badly hurt, crippled, or faced with a horde: it is not worth it.
+    if ((a.chasing && (a.hp < def.hp * 0.25 || a.moveMult < 0.4)) || (horde && !(th && th.d < 15))) {
+      a.fearX = horde ? horde.x : a.tx;
+      a.fearZ = horde ? horde.z : a.tz;
       a.state = 'flee';
       a.stateT = 0;
+      a.feedOn = null;
       ctx.audio.play('yelp', a.x, a.z, 0.8);
       return;
     }
@@ -739,6 +1090,37 @@ export class WildlifeSystem {
       this.huntAlert(a, th);
       return;
     }
+    // Feeding, or on the way to it.
+    const c = a.feedOn;
+    if (a.state === 'feed') {
+      if (noise && noise.level >= 75) {
+        a.feedOn = null;
+        a.state = 'wander';
+        a.tx = noise.x;
+        a.tz = noise.z;
+        a.hasTarget = true;
+        a.stateT = 0;
+      } else if (!c || !c.dead || c.butchered || a.stateT > a.feedFor) {
+        a.feedOn = null;
+        a.state = 'idle';
+        a.stateT = 0;
+        a.idleFor = 1 + Math.random() * 3;
+      }
+      return;
+    }
+    if (c && a.state === 'wander') {
+      if (!c.dead || c.butchered || a.stateT > 25) {
+        a.feedOn = null;
+        a.state = 'idle';
+        a.stateT = 0;
+      } else if (Math.hypot(a.tx - a.x, a.tz - a.z) < 1.4) {
+        a.state = 'feed';
+        a.stateT = 0;
+        a.feedFor = 7 + Math.random() * 9;
+        a.hasTarget = false;
+      }
+      return;
+    }
     if (noise && a.state !== 'wander') {
       a.state = 'wander';
       a.tx = noise.x;
@@ -747,8 +1129,24 @@ export class WildlifeSystem {
       a.stateT = 0;
       return;
     }
+    if (a.state === 'idle' && this.scavenge(a)) return;
     // Packs roam a little further than grazers.
     this.graze(a, wolf ? 14 : 10);
+  }
+
+  /** Idle and a body lying within a long sniff: go and eat it. */
+  private scavenge(a: Animal): boolean {
+    if (a.stateT < a.idleFor * 0.5 || Math.random() > 0.35) return false;
+    const c = this.carcassNear(a.x, a.z, 55);
+    if (!c || c.herd === a.herd) return false;
+    const ang = Math.random() * 6.28;
+    a.feedOn = c;
+    a.tx = c.x + Math.cos(ang) * 1.1;
+    a.tz = c.z + Math.sin(ang) * 1.1;
+    a.hasTarget = true;
+    a.state = 'wander';
+    a.stateT = 0;
+    return true;
   }
 
   private huntAlert(a: Animal, th: Threat) {
@@ -763,6 +1161,7 @@ export class WildlifeSystem {
   }
 
   private startChase(a: Animal, target: Player | null = null, x = a.tx, z = a.tz) {
+    a.feedOn = null;
     a.state = 'chase';
     a.stateT = 0;
     a.lostT = 0;
@@ -775,7 +1174,20 @@ export class WildlifeSystem {
   private windup(a: Animal) {
     a.state = 'windup';
     a.stateT = 0;
+    a.feedOn = null;
     this.ctx.audio.play('growl', a.x, a.z, 0.8);
+    // A sounder backs its own: kin that are near square up too, a beat behind.
+    if (a.def.temper !== 'charger') return;
+    for (const o of this.list) {
+      if (o === a || o.dead || o.herd !== a.herd || o.def.temper !== 'charger') continue;
+      if (o.state !== 'idle' && o.state !== 'wander') continue;
+      if (Math.hypot(o.x - a.x, o.z - a.z) > 25 || Math.random() > 0.7) continue;
+      o.state = 'windup';
+      o.stateT = -Math.random() * 0.4;
+      o.tx = a.tx;
+      o.tz = a.tz;
+      o.hasTarget = true;
+    }
   }
 
   private thinkCharger(a: Animal) {
@@ -813,8 +1225,13 @@ export class WildlifeSystem {
     this.graze(a, 6);
   }
 
+  /**
+   * A bear leaves you alone until you walk into its space, but it says so first: it rises on its hind legs and growls,
+   * turning to face you, and only charges if you keep coming (or have already hurt it).
+   */
   private thinkBrute(a: Animal) {
     const th = this.threat(a, true, true);
+    a.calloutT -= 0.08;
     if (a.state === 'chase') {
       if (th && (this.visible(a, th.x, th.z) || th.d < 20) && th.d < 70) {
         a.tx = th.x;
@@ -831,12 +1248,36 @@ export class WildlifeSystem {
       }
       return;
     }
-    // A bear leaves you alone until you walk into its space.
     const close = th && (th.player ? th.d < (th.player.crouch ? 6 : 11) : th.d < 9);
     if (close && th && this.visible(a, th.x, th.z)) {
       a.target = th.player;
       this.startChase(a, th.player, th.x, th.z);
       this.ctx.audio.play('growl', a.x, a.z, 1);
+      return;
+    }
+    // Inside its warning range but not yet in its space.
+    const warn = !!th && (th.player ? th.d < (th.player.crouch ? 9 : 20) : th.d < 14) && this.visible(a, th.x, th.z);
+    if (a.state === 'alert') {
+      if (!warn || a.stateT > 6) {
+        a.state = 'idle';
+        a.stateT = 0;
+        a.idleFor = 1.5;
+      } else {
+        a.fearX = th!.x;
+        a.fearZ = th!.z;
+      }
+      return;
+    }
+    if (warn && th) {
+      a.state = 'alert';
+      a.stateT = 0;
+      a.hasTarget = false;
+      a.fearX = th.x;
+      a.fearZ = th.z;
+      if (a.calloutT <= 0) {
+        a.calloutT = 6;
+        this.ctx.audio.play('growl', a.x, a.z, 0.9);
+      }
       return;
     }
     this.graze(a, 8);
@@ -867,14 +1308,30 @@ export class WildlifeSystem {
         case 'idle':
           break;
         case 'wander':
-          if (a.hasTarget && toward(a.tx, a.tz) > 0) speed = def.walk * (a.def.temper === 'pack' && a.stateT < 1.5 ? 2.2 : 1);
+          if (a.hasTarget && toward(a.tx, a.tz) > 0) speed = def.walk * (a.def.temper === 'pack' && (a.stateT < 1.5 || a.feedOn) ? 2.2 : 1);
           break;
+        case 'alert':
+        case 'feed': {
+          // Standing its ground: turn to face what it is watching, or the body it is eating.
+          const fx = a.state === 'feed' && a.feedOn ? a.feedOn.x : a.fearX;
+          const fz = a.state === 'feed' && a.feedOn ? a.feedOn.z : a.fearZ;
+          if (Math.hypot(fx - a.x, fz - a.z) > 0.3) a.yaw += wrapAngle(Math.atan2(fx - a.x, fz - a.z) - a.yaw) * Math.min(1, dt * 4);
+          break;
+        }
         case 'flee': {
-          // Away from the fear, bent toward the herd's home so a flock does not scatter to the horizon.
+          // Away from the fear, bent toward the herd's home so a flock does not scatter to the horizon. A hare jinks hard from
+          // side to side; the rest weave a little.
           const dx = a.x - a.fearX;
           const dz = a.z - a.fearZ;
           const d = Math.hypot(dx, dz) || 1;
-          const wob = Math.sin(a.stateT * 1.7 + a.id) * 0.35;
+          if (a.kind === 'hare') {
+            a.zigT -= dt;
+            if (a.zigT <= 0) {
+              a.zigT = 0.3 + Math.random() * 0.5;
+              a.zig = -a.zig;
+            }
+          }
+          const wob = a.kind === 'hare' ? a.zig * 0.95 : Math.sin(a.stateT * 1.7 + a.id) * 0.35;
           wx = dx / d + -dz / d * wob;
           wz = dz / d + (dx / d) * wob;
           const l = Math.hypot(wx, wz) || 1;
@@ -886,8 +1343,24 @@ export class WildlifeSystem {
         case 'chase':
           if (a.hasTarget && toward(a.tx, a.tz) > 0) {
             speed = def.run;
-            // A dog slows to bite range; a bear charges to the end.
             const d = Math.hypot(a.tx - a.x, a.tz - a.z);
+            const ux = (a.tx - a.x) / d;
+            const uz = (a.tz - a.z) / d;
+            if (a.retreatT > 0) {
+              // Just bitten: dart back and circle, so a pack worries at you instead of sitting on you.
+              a.retreatT -= dt;
+              wx = -ux * 0.45 - uz * a.packSide * 0.9;
+              wz = -uz * 0.45 + ux * a.packSide * 0.9;
+              const l = Math.hypot(wx, wz) || 1;
+              wx /= l;
+              wz /= l;
+              speed = def.run * 0.8;
+            } else if (def.temper === 'pack' && d > 4) {
+              // Surround: each comes in on its own line, to one side or the other, not single file down the same track.
+              const off = ((a.id % 3) - 1) * Math.min(5, d * 0.35);
+              toward(a.tx - uz * off, a.tz + ux * off);
+            }
+            // A dog slows to bite range; a bear charges to the end.
             if (d < 1.2) speed = 0;
           }
           break;
@@ -939,6 +1412,7 @@ export class WildlifeSystem {
           break;
       }
     }
+    speed *= a.moveMult;
     // Separation from its own kind.
     let sx = 0;
     let sz = 0;
@@ -989,6 +1463,39 @@ export class WildlifeSystem {
     const ctx = this.ctx;
     const o = a.orbit;
     const speed = (a.def.walk / Math.max(8, o.r)) * o.dir;
+    if (a.state === 'land' || a.state === 'feed') {
+      const ground = ctx.groundAt(a.x, a.z);
+      if (a.state === 'land') {
+        // Spiral in: close on the spot beside the carcass and let the height go as the distance does.
+        const dx = a.tx - a.x;
+        const dz = a.tz - a.z;
+        const d = Math.hypot(dx, dz);
+        const step = a.def.run * 0.9 * dt;
+        if (d > step) {
+          a.x += (dx / d) * step;
+          a.z += (dz / d) * step;
+          a.yaw += wrapAngle(Math.atan2(dx, dz) - a.yaw) * Math.min(1, dt * 5);
+        } else {
+          a.x = a.tx;
+          a.z = a.tz;
+        }
+        a.y += (ground + 0.15 + Math.min(o.alt, d * 0.5) - a.y) * Math.min(1, dt * 2.2);
+        a.flap += dt * (d > 4 ? 6 : 11);
+        a.gait = 0.6;
+        a.vx = a.vz = 0;
+        if (d < 0.6 && a.y < ground + 0.6) {
+          a.state = 'feed';
+          a.stateT = 0;
+        }
+        return;
+      }
+      // Down: hop about and peck, facing the body.
+      a.y += (ground + 0.15 - a.y) * Math.min(1, dt * 8);
+      if (a.feedOn) a.yaw += wrapAngle(Math.atan2(a.feedOn.x - a.x, a.feedOn.z - a.z) - a.yaw) * Math.min(1, dt * 3);
+      a.vx = a.vz = 0;
+      a.gait = 0;
+      return;
+    }
     if (a.state === 'flee') {
       // Beat away from the fright, climbing.
       const dx = a.x - a.fearX;
@@ -1032,6 +1539,72 @@ export class WildlifeSystem {
     a.gait = 0.5;
   }
 
+  // ------------------------------------------------------------------ body language
+
+  /** Ease the pose toward what it is doing: head down to graze, up to watch, low to charge, the front lifted to warn. */
+  private animate(a: Animal, dt: number) {
+    const t = this.ctx.time;
+    let head = 0;
+    let look = 0;
+    let rear = 0;
+    let fold = 0;
+    if (a.flying) {
+      fold = a.state === 'feed' ? 1 : a.state === 'land' ? 0.35 : 0;
+    } else {
+      const scan = Math.sin(t * 0.8 + a.id * 2.1);
+      const down = HEAD_DOWN[a.kind];
+      switch (a.state) {
+        case 'idle': {
+          // Head down for most of a cycle, up now and then to look about.
+          const cyc = (t * 0.2 + a.id * 0.37) % 1;
+          if (cyc < 0.72) head = down;
+          else {
+            head = -0.22;
+            look = scan * 0.8;
+          }
+          break;
+        }
+        case 'wander':
+          head = 0.1 + Math.sin(a.phase * 0.5) * 0.08;
+          look = scan * 0.15;
+          break;
+        case 'alert':
+          head = a.kind === 'bear' ? -0.15 : a.kind === 'deer' ? -0.2 : -0.5;
+          rear = a.kind === 'bear' ? 0.85 : 0;
+          look = clamp(wrapAngle(Math.atan2(a.fearX - a.x, a.fearZ - a.z) - a.yaw) * 0.6, -0.8, 0.8);
+          break;
+        case 'flee':
+          head = a.kind === 'deer' ? -0.12 : 0.12;
+          break;
+        case 'chase':
+          head = a.kind === 'bear' ? 0.25 : 0.05;
+          break;
+        case 'stalk':
+          head = 0.5;
+          look = scan * 0.1;
+          break;
+        case 'windup':
+          // Lowering the tusks and pawing the ground.
+          head = 0.6 + Math.sin(a.stateT * 18) * 0.08;
+          break;
+        case 'charge':
+          head = 0.5;
+          break;
+        case 'rest':
+          head = 0.3;
+          break;
+        case 'feed':
+          head = HEAD_DOWN[a.kind] * 1.1 + Math.sin(t * 5 + a.id) * 0.12;
+          break;
+      }
+    }
+    const k = Math.min(1, dt * (a.state === 'alert' || a.state === 'flee' ? 9 : 4));
+    a.head += (head - a.head) * k;
+    a.look += (look - a.look) * k;
+    a.rear += (rear - a.rear) * Math.min(1, dt * 3);
+    a.fold += (fold - a.fold) * Math.min(1, dt * 4);
+  }
+
   // ------------------------------------------------------------------ attacks
 
   private attack(a: Animal, dt: number) {
@@ -1067,6 +1640,8 @@ export class WildlifeSystem {
           const l = Math.hypot(a.x - p.pos.x, a.z - p.pos.z) || 1;
           a.vx += ((a.x - p.pos.x) / l) * 3;
           a.vz += ((a.z - p.pos.z) / l) * 3;
+          a.retreatT = 0.5 + Math.random() * 0.5;
+          a.packSide = Math.random() < 0.5 ? 1 : -1;
         }
         return;
       }
@@ -1137,7 +1712,12 @@ export class WildlifeSystem {
       // Lying on its side puts the body a little off the ground, not through it.
       const lift = a.dead && !a.flying ? a.fall * 0.04 : 0;
       const bank = a.flying && !a.dead ? a.orbit.dir * -0.35 : 0;
-      ar.push(a.kind, a.def.size, a.x, a.y - sink + lift, a.z, a.yaw, a.phase, a.dead ? 0 : a.gait, roll, a.dead ? 0.2 : a.flap, bank, a.tint);
+      _pose.mask = a.wounds.mask;
+      _pose.head = a.dead ? 0.15 : a.head;
+      _pose.look = a.dead ? 0 : a.look;
+      _pose.rear = a.dead ? 0 : a.rear;
+      _pose.fold = a.dead ? 0 : a.fold;
+      ar.push(a.kind, a.def.size, a.x, a.y - sink + lift, a.z, a.yaw, a.phase, a.dead ? 0 : a.gait, roll, a.dead ? 0.2 : a.flap, bank, a.tint, _pose);
     }
     ar.end();
   }

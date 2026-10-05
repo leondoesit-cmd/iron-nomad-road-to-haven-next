@@ -90,6 +90,16 @@ function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, f
         const y0 = isOut && L === 0 && p.v0 === 0 ? base - 0.9 : yBot;
         face(fb, w, p.u0, p.u1, y0, yTop, side, isOut ? rb.extStyle : INTERIOR_STYLE, tint, rb.seed * 0.37 + wi * 0.41, base);
       }
+      // The long exterior walls run the full footprint and own the corner columns; their open ends would show the room
+      // behind as a slit down every corner, so close them with a face in the exterior material.
+      if (w.ext && w.axis === 'x') {
+        const yCap = L === 0 && p.v0 === 0 ? base - 0.9 : yBot;
+        const lo = w.c - w.t / 2;
+        const hi = w.c + w.t / 2;
+        const seed = rb.seed * 0.37 + wi * 0.41;
+        if (p.u0 <= w.a + 0.001) fb.wall(w.a, lo, w.a, hi, yCap, yTop, 0, extTint, rb.extStyle, seed, 3, 2, base);
+        if (p.u1 >= w.b - 0.001) fb.wall(w.b, hi, w.b, lo, yCap, yTop, 0, extTint, rb.extStyle, seed, 3, 2, base);
+      }
       // Top edge so a cut-away wall reads as solid.
       if (p.v1 > 0.05 && p.solid) {
         const along = p.u1 - p.u0;
@@ -101,7 +111,11 @@ function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, f
       if (L === 0 && w.ext && p.v0 === 0 && p.solid) {
         const along = p.u1 - p.u0;
         const py = base + 0.12;
-        if (w.axis === 'x') trim.box(mid, py - 0.18, w.c + w.out * 0.04, along, 0.5, w.t + 0.08, S.concrete(0x7c7a74, 0.6));
+        // The plinth stands 0.08 proud of the wall, so at a corner the long wall's plinth has to run that far past the
+        // wall end or it stops short of the side wall's plinth and leaves a notch.
+        const lo = w.axis === 'x' && p.u0 <= w.a + 0.001 ? 0.08 : 0;
+        const hi = w.axis === 'x' && p.u1 >= w.b - 0.001 ? 0.08 : 0;
+        if (w.axis === 'x') trim.box(mid + (hi - lo) / 2, py - 0.18, w.c + w.out * 0.04, along + lo + hi, 0.5, w.t + 0.08, S.concrete(0x7c7a74, 0.6));
         else trim.box(w.c + w.out * 0.04, py - 0.18, mid, w.t + 0.08, 0.5, along, S.concrete(0x7c7a74, 0.6));
       }
     }

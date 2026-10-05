@@ -19,6 +19,8 @@ export interface LightState {
 }
 
 export const DUSK_BELL_AT = 0.72;
+/** A heads-up this far before the Bell, so the convoy can start looking for somewhere to camp. */
+export const DUSK_WARN_AT = 0.62;
 export const SUNSET_AT = 0.9;
 export const NIGHT_AT = 1.0;
 
@@ -26,6 +28,8 @@ export const NIGHT_AT = 1.0;
 export class DayClock {
   elapsed = 0;
   bellRung = false;
+  /** The early heads-up has been given (or skipped past). */
+  warned = false;
   frozen = false;
   constructor(public dayLength: number, start = 0.1) {
     this.elapsed = start * dayLength;
@@ -43,18 +47,27 @@ export class DayClock {
   get secondsToDark() {
     return Math.max(0, (NIGHT_AT - this.t) * this.dayLength);
   }
-  tick(dt: number): { bell: boolean } {
-    if (this.frozen) return { bell: false };
+  tick(dt: number): { bell: boolean; warn: boolean } {
+    if (this.frozen) return { bell: false, warn: false };
     this.elapsed += dt;
+    let warn = false;
+    if (!this.warned && this.t >= DUSK_WARN_AT) {
+      this.warned = true;
+      // Only a real heads-up: a clock that jumps past the Bell in one step has nothing left to warn about.
+      warn = !this.bellRung && this.t < DUSK_BELL_AT;
+    }
     if (!this.bellRung && this.t >= DUSK_BELL_AT) {
       this.bellRung = true;
-      return { bell: true };
+      return { bell: true, warn };
     }
-    return { bell: false };
+    return { bell: false, warn };
   }
   /** Jump to the Bell (used when the convoy reaches the end of the road early). */
   skipToDusk() {
-    if (this.t < DUSK_BELL_AT) this.elapsed = DUSK_BELL_AT * this.dayLength;
+    if (this.t < DUSK_BELL_AT) {
+      this.elapsed = DUSK_BELL_AT * this.dayLength;
+      this.warned = true;
+    }
   }
 }
 

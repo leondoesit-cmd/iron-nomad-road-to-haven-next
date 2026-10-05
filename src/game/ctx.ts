@@ -78,6 +78,8 @@ export interface Ctx {
   night: number;
   /** Dust storm strength, 0 clear to 1 the full wall. */
   storm: number;
+  /** Heat wave strength, 0 mild to 1 the full swelter. Engines shed heat badly in it. */
+  heat: number;
   players: Player[];
   vehicles: Vehicle[];
   zombies: ZombieSystem;

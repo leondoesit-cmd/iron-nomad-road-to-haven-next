@@ -3,6 +3,7 @@ import { MeshBuilder, S } from './builder';
 import { kitMaterial } from './materials';
 import { shared } from './dispose';
 import type { AnimalKind } from '../data';
+import { PART_BIT } from '../sim/anatomy';
 
 export const MAX_PER_KIND = 40;
 
@@ -17,7 +18,9 @@ interface Model {
   /** One limb geometry per entry, hanging from (0,0,0): a leg, or a wing reaching along +x / -x. */
   limbs: THREE.BufferGeometry[];
   /** Where each limb instance sits in the body frame, and how it moves. */
-  mounts: { x: number; y: number; z: number; limb: number; /** phase offset in radians */ off: number; kind: 'leg' | 'wing'; slot?: number }[];
+  mounts: { x: number; y: number; z: number; limb: number; /** phase offset in radians */ off: number; kind: 'leg' | 'wing' | 'head' | 'stump'; slot?: number; /** Bit of the hidden-part mask that takes this one off. */ bit: number }[];
+  /** Length of a leg, for how far a body sags when some are gone. */
+  legLen?: number;
   /** Instances of the first limb mesh per animal. */
   per?: number;
   /** Pairs of legs move together (a bounding hare) instead of diagonally. */
@@ -71,33 +74,42 @@ function quadruped(sp: QuadSpec): Model {
   if (sp.hump) {
     b.add('sphere16', 0, topY - 0.03, fz * 0.38, sp.w * 1.8, sp.h * 0.5 + sp.hump, sp.len * 0.42, coat);
   }
-  // Neck and head.
+  // Neck and head: their own mesh, hinged at the base of the neck, so the head can graze, snap up and be shot off.
+  const hb = new MeshBuilder();
+  hb.jitter = 0.09;
+  hb.seed(sp.seed + 3);
+  const pivot: [number, number, number] = [0, topY - sp.h * 0.25, fz * 0.62];
   const nx = sp.neck[0];
   const ny = sp.neck[1];
   const hx = 0;
   const hy = topY + ny;
   const hz = fz * 0.9 + nx;
-  b.limb(0, topY - sp.h * 0.25, fz * 0.62, hx, hy - 0.02, hz - 0.04, sp.h * 0.42, sp.head[0] * 0.55, coat, 10);
-  b.add('sphere16', hx, hy, hz, sp.head[0] * 2, sp.head[1] * 2, sp.head[2] * 2, coat);
+  hb.limb(0, topY - sp.h * 0.25, fz * 0.62, hx, hy - 0.02, hz - 0.04, sp.h * 0.42, sp.head[0] * 0.55, coat, 10);
+  hb.add('sphere16', hx, hy, hz, sp.head[0] * 2, sp.head[1] * 2, sp.head[2] * 2, coat);
   // Muzzle, nose, eyes.
   const mz = hz + sp.head[2] * 0.6 + sp.snout * 0.5;
-  b.limb(hx, hy - sp.head[1] * 0.1, hz + sp.head[2] * 0.4, hx, hy - sp.head[1] * 0.25, mz, sp.head[0] * 0.62, sp.head[0] * 0.4, sp.belly === sp.coat ? coat : belly, 8, true);
-  b.sphereAt(hx, hy - sp.head[1] * 0.2, mz + sp.head[0] * 0.25, sp.head[0] * 0.22, dark);
-  for (const sx of [1, -1]) b.sphereAt(sx * sp.head[0] * 0.78, hy + sp.head[1] * 0.25, hz + sp.head[2] * 0.35, sp.head[0] * 0.14, S.glow(0xe8c070, 0.35));
+  hb.limb(hx, hy - sp.head[1] * 0.1, hz + sp.head[2] * 0.4, hx, hy - sp.head[1] * 0.25, mz, sp.head[0] * 0.62, sp.head[0] * 0.4, sp.belly === sp.coat ? coat : belly, 8, true);
+  hb.sphereAt(hx, hy - sp.head[1] * 0.2, mz + sp.head[0] * 0.25, sp.head[0] * 0.22, dark);
+  for (const sx of [1, -1]) hb.sphereAt(sx * sp.head[0] * 0.78, hy + sp.head[1] * 0.25, hz + sp.head[2] * 0.35, sp.head[0] * 0.14, S.glow(0xe8c070, 0.35));
   // Ears.
   for (const sx of [1, -1]) {
-    if (sp.floppy) b.add('sphere', sx * sp.head[0] * 0.95, hy + sp.head[1] * 0.1, hz - sp.head[2] * 0.2, sp.ear * 0.5, sp.ear * 1.1, sp.ear * 0.5, mark, 0, 0, sx * 0.5);
-    else b.add('cone6', sx * sp.earSpread, hy + sp.head[1] * 0.8 + sp.ear * 0.4, hz - sp.head[2] * 0.25, sp.ear * 0.55, sp.ear * 1.2, sp.ear * 0.3, coat, -0.15, 0, sx * -0.25);
+    if (sp.floppy) hb.add('sphere', sx * sp.head[0] * 0.95, hy + sp.head[1] * 0.1, hz - sp.head[2] * 0.2, sp.ear * 0.5, sp.ear * 1.1, sp.ear * 0.5, mark, 0, 0, sx * 0.5);
+    else hb.add('cone6', sx * sp.earSpread, hy + sp.head[1] * 0.8 + sp.ear * 0.4, hz - sp.head[2] * 0.25, sp.ear * 0.55, sp.ear * 1.2, sp.ear * 0.3, coat, -0.15, 0, sx * -0.25);
   }
   if (sp.tusks) {
-    for (const sx of [1, -1]) b.limb(sx * sp.head[0] * 0.55, hy - sp.head[1] * 0.45, mz - 0.04, sx * sp.head[0] * 0.75, hy + sp.head[1] * 0.1, mz + 0.06, 0.016, 0.006, S.rock(0xe6dcc0), 6, true);
+    for (const sx of [1, -1]) hb.limb(sx * sp.head[0] * 0.55, hy - sp.head[1] * 0.45, mz - 0.04, sx * sp.head[0] * 0.75, hy + sp.head[1] * 0.1, mz + 0.06, 0.016, 0.006, S.rock(0xe6dcc0), 6, true);
   }
   if (sp.horns) {
     for (const sx of [1, -1]) {
-      b.limb(sx * 0.05, hy + sp.head[1] * 0.8, hz - 0.04, sx * 0.1, hy + sp.head[1] * 0.8 + 0.2, hz - 0.1, 0.018, 0.012, S.rock(0x5a4a3a), 6, true);
-      b.limb(sx * 0.1, hy + sp.head[1] * 0.8 + 0.2, hz - 0.1, sx * 0.07, hy + sp.head[1] * 0.8 + 0.34, hz - 0.03, 0.012, 0.006, S.rock(0x5a4a3a), 6, true);
+      hb.limb(sx * 0.05, hy + sp.head[1] * 0.8, hz - 0.04, sx * 0.1, hy + sp.head[1] * 0.8 + 0.2, hz - 0.1, 0.018, 0.012, S.rock(0x5a4a3a), 6, true);
+      hb.limb(sx * 0.1, hy + sp.head[1] * 0.8 + 0.2, hz - 0.1, sx * 0.07, hy + sp.head[1] * 0.8 + 0.34, hz - 0.03, 0.012, 0.006, S.rock(0x5a4a3a), 6, true);
     }
   }
+  // What shows at the shoulder when the head is gone: raw neck. Its own part, drawn only once the head has come off.
+  const sb = new MeshBuilder();
+  sb.jitter = 0.06;
+  sb.seed(sp.seed + 5);
+  sb.sphereAt(0, sp.h * 0.12, sp.h * 0.12, sp.h * 0.34, S.skin(0x5a0c0a));
   // Tail.
   const [tl, tr, tu] = sp.tail;
   b.limb(0, cy + sp.h * 0.25, -fz * 0.95, 0, cy + sp.h * 0.25 + tu, -fz * 0.95 - tl, tr, tr * 0.6, coat, 8, true);
@@ -113,15 +125,20 @@ function quadruped(sp: QuadSpec): Model {
   const lx = sp.w * 0.62;
   const ly = sp.leg + 0.02;
   const lz = fz * 0.66;
+  const hg = hb.build();
+  hg.translate(-pivot[0], -pivot[1], -pivot[2]);
   return {
     body: b.build(),
-    limbs: [lb.build()],
+    limbs: [lb.build(), hg, sb.build()],
     mounts: [
-      { x: lx, y: ly, z: lz, limb: 0, off: 0, kind: 'leg' },
-      { x: -lx, y: ly, z: lz, limb: 0, off: sp.bound ? 0.5 : Math.PI, kind: 'leg' },
-      { x: lx, y: ly, z: -lz, limb: 0, off: sp.bound ? Math.PI + 0.5 : Math.PI, kind: 'leg' },
-      { x: -lx, y: ly, z: -lz, limb: 0, off: sp.bound ? Math.PI : 0, kind: 'leg' },
+      { x: lx, y: ly, z: lz, limb: 0, off: 0, kind: 'leg', bit: PART_BIT.legLF },
+      { x: -lx, y: ly, z: lz, limb: 0, off: sp.bound ? 0.5 : Math.PI, kind: 'leg', bit: PART_BIT.legRF },
+      { x: lx, y: ly, z: -lz, limb: 0, off: sp.bound ? Math.PI + 0.5 : Math.PI, kind: 'leg', bit: PART_BIT.legLB },
+      { x: -lx, y: ly, z: -lz, limb: 0, off: sp.bound ? Math.PI : 0, kind: 'leg', bit: PART_BIT.legRB },
+      { x: pivot[0], y: pivot[1], z: pivot[2], limb: 1, off: 0, kind: 'head', bit: PART_BIT.head },
+      { x: pivot[0], y: pivot[1], z: pivot[2], limb: 2, off: 0, kind: 'stump', bit: PART_BIT.head },
     ],
+    legLen: L,
     bound: sp.bound,
     swing: sp.bound ? 0.9 : 0.7,
   };
@@ -159,8 +176,8 @@ function vulture(): Model {
     body: b.build(),
     limbs: [wing(1, 402), wing(-1, 403)],
     mounts: [
-      { x: 0.12, y: 0.06, z: 0.05, limb: 0, off: 0, kind: 'wing' },
-      { x: -0.12, y: 0.06, z: 0.05, limb: 1, off: 0, kind: 'wing' },
+      { x: 0.12, y: 0.06, z: 0.05, limb: 0, off: 0, kind: 'wing', bit: PART_BIT.wingL },
+      { x: -0.12, y: 0.06, z: 0.05, limb: 1, off: 0, kind: 'wing', bit: PART_BIT.wingR },
     ],
     swing: 0,
   };
@@ -210,6 +227,16 @@ const _e = new THREE.Euler();
 const _c = new THREE.Color();
 const _qa = new THREE.Quaternion();
 
+/** What a body is doing besides walking; see `AnimalRenderer.push`. */
+export interface AnimalPose {
+  mask?: number;
+  head?: number;
+  look?: number;
+  rear?: number;
+  fold?: number;
+}
+const NO_POSE: AnimalPose = {};
+
 export class AnimalRenderer {
   readonly group = new THREE.Group();
   private batches = new Map<AnimalKind, Batch>();
@@ -243,18 +270,35 @@ export class AnimalRenderer {
 
   /**
    * One animal. `gait` is 0 standing to 1 flat out, `roll` lays it on its side (dead), `flap` drives the wings,
-   * `bank` leans a flier into its turn, and `tint` multiplies the coat.
+   * `bank` leans a flier into its turn, and `tint` multiplies the coat. `pose` is everything a living body does besides walk:
+   * `mask` the parts that are gone, `head` how far the head is lowered (+) or raised (-), `look` how far it is turned,
+   * `rear` how far the front is lifted (a bear on its hind legs), `fold` how far a bird's wings are tucked in.
    */
-  push(kind: AnimalKind, scale: number, x: number, y: number, z: number, yaw: number, phase: number, gait: number, roll: number, flap: number, bank: number, tint: number) {
+  push(kind: AnimalKind, scale: number, x: number, y: number, z: number, yaw: number, phase: number, gait: number, roll: number, flap: number, bank: number, tint: number, pose: AnimalPose = NO_POSE) {
     const b = this.batch(kind);
     if (b.count >= MAX_PER_KIND) return;
     const i = b.count++;
     const mdl = b.model;
-    const bounce = kind === 'hare' ? Math.abs(Math.sin(phase)) * 0.16 * gait : Math.abs(Math.sin(phase)) * 0.04 * gait * scale;
-    const pitch = kind === 'hare' ? Math.sin(phase) * 0.25 * gait : 0;
-    _e.set(pitch, yaw, roll + bank, 'YXZ');
+    const mask = pose.mask ?? 0;
+    // Legs gone: the body sags toward the side that is missing them and the legs that are left shorten to meet the ground.
+    let gone = 0;
+    let front = 0;
+    let side = 0;
+    if (mdl.legLen) {
+      for (const m of mdl.mounts) {
+        if (m.kind !== 'leg' || !(mask & m.bit)) continue;
+        gone++;
+        front += m.z > 0 ? 1 : -1;
+        side += m.x > 0 ? 1 : -1;
+      }
+    }
+    const sag = gone >= 3 ? 0.8 : gone === 2 ? 0.42 : gone === 1 ? 0.14 : 0;
+    // A hare bounds, a deer stots (all four feet off the ground at once, high and springy), the rest bob.
+    const bounce = kind === 'hare' ? Math.abs(Math.sin(phase)) * 0.16 * gait : kind === 'deer' ? Math.abs(Math.sin(phase * 0.6)) * 0.3 * gait * gait * scale : Math.abs(Math.sin(phase)) * 0.04 * gait * scale;
+    const pitch = (kind === 'hare' ? Math.sin(phase) * 0.25 * gait : 0) + front * 0.1 * Math.min(1, gone) - (pose.rear ?? 0) * 0.55;
+    _e.set(pitch, yaw, roll + bank - side * 0.09 * Math.min(1, gone), 'YXZ');
     _q.setFromEuler(_e);
-    _p.set(x, y + bounce, z);
+    _p.set(x, y + bounce - sag * (mdl.legLen ?? 0) * scale + (pose.rear ?? 0) * 0.3 * scale, z);
     _s.set(scale, scale, scale);
     _b.compose(_p, _q, _s);
     b.body.setMatrixAt(i, _b);
@@ -263,13 +307,33 @@ export class AnimalRenderer {
     for (let k = 0; k < mdl.mounts.length; k++) {
       const m = mdl.mounts[k];
       let ang = 0;
-      if (m.kind === 'leg') ang = Math.sin(phase + m.off) * mdl.swing * gait;
-      else ang = Math.sin(flap + m.off) * 0.7 * (m.x > 0 ? 1 : -1) + (m.x > 0 ? 0.08 : -0.08);
+      let sy = 1;
+      let sx = 1;
+      let yawL = 0;
+      const off = (mask & m.bit) !== 0;
+      if (m.kind === 'leg') {
+        ang = Math.sin(phase + m.off) * mdl.swing * gait * (off ? 0.3 : 1);
+        // A stump hangs short; the legs that are left shorten with the sag.
+        sy = off ? 0.26 : 1 - sag * 0.7;
+      } else if (m.kind === 'head') {
+        ang = pose.head ?? 0;
+        yawL = pose.look ?? 0;
+        if (off) sx = sy = 0;
+      } else if (m.kind === 'stump') {
+        if (!off) sx = sy = 0;
+      } else {
+        const fold = pose.fold ?? 0;
+        ang = (Math.sin(flap + m.off) * 0.7 * (1 - fold) - fold * 1.3) * (m.x > 0 ? 1 : -1) + (m.x > 0 ? 0.08 : -0.08);
+        sx = 1 - fold * 0.4;
+        if (off) sx = sy = 0;
+      }
       _p.set(m.x, m.y, m.z);
       if (m.kind === 'leg') _e.set(ang, 0, 0);
+      else if (m.kind === 'head') _e.set(ang, yawL, 0, 'YXZ');
+      else if (m.kind === 'stump') _e.set(0, 0, 0);
       else _e.set(0, 0, ang);
       _qa.setFromEuler(_e);
-      _l.compose(_p, _qa, _s.set(1, 1, 1));
+      _l.compose(_p, _qa, _s.set(sx, sy, sx));
       _m.multiplyMatrices(_b, _l);
       const idx = m.limb === 0 ? i * per + (m.slot ?? 0) : i;
       b.limbs[m.limb].setMatrixAt(idx, _m);

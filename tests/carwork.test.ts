@@ -54,8 +54,10 @@ function hold(h: ReturnType<typeof fakeServices>, sc: LegScene, who: number, btn
   it.pressed = 0;
   it.released = 1 << btn;
   it.heldTime[btn] = 0;
+  it.releasedAfter[btn] = secs;
   sc.tick(DT);
   it.released = 0;
+  it.releasedAfter[btn] = 0;
 }
 
 function tap(h: ReturnType<typeof fakeServices>, sc: LegScene, who: number, btn: number) {
@@ -67,8 +69,10 @@ function tap(h: ReturnType<typeof fakeServices>, sc: LegScene, who: number, btn:
   it.held &= ~(1 << btn);
   it.pressed = 0;
   it.released = 1 << btn;
+  it.releasedAfter[btn] = 0.05;
   sc.tick(DT);
   it.released = 0;
+  it.releasedAfter[btn] = 0;
   sc.tick(DT);
 }
 
@@ -244,5 +248,69 @@ describe('the deck', () => {
     run(sc, 1);
     expect(v.deckSpots().filter((s) => s.kind === 'part').map((s) => s.id).sort()).toEqual(['arm_sheet', 'whl_mt']);
     expect(c.inventory.every((i) => i.on === v.build!.uid)).toBe(true);
+  });
+});
+
+describe('stacked mounts', () => {
+  it('the engine and a bonnet gun sit almost on top of each other, and the engine is the default', () => {
+    const { sc } = leg();
+    const v = ownCar(sc);
+    const p = sc.players[0];
+    const ms = mountsOf(v, p.pos);
+    const e = ms.find((m) => m.slot === 'engine')!;
+    const w = ms.find((m) => m.slot === 'weapon')!;
+    expect(e.pos.distanceTo(w.pos)).toBeLessThan(0.5);
+    // Hands right over the gun: the engine still comes first.
+    standAt(sc, v, 'weapon');
+    const pick = pickMount(p, v)!;
+    expect(pick.mount.slot).toBe('engine');
+    expect(pick.stack.map((m) => m.slot)).toEqual(['engine', 'weapon']);
+  });
+
+  it('a tap of A with the wrench moves to the next mount in the stack, a hold still works the current one', () => {
+    const { h, sc } = leg();
+    const v = ownCar(sc);
+    const p = sc.players[0];
+    installPart(v.build!, newPart('eng_v6', 0.8));
+    v.syncFromBuild();
+    p.equip = 'wrench';
+    standAt(sc, v, 'weapon');
+    run(sc, 0.2);
+    expect(pickMount(p, v)?.mount.slot).toBe('engine');
+    expect(p.prompt?.text).toMatch(/Unbolt Tuned V6/);
+    tap(h, sc, 0, Btn.A);
+    expect(pickMount(p, v)?.mount.slot).toBe('weapon');
+    tap(h, sc, 0, Btn.A);
+    expect(pickMount(p, v)?.mount.slot).toBe('engine');
+    // Nothing came off from tapping.
+    expect(v.build!.fit.engine?.id).toBe('eng_v6');
+  });
+
+  it('a part in your arms picks its own mount whatever else is stacked there', () => {
+    const { sc } = leg();
+    const v = ownCar(sc);
+    const p = sc.players[0];
+    standAt(sc, v, 'engine');
+    expect(pickMount(p, v, 'weapon')?.mount.slot).toBe('weapon');
+    expect(pickMount(p, v, 'engine')?.mount.slot).toBe('engine');
+  });
+});
+
+describe('fit preview', () => {
+  it('carrying a part to its mount shows it snapped on, and it is gone once the part is bolted on', () => {
+    const { h, sc } = leg();
+    const v = ownCar(sc);
+    const p = sc.players[0];
+    p.carry = { kind: 'part', item: newPart('eng_v8', 1) };
+    standAt(sc, v, 'engine');
+    run(sc, 0.3);
+    sc.work.update(DT);
+    expect(sc.work.previewing(0)).toBe(true);
+    // Hold A through: the part sinks onto the mount and is bolted on.
+    hold(h, sc, 0, Btn.A, 5);
+    expect(v.build!.fit.engine?.id).toBe('eng_v8');
+    // The outline fades on render time, which these tests step by hand.
+    for (let i = 0; i < 60; i++) sc.work.update(DT);
+    expect(sc.work.previewing(0)).toBe(false);
   });
 });
