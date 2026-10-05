@@ -75,12 +75,16 @@ describe('staged chunk views', () => {
     const staged = build(sc, data, true);
     expect(whole.pending).toBe(0);
     expect(staged.pending).toBeGreaterThan(0);
-    expect(staged.colliders.length).toBe(whole.colliders.length);
+    // Ground, buildings and props are solid at once; the stones laid by the scatter stage get their colliders with it.
+    const atOnce = staged.colliders.length;
+    expect(atOnce).toBeGreaterThan(0);
+    expect(atOnce).toBeLessThanOrEqual(whole.colliders.length);
     expect(drawn(staged).verts).toBe(0);
     let steps = 0;
     while (staged.buildNext()) steps++;
     expect(steps).toBeGreaterThan(5);
     expect(staged.pending).toBe(0);
+    expect(staged.colliders.length).toBe(whole.colliders.length);
     expect(drawn(staged)).toEqual(drawn(whole));
     whole.dispose();
     staged.dispose();

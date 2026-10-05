@@ -25,6 +25,7 @@ import type { Ctx, NoteKind } from './ctx';
 import { CrewSystem } from './crew';
 import { CarField } from './cars';
 import { DebrisField } from './debris';
+import { LooseProps } from './looseProps';
 import { TrackMarks } from '../render/trackMarks';
 import { clearShells } from '../render/shellCache';
 import { InteractRegistry } from './interact';
@@ -106,6 +107,7 @@ export abstract class Scene implements Ctx {
   crew: CrewSystem;
   cars: CarField;
   debris = new DebrisField(this);
+  looseProps = new LooseProps(this);
   marks = new TrackMarks();
   vehicleByCollider = new Map<number, Vehicle>();
   interact = new InteractRegistry();
@@ -604,6 +606,7 @@ export abstract class Scene implements Ctx {
     this.gore.update(dt);
     this.groundGear?.update(dt);
     this.debris.update(dt);
+    this.looseProps.update();
     this.P.step();
     // Post-step gameplay systems.
     for (const v of this.vehicles) if (v.faction === 'convoy' || v.kind !== 'wagon') {
@@ -713,6 +716,7 @@ export abstract class Scene implements Ctx {
     for (const p of this.players) p.syncVisual(alpha, dt);
     this.syncExtra(alpha, dt);
     this.debris.sync(alpha);
+    this.looseProps.sync(alpha);
     this.marks.update(dt);
     if (!this.idleCam) for (const p of this.players) p.renderCamera(alpha, dt);
     this.fx.setBudget(QUALITY[R.quality].particles);
@@ -984,6 +988,7 @@ export abstract class Scene implements Ctx {
     for (const v of this.vehicles) v.destroy();
     this.vehicles.length = 0;
     this.debris.clear();
+    this.looseProps.clear();
     this.marks.dispose();
     clearShells();
     this.players.length = 0;

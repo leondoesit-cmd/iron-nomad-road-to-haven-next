@@ -4,7 +4,7 @@ import { initPhysics, PhysicsWorld } from '../src/physics/physics';
 import type { PropKind } from '../src/world/layout';
 
 const kinds = Object.keys(PROP_COLLISION) as PropKind[];
-const solid = kinds.filter((k) => PROP_COLLISION[k] !== 'none');
+const solid = kinds.filter((k) => PROP_COLLISION[k] === 'mesh' || PROP_COLLISION[k] === 'hull');
 
 describe('prop mesh colliders', () => {
   it('covers every kind', () => expect(kinds.length).toBeGreaterThan(45));

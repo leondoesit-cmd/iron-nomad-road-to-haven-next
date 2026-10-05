@@ -358,7 +358,11 @@ export class CampArena {
       this.group.add(im);
       this.instanced.push(im);
     }
+    this.stones = set.pebbles;
   }
+
+  /** The instanced stones laid by `scatter`, so the scene can give each a collider. */
+  stones: THREE.InstancedMesh[] = [];
 
   /** Build the accumulated facade and detail meshes. */
   finish() {

@@ -509,6 +509,7 @@ export class LegScene extends Scene {
     this.root.add(view.group);
     view.group.updateMatrixWorld(true);
     this.chunks.set(key, view);
+    this.looseProps.add(String(key), data.props);
     for (const a of data.aabbs) if (!a.physOnly) this.obs.add(a);
     // Pickups
     for (const p of data.pickups) {
@@ -547,6 +548,7 @@ export class LegScene extends Scene {
       for (const c of zone.containers) this.removeContainerView(c.id);
     }
     view.dispose();
+    this.looseProps.release(String(key));
     this.chunks.delete(key);
     this.landscape.setLoaded(view.data.cx, view.data.cz, false);
   }
