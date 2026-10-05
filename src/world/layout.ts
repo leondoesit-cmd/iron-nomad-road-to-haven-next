@@ -405,6 +405,21 @@ export class LegLayoutImpl implements LegLayout {
     // Later passes (parked cars, rocks) may overlap earlier spawns: nothing spawns inside an obstacle.
     this.zombies = this.zombies.filter((z) => !this.blockedAt(z.x, z.z, 0.3));
     this.pickups = this.pickups.filter((p) => !this.blockedAt(p.x, p.z, 0.2) || p.kind === 'fragment' || p.kind === 'chassis');
+    // Nor does a car: one that overlaps a wall is shoved out by the physics and lands tilted against it.
+    this.cars = this.cars.filter((c) => !this.carClips(c));
+  }
+
+  /** Would a car placed here sink into a wall, a barricade or a building? Its length is sampled as three circles. */
+  private carClips(c: CarSpawn): boolean {
+    for (const o of [-1.8, 0, 1.8]) {
+      const px = c.x + Math.sin(c.yaw) * o;
+      const pz = c.z + Math.cos(c.yaw) * o;
+      for (const a of this.aabbs) {
+        if (a.kind === 'car' || a.kind === 'floor' || a.kind === 'stair' || a.kind === 'rock') continue;
+        if (px > a.minX - 0.9 && px < a.maxX + 0.9 && pz > a.minZ - 0.9 && pz < a.maxZ + 0.9 && a.y1 > c.y + 0.3 && a.y0 < c.y + 1.5) return true;
+      }
+    }
+    return false;
   }
 
   // ---------------------------------------------------------------- the open world
