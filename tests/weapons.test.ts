@@ -55,7 +55,7 @@ describe('the weapon catalogue', () => {
   it('has many more weapons across the classes, and every gun has its full data wired through', () => {
     expect(GUNS.length).toBeGreaterThanOrEqual(18);
     expect(GEAR.items.filter((g) => g.melee).length).toBeGreaterThanOrEqual(7);
-    const sounds = new Set(['pistol', 'mg', 'sniper', 'shotgun', 'bolt']);
+    const sounds = new Set(['pistol', 'mg', 'sniper', 'shotgun', 'bolt', 'bow']);
     const shells = new Set(['pistol', 'magnum', 'carbine', 'rifle', 'hull']);
     for (const g of GUNS) {
       const s = g.gun!;
@@ -571,10 +571,9 @@ describe('seeded gun loot', () => {
 });
 
 describe('what you can see: the held model and the inventory icon', () => {
-  const verts = (h: Humanoid) => {
-    const m = h.hand.children.find((c) => (c as { isMesh?: boolean }).isMesh && c !== h.flash.group) as THREE.Mesh | undefined;
-    return m ? m.geometry.getAttribute('position').count : 0;
-  };
+  /** What is in hand: the weapon in the right hand, or a bow's riser, limbs and string in the left. */
+  const held = (h: Humanoid) => [...h.hand.children, ...h.handL.children.flatMap((c) => c.children)].filter((c) => (c as { isMesh?: boolean }).isMesh && c !== h.flash.group) as THREE.Mesh[];
+  const verts = (h: Humanoid) => held(h).reduce((n, m) => n + m.geometry.getAttribute('position').count, 0);
 
   it('every gun model builds, bare and with a full set of fitting add-ons, and the add-ons add solids', () => {
     for (const g of GUNS) {
@@ -582,13 +581,15 @@ describe('what you can see: the held model and the inventory icon', () => {
       h.setWeapon(g.gun!.model);
       const bare = verts(h);
       expect(bare, g.id).toBeGreaterThan(30);
+      // A bow takes no add-ons.
+      if (!slotsOfGun(g).length) continue;
       const att: Partial<Record<AttachSlot, string>> = {};
       for (const slot of slotsOfGun(g)) att[slot] = fittingMods(g.id, slot).sort((a, b) => b.rarity - a.rarity)[0].id;
       const key = lookKey(att);
       expect(Object.keys(parseLooks(key)).length).toBe(Object.keys(att).length);
       h.setWeapon(g.gun!.model, key);
       expect(verts(h), g.id).toBeGreaterThan(bare);
-      const pos = (h.hand.children.find((c) => (c as { isMesh?: boolean }).isMesh && c !== h.flash.group) as THREE.Mesh).geometry.getAttribute('position');
+      const pos = held(h)[0].geometry.getAttribute('position');
       for (let i = 0; i < pos.array.length; i++) expect(Number.isFinite(pos.array[i]), g.id).toBe(true);
     }
   });
@@ -605,7 +606,7 @@ describe('what you can see: the held model and the inventory icon', () => {
 
   it('every item has an icon, and a dressed gun\'s icon shows what is on it', () => {
     for (const g of GEAR.items.filter((x) => x.gun || x.melee || x.mod)) expect(gearIcon(g, 0)).toMatch(/^<svg/);
-    for (const g of GUNS) {
+    for (const g of GUNS.filter((x) => slotsOfGun(x).length)) {
       const att: Partial<Record<AttachSlot, string>> = {};
       for (const slot of slotsOfGun(g)) att[slot] = fittingMods(g.id, slot)[0].id;
       expect(gearIcon(g, 0, '', att).length, g.id).toBeGreaterThan(gearIcon(g, 0).length + 100);

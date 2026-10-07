@@ -4,6 +4,9 @@ import { C } from './palette';
 import type { PropKind } from '../world/layout';
 import { buildLakeLandmark, LAKE_KINDS } from './lakeProps';
 import { buildWaterLandmark, WATER_KINDS } from './waterProps';
+import { footbridgeModel } from './footbridge';
+import { buildHeritageLandmark, HERITAGE_KINDS } from './heritageProps';
+import { narYardModel } from './narYardModel';
 
 /**
  * Roadside landmarks for the wasteland: things tall or long enough to be seen from kilometres away.
@@ -35,6 +38,9 @@ export const LANDMARK_KINDS = new Set<PropKind>([
   'canopy',
   ...LAKE_KINDS,
   ...WATER_KINDS,
+  ...HERITAGE_KINDS,
+  'footbridge',
+  'narYard',
 ]);
 
 const PAINT = [0xb8b0a0, 0xa89880, 0x9aa0a0, 0xc2b8a0];
@@ -353,6 +359,8 @@ export function overpass(seed: number): MeshBuilder {
 
 export function buildLandmark(kind: PropKind, seed: number, tag: number): MeshBuilder | null {
   switch (kind) {
+    case 'footbridge':
+      return footbridgeModel();
     case 'waterTower':
       return waterTower(seed);
     case 'silo':
@@ -379,6 +387,13 @@ export function buildLandmark(kind: PropKind, seed: number, tag: number): MeshBu
       return canopy(seed);
     case 'bridge':
       return buildWaterLandmark(kind, seed, tag);
+    case 'concreteHouse':
+    case 'mudHut':
+    case 'oldMill':
+    case 'culvert':
+      return buildHeritageLandmark(kind, seed, tag);
+    case 'narYard':
+      return narYardModel(seed);
     default:
       return buildLakeLandmark(kind, seed, tag);
   }

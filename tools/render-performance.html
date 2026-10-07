@@ -1,0 +1,60 @@
+<!doctype html><meta charset="utf-8"><title>Tree rendering fidelity and GPU benchmark</title>
+<button id="run">Run tree comparison</button><pre id="result">Ready</pre><canvas id="canvas"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { buildTreesSteps, treeGeometry, treeInstances, treeMaterial, treeDepthMaterial } from '../src/render/trees.ts';
+import { GLOBALS } from '../src/render/materials.ts';
+import { TREE_SPECIES } from '../src/world/flora.ts';
+const output = document.querySelector('#result');
+const renderer = new THREE.WebGLRenderer({canvas:document.querySelector('#canvas'),antialias:false});
+renderer.setSize(512,512); renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFShadowMap;
+const scene=new THREE.Scene(); scene.background=new THREE.Color(0x667788);
+scene.add(new THREE.HemisphereLight(0xffffff,0x887766,2));
+const sun=new THREE.DirectionalLight(0xffeedd,3); sun.position.set(20,40,20); sun.castShadow=true;
+sun.shadow.mapSize.set(512,512); Object.assign(sun.shadow.camera,{left:-40,right:40,bottom:-40,top:40,far:100}); scene.add(sun);
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(100,100),new THREE.MeshStandardMaterial({color:0x778866}));ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);
+const camera=new THREE.PerspectiveCamera(60,1,.2,160);camera.position.set(26,18,32);camera.lookAt(0,8,0);
+const target=new THREE.WebGLRenderTarget(512,512);
+const context=renderer.getContext(), timer=context.getExtension('EXT_disjoint_timer_query_webgl2');
+const frame=()=>new Promise(resolve=>requestAnimationFrame(resolve));
+document.querySelector('#run').onclick=async()=>{
+  try {
+    output.textContent='Building models'; await frame();
+    const trees=[];
+    for(let sp=0;sp<TREE_SPECIES.length;sp++) for(let i=0;i<12;i++) trees.push({sp,v:i%3,x:(sp%3-1)*14+(i%4-1.5)*3,y:0,z:(Math.floor(sp/3)-1)*14+(Math.floor(i/4)-1)*3,s:.65,yaw:i*.4,lean:[.02,-.03]});
+    const gen=buildTreesSteps(trees);let next=gen.next();while(!next.done)next=gen.next();
+    const after=new THREE.Group(); for(const mesh of next.value.near)after.add(mesh);
+    const before=new THREE.Group(), instances=treeInstances(trees), matrix=new THREE.Matrix4(), color=new THREE.Color();
+    for(let sp=0;sp<TREE_SPECIES.length;sp++){
+      const list=instances.filter(t=>t.sp===sp);const mesh=new THREE.InstancedMesh(treeGeometry(sp),treeMaterial(),list.length);
+      list.forEach((t,i)=>{mesh.setMatrixAt(i,matrix.fromArray(t.m));mesh.setColorAt(i,color.setRGB(t.tint[0]+4*t.v,t.tint[1],t.tint[2],THREE.LinearSRGBColorSpace));});
+      mesh.castShadow=true;mesh.receiveShadow=true;mesh.customDepthMaterial=treeDepthMaterial();before.add(mesh);
+    }
+    scene.add(before,after);
+    function draw(group,time){before.visible=group===before;after.visible=group===after;GLOBALS.uTime.value=time;renderer.setRenderTarget(target);renderer.render(scene,camera);}
+    // Warm both paths before comparing; compile/upload work belongs outside the pixel and timing checks.
+    for(let i=0;i<2;i++){draw(before,0);draw(after,0);}
+    const comparisons=[];
+    for(const time of [0,3,19,0]){
+      draw(before,time);const a=new Uint8Array(512*512*4);renderer.readRenderTargetPixels(target,0,0,512,512,a);
+      draw(after,time);const b=new Uint8Array(a.length);renderer.readRenderTargetPixels(target,0,0,512,512,b);
+      let changed=0,max=0;for(let i=0;i<a.length;i++){const d=Math.abs(a[i]-b[i]);if(d)changed++;max=Math.max(max,d);}
+      comparisons.push({time,changedChannels:changed,maxChannelDelta:max});
+    }
+    const counts={before:0,after:0};for(const mesh of before.children)counts.before+=mesh.geometry.index.count/3*mesh.count;for(const mesh of after.children)counts.after+=mesh.geometry.index.count/3*mesh.count;
+    const gpu={before:[],after:[]},cpu={before:[],after:[]};
+    for(let i=0;i<60;i++){
+      for(const [name,group]of i%2?[['after',after],['before',before]]:[['before',before],['after',after]]){
+        await frame();const query=timer?context.createQuery():null;
+        if(query)context.beginQuery(timer.TIME_ELAPSED_EXT,query);
+        const t0=performance.now();draw(group,3);cpu[name].push(performance.now()-t0);
+        if(query){context.endQuery(timer.TIME_ELAPSED_EXT);let waits=0;while(!context.getQueryParameter(query,context.QUERY_RESULT_AVAILABLE)&&waits++<120)await frame();if(context.getQueryParameter(query,context.QUERY_RESULT_AVAILABLE)&&!context.getParameter(timer.GPU_DISJOINT_EXT))gpu[name].push(context.getQueryParameter(query,context.QUERY_RESULT)/1e6);context.deleteQuery(query);}
+      }
+      if(i%15===0)output.textContent='Measuring '+i+'/60';
+    }
+    const median=a=>{a=a.slice(10).sort((a,b)=>a-b);return a.length?a[Math.floor(a.length/2)]:null;};
+    output.textContent=JSON.stringify({comparisons,triangles:counts,gpuTimer:!!timer,gpuMs:{before:median(gpu.before),after:median(gpu.after)},cpuSubmissionMs:{before:median(cpu.before),after:median(cpu.after)}},null,2);
+    renderer.setRenderTarget(null);before.visible=false;after.visible=true;renderer.render(scene,camera);
+  }catch(error){output.textContent=error.stack;}
+};
+</script>

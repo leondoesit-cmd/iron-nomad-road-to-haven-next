@@ -2,25 +2,19 @@ import { clamp } from '../core/math';
 import type { SampleLibrary } from './samples';
 import { TTSEngine } from './tts';
 
-/**
- * Contextual Voice Barks & Walkie-Talkie Radio Chatter Engine.
- * Features:
- * - Authentic walkie-talkie bandpass filtering (420Hz HP - 2900Hz LP, 1.8kHz presence peak)
- * - Analog transistor diode saturation (WaveShaper)
- * - Heavy RF dynamics compression (12:1, fast attack)
- * - Tactical PTT mic clicks, CTCSS chirps, Roger beeps, and squelch tail static bursts
- * - In-browser SpeechSynthesis TTS with speaker variation and radio carrier immersion
- * - Procedural formant-synthesized voice chatter syllables fallback when TTS is unsupported
- */
+/** Recorded radio clicks and receiver noise. Browser TTS is an explicit optional setting. */
 export class RadioAudioEngine {
   ctx: AudioContext;
   samples: SampleLibrary;
   tts: TTSEngine;
-  private noiseBuf: AudioBuffer;
   private masterVolume = 0.7;
   private muted = false;
-  ttsEnabled = true;
-  voiceMode: 'tts' | 'synth' | 'off' = 'tts';
+  ttsEnabled = false;
+  voiceMode: 'tts' | 'synth' | 'off' = 'off';
+
+  private synthSpeechUntil = 0;
+  private synthChain: { output: GainNode; carrierStatic: AudioBufferSourceNode } | null = null;
+  get speechActive() { return !!this.activeTransmission || this.ctx.currentTime < this.synthSpeechUntil; }
 
   private activeTransmission: {
     finish: () => void;
@@ -32,10 +26,7 @@ export class RadioAudioEngine {
     this.ctx = ctx;
     this.samples = samples;
     this.tts = tts || new TTSEngine();
-    const len = ctx.sampleRate * 2;
-    this.noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
-    const d = this.noiseBuf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+
   }
 
   setVolume(v: number) {
@@ -52,12 +43,20 @@ export class RadioAudioEngine {
   setTtsEnabled(enabled: boolean) {
     this.ttsEnabled = enabled;
     this.tts.enabled = enabled;
+    this.voiceMode = enabled ? 'tts' : 'off';
     if (!enabled) {
       this.cancelActiveTransmission();
     }
   }
 
   cancelActiveTransmission() {
+    this.synthSpeechUntil = 0;
+    if (this.synthChain) {
+      this.synthChain.output.gain.cancelScheduledValues(this.ctx.currentTime);
+      this.synthChain.output.gain.value = 0;
+      try { this.synthChain.carrierStatic.stop(); } catch {}
+      this.synthChain = null;
+    }
     if (this.activeTransmission) {
       this.activeTransmission.finish();
       this.activeTransmission = null;
@@ -121,7 +120,7 @@ export class RadioAudioEngine {
 
     // 6. Low-level RF carrier hiss
     const carrier = ctx.createBufferSource();
-    carrier.buffer = this.noiseBuf;
+    carrier.buffer = this.samples.get('radio');
     carrier.loop = true;
     const carrierFilt = ctx.createBiquadFilter();
     carrierFilt.type = 'bandpass';
@@ -146,11 +145,12 @@ export class RadioAudioEngine {
 
   /**
    * Plays a contextual radio bark with authentic PTT key-in,
-   * in-browser speech synthesis (or procedural fallback), compression, and squelch tail.
+   * optional browser speech, recorded receiver noise and switch clicks.
    */
   playRadioChatter(text: string, dest: AudioNode, vol = 1): number {
     const ctx = this.ctx;
     const t0 = ctx.currentTime;
+    if (this.muted) return 0;
 
     // Cancel active transmission to avoid overlapping comms
     this.cancelActiveTransmission();
@@ -210,7 +210,7 @@ export class RadioAudioEngine {
         }
       };
 
-      timeoutId = setTimeout(finishTransmission, Math.max(1200, (estDuration + 2.5) * 1000));
+      timeoutId = setTimeout(() => { this.tts.cancel(); finishTransmission(); }, Math.max(30000, (estDuration * 3 + 10) * 1000));
       const current = { finish: finishTransmission, timeoutId, chain };
       this.activeTransmission = current;
 
@@ -224,13 +224,8 @@ export class RadioAudioEngine {
       return estDuration;
     }
 
-    // Fallback when TTS is unsupported (e.g. Node/Vitest test environment) or 'synth' mode
-    if (this.voiceMode === 'synth' || !this.tts.hasSupport) {
-      return this.playSynthSyllables(text, chain, t0, vol);
-    }
-
-    // Voice mode 'off': silent radio carrier & mic clicks only
-    const tailStart = t0 + estDuration - 0.08;
+    // Recorded switch and carrier only; dialogue remains in captions.
+    const tailStart = t0 + 0.22;
     if (this.samples.micClickOut) {
       const pttOut = ctx.createBufferSource();
       pttOut.buffer = this.samples.micClickOut;
@@ -248,110 +243,16 @@ export class RadioAudioEngine {
     chain.output.gain.setValueAtTime(vol * 0.9, t0 + totalDur - 0.02);
     chain.output.gain.linearRampToValueAtTime(0.0001, t0 + totalDur);
 
+    this.synthChain = chain;
+    this.synthSpeechUntil = 0;
+    chain.carrierStatic.onended = () => { chain.carrierStatic.disconnect(); chain.input.disconnect(); chain.output.disconnect(); };
     return totalDur;
   }
 
-  /**
-   * Procedural formant voice chatter syllables fallback (used when TTS is unsupported
-   * such as headless test suites, or explicitly configured).
-   */
-  playSynthSyllables(
-    text: string,
-    chain: { input: GainNode; output: GainNode; carrierStatic: AudioBufferSourceNode },
-    t0: number,
-    vol = 1,
-  ): number {
-    const ctx = this.ctx;
-    const speechStart = t0 + 0.06;
-    const words = text.split(/\s+/).filter((w) => w.length > 0);
-    let curTime = speechStart;
-
-    const isUrgent = text.includes('!') || /horde|seiz|run|wall|strike|ambush/i.test(text);
-    const baseF0 = isUrgent ? 135 : 110;
-
-    const formants: Record<string, [number, number, number]> = {
-      a: [730, 1250, 2450],
-      e: [530, 1840, 2550],
-      i: [320, 2250, 2800],
-      o: [500, 950, 2400],
-      u: [350, 900, 2300],
-    };
-
-    for (let wIdx = 0; wIdx < words.length; wIdx++) {
-      const word = words[wIdx].toLowerCase().replace(/[^a-z]/g, '');
-      if (!word) continue;
-
-      const syllables = word.match(/[^aeiouy]*[aeiouy]+(?:[^aeiouy]*$|[^aeiouy](?=[^aeiouy]))?/gi) || [word];
-
-      for (let sIdx = 0; sIdx < syllables.length; sIdx++) {
-        const syl = syllables[sIdx];
-        const sylDur = clamp(0.09 + syl.length * 0.025, 0.08, 0.2);
-
-        const vowelMatch = syl.match(/[aeiou]/);
-        const vKey = vowelMatch ? vowelMatch[0] : 'a';
-        const [f1, f2, f3] = formants[vKey] || formants.a;
-
-        const osc = ctx.createOscillator();
-        osc.type = 'sawtooth';
-        const inflection = isUrgent ? Math.sin((sIdx / Math.max(1, syllables.length)) * Math.PI) * 20 : 0;
-        osc.frequency.setValueAtTime(baseF0 + inflection, curTime);
-        osc.frequency.linearRampToValueAtTime(baseF0 * 0.9 + inflection, curTime + sylDur);
-
-        const gSyl = ctx.createGain();
-        gSyl.gain.setValueAtTime(0.0001, curTime);
-        gSyl.gain.linearRampToValueAtTime(0.35, curTime + 0.012);
-        gSyl.gain.exponentialRampToValueAtTime(0.0001, curTime + sylDur);
-
-        for (const f of [f1, f2, f3]) {
-          const filt = ctx.createBiquadFilter();
-          filt.type = 'bandpass';
-          filt.frequency.value = f;
-          filt.Q.value = 4.2;
-          osc.connect(filt).connect(gSyl);
-        }
-
-        if (/[stkpfch]/i.test(syl)) {
-          const noiseSrc = ctx.createBufferSource();
-          noiseSrc.buffer = this.noiseBuf;
-          const nFilt = ctx.createBiquadFilter();
-          nFilt.type = 'bandpass';
-          nFilt.frequency.value = 2400;
-          nFilt.Q.value = 2.0;
-          const nGain = ctx.createGain();
-          nGain.gain.setValueAtTime(0.12, curTime);
-          nGain.gain.exponentialRampToValueAtTime(0.0001, curTime + 0.04);
-          noiseSrc.connect(nFilt).connect(nGain).connect(gSyl);
-          noiseSrc.start(curTime);
-          noiseSrc.stop(curTime + 0.05);
-        }
-
-        gSyl.connect(chain.input);
-        osc.start(curTime);
-        osc.stop(curTime + sylDur + 0.02);
-
-        curTime += sylDur + 0.015;
-      }
-      curTime += 0.04;
-    }
-
-    const tailStart = curTime + 0.05;
-    if (this.samples.micClickOut) {
-      const pttOut = ctx.createBufferSource();
-      pttOut.buffer = this.samples.micClickOut;
-      const g = ctx.createGain();
-      g.gain.value = 0.9;
-      pttOut.connect(g).connect(chain.input);
-      pttOut.start(tailStart);
-    }
-
-    const totalDur = tailStart - t0 + 0.12;
-    try {
-      chain.carrierStatic.stop(t0 + totalDur);
-    } catch {}
-
-    chain.output.gain.setValueAtTime(vol * 0.9, t0 + totalDur - 0.02);
-    chain.output.gain.linearRampToValueAtTime(0.0001, t0 + totalDur);
-
-    return totalDur;
+  /** Legacy API: no unintelligible generated speech; dialogue stays in captions. */
+  playSynthSyllables(_text: string, chain: { input: GainNode; output: GainNode; carrierStatic: AudioBufferSourceNode }, t0: number, _vol = 1): number {
+    chain.carrierStatic.stop(t0);
+    chain.output.gain.value = 0;
+    return 0;
   }
 }

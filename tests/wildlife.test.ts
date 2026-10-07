@@ -88,7 +88,7 @@ describe('wildlife data', () => {
 
 describe('prey', () => {
   it('bolts away from a person who walks up on it', () => {
-    const p = player(0, 0);
+    const p = Object.assign(player(0, 0), { moveSpeed: 1.4 });
     const { W } = world([p]);
     const deer = W.spawn('deer', 0, 25);
     step(W, 3);
@@ -225,6 +225,6 @@ describe('ambient population', () => {
     expect(W.list.some((a) => a.kind === 'bear' || a.kind === 'wolf')).toBe(false);
     const city = world([player(0, 0)]);
     for (let i = 0; i < 60 * 200; i++) city.W.ambient(1 / 60, 'city', 'dust', 3);
-    for (const a of city.W.list) expect(['dog', 'vulture']).toContain(a.kind);
+    for (const a of city.W.list) expect(['dog', 'vulture', 'crow']).toContain(a.kind);
   });
 });

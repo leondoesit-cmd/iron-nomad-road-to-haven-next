@@ -4,19 +4,26 @@ import { C } from './palette';
 import { clamp, clamp01, damp, lerp, wrapAngle } from '../core/math';
 import { swingPose } from '../sim/weaponfx';
 import { GUN_POINTS } from '../sim/weaponanim';
+import { drillPose, newDrillPose, offGrip, type Drill } from '../sim/gunDrills';
 import { shared } from './dispose';
-import { kitMaterial } from './materials';
+import { applyKit, kitMaterial } from './materials';
 import { drawMods, muzzleAt } from './gunMods';
 import { parseLooks } from '../sim/gunmods';
 import { GUN_MODELS, type GunModel, type MeleeModel } from '../data/gear';
 import type { HeroId } from '../data/heroes';
 import { HERO_LOOKS, type HeroLook } from './heroLooks';
-import { drawEars, portraitGeometry, portraitMaterial } from './portrait';
+import { drawEars, portraitGeometry, portraitMaterial, type PortraitSpec } from './portrait';
 import { MuzzleFlash } from './muzzleFlash';
+import { BowRig, drawBow } from './bow';
+import { flashes } from '../sim/weaponfx';
+import { drawTropicalArmHair, drawTropicalSleeve } from './tropicalShirt';
+import { LeisureRig, type LeisurePose } from './leisure';
+import { NuhatRig, type CharacterExpression } from './nuhat';
+import { drawGlasses } from './spectacles';
+import { UdudRig } from './udud';
 import {
   DEFAULT_LOOK,
   drawBody,
-  drawBriefs,
   drawFace,
   drawHand,
   drawHead,
@@ -26,16 +33,43 @@ import {
   drawShin,
   drawThigh,
   drawUpperArm,
+  drawWaist,
   shortSleeves,
+  quiltedSleeves,
   sleeveColor,
   trouserColor,
   type OutfitLook,
+  type PackStyle,
 } from './outfit';
 
 const mat = kitMaterial();
+/**
+ * A hero's body: the kit material without its dents and casting texture, which made cloth and skin look like clay, and
+ * without the grime map's tone shift where there is no grime (it mottled clean cloth, and changed from one body part to
+ * the next, since each samples it in its own frame).
+ */
+const heroMat = (() => {
+  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+  m.onBeforeCompile = (shader) => {
+    applyKit(shader, false);
+    shader.fragmentShader = shader.fragmentShader.replace('diffuseColor.rgb *= 0.9 + kitG.g * 0.2;', 'diffuseColor.rgb *= 1.0 + ( kitG.g - 0.5 ) * 0.2 * min( kitWear, 1.0 );');
+  };
+  m.customProgramCacheKey = () => 'kit:hero';
+  return shared(m);
+})();
+/** How much of the usual grime a hero's clothes and skin carry. */
+const HERO_WEAR = 0.22;
+const bodyMaterial = (p: Palette) => (p.hero && !p.mask ? heroMat : mat);
 const basicLight = shared(new THREE.MeshBasicMaterial({ color: 0xfff6d0 }));
 
-export type PoseKind = 'stand' | 'ride' | 'seat' | 'downed' | 'gun';
+/**
+ * `seat` is in a vehicle's seat and `ride` astride a bike; `sit` is sat on the ground and `lie` lying on the back at rest,
+ * both of them still. `downed` is lying hurt, stirring.
+ */
+export type PoseKind = 'stand' | 'ride' | 'seat' | 'downed' | 'gun' | 'sit' | 'lie';
+
+/** How far a body lying on its back is propped up by what is on it, radians: the pack under it is a backrest. */
+const PACK_RECLINE: Record<PackStyle, number> = { none: 0, satchel: 0.1, ruck: 0.72, duffel: 0.8, frame: 0.95 };
 
 export interface Palette {
   jacket: number;
@@ -69,7 +103,7 @@ function bodyParts(p: Palette): Record<Part, THREE.BufferGeometry> {
   const look = p.look ?? DEFAULT_LOOK;
   const jacket = S.cloth(p.jacket, 0.55);
   const trim = S.cloth(p.trim, 0.5);
-  const pantsColor = trouserColor(look.legs, p.pants ?? 0x3d3f3a);
+  const pantsColor = trouserColor(look.legs, p.pants ?? hero?.pants ?? 0x3d3f3a);
   const pants = S.cloth(raider ? (p.pants ?? 0x3d3f3a) : pantsColor, 0.6);
   const skin = S.skin(hero?.skin ?? p.skin ?? C.skin);
   const leather = S.leather(0x3b2a1e, 0.5);
@@ -78,30 +112,39 @@ function bodyParts(p: Palette): Record<Part, THREE.BufferGeometry> {
   const buckle = S.metal(0x8a8478, 0.4);
   const helmet = p.mask ? S.metal(p.helmet ?? 0x111111, 0.5) : S.paint(p.helmet ?? p.trim, 0.6);
   const scarfColor = p.scarf ?? p.trim;
-  const sleeve = raider ? jacket : S.cloth(sleeveColor(look.body, p.jacket, hero?.over ?? hero?.shirt), 0.55);
+  const sleeve = raider ? jacket : S.cloth(sleeveColor(look.body, p.jacket, hero?.puffer ?? hero?.over ?? hero?.shirt), 0.55);
   // In nothing but a T-shirt the forearms are bare.
   const short = !raider && shortSleeves(look.body, hero ?? undefined);
+  const rolled = !raider && look.body.style === 'shirt' && !!hero?.rolledSleeves;
+  const tropical = !raider && look.body.style === 'shirt' ? hero?.tropical : undefined;
+  const quilted = !raider && quiltedSleeves(look.body, hero ?? undefined);
   // A hero's build: torso and pelvis as broad as their weight makes them, limbs a little less so.
   const girth = hero?.girth ?? 1;
   const limb = 1 + (girth - 1) * 0.9;
-  const mk = (fn: (b: MeshBuilder) => void, gx = 1, belly = 0) => {
+  // A hero's clothes and skin are kept clean: hardly any grime and no colour mottling (what is worn on the head keeps its wear).
+  const mk = (fn: (b: MeshBuilder) => void, gx = 1, belly = 0, clean = !!hero) => {
     const b = new MeshBuilder();
-    b.jitter = 0.03;
+    b.jitter = hero ? 0.008 : 0.03;
     b.roundSeg = 2;
     fn(b);
+    if (clean) for (let i = 2; i < b.srf.length; i += 4) b.srf[i] *= HERO_WEAR;
     if (gx !== 1 || belly > 0) fitBuild(b, gx, belly);
     return shared(b.build());
   };
+  // Plain trousers (or none) have a plain belt, not the survival belt with its pouches.
+  const casual = !raider && (look.legs.style === 'trousers' || look.legs.style === 'bare');
   const parts: Record<Part, THREE.BufferGeometry> = {
     pelvis: mk(
       (b) => {
-        if (!raider && look.legs.style === 'bare') drawBriefs(b);
-        else b.rbox(0, -0.02, 0, 0.33, 0.2, 0.21, 0.07, pants);
-        // Belt with buckle and pouches.
-        b.rbox(0, 0.07, 0, 0.35, 0.055, 0.23, 0.025, leather);
-        b.box(0, 0.07, 0.118, 0.06, 0.045, 0.01, buckle);
-        for (const sx of [1, -1]) b.rbox(sx * 0.15, 0.03, 0.06, 0.07, 0.09, 0.06, 0.015, raider ? leather : trim);
-        b.rbox(-0.1, 0.03, -0.11, 0.1, 0.09, 0.06, 0.015, leather);
+        if (casual) drawWaist(b, look.legs, pantsColor);
+        else {
+          b.rbox(0, -0.02, 0, 0.33, 0.2, 0.21, 0.07, pants);
+          // Belt with buckle and pouches.
+          b.rbox(0, 0.07, 0, 0.35, 0.055, 0.23, 0.025, leather);
+          b.box(0, 0.07, 0.118, 0.06, 0.045, 0.01, buckle);
+          for (const sx of [1, -1]) b.rbox(sx * 0.15, 0.03, 0.06, 0.07, 0.09, 0.06, 0.015, raider ? leather : trim);
+          b.rbox(-0.1, 0.03, -0.11, 0.1, 0.09, 0.06, 0.015, leather);
+        }
         if (!raider) drawHips(b, look.body, p.jacket);
       },
       girth,
@@ -158,14 +201,32 @@ function bodyParts(p: Palette): Record<Part, THREE.BufferGeometry> {
         // Eyes and brow under the helmet.
         for (const sx of [1, -1]) b.add('sphere', sx * 0.04, 0.115, 0.098, 0.03, 0.018, 0.012, S.skin(0x1a1410));
       }
-    }),
+    }, 1, 0, false),
     upperL: mk((b) => {
-      upperArm(b, look, sleeve, raider, short ? skin : undefined);
+      if (tropical !== undefined) drawTropicalSleeve(b, tropical);
+      else upperArm(b, look, sleeve, raider, short || rolled ? skin : undefined, quilted, rolled && !short ? 0.245 : 0.14);
+      if (rolled) b.torus(0, -0.25, 0, 0.056, 0.017, sleeve, Math.PI / 2, 0, 0, 6, 16);
       if (p.band) b.torus(0, -0.12, 0, 0.066, 0.018, S.cloth(p.band, 0.4), Math.PI / 2, 0, 0, 6, 12);
     }, limb),
-    upperR: mk((b) => upperArm(b, look, sleeve, raider, short ? skin : undefined), limb),
-    foreL: mk((b) => (raider ? forearm(b, jacket, glove) : drawHand(b, look.hands, sleeve, skin, short)), limb),
-    foreR: mk((b) => (raider ? forearm(b, jacket, glove) : drawHand(b, look.hands, sleeve, skin, short)), limb),
+    upperR: mk((b) => {
+      if (tropical !== undefined) drawTropicalSleeve(b, tropical);
+      else upperArm(b, look, sleeve, raider, short || rolled ? skin : undefined, quilted, rolled && !short ? 0.245 : 0.14);
+      if (rolled) b.torus(0, -0.25, 0, 0.056, 0.017, sleeve, Math.PI / 2, 0, 0, 6, 16);
+    }, limb),
+    foreL: mk((b) => {
+      if (raider) forearm(b, jacket, glove);
+      else {
+        drawHand(b, look.hands, sleeve, skin, short || rolled, 1);
+        if (tropical !== undefined) drawTropicalArmHair(b);
+      }
+    }, limb),
+    foreR: mk((b) => {
+      if (raider) forearm(b, jacket, glove);
+      else {
+        drawHand(b, look.hands, sleeve, skin, short || rolled, -1);
+        if (tropical !== undefined) drawTropicalArmHair(b);
+      }
+    }, limb),
     thighL: mk((b) => thigh(b, pants, raider, look, pantsColor, skin, 1), limb),
     thighR: mk((b) => thigh(b, pants, raider, look, pantsColor, skin, -1), limb),
     shinL: mk((b) => (raider ? shin(b, pants, boot, true) : drawShin(b, look.legs, look.feet, pantsColor, skin)), limb),
@@ -203,6 +264,8 @@ const STOCK_HEAD = new THREE.Vector3(0, 0.1, 0.005);
 /** Ears, then whatever is worn on the head and over the face, moved from the stock head onto this hero's. */
 function heroHead(b: MeshBuilder, hero: HeroLook, look: OutfitLook, p: Palette, scarf: number) {
   drawEars(b, hero.portrait);
+  if (hero.shades !== undefined && (look.face.style === 'bandana' || look.face.style === 'none')) drawShades(b, hero.portrait, hero.shades);
+  if (p.hero !== 'udud' && hero.glasses !== undefined && (look.face.style === 'bandana' || look.face.style === 'none' || look.face.style === 'respirator')) drawGlasses(b, hero.portrait, hero.glasses);
   if (look.head.style !== 'bare') {
     const g = new MeshBuilder();
     g.jitter = 0.03;
@@ -225,6 +288,55 @@ function heroHead(b: MeshBuilder, hero: HeroLook, look: OutfitLook, p: Palette, 
   }
 }
 
+/**
+ * Wraparound sunglasses in the head's frame: two dark mirror lenses curved round the eyes and on round the sides of the
+ * face, a bar along their tops under the brows, a bridge over the nose, and the arms back to the ears.
+ */
+function drawShades(b: MeshBuilder, spec: PortraitSpec, frame: number) {
+  const s = spec.shape;
+  const E = s.eyeY + 0.003;
+  // The shield follows a flattened ellipse round the face: across the front clear of the brow and the bridge of the
+  // nose, then back round the temples.
+  const front = s.eyeZ + Math.max(0.024, s.brow + 0.01);
+  const A = s.halfW + 0.007;
+  const B = 0.1;
+  const lens = S.glass(0x0a0c10);
+  const rim = S.plastic(frame, 0.3);
+  const n = 40;
+  const end = 1.3;
+  type P = [number, number, number];
+  const top: P[] = [];
+  const bot: P[] = [];
+  const out: P[] = [];
+  for (let i = 0; i <= n; i++) {
+    const a = -end + (i / n) * end * 2;
+    const c = Math.cos(a);
+    const x = Math.sin(a) * A;
+    const z = front - B + B * Math.sign(c) * Math.sqrt(Math.abs(c));
+    // Deep over each eye, pinched over the nose, tapering to the temples; the top edge curves down a little at the sides.
+    const ax = Math.abs(x);
+    const eye = Math.exp(-(((ax - s.eyeX - 0.004) / 0.026) ** 2));
+    const h = 0.012 + 0.03 * eye + 0.008 * smooth(0.03, 0.07, ax) * (1 - eye);
+    const yt = E + 0.014 - 0.006 * (ax / A) ** 2;
+    top.push([x, yt, z]);
+    bot.push([x, yt - h * smooth(0, 0.012, ax + 0.004), z - 0.004 * eye]);
+    // Outward along the ellipse's normal, for the frame's lip.
+    const nx = Math.sin(a) * B;
+    const nz = c * A;
+    const l = Math.hypot(nx, nz);
+    out.push([nx / l, 0, nz / l]);
+  }
+  for (let i = 0; i < n; i++) {
+    b.quad(bot[i], bot[i + 1], top[i + 1], top[i], lens);
+    // The inside face, a hair behind.
+    const k = (p: P, o: P): P => [p[0] - o[0] * 0.0015, p[1], p[2] - o[2] * 0.0015];
+    b.quad(k(top[i], out[i]), k(top[i + 1], out[i + 1]), k(bot[i + 1], out[i + 1]), k(bot[i], out[i]), lens);
+  }
+  // The frame: a thin bar along the top edge, then the arms back to the ears.
+  b.pipe(top.map((p, i) => [p[0] + out[i][0] * 0.001, p[1] + 0.001, p[2] + out[i][2] * 0.001] as P), 0.0026, rim, 6);
+  for (const i of [0, n]) b.capsule(top[i][0], top[i][1] - 0.004, top[i][2], Math.sign(top[i][0]) * (s.halfW + 0.004), E + 0.012, s.eyeZ + s.ear.z + 0.004, 0.0028, rim, 6);
+}
+
 /** A hero's textured face and hair, or null for anyone else. */
 function faceGeometry(p: Palette): THREE.BufferGeometry | null {
   if (!p.hero || p.mask) return null;
@@ -232,11 +344,11 @@ function faceGeometry(p: Palette): THREE.BufferGeometry | null {
   return portraitGeometry(HERO_LOOKS[p.hero].portrait, look.head.style === 'bare' ? 'full' : 'covered');
 }
 
-function upperArm(b: MeshBuilder, look: OutfitLook, sleeve: ReturnType<typeof S.cloth>, raider: boolean, bare?: ReturnType<typeof S.skin>) {
+function upperArm(b: MeshBuilder, look: OutfitLook, sleeve: ReturnType<typeof S.cloth>, raider: boolean, bare?: ReturnType<typeof S.skin>, quilted = false, cuff = 0.14) {
   if (raider) {
     b.limb(0, -0.02, 0, 0, -0.27, 0, 0.065, 0.054, sleeve, 10);
     b.box(0, -0.16, 0, 0.13, 0.04, 0.13, S.leather(0x2a1e16, 0.5));
-  } else drawUpperArm(b, look.body, sleeve, bare);
+  } else drawUpperArm(b, look.body, sleeve, bare, quilted, cuff);
 }
 
 function forearm(b: MeshBuilder, jacket: ReturnType<typeof S.cloth>, glove: ReturnType<typeof S.leather>) {
@@ -253,7 +365,10 @@ function thigh(b: MeshBuilder, pants: ReturnType<typeof S.cloth>, raider: boolea
     drawThigh(b, { style: 'work' }, pantsColor, side);
     return;
   }
-  b.limb(0, 0, 0, 0, -0.42, 0, 0.088, 0.066, look.legs.style === 'bare' ? skin : pants, 12);
+  // Plain trousers and bare legs end round the knee itself, a hair rounder than the shin turning inside it, so the knee
+  // reads as one smooth joint instead of two rounds cutting through each other.
+  if (look.legs.style === 'trousers' || look.legs.style === 'bare') b.limb(0, 0, 0, 0, -0.43, 0, 0.088, 0.0625, look.legs.style === 'bare' ? skin : pants, 16);
+  else b.limb(0, 0, 0, 0, -0.42, 0, 0.088, 0.066, pants, 16);
   drawThigh(b, look.legs, pantsColor, side);
 }
 
@@ -273,6 +388,12 @@ function shin(b: MeshBuilder, pants: ReturnType<typeof S.cloth>, boot: ReturnTyp
 export type Held = 'none' | GunModel | MeleeModel | 'wrench' | 'jerrycan' | 'crowbar' | 'flare';
 const weaponCache = new Map<string, THREE.BufferGeometry>();
 const _ra = new THREE.Vector3();
+const [_bv, _bv2, _bv3, _bv4, _bv5] = [0, 0, 0, 0, 0].map(() => new THREE.Vector3());
+const [_rv, _rv2, _rv3, _rv4, _rv5, _rv6, _rv7, _rv8] = [0, 0, 0, 0, 0, 0, 0, 0].map(() => new THREE.Vector3());
+const [_bq, _bq2, _bq3, _bq4] = [0, 0, 0, 0].map(() => new THREE.Quaternion());
+const _bm = new THREE.Matrix4();
+const _be = new THREE.Euler();
+const _dp = newDrillPose();
 
 /** A weapon's solids. `mods` is the fitted add-ons' look key (`lookKey` in `sim/gunmods.ts`), empty for a bare gun; each different set is its own cached geometry. */
 export function weaponGeometry(kind: Exclude<Held, 'none'>, mods = ''): THREE.BufferGeometry {
@@ -372,6 +493,9 @@ export function weaponGeometry(kind: Exclude<Held, 'none'>, mods = ''): THREE.Bu
       b.cyl(0, 0.035, 0.62, 0.024, 0.32, 0.024, gun, Math.PI / 2, 0, 0, 8);
       b.rbox(0, -0.01, -0.12, 0.045, 0.1, 0.26, 0.015, S.wood(0x5a3e28, 0.5));
       b.rbox(0, -0.06, 0.2, 0.035, 0.13, 0.05, 0.008, gun, 0.3, 0, 0);
+      // The bolt's handle, out to the right where the firing hand works it.
+      b.rod(-0.025, 0.035, 0.1, -0.07, 0.0, 0.08, 0.005, gun, 5);
+      b.sphereAt(-0.072, -0.004, 0.08, 0.01, gun);
       // The worn scope it comes with: taken off when a better optic goes on the rail.
       if (!looks.optic) {
         // Scope: an open tube, so the view goes through it behind the sights, with a fine crosshair in the front lens.
@@ -460,8 +584,9 @@ export function weaponGeometry(kind: Exclude<Held, 'none'>, mods = ''): THREE.Bu
       b.rbox(0, 0.02, 0.3, 0.052, 0.09, 0.6, 0.01, gun);
       b.cyl(0, 0.034, 0.9, 0.03, 0.62, 0.03, gun, HALF, 0, 0, 10);
       b.rbox(0, -0.01, -0.2, 0.05, 0.12, 0.4, 0.016, S.plastic(0x2c3028, 0.35), 0.04, 0, 0);
-      b.rod(0.03, 0.04, 0.1, 0.075, 0.0, 0.08, 0.005, gun, 5);
-      b.sphereAt(0.077, -0.004, 0.08, 0.01, gun);
+      // The bolt's handle, out to the right where the firing hand works it.
+      b.rod(-0.03, 0.04, 0.1, -0.075, 0.0, 0.08, 0.005, gun, 5);
+      b.sphereAt(-0.077, -0.004, 0.08, 0.01, gun);
       b.rbox(0, -0.07, 0.3, 0.03, 0.07, 0.05, 0.006, gun);
       b.box(0, 0.068, 0.3, 0.018, 0.014, 0.5, rail);
       break;
@@ -489,6 +614,9 @@ export function weaponGeometry(kind: Exclude<Held, 'none'>, mods = ''): THREE.Bu
       b.cyl(0, 0.05, 0.57, 0.012, 0.03, 0.012, S.chrome(0xc4c8cc), HALF, 0, 0, 5);
       break;
     }
+    case 'bow':
+      drawBow(b);
+      break;
     case 'combat':
       b.rbox(0, 0.03, 0.08, 0.052, 0.085, 0.26, 0.012, gun);
       b.cyl(0, 0.042, 0.52, 0.026, 0.58, 0.026, gun, HALF, 0, 0, 8);
@@ -573,6 +701,22 @@ export class Humanoid {
   kneeL = new THREE.Group();
   kneeR = new THREE.Group();
   hand = new THREE.Group();
+  /** The left hand's hold: only a bow is carried in it (the bow arm is the left). */
+  handL = new THREE.Group();
+  /** The bow in hand, its string drawn as far as `bowDraw` says. Null for anything else. */
+  private bow: BowRig | null = null;
+  /** How far the string is drawn, 0 to 1, and whether an arrow is on it: set by the owner each frame. */
+  bowDraw = 0;
+  nocked = true;
+  /** Cosmetic leisure animation, set by the owner; it never consumes stock or doses the simulation. */
+  leisure: LeisurePose | null = null;
+  /** The 'lie' pose laid out flat: back on the ground, legs straight, arms at the sides, the head rolled a little to one side. */
+  lieFlat = false;
+  private leisureRig: LeisureRig | null = null;
+  /** Face expression independent of standing, walking or sitting; supported by Nuhat's portrait. */
+  expression: CharacterExpression = 'neutral';
+  private nuhatRig: NuhatRig | null = null;
+  private ududRig: UdudRig | null = null;
   /** The flame at the muzzle of the gun in hand. */
   readonly flash = new MuzzleFlash();
   private weapon: THREE.Mesh | null = null;
@@ -591,9 +735,75 @@ export class Humanoid {
   private workT = 0;
   /** 0..1 while climbing into a vehicle: a step to the door, a duck under the frame and a drop into the seat. */
   enter = 0;
+  /**
+   * Afloat, 0..1 (set by the owner each frame): upright and treading water when still, flat and face down in a front crawl
+   * when moving. `swimDive` is how far under the surface the swimmer has gone and `swimPitch` the extra nose-down (radians)
+   * of a dive that is heading down.
+   */
+  swim = 0;
+  swimDive = 0;
+  swimPitch = 0;
+  private swimK = 0;
+  /** Where the swimmer is in the stroke, 0..1: one arm's full cycle, the other half a cycle behind. */
+  private strokeT = 0;
+  /** The climb-in ends astride a bike (the 'ride' pose) rather than in a cab seat: no ducking under a roof, the near leg swings over the saddle. */
+  enterRide = false;
   /** A greeting with a friend: 0 none, else 1 high five, 2 fist bump, 3 two-handed slap. `five` is its progress 0..1. */
   fiveStyle = 0;
   five = 0;
+  /**
+   * Afloat. Standing in the water the body is upright, the arms scull in front and the legs tread; moving, it lies face down
+   * and swims a front crawl: each arm enters ahead, pulls back under the chest and comes out over the water with a high elbow,
+   * the shoulders rolling into it, the legs fluttering, the head turning now and again for air. A dive points the nose down.
+   */
+  private swimPose(k: number, speed: number) {
+    const tau = Math.PI * 2;
+    const lie = clamp(this.moveK * 1.1, 0, 1);
+    const dive = this.swimDive;
+    const p = this.strokeT;
+    const effort = clamp(speed / 3, 0.55, 1);
+    const to = (cur: number, v: number) => lerp(cur, v, k);
+    // The body: tall in the water treading, the hips up at the surface and horizontal in a crawl, nose down diving.
+    const pitch = lerp(0.12, 1.4, lie) + this.swimPitch * lie;
+    const h = this.hips;
+    h.rotation.x = to(h.rotation.x, pitch);
+    h.rotation.y = to(h.rotation.y, 0);
+    h.rotation.z = to(h.rotation.z, 0);
+    h.position.y = to(h.position.y, lerp(lerp(0.72, 1.12, lie), 0.95, dive));
+    const t = this.torso;
+    t.rotation.x = to(t.rotation.x, lerp(0, -0.18, lie));
+    t.rotation.y = to(t.rotation.y, -Math.sin(tau * p) * 0.5 * lie * effort);
+    t.rotation.z = to(t.rotation.z, 0);
+    this.head.rotation.x = to(this.head.rotation.x, -(pitch - 0.18 * lie) * 0.85);
+    this.head.rotation.y = to(this.head.rotation.y, Math.sin(tau * p) * 0.4 * lie * (1 - dive));
+    this.head.rotation.z = to(this.head.rotation.z, 0);
+    // The arms: a full turn each, the right half a cycle behind. Past the hip (q 0.5) the hand leaves the water, elbow high.
+    for (const [arm, elbow, off, sx] of [
+      [this.armL, this.elbowL, 0, 1],
+      [this.armR, this.elbowR, 0.5, -1],
+    ] as const) {
+      const q = (p + off) % 1;
+      const out = q > 0.5 ? Math.sin((q - 0.5) * tau) : 0;
+      const pull = q <= 0.5 ? Math.sin(q * tau) : 0;
+      const stroke = -Math.PI + tau * q;
+      const scull = -0.75 + Math.sin(tau * (p * 2 + off)) * 0.3;
+      arm.rotation.x = to(arm.rotation.x, lerp(scull, stroke, lie));
+      arm.rotation.y = to(arm.rotation.y, 0);
+      arm.rotation.z = to(arm.rotation.z, sx * lerp(0.5, 0.12 + 0.4 * out, lie));
+      elbow.rotation.x = to(elbow.rotation.x, lerp(-1.0, -(0.25 + 1.1 * out + 0.55 * pull), lie));
+    }
+    this.hand.rotation.x = to(this.hand.rotation.x, 0);
+    // The legs: flutter kick flat out (six beats to a stroke), an eggbeater treading.
+    const kick = Math.sin(tau * 3 * p) * 0.4 * effort;
+    const egg = Math.sin(tau * (p * 2)) * 0.45;
+    this.legL.rotation.x = to(this.legL.rotation.x, lerp(-0.6 + egg, kick, lie));
+    this.legR.rotation.x = to(this.legR.rotation.x, lerp(-0.6 - egg, -kick, lie));
+    this.legL.rotation.z = to(this.legL.rotation.z, lerp(0.1, 0, lie));
+    this.legR.rotation.z = to(this.legR.rotation.z, lerp(-0.1, 0, lie));
+    this.kneeL.rotation.x = to(this.kneeL.rotation.x, lerp(0.95 + egg * 0.4, 0.18 + Math.max(0, -kick) * 0.6, lie));
+    this.kneeR.rotation.x = to(this.kneeR.rotation.x, lerp(0.95 - egg * 0.4, 0.18 + Math.max(0, kick) * 0.6, lie));
+  }
+
   /**
    * Hands at work on something at `workAt` (root space: x to the left, y up from the feet, z ahead). `workAmt` is 1 while
    * the job runs; the owner sets both every frame. What is carried is held out to the spot, a tool is worked on it.
@@ -613,9 +823,12 @@ export class Humanoid {
 
   constructor(pal: Palette) {
     this.worn = pal;
+    // The owner turns the root to face (y) and a lying pose tips it over (x): turn first, then tip, so a body on its back
+    // lies along the way it faced instead of rolling onto its side.
+    this.root.rotation.order = 'YXZ';
     const g = bodyParts(pal);
     const mk = (part: Part, parent: THREE.Object3D) => {
-      const m = new THREE.Mesh(g[part], mat);
+      const m = new THREE.Mesh(g[part], bodyMaterial(pal));
       m.castShadow = true;
       parent.add(m);
       this.meshes.push(m);
@@ -643,6 +856,8 @@ export class Humanoid {
     }
     this.elbowR.add(this.hand);
     this.hand.position.set(0, -0.27, 0.02);
+    this.elbowL.add(this.handL);
+    this.handL.position.set(0, -0.27, 0.02);
     for (const [leg, knee, thigh, shin, sx] of [
       [this.legL, this.kneeL, 'thighL', 'shinL', 1],
       [this.legR, this.kneeR, 'thighR', 'shinR', -1],
@@ -659,14 +874,46 @@ export class Humanoid {
 
   /** Change clothes: swap every body part for the ones this palette draws. Geometry is cached per palette, so this is cheap. */
   dress(pal: Palette) {
+    this.leisureRig?.hide();
+    this.leisure = null;
     this.worn = pal;
     const g = bodyParts(pal);
-    for (const part of Object.keys(this.partMesh) as Part[]) this.partMesh[part].geometry = g[part];
+    for (const part of Object.keys(this.partMesh) as Part[]) {
+      this.partMesh[part].geometry = g[part];
+      this.partMesh[part].material = bodyMaterial(pal);
+    }
     this.fit(pal);
+  }
+
+  /**
+   * Put another head of the same hero on for a moment (an expression: a mouth open for a bite), or the hero's own back
+   * with null. Does nothing on a rig without a portrait face.
+   */
+  showFace(spec: PortraitSpec | null) {
+    const f = this.face;
+    const hero = this.worn.hero;
+    if (!f || !hero) return;
+    const use = spec ?? HERO_LOOKS[hero].portrait;
+    const look = this.worn.look ?? DEFAULT_LOOK;
+    f.geometry = portraitGeometry(use, look.head.style === 'bare' ? 'full' : 'covered');
+    f.material = portraitMaterial(use);
+  }
+
+  /**
+   * Put a hand on `target` in the torso's frame (x to the body's left, y up from the hips, z ahead), the elbow out toward
+   * `pole`, over whatever pose the arm has by `k`. Call after `update`.
+   */
+  reach(side: 'L' | 'R', target: THREE.Vector3, pole: THREE.Vector3, k = 1) {
+    if (side === 'L') this.reachTo(this.armL, this.elbowL, target, pole, k);
+    else this.reachTo(this.armR, this.elbowR, target, pole, k);
   }
 
   /** A hero's face on the head, and the rig at their height and build; the stock survivor's otherwise. */
   private fit(pal: Palette) {
+    this.nuhatRig?.dispose();
+    this.nuhatRig = null;
+    this.ududRig?.dispose();
+    this.ududRig = null;
     const geo = faceGeometry(pal);
     const hero = geo && pal.hero ? HERO_LOOKS[pal.hero] : null;
     if (geo && hero) {
@@ -694,6 +941,11 @@ export class Humanoid {
     this.armR.position.x = -0.22 * girth;
     this.legL.position.x = 0.1 * girth;
     this.legR.position.x = -0.1 * girth;
+    if (pal.hero === 'nuhat' && this.face) {
+      const look = pal.look ?? DEFAULT_LOOK;
+      this.nuhatRig = new NuhatRig(this, this.face, look.head.style === 'bare' ? 'full' : 'covered');
+    }
+    if (pal.hero === 'udud' && this.face) this.ududRig = new UdudRig(this);
   }
 
   /**
@@ -703,18 +955,24 @@ export class Humanoid {
    * them. Applied just before the owner's view draws and undone just after, so a partner's view still sees the whole survivor.
    */
   setFirstPerson(on: boolean, viewArms = false) {
+    this.nuhatRig?.setFirstPerson(on);
+    this.ududRig?.setFirstPerson(on);
+    this.leisureRig?.setFirstPerson(on);
     for (const m of this.bodyMeshes) m.visible = !on;
     // The upper arms point straight at a camera at the eyes and would fill the view: the forearms come up from below the frame.
-    this.partMesh.upperL.visible = !on;
-    this.partMesh.upperR.visible = !on;
+    // Swimming is the exception: the strokes pass down the sides and below the eyes, and want their whole arm.
+    const swimming = this.swimK > 0.3;
+    this.partMesh.upperL.visible = !on || swimming;
+    this.partMesh.upperR.visible = !on || swimming;
     // Empty hands hang at the body's pitch, not the camera's, so they only read from one angle: the forearms show only when
     // they hold, carry or work on something.
-    const busy = !viewArms && (!!this.weapon || !!this.carried || this.workAmt > 0 || this.five > 0);
+    const busy = !viewArms && (!!this.weapon || !!this.carried || this.workAmt > 0 || this.five > 0 || swimming);
     this.partMesh.foreL.visible = !on || busy;
     this.partMesh.foreR.visible = !on || busy;
     this.hand.visible = !on || !viewArms;
-    this.placeArms(on && busy);
-    if (on && busy) {
+    this.handL.visible = !on || !viewArms;
+    this.placeArms(on && busy, swimming);
+    if (on && busy && !swimming) {
       // The arms follow the view's pitch, turning about the shoulders, so what they hold sits in the same place on screen
       // looking up, level or down.
       const free = this.viewPitch;
@@ -733,11 +991,13 @@ export class Humanoid {
   private freePitch = 0;
 
   /** The arms are brought up and forward to where a camera at the eyes can see them. Undone for anyone else's view. */
-  private placeArms(on: boolean) {
+  private placeArms(on: boolean, swimming = false) {
     const o = this.fpOffset;
     const k = on ? 1 : 0;
-    this.armR.position.set(-0.22 + k * o.x, 0.45 + k * o.y, k * o.z);
-    this.armL.position.set(0.22 - k * o.x, 0.45 + k * o.y, k * o.z);
+    // Swimming only brings the shoulders in toward the view's centre: the body is flat, so up and forward would be down and out.
+    const ky = swimming ? 0 : k;
+    this.armR.position.set(-0.22 + k * o.x, 0.45 + ky * o.y, ky * o.z);
+    this.armL.position.set(0.22 - k * o.x, 0.45 + ky * o.y, ky * o.z);
   }
 
   /** Where the muzzle, the ejection port and the magazine well are in the world right now, and which way the barrel points. Fresh only after `capturePoints`. */
@@ -767,12 +1027,23 @@ export class Humanoid {
     this.held = kind;
     this.heldMods = mods;
     if (this.weapon) {
-      this.hand.remove(this.weapon);
+      this.weapon.removeFromParent();
       this.weapon = null;
+    }
+    if (this.bow) {
+      this.bow.group.removeFromParent();
+      this.bow = null;
     }
     this.flash.setGun(null);
     this.flash.group.removeFromParent();
     if (kind === 'none') return;
+    if (kind === 'bow') {
+      // A bow is held in the left hand, its limbs and string a rig of their own that the draw bends.
+      this.bow = new BowRig();
+      this.handL.add(this.bow.group);
+      this.weapon = this.bow.riser;
+      return;
+    }
     // The flash comes out of the muzzle of a gun, with its barrel and muzzle device counted in.
     if (GUN_MODELS.includes(kind as GunModel)) {
       const tip = muzzleAt(kind as GunModel, parseLooks(mods));
@@ -782,7 +1053,7 @@ export class Humanoid {
     m.castShadow = true;
     this.hand.add(m);
     this.weapon = m;
-    if (this.gunHeld) {
+    if (this.gunHeld && flashes(kind as GunModel)) {
       this.flash.setGun(kind as GunModel);
       m.add(this.flash.group);
     }
@@ -810,7 +1081,7 @@ export class Humanoid {
 
   /** The muzzle flash: how much of it is left this frame, 1 at the instant of a shot, 0 for none. */
   muzzle(k: number) {
-    this.flash.set(this.gunHeld ? k : 0);
+    this.flash.set(this.gunHeld && flashes(this.held as GunModel) ? k : 0);
   }
 
   /** What is in the right hand. */
@@ -818,16 +1089,90 @@ export class Humanoid {
     return this.held;
   }
 
-  /** Whether the thing in the right hand is a firearm. */
+  /** Whether the thing in hand is a firearm (or a bow, which is handled like one). */
   private get gunHeld() {
-    return this.held === 'pistol' || this.held === 'revolver' || this.held === 'smg' || this.held === 'sawn' || this.held === 'pump' || this.held === 'rifle';
+    return GUN_MODELS.includes(this.held as GunModel);
+  }
+
+  /**
+   * A bow in the left hand. Raised (`k` 1), the bow arm reaches straight out along the aim with the bow canted a little in
+   * it, and the draw hand is on the string wherever the draw has brought it, back to the jaw at full draw; reaching for the
+   * next arrow (`gunPose.down`) it goes to the hip. Lowered, the bow is carried tipped forward at the side. Both arms are
+   * solved onto those points and blended over the pose the body already has by `k`.
+   */
+  private bowPose(k: number, pitch: number) {
+    const rig = this.bow!;
+    rig.set(this.bowDraw, this.nocked);
+    const up = clamp01((k - 0.05) / 0.5);
+    if (up <= 0) {
+      this.handL.rotation.set(1.2, 0, 0);
+      return;
+    }
+    const t = this.torso;
+    t.updateWorldMatrix(true, false);
+    // Directions in the torso's frame: along the aim, and the bow's up, canted a little to the right.
+    const q = _bq.copy(this.root.quaternion);
+    const tq = t.getWorldQuaternion(_bq2).invert();
+    const parentQ = this.root.parent ? this.root.parent.getWorldQuaternion(_bq3) : _bq3.identity();
+    q.premultiply(parentQ).premultiply(tq);
+    const aim = _bv.set(0, Math.sin(pitch), Math.cos(pitch)).applyQuaternion(q).normalize();
+    const bowUp = _bv2.set(0, Math.cos(pitch), -Math.sin(pitch)).applyQuaternion(q).normalize();
+    bowUp.applyAxisAngle(aim, -0.18).normalize();
+    // The bow hand straight out from the middle of the chest along the aim.
+    const grip = _bv3.set(0.06, 0.42, 0.05).addScaledVector(aim, 0.6);
+    this.reachTo(this.armL, this.elbowL, grip, _bv4.set(0.6, -0.8, -0.2).normalize(), up);
+    // The bow in that hand, pointing down the aim. The hand's frame is turned to make it so.
+    const want = _bq4.setFromRotationMatrix(_bm.makeBasis(_bv5.copy(bowUp).cross(aim).normalize(), bowUp, aim));
+    this.elbowL.updateWorldMatrix(true, false);
+    const elbowQ = this.elbowL.getWorldQuaternion(_bq2).premultiply(t.getWorldQuaternion(_bq3).invert()).invert();
+    const relaxed = _bq3.setFromEuler(_be.set(1.2, 0, 0));
+    this.handL.quaternion.copy(relaxed).slerp(elbowQ.multiply(want), up);
+    // The draw hand on the nock, or off to the hip for the next arrow.
+    this.handL.updateWorldMatrix(true, true);
+    const nock = rig.group.localToWorld(_bv5.copy(rig.nock));
+    t.worldToLocal(nock);
+    const down = clamp01(this.gunPose.down);
+    if (down > 0) nock.lerp(_bv3.set(-0.2, -0.02, -0.06), down);
+    this.reachTo(this.armR, this.elbowR, nock, _bv4.set(-0.9, 0.15, -0.5).normalize(), up);
+  }
+
+  /**
+   * Bend an arm so its hand lands on `target` (in the torso's frame), the elbow toward `pole`: the shoulder turns the upper
+   * arm onto the elbow and the elbow folds the forearm onto the target. Past arm's reach the arm goes straight toward it.
+   * Blended over the arm's current pose by `k`.
+   */
+  private reachTo(arm: THREE.Group, elbow: THREE.Group, target: THREE.Vector3, pole: THREE.Vector3, k: number) {
+    const U = -elbow.position.y;
+    const F = 0.27;
+    const s = arm.position;
+    const d = _rv.copy(target).sub(s);
+    let dist = d.length();
+    d.divideScalar(Math.max(1e-6, dist));
+    dist = clamp(dist, Math.abs(U - F) + 0.02, U + F - 0.002);
+    const along = (U * U - F * F + dist * dist) / (2 * dist);
+    const h = Math.sqrt(Math.max(0, U * U - along * along));
+    const side = _rv2.copy(pole).addScaledVector(d, -pole.dot(d)).normalize();
+    const e = _rv3.copy(s).addScaledVector(d, along).addScaledVector(side, h);
+    const wrist = _rv4.copy(s).addScaledVector(d, dist);
+    // The upper arm hangs down its own -y: +y runs from the elbow back up to the shoulder.
+    const y = _rv5.copy(s).sub(e).normalize();
+    const f = _rv6.copy(wrist).sub(e).normalize();
+    const z = _rv7.copy(f).addScaledVector(y, -f.dot(y));
+    if (z.lengthSq() < 1e-8) z.copy(side).negate();
+    z.normalize();
+    const x = _rv8.copy(y).cross(z);
+    const q = _bq4.setFromRotationMatrix(_bm.makeBasis(x, y, z));
+    arm.quaternion.slerp(q, k);
+    // The forearm, folded about the elbow's x: (0, -cos, -sin) of the fold in the upper arm's frame.
+    const fold = Math.atan2(-f.dot(z), -f.dot(y));
+    elbow.rotation.set(lerp(elbow.rotation.x, fold, k), elbow.rotation.y * (1 - k), elbow.rotation.z * (1 - k));
   }
 
   /** Lay the way the gun is being handled over the pose: low ready, high ready, a reload, a rack. */
   private applyGunPose() {
     const gp = this.gunPose;
     this.hand.position.z = 0.02 - (this.gunHeld && !this.carried ? clamp(this.gunKick, 0, 1.6) * 0.04 : 0);
-    if (!this.gunHeld || this.carried) return;
+    if (!this.gunHeld || this.carried || this.bow) return;
     if (gp.low > 0.001) {
       // Low ready: the gun across the chest with its muzzle down and ahead, the support hand under it.
       const k = gp.low;
@@ -873,6 +1218,29 @@ export class Humanoid {
     }
   }
 
+  /** The drill's turn of the weapon in the hand, and the support arm leaving the gun for its work. */
+  private applyDrill() {
+    const d = this.drill;
+    if (!d.r || d.w <= 0 || this.carried || this.held === 'none') return;
+    const p = drillPose(d.r, d.t, _dp);
+    const w = d.w;
+    this.hand.rotation.x -= p.rx * w;
+    this.hand.rotation.y += p.ry * w;
+    this.hand.rotation.z += p.rz * w;
+    // Brought in to the chest to work on it.
+    this.elbowR.rotation.x -= Math.max(0, p.z) * 3 * w;
+    const off = offGrip(d.r, p.l) * w;
+    if (off > 0.001 && this.gunHeld && !this.bow) {
+      // Half of the reach to the belt reads as the hand at the magazine, the slide or the port.
+      this.armL.rotation.x = lerp(this.armL.rotation.x, -0.7, off * 0.5);
+      this.armL.rotation.z = lerp(this.armL.rotation.z, 0.1, off * 0.5);
+      this.elbowL.rotation.x = lerp(this.elbowL.rotation.x, -1.4, off * 0.5);
+    }
+    const offR = offGrip(d.r, p.r) * w;
+    // The firing hand off to a bolt or a handle turns up off the grip.
+    if (offR > 0.001) this.hand.rotation.z += offR * 0.5;
+  }
+
   /**
    * Pose the rig. `speed` is horizontal speed in m/s for walk cycles; `aim` raises the weapon arm;
    * `crouch` 0..1 lowers the stance, `air` 0..1 tucks the legs for a jump or a fall.
@@ -887,6 +1255,12 @@ export class Humanoid {
    * instead of a slide or pump worked by the left.
    */
   gunPose = { low: 0, high: 0, tilt: 0, pitch: 0, down: 0, rack: 0, bolt: false };
+  /**
+   * A drill of the hands on the weapon (see `sim/gunDrills`), set by the owner each frame: a re-grip at rest, or a jam being
+   * cleared. `t` is how far through it, `w` how much of it shows. The owner's first-person arms play it in full; this rig,
+   * what a partner sees, turns the weapon with it and lets the support arm come off the gun.
+   */
+  drill: { r: Drill | null; t: number; w: number } = { r: null, t: 0, w: 0 };
   /** How far the body leans into a sidestep or a turn (radians, positive to its left), set by the owner each frame. */
   lean = 0;
 
@@ -895,6 +1269,8 @@ export class Humanoid {
     if (enter > 0) speed = 2.4 * (1 - smooth(0.35, 0.55, enter));
     this.walkT += dt * (1.5 + speed * 1.1);
     this.idleT += dt;
+    this.swimK = damp(this.swimK, this.swim, 9, dt);
+    if (this.swimK > 0.002) this.strokeT = (this.strokeT + dt * (0.5 + speed * 0.28)) % 1;
     // Gait eases in and out, so starting, stopping and breaking into a sprint never snap the legs.
     this.moveK = damp(this.moveK, clamp(speed / 1.2, 0, 1) * (1 - air), 12, dt);
     this.sprintK = damp(this.sprintK, clamp((speed - 3.8) / 2, 0, 1) * (1 - air), 8, dt);
@@ -921,6 +1297,7 @@ export class Humanoid {
     this.elbowL.rotation.set(0, 0, 0);
     this.elbowR.rotation.set(0, 0, 0);
     this.hand.rotation.set(0, 0, 0);
+    this.handL.rotation.set(0, 0, 0);
     this.legL.rotation.set(0, 0, 0);
     this.legR.rotation.set(0, 0, 0);
     this.kneeL.rotation.set(0, 0, 0);
@@ -983,6 +1360,8 @@ export class Humanoid {
         this.torso.rotation.x -= this.gunKick * 0.07;
       }
       this.applyGunPose();
+      this.applyDrill();
+      if (this.bow && !this.carried) this.bowPose(aim, lookPitch);
       this.head.rotation.x = lookPitch * 0.4 - this.torso.rotation.x * 0.6;
       this.head.rotation.y -= this.torso.rotation.y * 0.5;
       if (this.swing > 0 && !this.carried) {
@@ -1020,6 +1399,7 @@ export class Humanoid {
       if (wk > 0.01 && air < 0.5) this.workPose(wk, aim);
       if (this.fiveStyle > 0 && !this.carried && air < 0.5) this.fivePose(this.fiveStyle, this.five);
       if (enter > 0) this.enterPose(enter);
+      if (this.swimK > 0.002 && !this.carried) this.swimPose(this.swimK, speed);
     } else if (pose === 'ride') {
       // Astride a moped: hips down, knees bent, arms out to the bars. The saddle is where it is, however tall the rider.
       h.position.y = 0.45 / r.scale.y;
@@ -1065,7 +1445,70 @@ export class Humanoid {
       this.elbowR.rotation.x = -0.3;
       this.torso.rotation.x = 0;
       this.head.rotation.x = -0.5;
+    } else if (pose === 'sit') {
+      // Sat on the ground: the seat of the trousers on it, knees up and a little apart, heels out in front, leaning forward
+      // with the elbows on the knees and the forearms folded in front of the shins, the hands crossed at the wrists.
+      const br = Math.sin(this.idleT * 1.7);
+      h.position.y = 0.13;
+      this.legL.rotation.set(-2.3, 0, 0.2);
+      this.legR.rotation.set(-2.3, 0, -0.2);
+      this.kneeL.rotation.x = 1.72;
+      this.kneeR.rotation.x = 1.72;
+      // Solved for the elbow on the front of the knee and the upper arm turned in, so the elbow folds the forearm across
+      // toward the other hand instead of up into the air.
+      this.torso.rotation.x = 0.32 + br * 0.012;
+      this.armL.rotation.set(2.015, -0.9165, -2.767);
+      this.armR.rotation.set(2.015, 0.9165, 2.767);
+      this.elbowL.rotation.x = -0.84;
+      this.elbowR.rotation.x = -0.84;
+      this.head.rotation.x = -0.22;
+      this.head.rotation.y = Math.sin(this.idleT * 0.43) * 0.05;
+    } else if (pose === 'lie' && this.lieFlat) {
+      // Laid out flat on the back: no pack under the shoulders, both legs out straight, the arms down the sides, the head
+      // rolled a little to one side. Only the slow rise and fall of the chest says he is breathing.
+      const br = Math.sin(this.idleT * 0.9);
+      r.rotation.x = -Math.PI / 2;
+      h.position.y = 0.92;
+      h.position.z = 0.17;
+      this.torso.rotation.x = br * 0.012;
+      this.legL.rotation.set(0.04, 0, 0.07);
+      this.kneeL.rotation.x = 0.05;
+      this.legR.rotation.set(0.04, 0, -0.07);
+      this.kneeR.rotation.x = 0.03;
+      this.armL.rotation.set(0.06, 0, 0.1);
+      this.armR.rotation.set(0.06, 0, -0.1);
+      this.elbowL.rotation.x = -0.12;
+      this.elbowR.rotation.x = -0.08;
+      this.head.rotation.x = -0.08;
+      this.head.rotation.y = 0.35;
+    } else if (pose === 'lie') {
+      // Lying on the back at rest: propped up on the pack if one is worn, one knee up with the foot flat, the other leg out
+      // straight, the hands folded on the belly, the chin tucked a little to look along the body.
+      const br = Math.sin(this.idleT * 1.1);
+      const look = this.worn.look ?? DEFAULT_LOOK;
+      const recline = this.worn.mask ? 0 : PACK_RECLINE[look.pack.style];
+      r.rotation.x = -Math.PI / 2;
+      h.position.y = 0.92;
+      h.position.z = 0.175; // local +z is world up once the body lies on its back: the back of the ribs on the ground
+      this.torso.rotation.x = recline + br * 0.01;
+      this.legL.rotation.set(-0.75, 0, 0.1);
+      this.kneeL.rotation.x = 1.8;
+      this.legR.rotation.set(0.12, 0, -0.1);
+      this.kneeR.rotation.x = 0.04;
+      // Upper arms down the sides with the elbows on the ground, turned in so the bent forearms come up onto the belly.
+      this.armL.rotation.set(0.305, -0.56, 0);
+      this.armR.rotation.set(0.305, 0.56, 0);
+      this.elbowL.rotation.x = -1.57;
+      this.elbowR.rotation.x = -1.57;
+      this.head.rotation.x = -0.32 + recline * 0.4;
     }
+    if (this.leisure && pose === 'stand' && !this.carried && this.swimK < 0.01 && enter <= 0) {
+      (this.leisureRig ??= new LeisureRig(this)).update(dt, this.leisure);
+    } else this.leisureRig?.hide();
+    this.nuhatRig?.update(dt, pose === 'downed' ? 'neutral' : this.expression, speed,
+      (pose === 'stand' || pose === 'sit' || pose === 'seat') && speed < 0.2 && aim < 0.1 && !this.carried && !this.leisure && this.workK < 0.01 && this.swimK < 0.01 && enter <= 0);
+    this.ududRig?.update(dt, pose,
+      speed < 0.2 && aim < 0.1 && this.held === 'none' && !this.carried && !this.leisure && this.workK < 0.01 && this.swimK < 0.01 && enter <= 0 && this.five <= 0);
   }
 
   /**
@@ -1171,30 +1614,48 @@ export class Humanoid {
    * into the seat. Blends the standing pose into the seated one so it ends exactly where the driver model begins.
    */
   private enterPose(k: number) {
+    const ride = this.enterRide;
     const seat = smooth(0.4, 1, k);
-    const duck = Math.sin(Math.PI * clamp((k - 0.3) / 0.6, 0, 1));
+    // Under a roof the head ducks; astride a bike the body stays upright and the near leg swings up and over the saddle.
+    const duck = ride ? 0 : Math.sin(Math.PI * clamp((k - 0.3) / 0.6, 0, 1));
     const step = Math.sin(Math.PI * clamp((k - 0.32) / 0.4, 0, 1));
     const reach = Math.sin(Math.PI * clamp(k / 0.4, 0, 1));
     const h = this.hips;
-    h.position.y = lerp(h.position.y, 0.4, seat) - duck * 0.07;
-    // Near leg lifts over the sill while the other takes the weight.
-    this.legL.rotation.x = lerp(lerp(this.legL.rotation.x, -1.0, step), -1.4, seat);
-    this.kneeL.rotation.x = lerp(lerp(this.kneeL.rotation.x, 1.2, step), 1.5, seat);
-    this.legR.rotation.x = lerp(this.legR.rotation.x, -1.4, seat);
-    this.kneeR.rotation.x = lerp(this.kneeR.rotation.x, 1.5, seat);
+    // Seated targets: exactly what the occupant's own pose ('ride' or 'seat') holds, so the hand-over at the end does not jump.
+    const hipY = ride ? 0.45 / this.root.scale.y : 0.4 / this.root.scale.y;
+    const legX = ride ? -1.15 : -1.4;
+    const kneeX = ride ? 1.45 : 1.5;
+    const torsoX = ride ? 0.5 : 0.1;
+    const armX = ride ? -0.95 : -0.75;
+    const elbowX = ride ? -0.55 : -0.7;
+    const armZ = ride ? 0.25 : 0.15;
+    const headX = ride ? -0.45 : -0.05;
+    h.position.y = lerp(h.position.y, hipY, seat) - duck * 0.07 + (ride ? step * 0.06 : 0);
+    // Near leg lifts over the sill (or the saddle) while the other takes the weight.
+    this.legL.rotation.x = lerp(lerp(this.legL.rotation.x, ride ? -1.5 : -1.0, step), legX, seat);
+    this.kneeL.rotation.x = lerp(lerp(this.kneeL.rotation.x, ride ? 1.0 : 1.2, step), kneeX, seat);
+    this.legR.rotation.x = lerp(this.legR.rotation.x, legX, seat);
+    this.kneeR.rotation.x = lerp(this.kneeR.rotation.x, kneeX, seat);
+    if (ride) {
+      this.legL.rotation.z = lerp(this.legL.rotation.z, 0.12, seat) + step * (1 - seat) * 0.5;
+      this.legR.rotation.z = lerp(this.legR.rotation.z, -0.12, seat);
+    }
     this.torso.rotation.y *= 1 - seat;
-    this.torso.rotation.x = lerp(this.torso.rotation.x, 0.1, seat) + duck * 0.5;
-    this.head.rotation.x = lerp(this.head.rotation.x, -0.05, seat) - duck * 0.45;
-    // The far hand reaches for the door or the grab handle, then both come to the wheel.
-    this.armR.rotation.x = lerp(lerp(this.armR.rotation.x, -1.15, reach), -0.75, seat);
-    this.elbowR.rotation.x = lerp(lerp(this.elbowR.rotation.x, -0.5, reach), -0.7, seat);
-    this.armL.rotation.x = lerp(this.armL.rotation.x, -0.75, seat);
-    this.elbowL.rotation.x = lerp(this.elbowL.rotation.x, -0.7, seat);
-    this.armL.rotation.z = lerp(this.armL.rotation.z, 0.15, seat);
-    this.armR.rotation.z = lerp(this.armR.rotation.z, -0.15, seat);
+    this.torso.rotation.x = lerp(this.torso.rotation.x, torsoX, seat) + duck * 0.5;
+    this.head.rotation.x = lerp(this.head.rotation.x, headX, seat) - duck * 0.45;
+    // The far hand reaches for the door, the grab handle or the bars, then both come to the wheel.
+    this.armR.rotation.x = lerp(lerp(this.armR.rotation.x, -1.15, reach), armX, seat);
+    this.elbowR.rotation.x = lerp(lerp(this.elbowR.rotation.x, -0.5, reach), elbowX, seat);
+    this.armL.rotation.x = lerp(this.armL.rotation.x, armX, seat);
+    this.elbowL.rotation.x = lerp(this.elbowL.rotation.x, elbowX, seat);
+    this.armL.rotation.z = lerp(this.armL.rotation.z, armZ, seat);
+    this.armR.rotation.z = lerp(this.armR.rotation.z, -armZ, seat);
   }
 
   dispose() {
+    this.nuhatRig?.dispose();
+    this.ududRig?.dispose();
+    this.leisureRig?.dispose();
     // Geometry is shared per palette and per weapon; nothing to free per instance.
   }
 }

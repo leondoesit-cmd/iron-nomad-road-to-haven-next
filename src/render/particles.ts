@@ -2,24 +2,91 @@ import * as THREE from 'three';
 import { atmoUniforms } from './atmosphere';
 import { GLOBALS } from './materials';
 import { smokeTexture } from './proctex';
+import { FIRE_PARS, fireUniforms } from './fireLight';
 import type { MuzzleFx } from '../sim/weaponfx';
+
+/** Accumulate ranges until WebGL consumes them; several simulation steps may precede one draw. */
+function uploadRange(geo: THREE.BufferGeometry, name: string, first: number, last: number) {
+  if (last < first) return;
+  const attribute = geo.getAttribute(name) as THREE.BufferAttribute;
+  attribute.addUpdateRange(first * attribute.itemSize, (last - first + 1) * attribute.itemSize);
+  attribute.needsUpdate = true;
+}
+
+/** Dense CPU iteration over live slots; GPU slots keep their original order for alpha blending. */
+class LiveSlots {
+  readonly indices: Uint32Array;
+  private positions: Int32Array;
+  count = 0;
+  first = Infinity;
+  last = -1;
+  private boundsDirty = false;
+  constructor(n: number) {
+    this.indices = new Uint32Array(n);
+    this.positions = new Int32Array(n).fill(-1);
+  }
+  add(slot: number) {
+    if (this.positions[slot] >= 0) return;
+    this.positions[slot] = this.count;
+    this.indices[this.count++] = slot;
+    this.first = Math.min(this.first, slot);
+    this.last = Math.max(this.last, slot);
+  }
+  removeAt(index: number) {
+    const slot = this.indices[index], moved = this.indices[--this.count];
+    this.indices[index] = moved;
+    this.positions[moved] = index;
+    this.positions[slot] = -1;
+    if (slot === this.first || slot === this.last) this.boundsDirty = true;
+  }
+  refreshBounds() {
+    if (!this.boundsDirty) return;
+    this.first = Infinity;
+    this.last = -1;
+    for (let k = 0; k < this.count; k++) {
+      const slot = this.indices[k];
+      this.first = Math.min(this.first, slot);
+      this.last = Math.max(this.last, slot);
+    }
+    this.boundsDirty = false;
+  }
+}
 
 const vert = /* glsl */ `
 attribute float aSize;
 attribute vec4 aColor;
 attribute float aRot;
+attribute float aBlood;
+attribute vec3 aVelocity;
 varying vec4 vColor;
 varying float vRot;
 varying float vDepth;
+varying float vBlood;
+varying float vStretch;
+varying vec3 vFire;
 uniform float uScale;
+uniform float uLit;
+${FIRE_PARS}
 #include <fog_pars_vertex>
 void main() {
   vColor = aColor;
   vRot = aRot;
+  vBlood = aBlood;
+  vec3 motion = ( modelViewMatrix * vec4( aVelocity, 0.0 ) ).xyz;
+  vStretch = aBlood * clamp( length( motion.xy ) * 0.12, 0.0, 1.8 );
+  if ( aBlood > 0.5 && length( motion.xy ) > 0.1 ) vRot = atan( motion.y, motion.x );
   vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
   gl_Position = projectionMatrix * mvPosition;
-  gl_PointSize = aSize * uScale / max( 0.1, -mvPosition.z );
+  gl_PointSize = aSize * ( 1.0 + vStretch ) * uScale / max( 0.1, -mvPosition.z );
   vDepth = -mvPosition.z;
+  // Smoke and dust over a fire glow with it from below.
+  vFire = vec3( 0.0 );
+  if ( uLit > 0.5 && fireLightInfo.x > 0.5 ) {
+    for ( int i = 0; i < FIRE_MAX; i ++ ) {
+      if ( float( i ) >= fireLightInfo.x ) break;
+      vFire += fireIrradiance( i, position );
+    }
+  }
   #include <fog_vertex>
 }`;
 const frag = /* glsl */ `
@@ -29,17 +96,34 @@ uniform float uLit;
 varying vec4 vColor;
 varying float vRot;
 varying float vDepth;
+varying float vBlood;
+varying float vStretch;
+varying vec3 vFire;
 #include <fog_pars_fragment>
 void main() {
   vec2 c = gl_PointCoord - 0.5;
   float s = sin( vRot );
   float k = cos( vRot );
   vec2 uv = vec2( c.x * k - c.y * s, c.x * s + c.y * k ) + 0.5;
+  if ( vBlood > 0.5 ) {
+    // Dense liquid drops stretch along their motion, with a small wet highlight.
+    vec2 drop = uv - 0.5;
+    drop.y *= 1.0 + vStretch;
+    float radius = length( drop );
+    float edge = 1.0 - smoothstep( 0.32, 0.47, radius );
+    float a = edge * vColor.a * smoothstep( 0.18, 0.9, vDepth );
+    if ( a < 0.004 ) discard;
+    float glint = exp( -dot( drop - vec2( -0.10, -0.12 ), drop - vec2( -0.10, -0.12 ) ) * 160.0 );
+    vec3 col = vColor.rgb * uLight * ( 0.55 + 0.45 * edge ) + uLight * glint * 0.16;
+    gl_FragColor = vec4( col, a );
+    #include <fog_fragment>
+    return;
+  }
   vec4 t = texture2D( tPuff, uv );
   // Fade sprites that get right up to the lens instead of filling the screen.
   float a = mix( smoothstep( 1.0, 0.25, length( c ) * 2.0 ), t.a, uLit ) * vColor.a * smoothstep( 0.18, 0.9, vDepth );
   if ( a < 0.004 ) discard;
-  vec3 col = vColor.rgb * mix( vec3( 1.0 ), uLight * ( 0.7 + t.r * 0.45 ), uLit );
+  vec3 col = vColor.rgb * mix( vec3( 1.0 ), uLight * ( 0.7 + t.r * 0.45 ) + min( vFire, vec3( 3.0 ) ) * ( 0.14 + t.r * 0.12 ), uLit );
   gl_FragColor = vec4( col, a );
   #include <fog_fragment>
 }`;
@@ -61,13 +145,18 @@ export class ParticleLayer {
   private drag: Float32Array;
   private rot: Float32Array;
   private spin: Float32Array;
+  private blood: Float32Array;
   private next = 0;
+  private active: LiveSlots;
+  private bloodFirst = Infinity;
+  private bloodLast = -1;
   private uniforms: Record<string, THREE.IUniform>;
   private geo: THREE.BufferGeometry;
   budget = 1;
 
   constructor(n: number, additive: boolean) {
     this.n = n;
+    this.active = new LiveSlots(n);
     this.pos = new Float32Array(n * 3);
     this.col = new Float32Array(n * 4);
     this.size = new Float32Array(n);
@@ -81,14 +170,18 @@ export class ParticleLayer {
     this.drag = new Float32Array(n);
     this.rot = new Float32Array(n);
     this.spin = new Float32Array(n);
+    this.blood = new Float32Array(n);
     this.geo = new THREE.BufferGeometry();
     this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
     this.geo.setAttribute('aColor', new THREE.BufferAttribute(this.col, 4).setUsage(THREE.DynamicDrawUsage));
     this.geo.setAttribute('aSize', new THREE.BufferAttribute(this.size, 1).setUsage(THREE.DynamicDrawUsage));
     this.geo.setAttribute('aRot', new THREE.BufferAttribute(this.rot, 1).setUsage(THREE.DynamicDrawUsage));
+    this.geo.setAttribute('aBlood', new THREE.BufferAttribute(this.blood, 1).setUsage(THREE.DynamicDrawUsage));
+    this.geo.setAttribute('aVelocity', new THREE.BufferAttribute(this.vel, 3).setUsage(THREE.DynamicDrawUsage));
     // Smoke and dust are lit by the scene and fade into the haze; additive glow stays self-lit.
     this.uniforms = {
       ...atmoUniforms(),
+      ...fireUniforms(),
       uScale: { value: 800 },
       tPuff: { value: smokeTexture() },
       uLight: GLOBALS.uLight,
@@ -106,6 +199,8 @@ export class ParticleLayer {
     this.points = new THREE.Points(this.geo, mat);
     this.points.frustumCulled = false;
     this.points.renderOrder = 5;
+    this.points.visible = false;
+    this.geo.setDrawRange(0, 0);
   }
 
   setViewScale(viewHeightPx: number, fovDeg: number) {
@@ -113,7 +208,7 @@ export class ParticleLayer {
     this.uniforms.uScale.value = viewHeightPx / (2 * Math.tan((fovDeg * Math.PI) / 360));
   }
 
-  emit(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, s0: number, s1: number, r: number, g: number, b: number, a: number, gravity = 0, drag = 0.5) {
+  emit(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, s0: number, s1: number, r: number, g: number, b: number, a: number, gravity = 0, drag = 0.5, blood = false) {
     if (this.budget < 1 && Math.random() > this.budget) return;
     const i = this.next;
     this.next = (this.next + 1) % this.n;
@@ -135,32 +230,51 @@ export class ParticleLayer {
     this.drag[i] = drag;
     this.rot[i] = Math.random() * Math.PI * 2;
     this.spin[i] = (Math.random() - 0.5) * 1.2;
+    this.blood[i] = blood ? 1 : 0;
+    this.active.add(i);
+    this.bloodFirst = Math.min(this.bloodFirst, i);
+    this.bloodLast = Math.max(this.bloodLast, i);
   }
 
   update(dt: number) {
-    for (let i = 0; i < this.n; i++) {
+    this.active.refreshBounds();
+    const first = this.active.first, last = this.active.last;
+    for (let k = 0; k < this.active.count;) {
+      const i = this.active.indices[k];
       if (this.life[i] <= 0) {
         this.col[i * 4 + 3] = 0;
         this.size[i] = 0;
+        this.active.removeAt(k);
         continue;
       }
       this.life[i] -= dt;
       const t = 1 - Math.max(0, this.life[i]) / this.maxLife[i];
-      const k = Math.exp(-this.drag[i] * dt);
-      this.vel[i * 3] *= k;
-      this.vel[i * 3 + 1] = this.vel[i * 3 + 1] * k - this.grav[i] * dt;
-      this.vel[i * 3 + 2] *= k;
+      const damping = Math.exp(-this.drag[i] * dt);
+      this.vel[i * 3] *= damping;
+      this.vel[i * 3 + 1] = this.vel[i * 3 + 1] * damping - this.grav[i] * dt;
+      this.vel[i * 3 + 2] *= damping;
       this.pos[i * 3] += this.vel[i * 3] * dt;
       this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt;
       this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
       this.size[i] = this.s0[i] + (this.s1[i] - this.s0[i]) * t;
       this.rot[i] += this.spin[i] * dt;
-      this.col[i * 4 + 3] = this.a0[i] * (1 - t) * (t < 0.08 ? t / 0.08 : 1);
+      this.col[i * 4 + 3] = this.blood[i]
+        ? this.a0[i] * (1 - THREE.MathUtils.smoothstep(t, 0.55, 1))
+        : this.a0[i] * (1 - t) * (t < 0.08 ? t / 0.08 : 1);
+      if (this.life[i] <= 0) {
+        this.size[i] = 0;
+        this.active.removeAt(k);
+      } else k++;
     }
-    (this.geo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
-    (this.geo.attributes.aColor as THREE.BufferAttribute).needsUpdate = true;
-    (this.geo.attributes.aSize as THREE.BufferAttribute).needsUpdate = true;
-    (this.geo.attributes.aRot as THREE.BufferAttribute).needsUpdate = true;
+    if (last >= first) for (const name of ['position', 'aColor', 'aSize', 'aRot', 'aVelocity']) uploadRange(this.geo, name, first, last);
+    uploadRange(this.geo, 'aBlood', this.bloodFirst, this.bloodLast);
+    this.bloodFirst = Infinity;
+    this.bloodLast = -1;
+    this.active.refreshBounds();
+    const drawFirst = this.active.first, drawLast = this.active.last;
+    // Keep the original slot order for alpha blending; holes stay invisible instead of swapping sprites.
+    this.geo.setDrawRange(drawLast < 0 ? 0 : drawFirst, drawLast < 0 ? 0 : drawLast - drawFirst + 1);
+    this.points.visible = drawLast >= 0;
   }
 }
 
@@ -212,7 +326,9 @@ export class Particles {
 
   blood(x: number, y: number, z: number, n = 6, color: [number, number, number] = [0.55, 0.06, 0.06]) {
     for (let i = 0; i < n; i++) {
-      this.smoke.emit(x, y, z, (Math.random() - 0.5) * 4, Math.random() * 3.5, (Math.random() - 0.5) * 4, 0.5 + Math.random() * 0.4, 0.2, 0.1, color[0], color[1], color[2], 0.9, 16, 0.6);
+      const size = 0.045 + Math.random() * 0.095;
+      const shade = 0.7 + Math.random() * 0.4;
+      this.smoke.emit(x, y, z, (Math.random() - 0.5) * 4, Math.random() * 3.5, (Math.random() - 0.5) * 4, 0.5 + Math.random() * 0.4, size, size * 0.55, color[0] * shade, color[1] * shade, color[2] * shade, 0.95, 9.81, 0.6, true);
     }
   }
 
@@ -223,6 +339,8 @@ export class Particles {
   bloodSpray(x: number, y: number, z: number, dx: number, dy: number, dz: number, n = 6, speed = 6, spread = 0.45, color: [number, number, number] = [0.55, 0.05, 0.05]) {
     for (let i = 0; i < n; i++) {
       const k = speed * (0.35 + Math.random() * 0.95);
+      const size = 0.035 + Math.random() * 0.09;
+      const shade = 0.65 + Math.random() * 0.55;
       this.smoke.emit(
         x,
         y,
@@ -231,18 +349,19 @@ export class Particles {
         dy * k + (Math.random() - 0.3) * spread * speed,
         dz * k + (Math.random() - 0.5) * spread * speed,
         0.4 + Math.random() * 0.45,
-        0.2 + Math.random() * 0.1,
-        0.07,
-        color[0],
-        color[1],
-        color[2],
-        0.9,
-        15,
+        size,
+        size * 0.6,
+        color[0] * shade,
+        color[1] * shade,
+        color[2] * shade,
+        0.95,
+        9.81,
         0.5,
+        true,
       );
     }
     // A fine pink mist hangs for a moment where the round went in.
-    this.smoke.emit(x, y, z, dx * 0.6, 0.3, dz * 0.6, 0.35, 0.3, 0.9, 0.62, 0.12, 0.1, 0.35, 0, 2);
+    if (n > 2) this.smoke.emit(x, y, z, dx * 0.6, 0.3, dz * 0.6, 0.28, 0.16, 0.6, color[0], color[1], color[2], 0.22, 0, 2);
   }
 
   flash(x: number, y: number, z: number, size = 1.6) {
@@ -320,10 +439,14 @@ export class Tracers {
   private max: Float32Array;
   private n: number;
   private next = 0;
+  private active: LiveSlots;
+  private positionFirst = Infinity;
+  private positionLast = -1;
   private geo: THREE.BufferGeometry;
 
   constructor(n = 420) {
     this.n = n;
+    this.active = new LiveSlots(n);
     this.pos = new Float32Array(n * 6);
     this.col = new Float32Array(n * 6);
     this.base = new Float32Array(n * 6);
@@ -335,6 +458,8 @@ export class Tracers {
     this.mesh = new THREE.LineSegments(this.geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 6;
+    this.mesh.visible = false;
+    this.geo.setDrawRange(0, 0);
   }
 
   add(ax: number, ay: number, az: number, bx: number, by: number, bz: number, r = 1, g = 0.85, b = 0.45, life = 0.09) {
@@ -345,22 +470,44 @@ export class Tracers {
     this.col.set(this.base.subarray(i * 6, i * 6 + 6), i * 6);
     this.life[i] = life;
     this.max[i] = life;
+    this.active.add(i);
+    this.positionFirst = Math.min(this.positionFirst, i);
+    this.positionLast = Math.max(this.positionLast, i);
   }
 
   update(dt: number) {
-    for (let i = 0; i < this.n; i++) {
+    this.active.refreshBounds();
+    const first = this.active.first, last = this.active.last;
+    for (let k = 0; k < this.active.count;) {
+      const i = this.active.indices[k];
       if (this.life[i] > 0) {
         this.life[i] -= dt;
         if (this.life[i] <= 0) {
           this.pos.fill(0, i * 6, i * 6 + 6);
           this.col.fill(0, i * 6, i * 6 + 6);
+          this.positionFirst = Math.min(this.positionFirst, i);
+          this.positionLast = Math.max(this.positionLast, i);
+          this.active.removeAt(k);
         } else {
           const f = this.life[i] / this.max[i];
           for (let k = 0; k < 6; k++) this.col[i * 6 + k] = this.base[i * 6 + k] * f;
+          k++;
         }
+      } else {
+        this.pos.fill(0, i * 6, i * 6 + 6);
+        this.col.fill(0, i * 6, i * 6 + 6);
+        this.positionFirst = Math.min(this.positionFirst, i);
+        this.positionLast = Math.max(this.positionLast, i);
+        this.active.removeAt(k);
       }
     }
-    (this.geo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
-    (this.geo.attributes.color as THREE.BufferAttribute).needsUpdate = true;
+    uploadRange(this.geo, 'position', this.positionFirst * 2, this.positionLast < 0 ? -1 : this.positionLast * 2 + 1);
+    uploadRange(this.geo, 'color', first * 2, last < 0 ? -1 : last * 2 + 1);
+    this.positionFirst = Infinity;
+    this.positionLast = -1;
+    this.active.refreshBounds();
+    const drawFirst = this.active.first, drawLast = this.active.last;
+    this.geo.setDrawRange(drawLast < 0 ? 0 : drawFirst * 2, drawLast < 0 ? 0 : (drawLast - drawFirst + 1) * 2);
+    this.mesh.visible = drawLast >= 0;
   }
 }

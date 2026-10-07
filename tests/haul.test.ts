@@ -277,7 +277,8 @@ describe('carrying parts, fuel and oil by hand', () => {
     p.equip = 'wrench';
     tap(h, sc, 0, Btn.LB);
     expect(p.equip).toBe('wrench'); // LB would have cycled it
-    expect(p.notes.some((n) => /Hands full/.test(n.text))).toBe(true);
+    // With full hands LB turns what is held instead (game/grab.ts).
+    expect(p.hold.yaw).toBeGreaterThan(0);
   });
 
   it('climbing into a car with full hands stows the load at an open boot, or sets it down if there is no room or no way in', () => {

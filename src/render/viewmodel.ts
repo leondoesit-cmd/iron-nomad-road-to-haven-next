@@ -3,12 +3,15 @@ import { MeshBuilder, S } from './builder';
 import { C } from './palette';
 import { clamp, clamp01, damp, lerp } from '../core/math';
 import { GUN_BASE, GUN_POINTS, curve } from '../sim/weaponanim';
-import type { GunModel } from '../data/gear';
+import { drillPose, newDrillPose, type Drill, type HandAt } from '../sim/gunDrills';
+import { flashes } from '../sim/weaponfx';
+import { GUN_MODELS, type GunModel } from '../data/gear';
 import { shared } from './dispose';
 import { kitMaterial } from './materials';
 import { DEFAULT_LOOK, drawUpperArm, sleeveColor } from './outfit';
 import { weaponGeometry, type Held, type Humanoid, type Palette } from './humanoid';
 import { MuzzleFlash } from './muzzleFlash';
+import { ARROW_LEN, BRACE, BowRig } from './bow';
 
 /**
  * The owner's own arms and weapon in first person, drawn the way a body camera sees them: two whole arms from shoulders
@@ -44,8 +47,25 @@ const ARM_SWING = 0.55;
 /** Elbows point out and down. */
 const POLE_R = new THREE.Vector3(1, -0.75, 0.1).normalize();
 const POLE_L = new THREE.Vector3(-1, -0.75, 0.1).normalize();
+/**
+ * Working the weapon over (a drill), the elbows are tucked down by the ribs: held out, a raised gun lifts the upper arms into
+ * the bottom corners of the frame, where the lens cuts them open.
+ */
+const POLE_TUCK_R = new THREE.Vector3(0.45, -1, 0.15).normalize();
+const POLE_TUCK_L = new THREE.Vector3(-0.45, -1, 0.15).normalize();
+const _pr = new THREE.Vector3();
+const _pl = new THREE.Vector3();
+/** Drawing a bow, the elbow comes up and out to the side, so the forearm runs off the right of the frame. */
+const POLE_DRAW = new THREE.Vector3(1, 0.12, -0.2).normalize();
 /** The hip-fire gun points at what the crosshair is on, this far out. */
 const CONVERGE = 20;
+
+/** A hand in a drill this frame: the drill, where the hand is in it, and how much of it shows. */
+interface DrillHand {
+  d: Drill;
+  at: HandAt;
+  w: number;
+}
 
 /**
  * A hand on the weapon, in the weapon's own frame (+z down the barrel, +y up, +x to the weapon's left): the middle of what
@@ -121,6 +141,8 @@ const GRIPS: Partial<Record<GunModel, Partial<Spec>>> = {
   sniper: { l: UNDER(0.45) },
   lever: { l: UNDER(0.5) },
   crossbow: { r: PIST(-0.06, 0, 0.25), l: UNDER(0.35) },
+  // A bow is placed by its grip (see `bowBase`) and its hands are its own (`bowHands`).
+  bow: { r: { p: [0, 0, 0], a: [0, 1, 0], n: [0, 0, 1], thumb: 'wrap' }, l: undefined, scale: 0.92 },
   combat: { r: PIST(-0.04, 0, 0.15), l: UNDER(0.45) },
   coach: { l: UNDER(0.3) },
   lmg: { r: PIST(-0.06, 0.05, 0.25), l: UNDER(0.45) },
@@ -135,7 +157,29 @@ for (const [k, like] of Object.entries(MELEE_LIKE) as [Exclude<Held, 'none'>, Ex
 /** Bare fists, for a punch. */
 const FIST: Spec = { hip: [0.18, -0.3, -0.36], ads: 0, rest: [0, 0, 0], scale: 1, r: HANDLE(0) };
 
-const isGun = (h: Held): h is GunModel => h === 'pistol' || h === 'revolver' || h === 'smg' || h === 'sawn' || h === 'pump' || h === 'rifle';
+const isGun = (h: Held): h is GunModel => GUN_MODELS.includes(h as GunModel);
+
+// ------------------------------------------------------------------------------------------- the bow
+
+/**
+ * The bow, in camera space: the bow arm out toward the middle of the frame, the bow canted with its top to the right, and
+ * the draw hand on the string. Lowered (`k` 0) it rests low and further over, the arrow pointing at the ground ahead; drawn
+ * (`k` 1) the draw hand is low on the right by the jaw and the arrow runs in from it to just under the crosshair, the way
+ * a bow is seen from behind it. `rest` is where the arrow lies on the shelf and `dir` the way it points.
+ */
+const BOW = {
+  low: { rest: [-0.12, -0.2, -0.56] as V3, dir: [-0.15, -0.24, -1] as V3, cant: 0.75 },
+  up: { rest: [-0.035, -0.055, -0.76] as V3, dir: [-0.115, 0.06, -0.44] as V3, cant: 0.25 },
+  /** The string's travel in this view: short of the real draw, so the draw hand stays in front of the eye. */
+  drawLen: 0.22,
+};
+/** The bow hand round the grip, the palm behind it pushing forward; the draw hand's fingers hooked round the string. */
+const BOW_HAND: Grip = { p: [0, -0.01, -0.012], a: [0, 1, 0], n: [0, 0, 1], thumb: 'wrap' };
+const STRING_HAND: Grip = { p: [0, 0, 0], a: [0, 1, 0], n: [1, 0, -0.3], thumb: 'wrap' };
+/** Where the draw hand goes to pull the next arrow, low by the right hip (camera space). */
+const QUIVER: V3 = [0.2, -0.5, -0.05];
+/** The bow arm comes up from low on the left, so it reaches the grip at a slant instead of hiding the hand behind its forearm. */
+const BOW_SHOULDER = new THREE.Vector3(-0.34, -0.52, 0.04);
 
 // ------------------------------------------------------------------------------------------- the arms' meshes
 
@@ -149,6 +193,8 @@ interface ArmGeo {
   hand: Record<'r' | 'l', Record<Thumb, THREE.BufferGeometry>>;
   /** The left hand in a fist with the middle finger up. */
   bird: THREE.BufferGeometry;
+  /** Each hand open, off its grip. */
+  open: Record<'r' | 'l', THREE.BufferGeometry>;
 }
 
 const armCache = new Map<string, ArmGeo>();
@@ -187,6 +233,9 @@ const BIRD_FINGER: [number, number][] = [[-0.034, -0.035], [-0.078, -0.037], [-0
 /** The others closed tight into the palm round nothing, and the thumb laid across them. */
 const FIST_FINGER: [number, number][] = [[-0.034, -0.035], [-0.044, 0.004], [-0.02, 0.012], [-0.004, -0.006]];
 const FIST_THUMB = { x: [0.62, 0.85, 0.45, 0.05], yz: [[0.03, -0.028], [0.0, -0.002], [-0.035, 0.012], [-0.05, 0.012]] as [number, number][] };
+/** An open hand, letting go of a grip or slapping a magazine home: the fingers out nearly straight, the thumb spread. */
+const OPEN_FINGER: [number, number][] = [[-0.034, -0.035], [-0.07, -0.029], [-0.093, -0.017], [-0.108, -0.002]];
+const OPEN_THUMB = { x: [0.62, 1.05, 1.3, 1.45], yz: [[0.03, -0.028], [0.008, -0.03], [-0.016, -0.028], [-0.038, -0.024]] as [number, number][] };
 /** The thumb's bones from its root in the heel of the hand, by where it goes (`x` along the grip as a share of the hand's half-width). */
 const THUMBS: Record<Thumb, { x: number[]; yz: [number, number][] }> = {
   // Over the back of the grip and forward along the far side, under the slide.
@@ -214,7 +263,7 @@ function fingerJoints(tpl: [number, number][], x: number, k: number, l: number):
  * the left: the thumb is at the -x end of the right hand's knuckles and the +x end of the left's. The firing hand
  * (`far`) has its index finger on the trigger.
  */
-function drawViewHand(b: MeshBuilder, glove: Surf, fingers: Surf, side: number, thumb: Thumb, padded: boolean, bird = false) {
+function drawViewHand(b: MeshBuilder, glove: Surf, fingers: Surf, side: number, thumb: Thumb, padded: boolean, bird = false, open = false) {
   const sx = -side;
   const half = 0.042;
   // The wrist, flatter through the hand than across it, running back into the forearm's cuff.
@@ -236,13 +285,15 @@ function drawViewHand(b: MeshBuilder, glove: Surf, fingers: Surf, side: number, 
   // Fingers, index to little, each in three tapering bones.
   for (let i = 0; i < 4; i++) {
     const f = FINGERS[i];
-    const j = fingerJoints(bird ? (i === 1 ? BIRD_FINGER : FIST_FINGER) : i === 0 && thumb === 'far' ? TRIGGER_FINGER : FINGER, sx * f.x, f.k, f.l);
+    const tpl = open ? OPEN_FINGER : bird ? (i === 1 ? BIRD_FINGER : FIST_FINGER) : i === 0 && thumb === 'far' ? TRIGGER_FINGER : FINGER;
+    // Spread a little when open, the way a hand relaxes.
+    const j = fingerJoints(tpl, sx * f.x * (open ? 1.12 : 1), f.k, f.l);
     b.limb(j[0][0], j[0][1], j[0][2], j[1][0], j[1][1], j[1][2], f.r * 1.08, f.r, i === 0 ? glove : fingers, 10);
     b.limb(j[1][0], j[1][1], j[1][2], j[2][0], j[2][1], j[2][2], f.r, f.r * 0.93, fingers, 10);
     b.limb(j[2][0], j[2][1], j[2][2], j[3][0], j[3][1], j[3][2], f.r * 0.93, f.r * 0.84, fingers, 10);
   }
   // The thumb: a thick root in the heel of the hand, then two bones.
-  const t = bird ? FIST_THUMB : THUMBS[thumb];
+  const t = open ? OPEN_THUMB : bird ? FIST_THUMB : THUMBS[thumb];
   const pt = (i: number): V3 => [sx * half * t.x[i], t.yz[i][0], t.yz[i][1]];
   const [t0, t1, t2, t3] = [pt(0), pt(1), pt(2), pt(3)];
   b.limb(t0[0], t0[1], t0[2], t1[0], t1[1], t1[2], 0.016, 0.0118, glove, 10);
@@ -285,6 +336,7 @@ function viewArms(pal: Palette): ArmGeo {
     fore: mk((b) => drawViewForearm(b, sleeve, glove)),
     hand: { r: hand(1), l: hand(-1) },
     bird: mk((b) => drawViewHand(b, glove, fingers, -1, 'wrap', padded, true)),
+    open: { r: mk((b) => drawViewHand(b, glove, fingers, 1, 'wrap', padded, false, true)), l: mk((b) => drawViewHand(b, glove, fingers, -1, 'wrap', padded, false, true)) },
   };
   armCache.set(key, out);
   return out;
@@ -338,6 +390,11 @@ const _fd = new THREE.Vector3();
 const _ax = new THREE.Vector3();
 const _hy = new THREE.Vector3();
 const _m = new THREE.Matrix4();
+const _rp = new THREE.Vector3();
+const _ra = new THREE.Vector3();
+const _rn = new THREE.Vector3();
+const _h0 = { p: new THREE.Vector3(), a: new THREE.Vector3(), n: new THREE.Vector3() };
+const _h1 = { p: new THREE.Vector3(), a: new THREE.Vector3(), n: new THREE.Vector3() };
 const DOWN = new THREE.Vector3(0, -1, 0);
 const UP = new THREE.Vector3(0, 1, 0);
 const AHEAD = new THREE.Vector3(0, 0, -1);
@@ -350,6 +407,7 @@ export class ViewModel {
   private gun = new THREE.Group();
   private weapon: THREE.Mesh | null = null;
   private held: Held = 'none';
+  private bow: BowRig | null = null;
   private flash = new MuzzleFlash();
   private upperR: THREE.Mesh;
   private upperL: THREE.Mesh;
@@ -365,6 +423,9 @@ export class ViewModel {
   /** Whether there is anything to draw this frame (a weapon, or a punch). */
   active = false;
   readonly motion = newViewMotion();
+  private dp = newDrillPose();
+  private dhL: DrillHand = { d: null!, at: this.dp.l, w: 0 };
+  private dhR: DrillHand = { d: null!, at: this.dp.r, w: 0 };
 
   constructor(pal: Palette) {
     const g = (this.geo = viewArms(pal));
@@ -400,15 +461,27 @@ export class ViewModel {
     this.flash.setGun(null);
     this.flash.group.removeFromParent();
     if (this.weapon) {
-      this.gun.remove(this.weapon);
+      this.weapon.removeFromParent();
       this.weapon = null;
     }
+    if (this.bow) {
+      this.bow.group.removeFromParent();
+      this.bow = null;
+    }
     if (kind === 'none') return;
+    if (kind === 'bow') {
+      this.bow = new BowRig();
+      this.bow.drawLen = BOW.drawLen;
+      this.bow.arrowScale = (BRACE + BOW.drawLen + 0.1) / ARROW_LEN;
+      this.gun.add(this.bow.group);
+      this.weapon = this.bow.riser;
+      return;
+    }
     const m = new THREE.Mesh(weaponGeometry(kind), mat);
     m.frustumCulled = false;
     this.gun.add(m);
     this.weapon = m;
-    if (isGun(kind)) {
+    if (isGun(kind) && flashes(kind)) {
       this.flash.setGun(kind);
       m.add(this.flash.group);
     }
@@ -428,6 +501,7 @@ export class ViewModel {
     if (!this.active) return;
     const spec = kind === 'none' ? FIST : SPECS[kind];
     const gun = isGun(kind);
+    const bow = this.bow;
     const gp = h.gunPose;
     this.sf = damp(this.sf, m.strafe, 7, dt);
     this.ff = damp(this.ff, m.fwd, 5, dt);
@@ -437,7 +511,8 @@ export class ViewModel {
     const s = spec.scale;
     const P = _t.set(spec.hip[0], spec.hip[1], spec.hip[2]);
     const Q = _q;
-    if (gun) {
+    if (bow) this.bowBase(P, Q, Math.max(h.bowDraw, ads * 0.7));
+    else if (gun) {
       // From the hip the barrel points at what the crosshair is on.
       _m.lookAt(_v.set(0, 0, -CONVERGE), P, UP);
       Q.setFromRotationMatrix(_m);
@@ -491,9 +566,11 @@ export class ViewModel {
     const still = 1 - clamp(Math.abs(this.ff) + Math.abs(this.sf), 0, 1);
     dy += Math.sin(this.t * 1.5) * 0.0025 * still * free;
     rx += Math.sin(this.t * 1.5 + 0.6) * 0.004 * still * free;
-    // The barrel's own wander, at the hip (behind the sights the whole view wanders instead).
-    rx -= h.gunSway[1] * 0.8 * (1 - ads);
-    ry += h.gunSway[0] * 0.8 * (1 - ads);
+    // The barrel's own wander, at the hip (behind the sights the whole view wanders instead). A drawn bow wanders as a
+    // whole with the view, like sights.
+    const braced = bow ? Math.max(ads, h.bowDraw) : ads;
+    rx -= h.gunSway[1] * 0.8 * (1 - braced);
+    ry += h.gunSway[0] * 0.8 * (1 - braced);
     if (gun) {
       // A shot bucks the gun back into the hands and climbs the muzzle.
       const kick = h.gunKick;
@@ -544,12 +621,28 @@ export class ViewModel {
         rz += curve([[0, 0], [0.3, -0.5], [0.55, 0.6], [1, 0]], e);
       }
     }
+    // A drill of the hands (a re-grip, a jam being cleared) moves the weapon too.
+    const dr = h.drill;
+    const dw = dr.r && kind !== 'none' ? clamp01(dr.w) : 0;
+    const dp = dw > 0 ? drillPose(dr.r!, dr.t, this.dp) : null;
+    // A gun is canted about its barrel, the way a wrist turns it (about the view it would swing the forearm into the lens);
+    // a blade or a tool is turned about the view.
+    let cant = 0;
+    if (dp) {
+      dx += dp.x * dw;
+      dy += dp.y * dw;
+      dz += dp.z * dw;
+      rx += dp.rx * dw;
+      ry += dp.ry * dw;
+      if (gun) cant = -dp.rz * dw;
+      else rz += dp.rz * dw;
+    }
     P.x += dx;
     P.y += dy;
     P.z += dz;
     Q.premultiply(_q2.setFromEuler(_e.set(rx, ry, rz, 'YXZ')));
-    // Canted about the barrel for a reload.
-    if (gun && gp.tilt) Q.multiply(_q2.setFromAxisAngle(_x.set(0, 0, 1), gp.tilt));
+    // Canted about the barrel for a reload, or a drill.
+    if (gun && (gp.tilt || cant)) Q.multiply(_q2.setFromAxisAngle(_x.set(0, 0, 1), gp.tilt + cant));
 
     // The weapon: placed so its grip lands on P.
     const g = this.gun;
@@ -557,14 +650,25 @@ export class ViewModel {
     g.scale.setScalar(s);
     g.position.copy(P).sub(_v.set(spec.r.p[0], spec.r.p[1], spec.r.p[2]).multiplyScalar(s).applyQuaternion(Q));
     g.updateMatrix();
+    // Turned in the fingers about its grip (a knife rolled, a handle twisted), the hand staying where it is.
+    if (this.weapon && !bow) this.spin(spec.r, dp ? dp.spin * dw : 0);
+    const dhL = dp && dr.r!.l ? this.drillHand(this.dhL, dr.r!, dw) : null;
+    const dhR = dp && dr.r!.r ? this.drillHand(this.dhR, dr.r!, dw) : null;
 
+    if (bow) {
+      this.bowHands(bow, h);
+      if (m.flip > 0.001) this.flipOff(smooth01(m.flip), SHOULDER_L);
+      return;
+    }
     // Right hand: on the grip, or off to the bolt.
     let rp = spec.r.p;
     if (gun && gp.bolt && gp.rack > 0.001) {
       const k = clamp01(gp.rack * 3);
       rp = [lerp(rp[0], -0.045, k), lerp(rp[1], 0.05, k), lerp(rp[2], 0.12 - gp.rack * 0.09, k)];
     }
-    this.handOn(rp, spec.r, 'r', this.handR, SHOULDER_R, POLE_R, this.upperR, this.foreR);
+    const poleR = dp ? _pr.copy(POLE_R).lerp(POLE_TUCK_R, dw).normalize() : POLE_R;
+    const poleL = dp ? _pl.copy(POLE_L).lerp(POLE_TUCK_L, dw).normalize() : POLE_L;
+    this.handOn(rp, spec.r, 'r', this.handR, SHOULDER_R, poleR, this.upperR, this.foreR, 0, dhR);
     // Left hand: on the support grip unless a reload has it at the belt or it is racking the slide; or a loose guard.
     if (spec.l) {
       let lp = spec.l.p;
@@ -577,9 +681,41 @@ export class ViewModel {
         }
       }
       const down = gun ? gp.down : 0;
-      this.handOn(lp, spec.l, 'l', this.handL, spec.long ? SHOULDER_L_LONG : SHOULDER_L, POLE_L, this.upperL, this.foreL, down);
-    } else this.guard(swing);
+      this.handOn(lp, spec.l, 'l', this.handL, spec.long ? SHOULDER_L_LONG : SHOULDER_L, poleL, this.upperL, this.foreL, down, dhL);
+    } else this.guard(swing, dhL);
     if (m.flip > 0.001) this.flipOff(smooth01(m.flip), spec.long ? SHOULDER_L_LONG : SHOULDER_L);
+  }
+
+  /** The bow's grip at `P`, turned by `Q`, for a draw `k`: the arrow along its line from the shelf, the top canted right. */
+  private bowBase(P: THREE.Vector3, Q: THREE.Quaternion, k: number) {
+    const e = smooth01(k);
+    const lo = BOW.low;
+    const hi = BOW.up;
+    const rest = _s.set(lerp(lo.rest[0], hi.rest[0], e), lerp(lo.rest[1], hi.rest[1], e), lerp(lo.rest[2], hi.rest[2], e));
+    const d0 = _a.set(lo.dir[0], lo.dir[1], lo.dir[2]).normalize();
+    const d1 = _n.set(hi.dir[0], hi.dir[1], hi.dir[2]).normalize();
+    const at = d0.lerp(d1, e).normalize().add(rest);
+    _m.lookAt(at, rest, UP);
+    Q.setFromRotationMatrix(_m).multiply(_q2.setFromAxisAngle(_x.set(0, 0, 1), lerp(lo.cant, hi.cant, e)));
+    const mz = GUN_POINTS.bow.muzzle;
+    P.copy(rest).sub(_v.set(mz[0], mz[1], mz[2]).multiplyScalar(SPECS.bow.scale).applyQuaternion(Q));
+  }
+
+  /** The bow hand round the grip, and the draw hand on the nock (or reaching to the hip for the next arrow). */
+  private bowHands(bow: BowRig, h: Humanoid) {
+    bow.set(h.bowDraw, h.nocked);
+    this.handOn(BOW_HAND.p, BOW_HAND, 'l', this.handL, BOW_SHOULDER, POLE_L, this.upperL, this.foreL);
+    const g = this.gun;
+    const t = _s.copy(bow.nock).applyMatrix4(g.matrix);
+    const a = _a.set(STRING_HAND.a[0], STRING_HAND.a[1], STRING_HAND.a[2]).applyQuaternion(g.quaternion);
+    const n = _n.set(STRING_HAND.n[0], STRING_HAND.n[1], STRING_HAND.n[2]).applyQuaternion(g.quaternion);
+    const down = clamp01(h.gunPose.down);
+    if (down > 0) {
+      t.lerp(_v.set(QUIVER[0], QUIVER[1], QUIVER[2]), down);
+      a.lerp(AHEAD, down).normalize();
+    }
+    this.handR.geometry = this.geo.hand.r.wrap;
+    solveArm(SHOULDER_R, t, a, n, POLE_DRAW, this.handR, this.upperR, this.foreR);
   }
 
   /**
@@ -597,9 +733,11 @@ export class ViewModel {
     solveArm(shoulder, t, a, n, POLE_L, h, this.upperL, this.foreL);
   }
 
-  /** Put a hand on the weapon at `p` (weapon space), or partway to the belt by `down`, and bend the arm to it. */
-  private handOn(p: V3, grip: Grip, side: 'r' | 'l', hand: THREE.Mesh, shoulder: THREE.Vector3, pole: THREE.Vector3, upper: THREE.Mesh, fore: THREE.Mesh, down = 0) {
-    hand.geometry = this.geo.hand[side][grip.thumb];
+  /**
+   * Put a hand on the weapon at `p` (weapon space), or partway to the belt by `down`, and bend the arm to it. In a drill the
+   * hand goes where the drill has it instead.
+   */
+  private handOn(p: V3, grip: Grip, side: 'r' | 'l', hand: THREE.Mesh, shoulder: THREE.Vector3, pole: THREE.Vector3, upper: THREE.Mesh, fore: THREE.Mesh, down = 0, dh: DrillHand | null = null) {
     const g = this.gun;
     const t = _s.set(p[0], p[1], p[2]).applyMatrix4(g.matrix);
     const a = _a.set(grip.a[0], grip.a[1], grip.a[2]).applyQuaternion(g.quaternion);
@@ -610,16 +748,88 @@ export class ViewModel {
       a.lerp(AHEAD, down).normalize();
       n.lerp(_v.set(1, 0, 0), down).normalize();
     }
+    hand.geometry = dh ? this.drillReach(dh, side, t, a, n, p, grip) : this.geo.hand[side][grip.thumb];
     solveArm(shoulder, t, a, n, pole, hand, upper, fore);
   }
 
   /** The free hand of a one-handed weapon: low on the left, a loose fist, barely in frame; it comes up for balance in a swing. */
-  private guard(swing: number) {
+  private guard(swing: number, dh: DrillHand | null = null) {
     const up = swing > 0 ? Math.sin(Math.PI * (1 - swing)) : 0;
     const t = _s.set(-0.2 - up * 0.05, -0.37 + up * 0.08, -0.33 - up * 0.05);
     t.y += this.motion.bobY * 1.2;
-    this.handL.geometry = this.geo.hand.l.wrap;
-    solveArm(SHOULDER_L, t, _a.set(0.2, 1, -0.4).normalize(), _n.set(1, 0.2, -0.3).normalize(), POLE_L, this.handL, this.upperL, this.foreL);
+    const a = _a.set(0.2, 1, -0.4).normalize();
+    const n = _n.set(1, 0.2, -0.3).normalize();
+    this.handL.geometry = dh ? this.drillReach(dh, 'l', t, a, n, null, null) : this.geo.hand.l.wrap;
+    solveArm(SHOULDER_L, t, a, n, POLE_L, this.handL, this.upperL, this.foreL);
+  }
+
+  /** Point a reused drill-hand record at this frame's drill. */
+  private drillHand(out: DrillHand, d: Drill, w: number): DrillHand {
+    out.d = d;
+    out.w = w;
+    return out;
+  }
+
+  /**
+   * Move a hand's target `t`, `a`, `n` (camera space, where it would rest) to where the drill has it: partway between two
+   * spots, `w` of the way from rest. Returns the hand to draw: open, closed round its own grip, or closed round whatever
+   * else it has hold of. With no grip (the free hand of a one-handed weapon), rest stands for 'grip'.
+   */
+  private drillReach(dh: DrillHand, side: 'r' | 'l', t: THREE.Vector3, a: THREE.Vector3, n: THREE.Vector3, p: V3 | null, grip: Grip | null): THREE.BufferGeometry {
+    const rp = _rp.copy(t);
+    const ra = _ra.copy(a);
+    const rn = _rn.copy(n);
+    const at = dh.at;
+    const fromOn = this.spotAt(dh.d, at.from, p, grip, rp, ra, rn, _h0);
+    const toOn = this.spotAt(dh.d, at.to, p, grip, rp, ra, rn, _h1);
+    // A hand's frame does not care which way along its line `a` points, so take the nearer way round.
+    if (_h1.a.dot(_h0.a) < 0) _h1.a.negate();
+    _h0.p.lerp(_h1.p, at.k);
+    _h0.a.lerp(_h1.a, at.k).normalize();
+    _h0.n.lerp(_h1.n, at.k).normalize();
+    if (_h0.a.dot(a) < 0) _h0.a.negate();
+    t.lerp(_h0.p, dh.w);
+    a.lerp(_h0.a, dh.w).normalize();
+    n.lerp(_h0.n, dh.w).normalize();
+    const open = at.open * dh.w;
+    const onGrip = (fromOn ? 1 - at.k : 0) + (toOn ? at.k : 0) > 0.5;
+    if (open > 0.5) return this.geo.open[side];
+    return onGrip && grip ? this.geo.hand[side][grip.thumb] : this.geo.hand[side].wrap;
+  }
+
+  /** A drill's spot in camera space, into `out`; true if it is the hand's own grip (or a shift on it). */
+  private spotAt(d: Drill, name: string, p: V3 | null, grip: Grip | null, rp: THREE.Vector3, ra: THREE.Vector3, rn: THREE.Vector3, out: typeof _h0): boolean {
+    const s = name === 'grip' ? undefined : d.spots?.[name];
+    const g = this.gun;
+    if (!s || ('off' in s && (!p || !grip))) {
+      out.p.copy(rp);
+      out.a.copy(ra);
+      out.n.copy(rn);
+      return true;
+    }
+    if ('off' in s) out.p.set(p![0] + s.off[0], p![1] + s.off[1], p![2] + s.off[2]);
+    else out.p.set(s.p[0], s.p[1], s.p[2]);
+    out.p.applyMatrix4(g.matrix);
+    const a = s.a ?? grip?.a;
+    const n = s.n ?? grip?.n;
+    if (a) out.a.set(a[0], a[1], a[2]).applyQuaternion(g.quaternion);
+    else out.a.copy(ra);
+    if (n) out.n.set(n[0], n[1], n[2]).applyQuaternion(g.quaternion);
+    else out.n.copy(rn);
+    return 'off' in s;
+  }
+
+  /** Turn the weapon in the hand by `k` radians about its grip's line (0 puts it back square in the hand). */
+  private spin(grip: Grip, k: number) {
+    const w = this.weapon!;
+    if (k === 0) {
+      w.position.set(0, 0, 0);
+      w.quaternion.identity();
+      return;
+    }
+    w.quaternion.setFromAxisAngle(_ax.set(grip.a[0], grip.a[1], grip.a[2]).normalize(), k);
+    const pivot = _v.set(grip.p[0], grip.p[1], grip.p[2]);
+    w.position.copy(pivot).sub(_w.copy(pivot).applyQuaternion(w.quaternion));
   }
 
   /** Move onto the camera for its view. */
@@ -630,7 +840,7 @@ export class ViewModel {
 
   /** The muzzle flash: how much of it is left this frame (the rig's own flash decides when). */
   muzzle(k: number) {
-    this.flash.set(isGun(this.held) ? k : 0);
+    this.flash.set(isGun(this.held) && flashes(this.held) ? k : 0);
   }
 
   /** The gun's points in the world as this view draws them, into the rig's `points` (call after `place`). */

@@ -13,6 +13,7 @@ import { PaneSet } from './glass';
 import { attachBay } from './bayMesh';
 import type { VehicleLook } from './vehicleModels';
 import type { CarPane } from '../sim/glass';
+import { panesPresent } from '../sim/glassfit';
 import { paintPanels } from './paintJob';
 import { panelSignature } from '../sim/paint';
 import { cabinGaps } from '../sim/cabin';
@@ -43,8 +44,9 @@ function rnd(seed: number) {
 /**
  * The windows of a car as panes of glass, in the chassis frame: the windscreen, the rear window (a van has none), and the
  * side windows either side of the pillar. They are not part of the shell, so they can crack and go while the body stays.
+ * `fit` is what is bolted on: a frame with no glass in it, or a door that is off, has no pane.
  */
-export function carPanes(def: VehicleDef): CarPane[] {
+export function carPanes(def: VehicleDef, fit: Fit = {}): CarPane[] {
   const sp = SPECS[def.id as Spec['id']];
   if (!sp) return [];
   const g0 = restHeight(def);
@@ -74,7 +76,9 @@ export function carPanes(def: VehicleDef): CarPane[] {
       out.push({ key: `s${sx > 0 ? 'L' : 'R'}${i}`, kind: 'side', c: [sx * (hw - 0.08), (y0 + y1) / 2 - g0, (za + zb) / 2], n: [sx, 0, 0], hw: (zb - za) / 2, hh: (y1 - y0) / 2 });
     });
   }
-  return out;
+  // Only the panes the fitted parts leave: no windscreen, no pane. A door with no window (or none at all) has no glass in it.
+  const have = new Set(panesPresent(def, fit));
+  return out.filter((p) => have.has(p.key));
 }
 
 /** Where loose cargo can ride on a car, in the chassis frame (the body's own ground frame shifted down to the chassis centre). */
@@ -550,7 +554,7 @@ export function buildCar(def: VehicleDef, wheelLocal: [number, number, number][]
   v.inner.add(v.body);
   // The windows: panes of their own over the open shell. A beaten-up car comes with its screen already cracked.
   const panes = new PaneSet();
-  for (const p of carPanes(def)) panes.add(p);
+  for (const p of carPanes(def, look.fit)) panes.add(p);
   v.inner.add(panes.group);
   v.panes = panes;
   const screen = panes.spec('ws');

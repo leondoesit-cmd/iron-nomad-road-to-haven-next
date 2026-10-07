@@ -1,0 +1,818 @@
+{
+  "date": "2026-10-07",
+  "method": {
+    "build": "production",
+    "preset": "medium",
+    "viewport": {
+      "width": 1280,
+      "height": 720
+    },
+    "renderPixelRatio": 1.4875,
+    "outputDevicePixelRatio": 2,
+    "renderScale": 1,
+    "post": true,
+    "duration": "standard",
+    "warmupSeconds": 3,
+    "measureSeconds": 8,
+    "seed": 4242,
+    "order": [
+      "baseline-1",
+      "optimized-1",
+      "baseline-2",
+      "optimized-2",
+      "optimized-final",
+      "baseline-3"
+    ],
+    "notes": [
+      "Serial runs in the same in-app browser tab; no tests or builds during measurements.",
+      "Native DPR at renderer construction, then 1280x720 viewport override; every report showed 1.49 render pixels per CSS pixel.",
+      "Data transcribed from rendered result table: FPS and milliseconds rounded to 0.1, calls to integer, triangles to nearest 1,000.",
+      "CPU simulation time is per browser frame and includes a variable number of fixed steps; it is not a per-step comparison.",
+      "The first baseline had broadly halved frame rates despite similar geometry to all later runs; it cannot establish an optimization speedup.",
+      "These opening scenarios showed little triangle reduction from ground-cover culling; the dedicated dense-vegetation comparison measures that workload separately.",
+      "Optimized runs 1 and 2 used the initial visibility implementation. Before final verification, shared parent transforms were updated once per chunk/view to remove repeated batch work."
+    ]
+  },
+  "columns": [
+    "fps",
+    "fps1PercentLow",
+    "frameP95Ms",
+    "simCpuMs",
+    "drawCpuMs",
+    "calls",
+    "trianglesThousands"
+  ],
+  "scenarioOrder": [
+    "desert-single",
+    "desert-horizontal",
+    "desert-vertical",
+    "country-single",
+    "country-horizontal",
+    "country-vertical",
+    "city-single",
+    "city-horizontal",
+    "city-vertical",
+    "effects-single",
+    "effects-horizontal",
+    "effects-vertical"
+  ],
+  "baseline1": [
+    [
+      40.7,
+      22.6,
+      33.3,
+      3.8,
+      3.1,
+      320,
+      953
+    ],
+    [
+      32.6,
+      21,
+      34.2,
+      4.5,
+      4.7,
+      701,
+      2142
+    ],
+    [
+      36,
+      22.6,
+      33.5,
+      4.2,
+      4.5,
+      645,
+      1933
+    ],
+    [
+      39.1,
+      20.8,
+      33.4,
+      3.3,
+      6.3,
+      696,
+      2166
+    ],
+    [
+      30.6,
+      18.9,
+      34.1,
+      5.5,
+      11,
+      1451,
+      4566
+    ],
+    [
+      33.7,
+      18.7,
+      33.4,
+      4.9,
+      8.8,
+      926,
+      3977
+    ],
+    [
+      41.4,
+      29.4,
+      33.3,
+      2.2,
+      3.2,
+      413,
+      1501
+    ],
+    [
+      47.1,
+      26.1,
+      33.4,
+      1.8,
+      4.4,
+      884,
+      3294
+    ],
+    [
+      40.3,
+      26.5,
+      33.3,
+      2.3,
+      4.7,
+      818,
+      2956
+    ],
+    [
+      41.1,
+      29.9,
+      28.7,
+      1.3,
+      2.9,
+      351,
+      1628
+    ],
+    [
+      31.4,
+      24,
+      34.2,
+      1.6,
+      4.4,
+      747,
+      3587
+    ],
+    [
+      30.5,
+      23.8,
+      37.8,
+      1.5,
+      4.5,
+      709,
+      3473
+    ]
+  ],
+  "optimized1": [
+    [
+      84.2,
+      48.1,
+      17.2,
+      1.6,
+      2.2,
+      320,
+      958
+    ],
+    [
+      65.4,
+      46.9,
+      17.6,
+      2,
+      3.9,
+      703,
+      2177
+    ],
+    [
+      80.2,
+      53.4,
+      17.6,
+      1.6,
+      3.7,
+      646,
+      1943
+    ],
+    [
+      77.2,
+      45.5,
+      16.9,
+      1.7,
+      4.5,
+      696,
+      2179
+    ],
+    [
+      58.8,
+      33,
+      24.9,
+      2.3,
+      6.4,
+      1456,
+      4624
+    ],
+    [
+      73.2,
+      41.7,
+      17.5,
+      1.9,
+      5.7,
+      929,
+      3999
+    ],
+    [
+      87.1,
+      56.8,
+      17.2,
+      1.1,
+      2.6,
+      411,
+      1505
+    ],
+    [
+      68.2,
+      53,
+      16.9,
+      1.1,
+      3.8,
+      890,
+      3285
+    ],
+    [
+      76.4,
+      53.3,
+      17.2,
+      0.9,
+      3.4,
+      815,
+      2947
+    ],
+    [
+      77,
+      53.9,
+      17.2,
+      0.5,
+      2.5,
+      349,
+      1623
+    ],
+    [
+      59.3,
+      39.6,
+      17.5,
+      0.5,
+      3.7,
+      748,
+      3562
+    ],
+    [
+      60.3,
+      39.8,
+      17.4,
+      0.6,
+      3.7,
+      709,
+      3431
+    ]
+  ],
+  "baseline2": [
+    [
+      91.6,
+      48.6,
+      17,
+      1.5,
+      2.2,
+      321,
+      965
+    ],
+    [
+      72.7,
+      56.8,
+      17,
+      1.9,
+      3.7,
+      708,
+      2177
+    ],
+    [
+      83.2,
+      56.8,
+      16.8,
+      1.6,
+      3.5,
+      649,
+      1962
+    ],
+    [
+      78.6,
+      42.8,
+      17,
+      1.6,
+      3.9,
+      697,
+      2172
+    ],
+    [
+      59.2,
+      33.2,
+      24,
+      2.3,
+      6.5,
+      1457,
+      4609
+    ],
+    [
+      73.4,
+      39.4,
+      17,
+      2,
+      5.9,
+      930,
+      4003
+    ],
+    [
+      86.5,
+      56.6,
+      17.3,
+      1,
+      2.5,
+      412,
+      1504
+    ],
+    [
+      68.2,
+      56.8,
+      17.2,
+      1.1,
+      3.8,
+      892,
+      3292
+    ],
+    [
+      76,
+      56.6,
+      17,
+      1,
+      3.6,
+      817,
+      2945
+    ],
+    [
+      76.7,
+      53.5,
+      17.1,
+      0.6,
+      2.5,
+      349,
+      1629
+    ],
+    [
+      58.8,
+      39.1,
+      24.4,
+      0.6,
+      3.8,
+      747,
+      3563
+    ],
+    [
+      59.7,
+      39.9,
+      17.5,
+      0.7,
+      3.7,
+      711,
+      3429
+    ]
+  ],
+  "optimized2": [
+    [
+      90.6,
+      51.3,
+      17,
+      1.6,
+      2.3,
+      320,
+      958
+    ],
+    [
+      71,
+      53.1,
+      17.5,
+      1.8,
+      3.7,
+      704,
+      2186
+    ],
+    [
+      80.9,
+      56.5,
+      17.5,
+      1.6,
+      3.6,
+      646,
+      1955
+    ],
+    [
+      77.1,
+      41.5,
+      17.1,
+      1.7,
+      4.5,
+      697,
+      2173
+    ],
+    [
+      58,
+      35.1,
+      25,
+      2.3,
+      6.6,
+      1457,
+      4624
+    ],
+    [
+      72.6,
+      39.4,
+      17.5,
+      2,
+      5.9,
+      929,
+      4001
+    ],
+    [
+      58,
+      29.4,
+      33.3,
+      1.7,
+      2.9,
+      413,
+      1492
+    ],
+    [
+      65.3,
+      41.8,
+      17.4,
+      1.3,
+      4.2,
+      889,
+      3290
+    ],
+    [
+      70.4,
+      44.2,
+      17.3,
+      1.2,
+      3.9,
+      815,
+      2931
+    ],
+    [
+      72.5,
+      56.6,
+      17.5,
+      0.6,
+      2.5,
+      349,
+      1626
+    ],
+    [
+      56,
+      30.2,
+      25,
+      0.7,
+      4,
+      747,
+      3573
+    ],
+    [
+      57,
+      38.9,
+      25,
+      0.7,
+      3.9,
+      709,
+      3422
+    ]
+  ],
+  "optimizedFinal": [
+    [
+      84,
+      45.1,
+      17.5,
+      1.7,
+      2.3,
+      320,
+      957
+    ],
+    [
+      67,
+      41.9,
+      17.6,
+      1.8,
+      3.6,
+      705,
+      2186
+    ],
+    [
+      77.4,
+      48.3,
+      17.6,
+      1.5,
+      3.3,
+      646,
+      1950
+    ],
+    [
+      73,
+      42.4,
+      17,
+      1.8,
+      4.4,
+      697,
+      2174
+    ],
+    [
+      55.5,
+      31,
+      25.1,
+      2.8,
+      7.6,
+      1456,
+      4620
+    ],
+    [
+      68.2,
+      35.8,
+      18,
+      2.1,
+      5.9,
+      929,
+      4006
+    ],
+    [
+      80.6,
+      47.1,
+      17.1,
+      1.1,
+      2.6,
+      411,
+      1501
+    ],
+    [
+      62.8,
+      39.4,
+      23.8,
+      1.2,
+      3.9,
+      890,
+      3306
+    ],
+    [
+      69.6,
+      47.5,
+      18.2,
+      1,
+      3.6,
+      815,
+      2941
+    ],
+    [
+      70.1,
+      50.8,
+      17.7,
+      0.6,
+      2.6,
+      350,
+      1625
+    ],
+    [
+      55.5,
+      38.5,
+      25.1,
+      0.6,
+      3.6,
+      749,
+      3583
+    ],
+    [
+      56.7,
+      38.7,
+      25,
+      0.6,
+      3.7,
+      709,
+      3433
+    ]
+  ],
+  "baseline3": [
+    [
+      83.9,
+      47.7,
+      17.4,
+      1.7,
+      2.3,
+      321,
+      952
+    ],
+    [
+      66.1,
+      46.5,
+      17.6,
+      2.1,
+      3.9,
+      707,
+      2184
+    ],
+    [
+      76.1,
+      56.8,
+      16.8,
+      1.7,
+      3.7,
+      649,
+      1962
+    ],
+    [
+      72.4,
+      41.2,
+      17.5,
+      1.8,
+      4.7,
+      697,
+      2174
+    ],
+    [
+      55.8,
+      32.5,
+      25,
+      2.5,
+      6.7,
+      1458,
+      4620
+    ],
+    [
+      68.1,
+      39.5,
+      17.6,
+      2.1,
+      5.4,
+      930,
+      3997
+    ],
+    [
+      80.4,
+      56.7,
+      17.3,
+      1,
+      2.2,
+      412,
+      1506
+    ],
+    [
+      63.1,
+      47.2,
+      17.6,
+      1.2,
+      3.7,
+      892,
+      3295
+    ],
+    [
+      68.9,
+      49.6,
+      17.6,
+      1.2,
+      3.8,
+      817,
+      2934
+    ],
+    [
+      71.3,
+      56.6,
+      17.5,
+      0.6,
+      2.4,
+      349,
+      1645
+    ],
+    [
+      54.8,
+      38.5,
+      25.1,
+      0.7,
+      3.8,
+      749,
+      3581
+    ],
+    [
+      56.3,
+      39.4,
+      25,
+      0.7,
+      3.7,
+      712,
+      3450
+    ]
+  ],
+  "finalComparison": [
+    {
+      "scenario": "desert-single",
+      "baselineFps": 83.9,
+      "optimizedFps": 84,
+      "fpsChangePercent": 0.11918951132299238
+    },
+    {
+      "scenario": "desert-horizontal",
+      "baselineFps": 66.1,
+      "optimizedFps": 67,
+      "fpsChangePercent": 1.3615733736762614
+    },
+    {
+      "scenario": "desert-vertical",
+      "baselineFps": 76.1,
+      "optimizedFps": 77.4,
+      "fpsChangePercent": 1.708278580814726
+    },
+    {
+      "scenario": "country-single",
+      "baselineFps": 72.4,
+      "optimizedFps": 73,
+      "fpsChangePercent": 0.828729281767937
+    },
+    {
+      "scenario": "country-horizontal",
+      "baselineFps": 55.8,
+      "optimizedFps": 55.5,
+      "fpsChangePercent": -0.5376344086021501
+    },
+    {
+      "scenario": "country-vertical",
+      "baselineFps": 68.1,
+      "optimizedFps": 68.2,
+      "fpsChangePercent": 0.1468428781204345
+    },
+    {
+      "scenario": "city-single",
+      "baselineFps": 80.4,
+      "optimizedFps": 80.6,
+      "fpsChangePercent": 0.24875621890545485
+    },
+    {
+      "scenario": "city-horizontal",
+      "baselineFps": 63.1,
+      "optimizedFps": 62.8,
+      "fpsChangePercent": -0.47543581616482644
+    },
+    {
+      "scenario": "city-vertical",
+      "baselineFps": 68.9,
+      "optimizedFps": 69.6,
+      "fpsChangePercent": 1.015965166908539
+    },
+    {
+      "scenario": "effects-single",
+      "baselineFps": 71.3,
+      "optimizedFps": 70.1,
+      "fpsChangePercent": -1.6830294530154277
+    },
+    {
+      "scenario": "effects-horizontal",
+      "baselineFps": 54.8,
+      "optimizedFps": 55.5,
+      "fpsChangePercent": 1.277372262773735
+    },
+    {
+      "scenario": "effects-vertical",
+      "baselineFps": 56.3,
+      "optimizedFps": 56.7,
+      "fpsChangePercent": 0.7104795737122638
+    }
+  ],
+  "summary": {
+    "meanPerCaseFpsChangePercent": 0.3934239308516616,
+    "smallestCaseChangePercent": -1.6830294530154277,
+    "largestCaseChangePercent": 1.708278580814726,
+    "interpretation": "The final unchanged control reproduced the lower frame-rate level of the final optimized run. Mean case FPS is effectively unchanged; these serial runs do not establish a whole-game FPS improvement. Dense ground-cover GPU savings are supported separately by the interleaved pixel/timer comparison.",
+    "caveats": "Other browser workloads were active on the machine. Earlier identical-control runs varied greatly; cosmetic geometry and frame pacing also vary. Rounded DOM figures cannot establish sub-percent gains or consistent percentile changes."
+  },
+  "bundles": {
+    "baseline": "game-KB_io4rF.js",
+    "optimizedInitial": "game-DLhidRZ2.js",
+    "optimizedFinal": "game-7w0FvAqU.js"
+  },
+  "verification": {
+    "testSuites": 7,
+    "testsPassed": 54,
+    "typecheck": "passed",
+    "productionBuild": "passed",
+    "pixelComparisons": 9,
+    "changedPixelChannels": 0
+  },
+  "artifacts": {
+    "denseVegetation": "output/scatter-fidelity-2026-10-07.json",
+    "finalBenchmarkScreenshot": "/private/tmp/iron-nomad-render-efficiency-benchmark.png",
+    "finalControlScreenshot": "/private/tmp/iron-nomad-render-efficiency-control.png"
+  }
+}

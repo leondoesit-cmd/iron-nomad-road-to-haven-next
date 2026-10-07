@@ -1,0 +1,39 @@
+IRON NOMAD — SOUND CREDITS
+
+Bundled recordings may be used in a commercial build under the licenses below. Keep this credit file with distributions.
+
+Required attribution:
+“Deer Sound” by Alexander / Orange Free Sounds
+https://orangefreesounds.com/deer-sound/
+Licensed under Creative Commons Attribution 4.0 International:
+https://creativecommons.org/licenses/by/4.0/
+Changed: leading silence trimmed; mono PCM conversion, alternate excerpts, edge fades and peak normalization. No endorsement implied.
+
+CC0 recordings (credit appreciated, not required):
+Joseph SARDIN — BigSoundBank.com / LaSonotheque
+https://bigsoundbank.com/licenses.html
+Kenney — Impact Sounds, https://kenney.nl/assets/impact-sounds
+rubberduck — 100 CC0 metal and wood SFX, https://opengameart.org/content/100-cc0-metal-and-wood-sfx
+Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney — The Free Firearm Sound Library
+https://opengameart.org/content/the-free-firearm-sound-library
+domasx2 — racing car engine sound loops, https://opengameart.org/content/racing-car-engine-sound-loops
+SpringySpringo — recorded airsoft gun reload, https://opengameart.org/content/gun-reload-sounds
+betchkal — solitary wolf field recording, https://freesound.org/people/betchkal/sounds/500646/
+7h3_lark — rattlesnake recording, https://freesound.org/people/7h3_lark/sounds/268580/
+eZZin — recorded hiccups, https://freesound.org/people/eZZin/sounds/619255/
+Daphne_in_Wonderland — footsteps on wet sand, https://freesound.org/people/Daphne_in_Wonderland/sounds/383490/
+
+CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/
+
+The file-by-file source, author, license, edits and SHA-256 inventory is in sources.json. Selected recordings are cropped and converted; foley uses recorded objects and human performances. The wolf and rattlesnake cues are animal recordings. No oscillator/noise-generated SFX or ambience are used. Engine speed changes the playback rate of a recorded loop. Firearm families have six recorded takes each; every event cue has at least three recordings or recorded excerpts. Related cues may share banks. The deer variants are different excerpts of one original call. Playback applies subtle pitch/gain changes, intensity filtering, distance/wall absorption and early reflections. Bike, car, diesel and V8 engines blend recorded running sections by load and RPM. Radio text uses captions by default; the optional browser TTS setting is synthesized speech and does not form part of this asset bank. User-imported music is supplied by the player and is outside this asset license inventory.
+
+Additional BigSoundBank recording contributors: DenisChardonnet, Dorian CLAIR, GlaneurDeSons, Joseph SARDIN, Joseph SARDIN & Axeline T., JosephSardin, Le tiroir du fond, Pierre SIBANARCO, anonyme, charlesdu76, gamin. See sources.json for individual credits.
+
+Customization recording additions (CC0):
+danhelbling — Gun Handling foley, https://freesound.org/people/danhelbling/sounds/272394/
+UnplugTheFridge — Honda gear shifter handling, https://freesound.org/people/UnplugTheFridge/sounds/529222/
+seth-m — Honda CR-V driving on gravel, https://freesound.org/people/seth-m/sounds/341069/
+kyles — car/van skid on gravel, https://freesound.org/people/kyles/sounds/637161/
+BigSoundBank — AC Cobra 427 V8, damaged muffler, electric fans, pressure-cooker steam, car road recordings, tire squeals/air leak, difficult starting and pistol mechanisms. Individual recording pages and authors are in sources.json.
+
+Component design uses real recorded material and processing. Electric fan and steam recordings provide cooling-system foley; recorded soft impacts provide flat-tire thumps; metal-sheet impacts provide damaged gearbox and panel foley; filtered car recordings provide drivetrain hum. These are designed component layers, not isolated recordings of every fitted part or engine size. Motor families use bike/car/diesel/V8 recordings, with displacement, layout, load and condition changing pitch and filtering. Alternate component takes include different excerpts of the same recording. Magazine and rack phases include excerpts of recorded airsoft reloads. Gear-shift handling is a recorded shifter, not a recording of transmission internals.

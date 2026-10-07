@@ -261,6 +261,21 @@ function gun(m: string): string {
       return P('M2 22 L12 19 V28 L6 36 Q2 38 2 33Z', WOOD) + P('M12 17 H28 V24 H12Z', '#9a7a3a') + P('M28 17.5 H46 V21 H28Z', STEEL_DK) + P('M26 21 H44 V24 H26Z', STEEL) + L('M14 24 Q18 34 24 28', INK, 2) + L('M14 24 Q18 33 24 28', '#9a7a3a', 1.2) + P('M26 24 H40 V27 H26Z', WOOD);
     case 'crossbow':
       return R(3, 21, 36, 5, WOOD, 1.5) + L('M36 23 Q41 11 46 7', INK, 3.4) + L('M36 23 Q41 11 46 7', STEEL_DK, 1.8) + L('M36 24 Q41 36 46 40', INK, 3.4) + L('M36 24 Q41 36 46 40', STEEL_DK, 1.8) + L('M46 7 L33 23.5 L46 40', '#e8e0c4', 1) + L('M10 21 H40', STEEL, 2) + P('M8 26 H14 L13 36 H7Z', BLK);
+    case 'bow':
+      // A recurve on end, its string, and an arrow across it with a red crest and pale vanes.
+      return (
+        L('M30 4 Q42 12 37 24 Q42 36 30 44', INK, 4.2) +
+        L('M30 4 Q42 12 37 24 Q42 36 30 44', WOOD, 2.6) +
+        L('M30 4 Q27 2 25 4 M30 44 Q27 46 25 44', INK, 2.2) +
+        L('M26.5 4.5 L21 24 L26.5 43.5', '#e8e0c4', 1) +
+        R(35, 20, 5, 9, WOOD_DK, 1.5) +
+        L('M5 24 H44', INK, 2.6) +
+        L('M5 24 H44', '#b08a5a', 1.4) +
+        P('M47 24 L42 21.5 V26.5Z', STEEL) +
+        L('M14 24 H17', '#b8322a', 2) +
+        P('M5 24 L2 20 H8 L11 24Z', '#e8e2d4') +
+        P('M5 24 L2 28 H8 L11 24Z', '#d8b03a')
+      );
     case 'combat':
       return P('M2 21 L12 18 V29 L5 33 H2Z', BLK) + P('M12 15 H29 V23 H12Z', STEEL_DK) + P('M29 15.5 H46 V18.5 H29Z', STEEL) + P('M29 18.5 H44 V21.5 H29Z', STEEL_DK) + P('M29 21.5 H40 V25 H29Z', BLK) + P('M12 23 H17 L15 32 H11Z', BLK) + L('M12 14 H28', shade(STEEL_DK, 0.4), 1.2);
     case 'coach':
@@ -432,7 +447,7 @@ const SPOTS: Record<string, IconSpot> = {
 const SPOT_OF: Record<GunModel, keyof typeof SPOTS> = {
   pistol: 'hand', compact: 'hand', revolver: 'hand', cannon: 'hand', mp: 'hand', smg: 'smg', smg2: 'smg',
   rifle: 'long', carbine: 'long', ar: 'long', br: 'long', dmr: 'long', sniper: 'long', lever: 'long', lmg: 'long',
-  sawn: 'shot', pump: 'shot', combat: 'shot', coach: 'shot', crossbow: 'bow',
+  sawn: 'shot', pump: 'shot', combat: 'shot', coach: 'shot', crossbow: 'bow', bow: 'bow',
 };
 
 /** What is fitted to a gun, shrunk onto its picture: stock and magazine behind, then the rail and underbarrel, the muzzle, and the optic on top. */

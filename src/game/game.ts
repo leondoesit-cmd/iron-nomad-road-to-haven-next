@@ -4,7 +4,9 @@ import { Btn, isHeld, wasPressed } from '../input/intents';
 import { AudioEngine } from '../audio/audio';
 import { Hud } from '../ui/hud';
 import { FocusUI } from '../ui/focus';
-import { Campaign } from './campaign';
+import { Campaign, GOD_BAG_SLOTS, grantAllWeapons } from './campaign';
+import { setExtraBagSlots } from '../sim/gear';
+import { StoryVoice } from '../audio/storyVoice';
 import { LegScene } from './legScene';
 import { WorldMemory, type WorldPose } from './worldMemory';
 import { Scene, type SceneResult, type SceneServices } from './scene';
@@ -23,13 +25,17 @@ import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { Workbench } from '../ui/garage';
 import { InventoryScreen } from '../ui/inventory';
 import { TutorialDirector, TRAINING_STEPS } from './tutorial';
+import { setupStoryCampaign } from './story';
 import { CoachUI } from '../ui/coach';
 import type { Player } from './player';
 import type { Vehicle } from './vehicle';
+import { BenchmarkRun, type BenchmarkReport } from './benchmark';
+import { Rng } from '../core/rng';
 
 export type Phase =
   | 'boot'
   | 'title'
+  | 'benchmark'
   | 'leg'
   | 'vote'
   | 'camp'
@@ -50,6 +56,10 @@ export class Game {
   overlays: Overlays;
   campaign = new Campaign();
   scene: Scene | null = null;
+  /** God mode (a setting, on by default): every weapon in the game from the start, with room and ammo for them. */
+  godMode = true;
+  /** Reads the story's subtitles aloud with the browser's speech synthesis (a setting, on by default). */
+  storyVoice = new StoryVoice();
   phase: Phase = 'boot';
   paused = false;
   pausedBy = -1;
@@ -58,6 +68,8 @@ export class Game {
   private time = 0;
   private hudAcc = 0;
   debug = false;
+  private simulationMs = 0;
+  private renderCpuMs = 0;
   fps = 0;
   private fpsEma = 60;
   private frameMs = 16;
@@ -74,6 +86,11 @@ export class Game {
   solo = false;
   /** Set while Training is running: the lessons, played in a quiet copy of the open world. */
   tutorial: TutorialDirector | null = null;
+  benchmark: BenchmarkRun | null = null;
+  benchmarkReport: BenchmarkReport | null = null;
+  private benchmarkMeta: Omit<BenchmarkReport, 'results'> | null = null;
+  private benchmarkRestore: { solo: boolean; layout: GameRenderer['layout']; slots: InputManager['slots']; campaign: Campaign; volume: number; scale: number; slowMo: number } | null = null;
+  private benchmarkRng = new Rng(4242);
 
   constructor() {
     this.debug = new URLSearchParams(location.search).has('debug');
@@ -84,7 +101,7 @@ export class Game {
     this.hud = new Hud(halves);
     this.hud.setLayout(this.R.layout);
     this.overlays = new Overlays(this);
-    this.input.onEscape = () => (this.inventory ? this.inventory.close() : this.togglePause(-1));
+    this.input.onEscape = () => this.benchmark ? this.stopBenchmark() : (this.inventory ? this.inventory.close() : this.togglePause(-1));
     // Mouse aim: click the canvas to capture the pointer. Esc (or alt-tab) releases it, which pauses.
     this.input.attachMouse(canvas);
     this.input.onChange = () => this.saveSettings();
@@ -104,14 +121,24 @@ export class Game {
       this.hud.disconnected[p] = false;
     };
     // Browsers need a gesture before audio can start.
-    const wake = () => this.audio.init();
+    const wake = () => { this.audio.init(); this.audio.userMusic.unlock(); };
+    void this.audio.userMusic.load();
     window.addEventListener('pointerdown', wake);
     window.addEventListener('keydown', wake);
     window.addEventListener('gamepadconnected', wake);
     this.R.onContextRestored = () => {
       /* geometry lives in the scene graph; three rebuilds GPU buffers lazily */
     };
-    window.addEventListener('resize', () => this.layout());
+    window.addEventListener('resize', () => {
+      if (this.benchmark) this.stopBenchmark('Window size changed. Run again at a fixed window size.');
+      this.layout();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (this.benchmark && document.hidden) {
+        this.benchmark.restartCurrent();
+        this.overlays.updateBenchmarkProgress(true);
+      }
+    });
     this.applySettings();
   }
 
@@ -150,17 +177,23 @@ export class Game {
   }
 
   applySettings() {
+    this.setGodMode(this.godMode);
     try {
       const raw = localStorage.getItem('ironnomad.settings');
       if (!raw) return;
-      const s = JSON.parse(raw) as { quality?: QualityPreset; ui?: number; layout?: 'horizontal' | 'vertical'; vol?: number; music?: number; tts?: boolean; mouse?: number; solo?: boolean; input?: unknown };
+      const s = JSON.parse(raw) as { quality?: QualityPreset; ui?: number; layout?: 'horizontal' | 'vertical'; vol?: number; music?: number; gameMusicEnabled?: boolean; userMusicEnabled?: boolean; userMusicVolume?: number; tts?: boolean; god?: boolean; voice?: boolean; mouse?: number; solo?: boolean; input?: unknown };
       if (s.solo) this.setSolo(true);
       if (s.quality && QUALITY[s.quality]) this.R.setQuality(s.quality);
       if (s.ui) this.hud.setScale(s.ui);
       if (s.layout) this.R.setLayout(s.layout);
       if (s.vol !== undefined) this.audio.setVolume(s.vol);
       if (s.music !== undefined) this.audio.setMusicVolume(s.music);
+      if (s.gameMusicEnabled !== undefined) this.audio.setGameMusicEnabled(s.gameMusicEnabled);
+      if (s.userMusicEnabled !== undefined) this.audio.setUserMusicEnabled(s.userMusicEnabled);
+      if (s.userMusicVolume !== undefined) this.audio.setUserMusicVolume(s.userMusicVolume);
       if (s.tts !== undefined) this.audio.setTtsEnabled(s.tts);
+      if (s.god !== undefined) this.setGodMode(s.god);
+      if (s.voice !== undefined) this.storyVoice.enabled = s.voice;
       if (s.mouse) this.input.settings.mouseSens = s.mouse;
       // Control settings: bindings, sensitivities, view. Saved since the first version only kept the mouse speed.
       this.input.importSettings(s.input);
@@ -170,10 +203,11 @@ export class Game {
   }
 
   saveSettings() {
+    if (this.benchmark) return;
     try {
       localStorage.setItem(
         'ironnomad.settings',
-        JSON.stringify({ quality: this.R.quality, ui: this.hud.uiScale, layout: this.R.layout, vol: this.audio.volume, music: this.audio.musicVolume, tts: this.audio.ttsEnabled, mouse: this.input.settings.mouseSens, solo: this.solo, input: this.input.exportSettings() }),
+        JSON.stringify({ quality: this.R.quality, ui: this.hud.uiScale, layout: this.R.layout, vol: this.audio.volume, music: this.audio.musicVolume, gameMusicEnabled: this.audio.gameMusicEnabled, userMusicEnabled: this.audio.userMusicEnabled, userMusicVolume: this.audio.userMusicVolume, tts: this.audio.ttsEnabled, god: this.godMode, voice: this.storyVoice.enabled, mouse: this.input.settings.mouseSens, solo: this.solo, input: this.input.exportSettings() }),
       );
     } catch {
       /* ignore */
@@ -189,6 +223,11 @@ export class Game {
       input: this.input,
       campaign: this.campaign,
       onRadio: (text) => this.hud.showSub(text, Math.max(4, Math.min(9, text.length / 14))),
+      onSubtitle: (text, secs) => {
+        this.hud.showSub(text, secs ?? Math.max(3.5, Math.min(8, text.length / 13)));
+        this.storyVoice.volume = this.audio.muted ? 0 : this.audio.volume;
+        this.storyVoice.speak(text);
+      },
       onTip: (id) => this.hud.showTip(t(`tip.${id}`), 10),
       onBanner: (title, sub) => this.hud.showBanner(title, sub, 4),
     };
@@ -216,6 +255,14 @@ export class Game {
     this.setSolo(this.solo);
     this.campaign = new Campaign(this.overlays.heroes(), this.solo);
     this.campaign.seed = (Math.random() * 1e6) | 0;
+    if (this.godMode) grantAllWeapons(this.campaign);
+  }
+
+  /** Turning it on arms the run in progress too; turning it off keeps what is carried, but the bag shrinks back. */
+  setGodMode(on: boolean) {
+    this.godMode = on;
+    setExtraBagSlots(on ? GOD_BAG_SLOTS : 0);
+    if (on && this.phase !== 'boot' && this.phase !== 'title') grantAllWeapons(this.campaign);
   }
 
   startNewGame() {
@@ -224,12 +271,24 @@ export class Game {
     this.beginLeg(this.campaign.legId);
   }
 
+  /**
+   * Story mode: a new run that begins in Nar's yard on the salt flat, on foot, with Nar out cold on his mattress and the
+   * rickshaw trike in pieces round him (`game/story.ts`).
+   */
+  startStory() {
+    this.input.autoJoinKeyboard();
+    this.newCampaign();
+    setupStoryCampaign(this.campaign);
+    this.beginLeg(LEGS.route.start, undefined, true);
+  }
+
   continueGame() {
     const c = loadCampaign();
     if (!c) return this.startNewGame();
     this.setSolo(c.solo);
     this.input.autoJoinKeyboard();
     this.campaign = c;
+    if (this.godMode) grantAllWeapons(c);
     this.world = c.worldSave ? WorldMemory.restore(c.worldSave) : null;
     // Resume at the Ledger that was saved at dawn.
     this.beginLedger();
@@ -240,6 +299,7 @@ export class Game {
 
   disposeScene() {
     this.attract = false;
+    this.storyVoice.stop();
     if (this.tutorial) {
       this.tutorial.dispose(this.scene instanceof LegScene ? this.scene : null);
       this.tutorial = null;
@@ -255,14 +315,14 @@ export class Game {
     }
   }
 
-  beginLeg(legId: string, start?: WorldPose) {
+  beginLeg(legId: string, start?: WorldPose, story = false) {
     this.disposeScene();
     this.overlays.hideAll();
     this.campaign.legId = legId;
     const leg = legById(legId);
     this.R.resize();
     if (leg.open) this.world ??= new WorldMemory();
-    const sc = new LegScene(this.services(), leg, leg.open ? { memory: this.world!, start } : {});
+    const sc = new LegScene(this.services(), leg, leg.open ? { memory: this.world!, start, story: story && !!leg.open.yard } : {});
     sc.onResult = (r) => this.onSceneResult(r);
     sc.openWorkbench = (p, v) => this.openWorkbench(p, v);
     sc.openInventory = (p) => this.openInventory(p);
@@ -271,7 +331,8 @@ export class Game {
     this.paused = false;
     this.hud.setVisible(true);
     this.focus.active = false;
-    this.hud.showBanner(leg.name.toUpperCase(), start ? `Day ${this.campaign.day}` : leg.subtitle, 5);
+    if (story) this.hud.showBanner('NAR\'S FLAT', 'Mission one', 5);
+    else this.hud.showBanner(leg.name.toUpperCase(), start ? `Day ${this.campaign.day}` : leg.subtitle, 5);
     this.audio.setMusic('travel');
     this.startLock = 0.5;
   }
@@ -561,6 +622,102 @@ export class Game {
     this.attract = true;
   }
 
+  /** Title-only, disposable scenes: never writes campaign or settings saves. */
+  startBenchmark(duration: 'quick' | 'standard' = 'standard') {
+    if (this.phase !== 'title' || this.benchmark) return;
+    this.benchmarkRestore = {
+      solo: this.solo, layout: this.R.layout, slots: [...this.input.slots], campaign: this.campaign,
+      volume: this.audio.volume, scale: this.R.renderScale, slowMo: this.slowMo,
+    };
+    this.disposeScene();
+    this.photo = null;
+    this.paused = false;
+    this.slowMo = 1;
+    this.acc = 0;
+    this.audio.setVolume(0);
+    this.audio.setMusic('none');
+    this.input.release();
+    this.R.setRenderScale(1);
+    this.benchmark = new BenchmarkRun(duration);
+    const gl = this.R.gl.getContext();
+    this.benchmarkMeta = {
+      version: 1, createdAt: new Date().toISOString(), duration, seed: 4242,
+      quality: this.R.quality, width: this.R.width, height: this.R.height,
+      pixelRatio: this.R.renderPixelRatio(), renderScale: 1, post: this.R.usePost,
+      browser: navigator.userAgent, renderer: String(gl.getParameter(gl.RENDERER)),
+      warmupMs: this.benchmark.warmupMs, measureMs: this.benchmark.measureMs,
+    };
+    this.phase = 'benchmark';
+    this.hud.setVisible(false);
+    this.overlays.showBenchmarkRunning();
+  }
+
+  private loadBenchmarkCase() {
+    const run = this.benchmark!;
+    this.disposeScene();
+    const test = run.current;
+    this.setSolo(test.seats === 1);
+    this.R.setLayout(test.layout);
+    this.layout();
+    this.campaign = new Campaign(undefined, this.solo);
+    this.campaign.seed = 4242;
+    this.campaign.legId = test.scenario.leg;
+    this.benchmarkRng = new Rng(4242);
+    const svc = this.services();
+    svc.onRadio = () => {};
+    svc.onTip = () => {};
+    svc.onBanner = () => {};
+    const sc = new LegScene(svc, legById(test.scenario.leg));
+    sc.pendingResult = true;
+    sc.onResult = () => {};
+    sc.clock.elapsed = sc.clock.dayLength * (test.scenario.night ? 1.05 : 0.4);
+    sc.clock.frozen = true;
+    for (const p of sc.players) { p.autopilot = { speed: test.scenario.speed }; p.invuln = 3600; }
+    if (test.scenario.effects) {
+      const p = sc.players[0].pos;
+      for (let i = 0; i < 96; i++) {
+        const a = i * Math.PI * 2 / 96;
+        const r = 16 + (i % 4) * 5;
+        const x = p.x + Math.cos(a) * r, z = p.z + Math.sin(a) * r;
+        if (sc.src.layout.blockedAt(x, z, 1)) continue;
+        const zombie = sc.zombies.spawn(i % 5 === 0 ? 'runner' : 'walker', x, z, false, 4242);
+        // Stable cosmetic phase as well as the seeded layout and effect emitter.
+        zombie.yaw = a; zombie.phase = i % 6; zombie.walkPhase = zombie.phase;
+        zombie.variant = i % 3; zombie.aiT = 0;
+      }
+    }
+    this.scene = sc;
+    this.acc = 0;
+    this.last = performance.now();
+    run.loaded();
+  }
+
+  stopBenchmark(error?: string) {
+    if (!this.benchmark) return;
+    const run = this.benchmark;
+    if (run.stage === 'complete' && this.benchmarkMeta) {
+      this.benchmarkReport = { ...this.benchmarkMeta, results: run.results };
+    }
+    const restore = this.benchmarkRestore!;
+    this.benchmark = null;
+    this.benchmarkMeta = null;
+    this.benchmarkRestore = null;
+    this.disposeScene();
+    this.setSolo(restore.solo);
+    this.R.setLayout(restore.layout);
+    this.input.slots = restore.slots;
+    this.campaign = restore.campaign;
+    this.audio.setVolume(restore.volume);
+    this.R.setRenderScale(restore.scale);
+    this.slowMo = restore.slowMo;
+    this.acc = 0;
+    this.last = performance.now();
+    this.toTitle();
+    // startAttract changes seats; restore both joined devices after its setup too.
+    this.input.slots = restore.slots;
+    this.overlays.showBenchmark(error ?? (run.stage === 'complete' ? undefined : 'Run cancelled.'));
+  }
+
   // ------------------------------------------------------------------ pause
 
   togglePause(by: number) {
@@ -579,6 +736,23 @@ export class Game {
   // ------------------------------------------------------------------ loop
 
   private frame(now: number) {
+    if (this.benchmark) {
+      if (this.R.contextLost) this.stopBenchmark('Graphics context was lost. Run again after it recovers.');
+      else if (document.hidden) {
+        this.benchmark.restartCurrent();
+        this.last = now;
+        this.overlays.updateBenchmarkProgress(true);
+        requestAnimationFrame(n => this.frame(n));
+        return;
+      } else if (this.benchmark.stage === 'loading') {
+        try { this.loadBenchmarkCase(); }
+        catch (error) { console.error('Benchmark setup failed', error); this.stopBenchmark('Could not load this scenario. See the browser console for details.'); }
+        this.overlays.updateBenchmarkProgress();
+        requestAnimationFrame(n => this.frame(n));
+        return;
+      }
+    }
+    const benchmarkFrameMs = Math.max(0.0001, now - this.last);
     const raw = Math.min(0.25, Math.max(0.0001, (now - this.last) / 1000));
     this.last = now;
     this.frameMs = raw * 1000;
@@ -588,17 +762,34 @@ export class Game {
     // The fixed-step accumulator is clamped to 5 steps so a slow frame cannot spiral.
     this.acc += dt;
     let steps = 0;
+    const measuring = this.debug || !!this.benchmark;
+    const simulationStart = measuring ? performance.now() : 0;
+    const frameScene = this.scene;
+    frameScene?.beginFrame();
     while (this.acc >= FIXED_STEP && steps < MAX_STEPS) {
       this.fixed(FIXED_STEP);
       this.acc -= FIXED_STEP;
       steps++;
     }
+    frameScene?.endFrame();
+    if (measuring) this.simulationMs = performance.now() - simulationStart;
+    const droppedSteps = (steps === MAX_STEPS ? Math.floor(this.acc / FIXED_STEP) : 0)
+      + Math.floor(Math.max(0, benchmarkFrameMs / 1000 - raw) / FIXED_STEP);
     if (steps === MAX_STEPS) this.acc = 0;
     this.render(this.acc / FIXED_STEP, raw);
+    this.storyVoice.setPaused(this.paused || document.hidden);
+    if (this.benchmark) {
+      const info = this.R.gl.info.render;
+      this.benchmark.record({ frameMs: benchmarkFrameMs, simulationMs: this.simulationMs, renderCpuMs: this.renderCpuMs,
+        calls: info.calls, triangles: info.triangles, steps, droppedSteps });
+      if (this.benchmark.stage === 'complete') this.stopBenchmark();
+      else this.overlays.updateBenchmarkProgress();
+    }
     requestAnimationFrame((n) => this.frame(n));
   }
 
   private fixed(step: number) {
+    this.audio.updateUserMusic(!this.attract && (this.phase === 'leg' || this.phase === 'camp') && !!this.scene?.players.some(p => p.inVehicle));
     this.input.sample(step);
     this.time += step;
     // Menus and overlays run on the same tick so cursors feel identical to the sim.
@@ -618,6 +809,20 @@ export class Game {
     this.overlays.tick(step);
     const sc = this.scene;
     if (!sc) return;
+    if (this.benchmark) {
+      // Menu input can cancel the run, but held controls must not change the scripted workload.
+      for (const it of this.input.intents) { it.held = 0; it.pressed = 0; it.released = 0; it.move = [0, 0]; it.look = [0, 0]; }
+      sc.tick(step);
+      if (this.benchmark.current.scenario.effects) {
+        const p = sc.players[0].pos, rng = this.benchmarkRng;
+        for (let i = 0; i < 8; i++) {
+          const x = p.x + rng.range(-12, 12), z = p.z + rng.range(3, 22), y = sc.groundAt(x, z) + 0.5;
+          sc.fx.smoke.emit(x, y, z, rng.range(-1, 1), 1.5, 0, 2.5, 1.5, 5, 0.18, 0.16, 0.13, 0.5);
+          sc.fx.glow.emit(x, y, z, 0, 1.2, 0, 0.7, 0.8, 0.1, 1, 0.5, 0.1, 0.9);
+        }
+      }
+      return;
+    }
     if (this.attract) {
       if (this.phase === 'title') {
         sc.tick(step);
@@ -730,12 +935,13 @@ export class Game {
   }
 
   private render(alpha: number, dt: number) {
+    const renderStart = this.debug || this.benchmark ? performance.now() : 0;
     const sc = this.scene;
-    if (sc && (this.phase === 'leg' || this.phase === 'camp' || this.phase === 'ledger' || this.phase === 'vote' || this.phase === 'report' || (this.phase === 'title' && this.attract))) {
+    if (sc && (this.phase === 'benchmark' || this.phase === 'leg' || this.phase === 'camp' || this.phase === 'ledger' || this.phase === 'vote' || this.phase === 'report' || (this.phase === 'title' && this.attract))) {
       sc.renderFrame(this.paused ? 0 : alpha, dt);
       this.applyPhoto();
       if (!this.attract) sc.updateAudio(dt);
-      this.R.adapt(this.frameMs);
+      if (!this.benchmark) this.R.adapt(this.frameMs);
       // Particles scale with the viewport.
       for (let i = 0; i < 2; i++) {
         const v = this.R.views[i];
@@ -746,14 +952,17 @@ export class Game {
         void v;
       }
       this.R.render(this.time);
-      if (!this.attract) this.hud.update(sc, dt, this.input.slots, { legProgress: () => null });
+      if (!this.attract && !this.benchmark) this.hud.update(sc, dt, this.input.slots, { legProgress: () => null });
     } else {
       // Title: slow orbit around an empty ground plane is not needed; clear to the sky colour.
       this.R.gl.setScissorTest(false);
       this.R.gl.setClearColor(0x0b0907, 1);
       this.R.gl.clear();
     }
-    if (this.debug) this.overlays.debugLine(`${this.fps.toFixed(0)} fps · ${this.R.gl.info.render.calls} calls · ${(this.R.gl.info.render.triangles / 1000).toFixed(0)}k tris · scale ${this.R.renderScale.toFixed(2)}${sc ? ` · zombies ${sc.zombies.aliveCount} · veh ${sc.vehicles.length}` : ''}`);
+    if (this.debug || this.benchmark) this.renderCpuMs = performance.now() - renderStart;
+    if (this.debug) {
+      this.overlays.debugLine(`${this.fps.toFixed(0)} fps · CPU sim ${this.simulationMs.toFixed(1)} / draw ${this.renderCpuMs.toFixed(1)} ms · ${this.R.gl.info.render.calls} calls · ${(this.R.gl.info.render.triangles / 1000).toFixed(0)}k tris · scale ${this.R.renderScale.toFixed(2)}${sc ? ` · zombies ${sc.zombies.aliveCount} · veh ${sc.vehicles.length}` : ''}`);
+    }
   }
 }
 

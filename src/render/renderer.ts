@@ -1,18 +1,23 @@
 import * as THREE from 'three';
-import { DEG, lerp, smoothstep as smooth } from '../core/math';
+import { staticTransform } from './staticTransform';
+import { AdaptiveResolution } from './adaptiveResolution';
+import { DEG, clamp01, lerp, smoothstep as smooth } from '../core/math';
 import type { LightState } from '../sim/dayclock';
 import { ATMO, installAtmosphere, setAtmosphere } from './atmosphere';
 import { installGloss } from './gloss';
+import { installFireLight } from './fireLight';
 import { GLOBALS, KIT } from './materials';
 import { PostFX } from './post';
 import { SkyDome } from './sky';
 import { BREATH, installBreath, newTripView, resetCamera, shiftHue, tripCamera, tripTempo, lookActive, type TripView } from './trip';
 import type { Look } from '../sim/drugs';
+import { FACE_TRIP, faceStrength } from './faceGums';
 
 // Fog chunks must be replaced before the first material compiles.
 installAtmosphere();
 installBreath();
 installGloss();
+installFireLight();
 
 export type QualityPreset = 'low' | 'medium' | 'high';
 export interface QualitySpec {
@@ -39,6 +44,34 @@ export const QUALITY: Record<QualityPreset, QualitySpec> = {
 };
 
 export type SplitLayout = 'horizontal' | 'vertical';
+
+/**
+ * What the weather does to the look of the world this frame (`sim/climate.ts` decides it; the scene fills it in before the
+ * light is set). All zero is a fair day.
+ */
+export interface WeatherLook {
+  /** Cloud over the convoy, and how dark and heavy its base is. */
+  cover: number;
+  dark: number;
+  /** Rain falling, 0..1. */
+  rain: number;
+  /** Lightning lighting the world now, 0..1 (a flash dies in a fraction of a second), and flickering in a far thunderhead. */
+  flash: number;
+  farFlash: number;
+  /** A thunderhead on the horizon: its bearing (atan2 of x and z) and how much of the sky it fills. */
+  towerDir: number;
+  tower: number;
+  /** A rainbow, 0..1. */
+  bow: number;
+  /** Heat coming off the ground round each view's player, 0..1: the air shimmers and the far ground turns to water. */
+  heat: [number, number];
+}
+
+export function calmWeather(): WeatherLook {
+  return { cover: 0, dark: 0, rain: 0, flash: 0, farFlash: 0, towerDir: 0, tower: 0, bow: 0, heat: [0, 0] };
+}
+
+const _rainFog = new THREE.Color();
 
 export interface PlayerView {
   camera: THREE.PerspectiveCamera;
@@ -117,7 +150,7 @@ export class GameRenderer {
    * the scene itself is drawn at `baseDpr * quality * renderScale` and the composite scales it up with a sharp filter.
    */
   private outDpr = 1;
-  private frameEma = 16;
+  private resolution = new AdaptiveResolution();
   private lastRender = 0;
   night = 0;
   width = 1;
@@ -138,6 +171,8 @@ export class GameRenderer {
   private floatOk = true;
   /** Each player's trip, as the renderer sees it: what to bend in their view, and the clock it runs on. */
   trip: [TripView, TripView] = [newTripView(), newTripView()];
+  /** The weather's look this frame. The scene writes it; `setLight` reads it. */
+  wx: WeatherLook = calmWeather();
   /** Baseline sky, fog and light, put back after a view that bent them. */
   private tripSaved = {
     zenith: new THREE.Color(),
@@ -163,6 +198,9 @@ export class GameRenderer {
     this.gl.toneMapping = THREE.ACESFilmicToneMapping;
     this.gl.toneMappingExposure = 1.0;
     this.gl.autoClear = true;
+    // Count the whole frame (scene, shadows, both views and post passes), rather than only the last composite.
+    this.gl.info.autoReset = false;
+    staticTransform(this.scene);
     this.scene.fog = this.fog;
     this.scene.add(this.hemi);
     this.scene.add(this.sun);
@@ -239,6 +277,9 @@ export class GameRenderer {
     // The world heaves, and the sky grows an aurora, rings and (for the vine) an eye.
     BREATH.x = l.breathe * 0.16;
     BREATH.y = ph;
+    // The faces in the old gums' bark come forward.
+    FACE_TRIP.k.value = faceStrength(l);
+    FACE_TRIP.ph.value = ph;
     u.uTrip.value.set(l.sky, l.eye, ph, l.sky > 0.15 ? Math.min(1, l.sky) : 0);
     // The light drifts round the colour wheel, so everything it touches does too.
     const turn = l.hue * 0.3 * Math.sin(ph * 0.21);
@@ -282,6 +323,7 @@ export class GameRenderer {
     ATMO.sunCol.y = s.atmo.y;
     ATMO.sunCol.z = s.atmo.z;
     BREATH.x = 0;
+    FACE_TRIP.k.value = 0;
     u.uTrip.value.set(0, 0, 0, 0);
   }
 
@@ -314,6 +356,7 @@ export class GameRenderer {
   setQuality(q: QualityPreset) {
     this.quality = q;
     this.renderScale = 1;
+    this.resolution.reset();
     this.applyQuality();
     this.resize();
   }
@@ -427,18 +470,20 @@ export class GameRenderer {
     return Math.round(this.renderScale * 20) / 20;
   }
 
-  /** Apply time-of-day lighting. */
-  setLight(l: LightState, biome: 'wasteland' | 'city', cityMix = biome === 'city' ? 1 : 0, storm = 0, wet = 0) {
+  /** Apply time-of-day lighting. `wet` is how wet the hard ground is and `puddle` how full its puddles are (see `GLOBALS`). */
+  setLight(l: LightState, biome: 'wasteland' | 'city', cityMix = biome === 'city' ? 1 : 0, storm = 0, wet = 0, puddle = 0) {
     this.sky.mesh.visible = true;
     this.night = l.night;
+    const wx = this.wx;
     const e = l.elevation;
     const az = l.azimuth;
     const hz = Math.sqrt(Math.max(0.05, 1 - e * e));
     this.sunDir.set(Math.cos(az) * hz, e, Math.sin(az) * hz).normalize();
     this.sun.color.setRGB(...l.sunColor);
-    // A dust storm browns the whole sky over and takes the edge off the sun.
+    // A dust storm browns the whole sky over and takes the edge off the sun; cloud shades it, a thunderhead all but hides it.
     const dim = 1 - l.night * 0.85;
-    this.sun.intensity = l.sunIntensity * 1.05 * (1 - 0.5 * storm);
+    const shade = wx.cover * (0.3 + 0.6 * wx.dark);
+    this.sun.intensity = l.sunIntensity * 1.05 * (1 - 0.5 * storm) * (1 - shade);
     // The day-clock palette is authored as display (sRGB) colours.
     this.hemi.color.setRGB(...l.hemiSky, THREE.SRGBColorSpace);
     this.hemi.groundColor.setRGB(...l.hemiGround, THREE.SRGBColorSpace);
@@ -447,6 +492,22 @@ export class GameRenderer {
     if (storm > 0) {
       _storm.setRGB(0.66 * dim, 0.5 * dim, 0.32 * dim, THREE.SRGBColorSpace);
       this.fog.color.lerp(_storm, storm * 0.92);
+    }
+    // Under a lid of cloud the light goes flat and grey; rain greys the air itself. Lightning lights everything at once.
+    const grey = clamp01(wx.cover * (0.35 + 0.5 * wx.dark) + wx.rain * 0.4);
+    if (grey > 0) {
+      // A shower's grey is pale; a thunderhead's is slate, with a cold blue in it.
+      const slate = lerp(1, 0.62, wx.dark * wx.cover);
+      _rainFog.setRGB(0.5 * dim * slate, 0.53 * dim * slate, 0.58 * dim * slate, THREE.SRGBColorSpace);
+      this.fog.color.lerp(_rainFog, grey * 0.8);
+      this.hemi.color.lerp(_rainFog.setRGB(0.62 * dim, 0.65 * dim, 0.7 * dim, THREE.SRGBColorSpace), grey * 0.6);
+      this.hemi.groundColor.lerp(_rainFog.setRGB(0.28 * dim, 0.27 * dim, 0.26 * dim, THREE.SRGBColorSpace), grey * 0.4);
+      this.hemi.intensity *= 1 + 0.35 * grey - 0.35 * wx.dark * wx.cover;
+    }
+    if (wx.flash > 0) {
+      this.hemi.color.lerp(_rainFog.setRGB(0.85, 0.9, 1.0), Math.min(1, wx.flash));
+      this.hemi.intensity += wx.flash * 6;
+      this.fog.color.lerp(_rainFog.setRGB(0.7, 0.74, 0.85), wx.flash * 0.6);
     }
     const dist = QUALITY[this.quality].draw;
     const city = cityMix > 0.5;
@@ -459,6 +520,11 @@ export class GameRenderer {
     if (storm > 0) {
       this.fog.near *= Math.pow(0.1, storm);
       this.fog.far *= Math.pow(0.12, storm);
+    }
+    if (wx.rain > 0) {
+      // Heavy rain closes the view to a few hundred metres.
+      this.fog.near *= 1 - 0.75 * wx.rain;
+      this.fog.far *= 1 - 0.62 * wx.rain;
     }
     const u = this.sky.uniforms;
     u.uSunDir.value.copy(this.sunDir);
@@ -474,9 +540,13 @@ export class GameRenderer {
     _z2.setRGB(0.012, 0.018, 0.045, THREE.SRGBColorSpace);
     u.uZenith.value.copy(_z.lerp(_z2, l.night));
     if (storm > 0) u.uZenith.value.lerp(_storm.setRGB(0.52 * dim, 0.38 * dim, 0.24 * dim, THREE.SRGBColorSpace), storm * 0.85);
+    if (grey > 0) u.uZenith.value.lerp(_rainFog.setRGB(0.4 * dim, 0.43 * dim, 0.48 * dim, THREE.SRGBColorSpace).multiplyScalar(lerp(1, 0.55, wx.dark * wx.cover)), grey * 0.85);
+    u.uWx.value.set(wx.dark * wx.cover, wx.rain, wx.flash, wx.bow);
+    u.uTower.value.set(Math.sin(wx.towerDir), Math.cos(wx.towerDir), wx.tower, wx.farFlash);
     u.uGround.value.setRGB(l.hemiGround[0] * 0.8, l.hemiGround[1] * 0.75, l.hemiGround[2] * 0.7, THREE.SRGBColorSpace);
     u.uNight.value = l.night;
-    u.uCloud.value = city ? 0.55 : 0.4;
+    // Fair-weather cumulus; above 1 the shader closes the cloud into an overcast lid.
+    u.uCloud.value = Math.max(city ? 0.55 : 0.4, 0.3 + wx.cover * 1.25);
     u.uMoonDir.value.set(-this.sunDir.x, Math.max(0.35, this.sunDir.y), -this.sunDir.z).normalize();
     const scatter = lerp(0.55, 0.12, l.night);
     u.uScatter.value = scatter;
@@ -484,7 +554,7 @@ export class GameRenderer {
       this.sunDir,
       this.sun.color,
       scatter,
-      lerp((city ? 0.0035 : 0.0016) / Math.max(1, reach), 0.006, l.night) + 0.011 * storm,
+      lerp((city ? 0.0035 : 0.0016) / Math.max(1, reach), 0.006, l.night) + 0.011 * storm + 0.005 * wx.rain,
       lerp(city ? 0.03 : 0.045, 0.012, storm),
       city ? 2 : 0,
     );
@@ -495,12 +565,16 @@ export class GameRenderer {
       .add(_z.copy(this.hemi.color).multiplyScalar(this.hemi.intensity * 0.9 + 0.12));
     KIT.uGlow.value = 1 + l.night * 0.9;
     GLOBALS.uWet.value = wet;
+    GLOBALS.uPuddle.value = puddle;
     if (this.post) this.setScreenFx(l, city, storm, wet);
-    // Exposure opens up a little at night so headlights read without crushing everything else.
+    // Exposure opens up a little at night so headlights read without crushing everything else, and under a dark sky as an
+    // eye would; a hot day bleaches the colour a touch.
     if (this.post) {
       const p = this.post.params;
-      p.exposure = lerp(1.0, 1.7, l.night) * (1 - 0.1 * storm);
-      p.saturation = lerp(city ? 0.92 : 1.04, 0.85, l.night) * (1 - 0.22 * storm);
+      const hot = Math.max(wx.heat[0], wx.heat[1]);
+      p.exposure = lerp(1.0, 1.7, l.night) * (1 - 0.1 * storm) * (1 + 0.3 * shade) * (1 + 0.05 * hot);
+      p.saturation = lerp(city ? 0.92 : 1.04, 0.85, l.night) * (1 - 0.22 * storm) * (1 - 0.25 * grey) * (1 - 0.06 * hot);
+      this.post.heat.set(wx.heat[0], wx.heat[1]);
       p.bloom = lerp(0.018, 0.028, l.night);
       if (city) {
         p.shadowTint.setRGB(0.95, 0.99, 1.04);
@@ -572,11 +646,15 @@ export class GameRenderer {
 
   /** Adaptive resolution: one shared scale so the two halves always match. */
   adapt(frameMs: number) {
-    this.frameEma = lerp(this.frameEma, frameMs, 0.06);
+    this.setRenderScale(this.resolution.update(frameMs, this.renderScale));
+  }
+
+  /** Also used to pin benchmark resolution and restore the user's current scale afterwards. */
+  setRenderScale(scale: number) {
+    const previous = this.renderScale;
+    this.renderScale = Math.max(0.6, Math.min(1, scale));
     const q = QUALITY[this.quality];
-    if (this.frameEma > 21 && this.renderScale > 0.6) this.renderScale -= 0.01;
-    else if (this.frameEma < 15.5 && this.renderScale < 1) this.renderScale = Math.min(1, this.renderScale + 0.005);
-    if (!this.usePost) this.gl.setPixelRatio(this.baseDpr * q.scale * this.renderScale);
+    if (!this.usePost && previous !== this.renderScale) this.gl.setPixelRatio(this.baseDpr * q.scale * this.renderScale);
   }
 
   /** Point the single shadow map at a view: centred ahead of the player and snapped to whole texels. */
@@ -604,6 +682,7 @@ export class GameRenderer {
     const dtReal = this.lastRender ? Math.min(0.25, (now - this.lastRender) / 1000) : 1 / 60;
     this.lastRender = now;
     const gl = this.gl;
+    gl.info.reset();
     const q = QUALITY[this.quality];
     this.sky.uniforms.uTime.value = time;
     GLOBALS.uTime.value = time;
@@ -641,6 +720,19 @@ export class GameRenderer {
       const la = (this.views[0].active ? this.views[0] : this.views[1]).lens ?? 0;
       const lb = (this.views[1].active ? this.views[1] : this.views[0]).lens ?? 0;
       post.lens.set(la, lb);
+      // Where each half's horizon crosses it, for the mirage: the level line straight ahead of the camera, projected.
+      for (let i = 0; i < 2; i++) {
+        const k = this.views[i].active ? i : 1 - i;
+        const cam = this.views[k].camera;
+        cam.getWorldDirection(_fwd);
+        _fwd.y = 0;
+        if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, 1);
+        _c.copy(cam.position).addScaledVector(_fwd.normalize(), 900).project(cam);
+        const r = uv[k];
+        post.horizon.setComponent(i, r[1] + (r[3] - r[1]) * (_c.y * 0.5 + 0.5));
+      }
+      if (!this.views[0].active) post.heat.set(post.heat.y, post.heat.y);
+      else if (!this.views[1].active) post.heat.set(post.heat.x, post.heat.x);
       gl.setRenderTarget(null);
       gl.setViewport(0, 0, this.width, this.height);
       gl.setScissorTest(false);
@@ -687,4 +779,3 @@ export class GameRenderer {
     for (const cb of this.onAfterView) cb(i);
   }
 }
-

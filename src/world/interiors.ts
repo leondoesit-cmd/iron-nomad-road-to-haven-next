@@ -3,6 +3,7 @@ import type { DrugId } from '../sim/drugs';
 import { rollGunLoot } from '../sim/gunLoot';
 import { fits, GUN_ODDS, gunStashFor, rollItem, rollLoot, specFoot, specSize, SIZE_H, type GunStash, type ItemSize, type LootContext, type LootSpec, type LootTag } from '../sim/loot';
 import type { Aabb } from './layout';
+import { atriumBands, atriumRim, MALL, MALL_SHOPS, mallEscalators, rimOpen, SHOP_USE, shopRect, type MallShop } from './mall';
 
 /**
  * Floor plans for wasteland buildings. A plan is pure data: exterior and interior walls with their doorways and
@@ -18,7 +19,7 @@ export const T_EXT = 0.3;
 export const T_INT = 0.16;
 export const DOOR_W = 0.95;
 
-export type Look = 'house' | 'store' | 'barn' | 'warehouse' | 'motel' | 'shack' | 'garage' | 'dealership' | 'tyreshop';
+export type Look = 'house' | 'store' | 'barn' | 'warehouse' | 'motel' | 'shack' | 'garage' | 'dealership' | 'tyreshop' | 'mall';
 export type FloorMat = 'wood' | 'tile' | 'lino' | 'concrete' | 'carpet' | 'dirt';
 export type RoomRole = 'living' | 'kitchen' | 'bedroom' | 'bath' | 'hall' | 'storage' | 'sales' | 'office' | 'lobby' | 'barn' | 'shed' | 'workshop' | 'room';
 export type Side = 'w' | 'e' | 's' | 'n';
@@ -63,6 +64,8 @@ export interface Room extends Rect {
   role: RoomRole;
   floor: FloorMat;
   tint: number;
+  /** What this room in particular is for (a shop in a mall), over what the building is for. */
+  use?: LootContext;
 }
 
 export type FurnKind =
@@ -76,6 +79,8 @@ export type FurnKind =
   | 'enginestand' | 'partsshelf' | 'tyrerack' | 'tyrestack' | 'toolchest'
   /** A wall rack of guns in a gun shop, a police station or an armoury: three tiers, each holds one gun lying on it. */
   | 'gunrack'
+  /** A mall: rails of clothes, a planter, a kiosk cart, a bench, a round column. */
+  | 'clothesrail' | 'planter' | 'kiosk' | 'mallbench' | 'column'
   | 'rubble' | 'tipped';
 
 export interface Furn {
@@ -113,6 +118,8 @@ export interface Stair {
   steps: number;
   rise: number;
   tread: number;
+  /** An escalator: climbed like a stair (the steps no longer move), drawn as one. */
+  kind?: 'escalator';
 }
 
 export interface Debris {
@@ -262,7 +269,7 @@ class Builder {
     this.use = inp.use ?? DEFAULT_USE[inp.look];
     this.reach = inp.reach ?? 0.3;
     this.rng = new Rng(inp.seed * 2654435761);
-    this.levelH = inp.look === 'barn' ? 6.4 : inp.look === 'warehouse' ? 5.6 : inp.look === 'garage' ? 4.6 : inp.look === 'dealership' ? 4.4 : inp.look === 'tyreshop' ? 4.0 : inp.look === 'store' ? 3.2 : inp.look === 'shack' ? 2.5 : inp.look === 'motel' ? 2.7 : 2.8;
+    this.levelH = inp.look === 'mall' ? MALL.levelH : inp.look === 'barn' ? 6.4 : inp.look === 'warehouse' ? 5.6 : inp.look === 'garage' ? 4.6 : inp.look === 'dealership' ? 4.4 : inp.look === 'tyreshop' ? 4.0 : inp.look === 'store' ? 3.2 : inp.look === 'shack' ? 2.5 : inp.look === 'motel' ? 2.7 : 2.8;
     this.root = { x0: inp.x0 + T_EXT, x1: inp.x1 - T_EXT, z0: inp.z0 + T_EXT, z1: inp.z1 - T_EXT };
     for (let l = 0; l < inp.floors; l++) this.keep.push([]);
   }
@@ -695,6 +702,7 @@ const DEFAULT_USE: Record<Look, LootContext> = {
   garage: 'garage',
   dealership: 'dealership',
   tyreshop: 'tyreshop',
+  mall: 'shop',
 };
 
 const LABEL: Partial<Record<FurnKind, string>> = {
@@ -729,6 +737,7 @@ const ONLY: Partial<Record<FurnKind, LootTag[]>> = {
 function contextOf(b: Builder, f: Furn): LootContext {
   const room = b.rooms.find((r) => r.level === f.level && f.x >= r.x0 - 0.01 && f.x <= r.x1 + 0.01 && f.z >= r.z0 - 0.01 && f.z <= r.z1 + 0.01);
   const look = b.inp.look;
+  if (room?.use) return room.use;
   if (look === 'house' || look === 'motel') {
     switch (room?.role) {
       case 'kitchen':
@@ -858,6 +867,8 @@ export function furnSlots(f: Furn): FurnSlot[] {
     }
     case 'checkout':
       return [slot(0, w * 0.36, 0.05, 1.045, 0.44, d - 0.2, 'small')];
+    case 'kiosk':
+      return [slot(0, -w * 0.25, 0, 1.0, w * 0.4, d - 0.4, 'small'), slot(0, w * 0.25, 0, 1.0, w * 0.4, d - 0.4, 'small')];
     case 'table':
       return [slot(0, 0, 0, h, Math.min(0.6, w - 0.2), Math.min(0.5, d - 0.2), 'small')];
     case 'dresser':
@@ -965,6 +976,8 @@ function slotChance(f: Furn, ctx: LootContext): number {
       return 0.4;
     case 'checkout':
       return 0.3;
+    case 'kiosk':
+      return 0.35;
     case 'table':
       return ctx === 'kitchen' ? 0.35 : 0.12;
     case 'dresser':
@@ -980,7 +993,7 @@ function slotChance(f: Furn, ctx: LootContext): number {
 }
 
 /** The most loose things a building of each look holds: a house keeps a few, a garage a bench full. */
-const MAX_ITEMS: Record<Look, number> = { house: 5, store: 9, barn: 8, warehouse: 18, motel: 6, shack: 4, garage: 14, dealership: 10, tyreshop: 12 };
+const MAX_ITEMS: Record<Look, number> = { house: 5, store: 9, barn: 8, warehouse: 18, motel: 6, shack: 4, garage: 14, dealership: 10, tyreshop: 12, mall: 54 };
 
 /**
  * Put loose things on the furniture that justifies them: engines on their stands, tyres on the rack, parts on the bench and
@@ -1733,11 +1746,277 @@ function genDealership(b: Builder) {
 
 // ------------------------------------------------------------------------------------------ damage
 
+// ------------------------------------------------------------------------------------------ the mall
+
+/**
+ * Ofer Grand Mall (see `world/mall.ts`): two tall storeys round a mall street and a round court, shops either side behind
+ * glass fronts, an anchor store across the north end, the escalators in the court's void, and the upper-floor passage
+ * from the footbridge door. The layout is authored; the dice only decide which windows were smashed and how the shops
+ * were fitted out.
+ */
+function genMall(b: Builder) {
+  const { inp, rng } = b;
+  const M = MALL;
+  const X = (x: number) => inp.x0 + x;
+  const Z = (z: number) => inp.z0 + z;
+  const R = b.root;
+  const glass = (): Opening['glass'] => {
+    const r = rng.next();
+    return r < 0.5 ? 'intact' : r < 0.83 ? 'broken' : 'none';
+  };
+  const shopRooms: { s: MallShop; room: Room; front: Side }[] = [];
+  for (let L = 0; L < M.levels; L++) {
+    b.addExterior(L);
+    // The shopfronts along the mall street, the walls the corner shops turn to the court, and the anchor's front.
+    const north = L === 0 ? M.anchor : M.passage.z0;
+    const rows: { x: number; z0: number; z1: number; w: Wall }[] = [];
+    const row = (x: number, z0: number, z1: number) => rows.push({ x, z0, z1, w: b.addWall(L, 'z', X(x), Z(z0), Z(z1)) });
+    row(M.frontRow, 0.3, M.court.z0);
+    row(M.frontRow, M.court.z1, north);
+    row(M.backRow, 0.3, M.court.z0);
+    row(M.backRow, M.court.z1, M.anchor);
+    const courtWalls = new Map<string, Wall>();
+    for (const z of [M.court.z0, M.court.z1]) {
+      courtWalls.set(`front:${z}`, b.addWall(L, 'x', Z(z), R.x0, X(M.frontRow)));
+      courtWalls.set(`back:${z}`, b.addWall(L, 'x', Z(z), X(M.backRow), R.x1));
+    }
+    const anchorWall = b.addWall(L, 'x', Z(M.anchor), R.x0, R.x1);
+    if (L === 1) b.addWall(L, 'x', Z(M.passage.z0), R.x0, X(M.frontRow));
+    const shops = MALL_SHOPS.filter((s) => s.level === L);
+    // Party walls between neighbouring shops in a row.
+    for (const s of shops) {
+      if (s.row === 'anchor') continue;
+      if (!shops.some((q) => q !== s && q.row === s.row && Math.abs(q.z0 - s.z1) < 0.01)) continue;
+      const r = shopRect(s);
+      b.addWall(L, 'x', Z(s.z1), X(r.x0), X(r.x1));
+    }
+    for (const s of shops) {
+      const r = shopRect(s);
+      const anchor = s.row === 'anchor';
+      // An anchor store keeps a stockroom down its car park side.
+      const sales = { x0: X(r.x0), x1: X(anchor ? 26 : r.x1), z0: Z(r.z0), z1: Z(r.z1) };
+      const floor: FloorMat = s.kind === 'clothes' || s.kind === 'books' || s.kind === 'shoes' ? 'wood' : s.kind === 'super' || s.kind === 'pharmacy' ? 'lino' : 'tile';
+      const room = b.addRoom(L, sales, 'sales', floor, 'plain');
+      room.use = SHOP_USE[s.kind];
+      const front: Side = anchor ? 's' : s.row === 'front' ? 'e' : 'w';
+      shopRooms.push({ s, room, front });
+      if (anchor) {
+        const wall = b.addWall(L, 'z', X(26), Z(r.z0), Z(r.z1));
+        b.open(wall, Z(r.z1 - 4), DOOR_W, 'door');
+        const stock = b.addRoom(L, { x0: X(26), x1: X(r.x1), z0: Z(r.z0), z1: Z(r.z1) }, 'storage', 'concrete', 'industrial');
+        stock.use = room.use;
+      }
+      // The front: glass either side of an open doorway, or (the food court) open almost all the way across.
+      const w = anchor ? anchorWall : rows.find((q) => q.x === (s.row === 'front' ? M.frontRow : M.backRow) && s.z0 >= q.z0 - 0.01 && s.z1 <= q.z1 + 0.01)!.w;
+      const [lo, hi] = anchor ? [X(M.frontRow), X(M.backRow)] : [Z(s.z0), Z(s.z1)];
+      const mid = (lo + hi) / 2;
+      if (s.kind === 'food') {
+        const half = (hi - lo - 1.4) / 2;
+        b.open(w, lo + 0.35 + half / 2, half, 'door', { head: M.head, leaf: 'none' });
+        b.open(w, hi - 0.35 - half / 2, half, 'door', { head: M.head, leaf: 'none' });
+      } else {
+        const door = anchor ? 4 : hi - lo > 12 ? 3 : 2.4;
+        b.open(w, mid, door, 'door', { head: M.head - 0.6, leaf: 'none' });
+        const g = glass();
+        for (const [a, c] of [[lo + 0.4, mid - door / 2 - 0.3], [mid + door / 2 + 0.3, hi - 0.4]]) {
+          if (c - a > 1.0) b.open(w, (a + c) / 2, c - a, 'window', { sill: 0, head: M.head, glass: g });
+        }
+      }
+      // A corner shop shows its window to the court as well.
+      for (const z of [M.court.z0, M.court.z1]) {
+        if (anchor || (Math.abs(s.z1 - z) > 0.01 && Math.abs(s.z0 - z) > 0.01)) continue;
+        const cw = courtWalls.get(`${s.row}:${z}`);
+        if (cw) b.open(cw, X((r.x0 + r.x1) / 2), r.x1 - r.x0 - 2.6, 'window', { sill: 0, head: M.head, glass: glass() });
+      }
+    }
+    // The mall street south of the court, the court (across the whole depth), the street north of it, and upstairs the
+    // passage from the footbridge door.
+    const street = (z0: number, z1: number) => b.addRoom(L, { x0: X(M.frontRow), x1: X(M.backRow), z0: Z(z0), z1: Z(z1) }, 'lobby', 'tile', 'plain');
+    street(0.3, M.court.z0);
+    b.addRoom(L, { x0: R.x0, x1: R.x1, z0: Z(M.court.z0), z1: Z(M.court.z1) }, 'lobby', 'tile', 'plain');
+    street(M.court.z1, M.anchor);
+    if (L === 1) b.addRoom(L, { x0: R.x0, x1: X(M.frontRow), z0: Z(M.passage.z0), z1: Z(M.passage.z1) }, 'lobby', 'tile', 'plain');
+  }
+  // The ways in: the main doors under the red sign, the doors at each end and the car park door; upstairs the door to the
+  // footbridge and the glass over the court. Shop windows look out onto the street below.
+  const front0 = b.extWall(0, 'w');
+  b.open(front0, Z((M.court.z0 + M.court.z1) / 2), 8, 'door', { head: 4.4, leaf: 'none' });
+  for (const s of MALL_SHOPS) {
+    if (s.level !== 0 || s.row !== 'front' || s.z0 < 10) continue;
+    b.open(front0, Z((s.z0 + s.z1) / 2), Math.min(3.4, s.z1 - s.z0 - 2.4), 'window', { sill: 0.45, head: 3.3, glass: glass() });
+  }
+  b.open(b.extWall(0, 's'), X(M.atrium.x), 5, 'door', { head: 3.4, leaf: 'none' });
+  b.open(b.extWall(0, 'n'), X(M.atrium.x), 4, 'door', { head: 3.2, leaf: 'none' });
+  b.open(b.extWall(0, 'e'), Z((M.court.z0 + M.court.z1) / 2), 4, 'door', { head: 3.0, leaf: 'none' });
+  b.open(b.extWall(0, 'e'), Z(5), 1.2, 'door', { head: 2.2 });
+  const front1 = b.extWall(1, 'w');
+  b.open(front1, Z(M.bridgeDoor.z), M.bridgeDoor.w, 'door', { head: 3.2, leaf: 'none' });
+  for (let i = 0; i < 5; i++) b.open(front1, Z(M.court.z0 + 3.6 + i * 7.2), 5.6, 'window', { sill: 0.4, head: 4.6, glass: rng.chance(0.8) ? 'intact' : 'broken' });
+  b.open(b.extWall(1, 's'), X(M.atrium.x), 6, 'window', { sill: 0.9, head: 4.4, glass: 'intact' });
+  for (const z of [5, 12, 19]) b.open(b.extWall(1, 'e'), Z(z), 3.2, 'window', { sill: 1.0, head: 3.4, glass: glass() });
+  // The escalators, side by side in the void.
+  for (const e of mallEscalators()) b.stairs.push({ level: 0, x: X(e.x), z: Z(e.z), dir: '+z', width: e.width, steps: e.steps, rise: e.rise, tread: e.tread, kind: 'escalator' });
+  b.noteAllDoors();
+  // Fittings: everything in the shops, then the court and the street.
+  for (const { s, room, front } of rng.shuffle(shopRooms)) furnishShop(b, s, room, front);
+  for (const room of b.rooms) if (room.role === 'storage') furnishStock(b, room);
+  furnishMallCommons(b, X, Z);
+  for (const room of b.rooms) if (room.level === 0) b.lairs.push({ x: (room.x0 + room.x1) / 2, z: (room.z0 + room.z1) / 2 });
+}
+
+/** Rows of a fixture across a shop, parallel to its front, starting a few metres in from the door. */
+function shopRows(b: Builder, room: Room, front: Side, kind: FurnKind, w: number, d: number, h: number, opts: { start?: number; gap?: number; chance?: number; search?: number } = {}) {
+  const alongZ = front === 'e' || front === 'w';
+  const depth = alongZ ? room.x1 - room.x0 : room.z1 - room.z0;
+  const edge = front === 'e' ? room.x1 : front === 'w' ? room.x0 : front === 's' ? room.z0 : room.z1;
+  const dir = front === 'e' || front === 'n' ? -1 : 1;
+  const lo = (alongZ ? room.z0 : room.x0) + 1.3 + w / 2;
+  const hi = (alongZ ? room.z1 : room.x1) - 1.3 - w / 2;
+  const step = w + (opts.gap ?? 1.4);
+  for (let dd = opts.start ?? 3.2; dd < depth - 1.4 - d / 2; dd += d + 1.6) {
+    for (let a = lo; a <= hi + 0.01; a += step) {
+      if (!b.rng.chance(opts.chance ?? 0.85)) continue;
+      const x = alongZ ? edge + dir * dd : a;
+      const z = alongZ ? a : edge + dir * dd;
+      const f = b.free(room.level, room, kind, w, d, h, x, z, alongZ ? Math.PI / 2 : 0);
+      if (f && opts.search) searchable(b, f, 1, 0, opts.search);
+    }
+  }
+}
+
+function furnishShop(b: Builder, s: MallShop, room: Room, front: Side) {
+  const L = room.level;
+  const rng = b.rng;
+  const back: Side = front === 'e' ? 'w' : front === 'w' ? 'e' : 'n';
+  const ends: Side[] = front === 's' ? ['w', 'e'] : ['s', 'n'];
+  // Along a party wall, 0..1 from its x0/z0 end: near the shop's front.
+  const nearFront = front === 'e' ? 0.86 : 0.14;
+  const wall = (kind: FurnKind, w: number, d: number, h: number, sides: Side[], n: number, search = 0) => {
+    for (let i = 0; i < n; i++) {
+      const f = b.try(L, room, [kind], w, d, h, {}, sides);
+      if (f && search) searchable(b, f, 1, 0, search);
+    }
+  };
+  const till = () => b.against(L, room, ends[rng.int(0, 1)], 'checkout', 1.8, 0.7, 1.05, nearFront) ?? b.try(L, room, ['checkout'], 1.8, 0.7, 1.05, {}, ends);
+  switch (s.kind) {
+    case 'clothes':
+    case 'shoes':
+      till();
+      wall('shelf', 1.8, 0.45, 2.0, [back, ...ends], s.kind === 'shoes' ? 7 : 4);
+      if (s.kind === 'shoes') {
+        shopRows(b, room, front, 'mallbench', 1.6, 0.5, 0.45, { chance: 0.7, gap: 2.2 });
+      } else {
+        shopRows(b, room, front, 'clothesrail', 1.5, 0.55, 1.55, { chance: 0.8 });
+        if (rng.chance(0.7)) b.free(L, room, 'table', 1.4, 0.9, 0.8, (room.x0 + room.x1) / 2, (room.z0 + room.z1) / 2, 0);
+      }
+      break;
+    case 'home':
+      till();
+      wall('shelf', 1.8, 0.45, 2.0, [back, ...ends], 4);
+      shopRows(b, room, front, 'gondola', 2.4, 0.6, 1.5, { chance: 0.75 });
+      shopRows(b, room, front, 'table', 1.4, 0.9, 0.8, { start: 2.0, chance: 0.4 });
+      break;
+    case 'pharmacy':
+      b.try(L, room, ['counter'], 3.0, 0.7, 1.0, {}, [back]);
+      wall('shelf', 1.8, 0.45, 2.0, [back, ...ends], 5);
+      wall('cooler', 1.6, 0.8, 1.9, ends, 1, 0.8);
+      till();
+      shopRows(b, room, front, 'gondola', 2.6, 0.6, 1.5, { chance: 0.9 });
+      break;
+    case 'super':
+      wall('cooler', 2.2, 0.8, 1.9, [back], 3, 0.8);
+      wall('cooler', 1.6, 0.8, 1.9, ends, 2, 0.6);
+      for (const t of [0.25, 0.55]) b.against(L, room, ends[0], 'checkout', 1.8, 0.7, 1.05, front === 'e' ? 1 - t * 0.3 : t * 0.3);
+      shopRows(b, room, front, 'gondola', 3.0, 0.6, 1.5, { start: 4.0, chance: 0.95 });
+      break;
+    case 'cafe':
+    case 'food': {
+      const n = s.kind === 'food' ? 3 : 1;
+      for (let i = 0; i < n; i++) b.try(L, room, ['counter'], 3.2, 0.75, 1.0, {}, [back]);
+      wall('cooler', 1.4, 0.7, 1.9, [back, ...ends], n, 0.9);
+      wall('fridge', 0.8, 0.7, 1.8, [back, ...ends], n, 0.9);
+      const alongZ = front === 'e' || front === 'w';
+      for (let a = (alongZ ? room.z0 : room.x0) + 1.6; a < (alongZ ? room.z1 : room.x1) - 1.4; a += 2.6) {
+        for (let dd = 2.0; dd < (alongZ ? room.x1 - room.x0 : room.z1 - room.z0) - 2.4; dd += 2.4) {
+          if (!rng.chance(0.75)) continue;
+          const x = alongZ ? (front === 'e' ? room.x1 - dd : room.x0 + dd) : a;
+          const z = alongZ ? a : room.z0 + dd;
+          const t = b.free(L, room, 'table', 0.9, 0.9, 0.75, x, z, 0);
+          if (!t) continue;
+          for (const sd of [-1, 1]) if (rng.chance(0.8)) b.free(L, room, 'chair', 0.45, 0.45, 0.9, x + sd * 0.75, z, sd > 0 ? -Math.PI / 2 : Math.PI / 2, { solid: false });
+        }
+      }
+      break;
+    }
+    case 'books':
+      till();
+      wall('bookshelf', 1.8, 0.4, 2.0, [back, ...ends], 6);
+      shopRows(b, room, front, 'shelf', 1.8, 0.45, 1.6, { chance: 0.8 });
+      break;
+    case 'electronics':
+      b.try(L, room, ['counter'], 2.6, 0.7, 1.0, {}, [back]);
+      wall('shelf', 1.8, 0.45, 2.0, ends, 3);
+      shopRows(b, room, front, 'gondola', 2.2, 0.6, 1.4, { chance: 0.8 });
+      break;
+    case 'hardware':
+      till();
+      wall('shelf', 2.0, 0.5, 2.0, [back, ...ends], 5);
+      wall('toolchest', 1.0, 0.55, 1.0, [back], 1, 0.9);
+      shopRows(b, room, front, 'gondola', 2.6, 0.6, 1.5, { chance: 0.85 });
+      break;
+    case 'outdoor':
+      till();
+      wall('rack', 2.4, 0.9, 2.2, [back, 'n'], 3);
+      wall('shelf', 1.8, 0.45, 2.0, ends, 4);
+      wall('footlocker', 0.9, 0.5, 0.45, [back, 'n'], 2, 0.9);
+      shopRows(b, room, front, 'gondola', 2.6, 0.6, 1.5, { chance: 0.8 });
+      break;
+  }
+}
+
+/** An anchor store's stockroom: shelving, crates and a staff locker. */
+function furnishStock(b: Builder, room: Room) {
+  const L = room.level;
+  for (let i = 0; i < 3; i++) b.try(L, room, ['shelf'], 1.8, 0.45, 2.0, {}, ['e']);
+  searchable(b, b.try(L, room, ['locker'], 0.5, 0.5, 1.8, {}, ['e', 'n']), 1, 1, 0.9);
+  for (let i = 0; i < 2; i++) searchable(b, b.free(L, room, 'crate', 0.8, 0.8, 0.6, (room.x0 + room.x1) / 2, room.z0 + 2 + i * 3, b.rng.range(0, 1)), 1, 0, 0.5);
+  searchable(b, b.try(L, room, ['desk'], 1.2, 0.6, 0.76, {}, ['e', 's']), 1, 0, 0.8);
+}
+
+/** The court and the mall street: a planter under the cone, benches, kiosk carts, and the court's columns. */
+function furnishMallCommons(b: Builder, X: (x: number) => number, Z: (z: number) => number) {
+  const M = MALL;
+  const at = (L: number, x: number, z: number) => b.rooms.find((r) => r.level === L && r.role === 'lobby' && x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1);
+  const put = (L: number, kind: FurnKind, w: number, d: number, h: number, x: number, z: number, yaw = 0) => {
+    const room = at(L, X(x), Z(z));
+    return room ? b.free(L, room, kind, w, d, h, X(x), Z(z), yaw) : null;
+  };
+  const a = M.atrium;
+  for (let L = 0; L < M.levels; L++) {
+    for (const [x, z] of [[a.x - 10, M.court.z0 + 3], [a.x + 10, M.court.z0 + 3], [a.x - 10, M.court.z1 - 3], [a.x + 10, M.court.z1 - 3]]) put(L, 'column', 0.9, 0.9, M.levelH - 0.02, x, z);
+  }
+  // Under the cone: a big planter with the court's tree, benches round it.
+  put(0, 'planter', 3.2, 3.2, 0.7, a.x, a.z - 6.5);
+  for (const [dx, dz, yaw] of [[-3.0, 0, -Math.PI / 2], [3.0, 0, Math.PI / 2], [0, -3.0, Math.PI]] as const) put(0, 'mallbench', 1.8, 0.55, 0.45, a.x + dx, a.z - 6.5 + dz, yaw);
+  // Down the street: kiosk carts and benches between planters.
+  for (const z of [12, 30, 86]) put(0, 'kiosk', 2.6, 1.4, 1.1, a.x, z, Math.PI / 2);
+  for (const z of [20, 84]) put(1, 'kiosk', 2.6, 1.4, 1.1, a.x, z, Math.PI / 2);
+  for (let L = 0; L < M.levels; L++) {
+    for (const z of [6, 24, 36]) {
+      put(L, 'planter', 1.2, 1.2, 0.8, a.x + 3.6, z);
+      put(L, 'mallbench', 1.8, 0.55, 0.45, a.x - 3.6, z, Math.PI / 2);
+    }
+    // Benches along the gallery upstairs, with their backs to the shops.
+    if (L === 1) for (const z of [52, 68]) for (const s of [-1, 1]) put(1, 'mallbench', 1.8, 0.55, 0.45, a.x + s * 10.6, z, s > 0 ? -Math.PI / 2 : Math.PI / 2);
+  }
+}
+
 function weather(b: Builder) {
   const { inp, rng } = b;
   const wear = inp.wear;
   // Breaches: a section of an exterior or interior wall has fallen.
   for (const w of b.walls) {
+    if (inp.look === 'mall' && w.ext) continue;
     if (w.level !== 0 && rng.next() > 0.3) continue;
     if (rng.next() > wear * 0.22) continue;
     const len = w.b - w.a;
@@ -1799,6 +2078,9 @@ export function generatePlan(inp: PlanInput): BuildingPlan {
       break;
     case 'dealership':
       genDealership(b);
+      break;
+    case 'mall':
+      genMall(b);
       break;
   }
   weather(b);
@@ -1887,7 +2169,7 @@ export function wallMaterial(look: BuildingPlan['look']): NonNullable<Aabb['mat'
 
 /** What a window of a building is glazed with: a shop's wide front takes more than a house's sash. */
 export function paneKind(look: BuildingPlan['look'], op: Opening): import('../sim/glass').GlassKind {
-  return look === 'store' && op.b - op.a >= 1.8 ? 'shop' : 'window';
+  return (look === 'store' || look === 'mall') && op.b - op.a >= 1.8 ? 'shop' : 'window';
 }
 
 /** The key a window's pane goes by, for the building's glass and the collider that stands in for it. */
@@ -1986,13 +2268,89 @@ export function planAabbs(plan: BuildingPlan, newId: () => number): Aabb[] {
     const base = levelBase(plan, w.level);
     for (const r of wellRails(w)) box(r.x0, r.x1, r.z0, r.z1, base, base + 1.0, 'furniture', { physOnly: true });
   }
-  // Upper floors: slabs around the stairwell.
+  if (plan.look === 'mall') out.push(...mallAabbs(plan, newId));
+  // Upper floors: slabs around the stairwell (and a mall's court).
   for (let l = 1; l < plan.levels; l++) {
     const base = levelBase(plan, l);
     const full: Rect = { x0: plan.x0, x1: plan.x1, z0: plan.z0, z1: plan.z1 };
-    const wells = plan.wells.filter((q) => q.level === l);
+    const wells: Rect[] = [...plan.wells.filter((q) => q.level === l), ...atriumHoles(plan, l)];
     const pieces = subtractRects(full, wells);
     for (const p of pieces) box(p.x0, p.x1, p.z0, p.z1, base - 0.3, base, 'floor', { physOnly: true });
+  }
+  // A mall's storeys are tall: what stands upstairs is over people's heads downstairs, not in their way.
+  if (plan.look === 'mall') for (const a of out) if (a.y0 >= levelBase(plan, 1) - 0.35) a.overhead = true;
+  return out;
+}
+
+/** Where an upper floor of a mall has no slab: the court's void, as bands inside its oval. */
+export function atriumHoles(plan: BuildingPlan, level: number): Rect[] {
+  if (plan.look !== 'mall' || level !== 1) return [];
+  return atriumBands().map((r) => ({ x0: plan.x0 + r.x0, x1: plan.x0 + r.x1, z0: plan.z0 + r.z0, z1: plan.z0 + r.z1 }));
+}
+
+/**
+ * A static box turned by `yaw` (about y) and tilted by `pitch` (its local +z rising), as a ramp collider. The box's own
+ * bounds are its footprint for everything that only reads boxes.
+ */
+export function orientedBox(newId: () => number, cx: number, cy: number, cz: number, hx: number, hy: number, hz: number, yaw: number, pitch: number, extra: Partial<Aabb> = {}): Aabb {
+  const sx = Math.sin(-pitch / 2);
+  const cxq = Math.cos(pitch / 2);
+  const sy = Math.sin(yaw / 2);
+  const cyq = Math.cos(yaw / 2);
+  const q: [number, number, number, number] = [cyq * sx, sy * cxq, -sy * sx, cyq * cxq];
+  // Corners: pitch about x (local z rising), then yaw about y.
+  const cp = Math.cos(pitch);
+  const sp = Math.sin(pitch);
+  const cw = Math.cos(yaw);
+  const sw = Math.sin(yaw);
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const ux of [-hx, hx]) {
+    for (const uy of [-hy, hy]) {
+      for (const uz of [-hz, hz]) {
+        const py = uy * cp + uz * sp;
+        const pz = -uy * sp + uz * cp;
+        const wx = cx + ux * cw + pz * sw;
+        const wz = cz - ux * sw + pz * cw;
+        const wy = cy + py;
+        x0 = Math.min(x0, wx), (x1 = Math.max(x1, wx));
+        y0 = Math.min(y0, wy), (y1 = Math.max(y1, wy));
+        z0 = Math.min(z0, wz), (z1 = Math.max(z1, wz));
+      }
+    }
+  }
+  return { id: newId(), minX: x0, maxX: x1, minZ: z0, maxZ: z1, y0, y1, kind: 'furniture', hp: 99999, physOnly: true, ramp: { x: cx, y: cy, z: cz, hx, hy, hz, q }, ...extra };
+}
+
+/**
+ * A mall's own colliders: the glass balustrade round the court's void upstairs (open where the escalators arrive), and
+ * the balustrades down the outer sides of the escalators, sloped with the steps and level over each landing.
+ */
+function mallAabbs(plan: BuildingPlan, newId: () => number): Aabb[] {
+  const out: Aabb[] = [];
+  const X = (x: number) => plan.x0 + x;
+  const Z = (z: number) => plan.z0 + z;
+  const top = levelBase(plan, 1);
+  const rim = atriumRim(64, 0.1);
+  for (let i = 0; i < rim.length; i++) {
+    const [ax, az] = rim[i];
+    const [bx, bz] = rim[(i + 1) % rim.length];
+    if (rimOpen((ax + bx) / 2, (az + bz) / 2)) continue;
+    out.push(orientedBox(newId, X((ax + bx) / 2), top + 0.55, Z((az + bz) / 2), 0.06, 0.55, Math.hypot(bx - ax, bz - az) / 2 + 0.05, Math.atan2(bx - ax, bz - az), 0));
+  }
+  const e = MALL.escalator;
+  const s = mallEscalators()[0];
+  const run = (s.steps - 1) * s.tread;
+  const H = MALL.levelH;
+  const theta = Math.atan2(H, run);
+  const len = Math.hypot(run, H);
+  const base = plan.floorY;
+  const z0 = Z(s.z);
+  for (const side of [-1, 1]) {
+    const x = X(e.x + side * (e.gap / 2 + e.width / 2 + 0.14));
+    // The sloped run: its foot on the line of the step noses, half its height out along the slope's normal.
+    out.push(orientedBox(newId, x, base + H / 2 + 0.55 * Math.cos(theta), z0 + run / 2 - 0.55 * Math.sin(theta), 0.06, 0.55, len / 2, 0, theta));
+    out.push({ id: newId(), minX: x - 0.06, maxX: x + 0.06, minZ: z0 - 1.4, maxZ: z0 + 0.2, y0: base, y1: base + 1.1, kind: 'furniture', hp: 99999, physOnly: true });
+    out.push({ id: newId(), minX: x - 0.06, maxX: x + 0.06, minZ: z0 + run - 0.2, maxZ: z0 + run + 0.9, y0: top, y1: top + 1.1, kind: 'furniture', hp: 99999, physOnly: true });
   }
   return out;
 }

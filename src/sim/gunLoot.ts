@@ -56,7 +56,7 @@ interface Table {
 const TABLES: Record<GunLootContext, Table> = {
   gun_shop: {
     any: [1, 1, 1],
-    weapons: { w_pistol: 5, w_compact: 5, w_revolver: 4, w_cannon: 0.8, w_pump: 3, w_sawn: 1, w_coach: 3, w_combat: 0.8, w_rifle: 4, w_lever: 4, w_carbine: 1.2, w_crossbow: 3, w_smg2: 0.8, w_dmr: 0.4, m_knife: 2, m_machete: 1 },
+    weapons: { w_pistol: 5, w_compact: 5, w_revolver: 4, w_cannon: 0.8, w_pump: 3, w_sawn: 1, w_coach: 3, w_combat: 0.8, w_rifle: 4, w_lever: 4, w_carbine: 1.2, w_crossbow: 3, w_bow: 2.5, w_smg2: 0.8, w_dmr: 0.4, m_knife: 2, m_machete: 1 },
     guns: [2, 3],
     gunsPerDepth: 1,
     wear: 0.15,
@@ -95,7 +95,7 @@ const TABLES: Record<GunLootContext, Table> = {
   },
   house: {
     any: [0.22, 0.34, 0.5],
-    weapons: { w_pistol: 6, w_compact: 4, w_revolver: 3, w_sawn: 2.5, w_coach: 2, w_pump: 1.2, w_rifle: 2.2, w_lever: 1.6, w_crossbow: 1, m_knife: 4, m_bat: 3, m_pipe: 3, m_machete: 1, m_katana: 0.15 },
+    weapons: { w_pistol: 6, w_compact: 4, w_revolver: 3, w_sawn: 2.5, w_coach: 2, w_pump: 1.2, w_rifle: 2.2, w_lever: 1.6, w_crossbow: 1, w_bow: 1.4, m_knife: 4, m_bat: 3, m_pipe: 3, m_machete: 1, m_katana: 0.15 },
     guns: [1, 1],
     gunsPerDepth: 1,
     wear: 0.5,
@@ -108,7 +108,7 @@ const TABLES: Record<GunLootContext, Table> = {
   },
   raider: {
     any: [0.35, 0.5, 0.6],
-    weapons: { w_mp: 4, w_smg: 3, w_revolver: 3, w_sawn: 3, w_pistol: 3, w_carbine: 2, w_coach: 1, w_lever: 1, w_ar: 0.7, w_cannon: 0.5, m_machete: 2, m_pipe: 2, m_axe: 0.8 },
+    weapons: { w_mp: 4, w_smg: 3, w_revolver: 3, w_sawn: 3, w_pistol: 3, w_carbine: 2, w_coach: 1, w_lever: 1, w_bow: 1.5, w_ar: 0.7, w_cannon: 0.5, m_machete: 2, m_pipe: 2, m_axe: 0.8 },
     guns: [1, 1],
     gunsPerDepth: 1,
     wear: 0.6,
@@ -121,7 +121,7 @@ const TABLES: Record<GunLootContext, Table> = {
   },
   wreck: {
     any: [0.4, 0.55, 0.7],
-    weapons: { w_pistol: 4, w_compact: 3, w_sawn: 2, w_smg: 2, w_mp: 2, w_rifle: 1.2, w_lever: 1, w_carbine: 1, w_crossbow: 1, w_revolver: 2, m_pipe: 2, m_bat: 2, m_knife: 2 },
+    weapons: { w_pistol: 4, w_compact: 3, w_sawn: 2, w_smg: 2, w_mp: 2, w_rifle: 1.2, w_lever: 1, w_carbine: 1, w_crossbow: 1, w_bow: 0.6, w_revolver: 2, m_pipe: 2, m_bat: 2, m_knife: 2 },
     guns: [1, 1],
     gunsPerDepth: 1,
     wear: 0.7,
@@ -147,7 +147,7 @@ const TABLES: Record<GunLootContext, Table> = {
   },
   cache: {
     any: [0.8, 1, 1],
-    weapons: { w_pistol: 3, w_revolver: 2, w_smg: 2, w_mp: 1.5, w_carbine: 1.5, w_ar: 1, w_rifle: 1.5, w_lever: 1.5, w_pump: 1.5, w_crossbow: 1, w_cannon: 0.6 },
+    weapons: { w_pistol: 3, w_revolver: 2, w_smg: 2, w_mp: 1.5, w_carbine: 1.5, w_ar: 1, w_rifle: 1.5, w_lever: 1.5, w_pump: 1.5, w_crossbow: 1, w_bow: 1, w_cannon: 0.6 },
     guns: [1, 2],
     gunsPerDepth: 0,
     wear: 0.4,

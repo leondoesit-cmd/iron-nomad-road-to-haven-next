@@ -275,48 +275,59 @@ describe('animals lose parts when shot', () => {
 });
 
 describe('prey behaviour', () => {
+  // Game has to notice a person on foot (see `sim/hunting.ts`): these people walk, and the clock runs so heads go up and down.
+  const walking = (p: FakePlayer) => Object.assign(p, { moveSpeed: 1.4 });
+  const stepT = (ctx: Ctx, W: WildlifeSystem, s: number) => {
+    for (let i = 0; i < s * 60; i++) {
+      (ctx as unknown as { time: number }).time += 1 / 60;
+      W.update(1 / 60);
+    }
+  };
   it('stops and stares before it runs: the whole herd goes still with its heads up', () => {
-    const p = player(0, 0);
-    const { W } = world([p]);
+    const p = walking(player(0, 0));
+    const { ctx, W } = world([p]);
     // Inside sight (45) but beyond the bolt line (0.75 x sight).
     const herd = W.spawnGroup('deer', 0, 40);
     expect(herd.length).toBeGreaterThan(2);
-    stepW(W, 0.5);
-    const alert = herd.filter((d) => d.state === 'alert');
-    expect(alert.length).toBeGreaterThan(0);
-    for (const d of alert) expect(d.state).not.toBe('flee');
+    let alert = 0;
+    for (let i = 0; i < 6 * 10 && !alert; i++) {
+      stepT(ctx, W, 0.1);
+      alert = herd.filter((d) => d.state === 'alert').length;
+      expect(herd.some((d) => d.state === 'flee')).toBe(false);
+    }
+    expect(alert).toBeGreaterThan(0);
   });
   it('and bolts if the thing stays in view', () => {
-    const p = player(0, 0);
-    const { W } = world([p]);
+    const p = walking(player(0, 0));
+    const { ctx, W } = world([p]);
     const deer = W.spawn('deer', 0, 40);
     const seen = new Set<string>();
     for (let i = 0; i < 60 * 8; i++) {
-      W.update(1 / 60);
+      stepT(ctx, W, 1 / 60);
       seen.add(deer.state);
     }
     expect(seen.has('alert')).toBe(true);
     expect(seen.has('flee')).toBe(true);
   });
   it('settles again if it was nothing', () => {
-    const p = player(0, 0);
-    const { W } = world([p]);
+    const p = walking(player(0, 0));
+    const { ctx, W } = world([p]);
     const deer = W.spawn('deer', 0, 40);
-    stepW(W, 0.5);
+    for (let i = 0; i < 60 && deer.state !== 'alert'; i++) stepT(ctx, W, 0.1);
     expect(deer.state).toBe('alert');
     p.pos.z = -100;
-    stepW(W, 6);
+    stepT(ctx, W, 6);
     expect(deer.state === 'idle' || deer.state === 'wander').toBe(true);
   });
   it('a hare freezes much longer than a deer and only bolts when nearly stepped on', () => {
-    const p = player(0, 0);
-    const { W } = world([p]);
+    const p = walking(player(0, 0));
+    const { ctx, W } = world([p]);
     const hare = W.spawn('hare', 0, 15);
-    stepW(W, 2);
+    stepT(ctx, W, 4);
     expect(hare.state).toBe('alert');
     expect(hare.alertFor).toBeGreaterThan(3);
     const near = W.spawn('hare', 0, 6, 99);
-    stepW(W, 0.3);
+    stepT(ctx, W, 0.4);
     expect(near.state).toBe('flee');
   });
   it('a hare jinks from side to side as it runs', () => {
@@ -717,5 +728,82 @@ describe('the dead: kinds', () => {
     (Z as unknown as { tear(z: Zombie, dx: number, dz: number, p: number): void }).tear(zb, 0, 1, 3);
     expect(zb.wounds.mask).not.toBe(0);
     expect(cut.length).toBeGreaterThan(0);
+  });
+});
+
+describe('zombies hunting strays', () => {
+  const lookForPrey = (Z: ZombieSystem, z: Zombie) => (Z as unknown as { findPrey(z: Zombie, dt: number): boolean }).findPrey(z, 0.05);
+
+  it('occasionally picks an isolated animal, while a healthy nearby herd stays together', () => {
+    const { ctx, W, Z } = world([player(0, 150)]);
+    const zombie = Z.spawn('walker', 0, 210, false);
+    const deer = W.spawn('deer', 0, 214, 77);
+    const friend = W.spawn('deer', 2, 214, 77);
+    ctx.rng.chance = () => true;
+    expect(lookForPrey(Z, zombie)).toBe(false);
+    friend.x = 30;
+    zombie.preyCd = 0;
+    ctx.rng.chance = () => false;
+    expect(lookForPrey(Z, zombie)).toBe(false);
+    zombie.preyCd = 0;
+    ctx.rng.chance = () => true;
+    zombie.idleT = 3;
+    expect(lookForPrey(Z, zombie)).toBe(true);
+    expect(zombie.prey).toBe(deer);
+    expect(zombie.idleT).toBe(0);
+  });
+
+  it('an injured animal is vulnerable even with its herd nearby, but walls conceal it', () => {
+    const { ctx, W, Z } = world([player(0, 150)]);
+    const zombie = Z.spawn('walker', 0, 210, false);
+    const deer = W.spawn('deer', 0, 214, 77);
+    W.spawn('deer', 2, 214, 77);
+    deer.hp *= 0.5;
+    ctx.rng.chance = () => true;
+    ctx.obs.segmentBlocked = () => true;
+    expect(lookForPrey(Z, zombie)).toBe(false);
+    ctx.obs.segmentBlocked = () => false;
+    zombie.preyCd = 0;
+    expect(lookForPrey(Z, zombie)).toBe(true);
+    expect(zombie.prey).toBe(deer);
+  });
+
+  it('kills a caught stray and eats the carcass, reducing what remains for scavengers', () => {
+    const { ctx, W, Z } = world([player(0, 150)]);
+    const zombie = Z.spawn('walker', 0, 210, false);
+    const deer = W.spawn('deer', 0, 210.6);
+    deer.hp = 0.05;
+    ctx.rng.chance = () => true;
+    stepZ(Z, 0.15);
+    expect(deer.dead).toBe(true);
+    expect(zombie.prey).toBeNull();
+    expect(zombie.feed).toBe(deer);
+    expect(zombie.feedT).toBeGreaterThan(0);
+    const eaten = deer.eaten;
+    const x = zombie.x;
+    const z = zombie.z;
+    stepZ(Z, 2);
+    expect(deer.eaten).toBeGreaterThan(eaten + 1);
+    expect(Math.hypot(zombie.x - x, zombie.z - z)).toBeLessThan(0.05);
+    expect(lookForPrey(Z, zombie)).toBe(false);
+  });
+
+  it('drops a hunt when the animal escapes out of reach or takes flight', () => {
+    const { ctx, W, Z } = world([player(0, 150)]);
+    const zombie = Z.spawn('walker', 0, 210, false);
+    const duck = W.spawn('duck', 0, 214);
+    ctx.rng.chance = () => true;
+    expect(lookForPrey(Z, zombie)).toBe(true);
+    duck.air = true;
+    zombie.preyCd = 1;
+    expect(lookForPrey(Z, zombie)).toBe(false);
+    expect(zombie.prey).toBeNull();
+    expect(zombie.hasTarget).toBe(false);
+    duck.air = false;
+    zombie.preyCd = 0;
+    expect(lookForPrey(Z, zombie)).toBe(true);
+    duck.z += 50;
+    expect(lookForPrey(Z, zombie)).toBe(false);
+    expect(zombie.prey).toBeNull();
   });
 });

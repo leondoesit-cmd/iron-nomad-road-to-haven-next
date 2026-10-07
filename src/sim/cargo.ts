@@ -1,5 +1,6 @@
 import { partDef, t, type PartHold, type VehicleDef } from '../data';
 import type { Carried } from './carry';
+import { FOODS } from './food';
 import type { Spot } from './access';
 import { slotsOf, type Fit, type PartItem } from './parts';
 
@@ -54,6 +55,8 @@ export function cargoName(c: Carried): string {
       return 'Water can';
     case 'paint':
       return 'Spray can';
+    case 'food':
+      return FOODS[c.food].name;
   }
 }
 
@@ -172,6 +175,10 @@ export function surfacesOf(def: VehicleDef, fit: Fit): Surface[] {
   if (bed) {
     const h = pick('bed');
     out.push({ zone: 'bed', spot: 'trunk', units: Math.max(bed.units, h?.units ?? 0), holder: h, walled: true, name: h ? `bed (${h.name.toLowerCase()})` : 'bed' });
+  } else {
+    // A body that brings its own floor and walls (a rickshaw's cab): what is set down in it rides inside, held.
+    const h = pick('bed');
+    if (h) out.push({ zone: 'bed', spot: 'trunk', units: h.units, holder: h, walled: true, name: h.name.toLowerCase() });
   }
   const rack = pick('rack');
   if (rack) out.push({ zone: 'rack', spot: 'flank', units: rack.units, holder: rack, walled: false, name: rack.name.toLowerCase() });
@@ -200,6 +207,9 @@ export interface CargoEntry {
   id: string;
   zone: Zone;
   c: Carried;
+  /** Where it was set down by hand, in the chassis frame, and which way it was turned. Missing: dealt into the deck's grid. */
+  at?: [number, number, number];
+  yaw?: number;
   /** Seeded 0.5..2.2: how long a loose load rides before it works free. */
   thr: number;
 }

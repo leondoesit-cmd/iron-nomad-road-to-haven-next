@@ -203,7 +203,8 @@ float wFoamN = wNoise( wp * 1.7 + vec2( wT * 0.15, 0.0 ) );
 float wFoam = smoothstep( 0.45, 0.0, wD + ( wFoamN - 0.5 ) * 0.3 ) * ( 0.55 + 0.45 * sin( wT * 1.7 + wD * 11.0 ) );
 wFoam = clamp( wFoam, 0.0, 1.0 );
 wCol = mix( wCol, cWFoam, wFoam * 0.9 );
-float wA = mix( 0.3, 0.97, smoothstep( 0.05, 3.4, wD ) ) * smoothstep( 0.02, 0.16, wD );
+// Clear enough to see the stones, the weed and the fish on the bed of the shallows; deep water goes opaque.
+float wA = mix( 0.22, 0.96, smoothstep( 0.05, 4.4, wD ) ) * smoothstep( 0.02, 0.16, wD );
 wA = max( wA, wFoam * 0.92 );
 float wRough = mix( 0.05, 0.5, wFoam );
 `;
@@ -226,7 +227,8 @@ float wDeep = smoothstep( 0.05, 1.3, wD );
 vec3 wCol = mix( cWShallow, cWDeep, wDeep );
 wCol = mix( wCol, cWScum * ( 0.55 + 0.45 * wNb.r + 0.4 * wFine ), wCover );
 float wFoam = 0.0;
-float wA = mix( 0.6, 0.97, smoothstep( 0.02, 0.7, wD ) ) * smoothstep( 0.02, 0.1, wD );
+// Peat-stained, but the pondweed and the drowned branches just under the surface still show through.
+float wA = mix( 0.5, 0.95, smoothstep( 0.02, 1.0, wD ) ) * smoothstep( 0.02, 0.1, wD );
 wA = max( wA, wCover * smoothstep( 0.02, 0.05, wD ) );
 float wRough = mix( 0.1, 0.75, wCover );
 `;

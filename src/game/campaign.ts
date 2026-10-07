@@ -1,10 +1,10 @@
-import { FIT_SLOTS, FUEL_TYPES, HEROES, LEGS, MERCS, PARTS, VEHICLES, hasChassis, hasPart, isHero, mountsFor, otherHero, partDef, seatHeroes, type FuelType, type HeroId, type MercRole, type PartSlot, type Stocks } from '../data';
+import { FIT_SLOTS, FUEL_TYPES, GEAR, HEROES, LEGS, MERCS, PARTS, VEHICLES, hasChassis, hasPart, isHero, mountsFor, otherHero, partDef, seatHeroes, type FuelType, type HeroId, type MercRole, type PartSlot, type Stocks } from '../data';
 import { newAxes, type Axes } from '../sim/endings';
 import { newStocks } from '../sim/resources';
 import { newMerc, type Merc } from '../sim/loyalty';
 import { GARAGE_MAX, PLAYER_PAINT, buildName, buildValue, dismantleYield, freshComp, inventoryCap, installPart, newBuild, type VehicleBuild } from '../sim/garage';
 import { newPart, newUid, scrapValue, seedUids, type PartItem, type Tyres } from '../sim/parts';
-import { addToBag, allItems, sanitizeLoadout, scrapOf, starterLoadout, type GearItem, type Loadout } from '../sim/gear';
+import { addToBag, allItems, isWeapon, newGear, sanitizeLoadout, scrapOf, starterLoadout, type GearItem, type Loadout } from '../sim/gear';
 import { DrugState, type DrugId, type DrugSave } from '../sim/drugs';
 import { newNeeds, restoreNeeds, rest as restNeed, serializeNeeds, type Needs, type NeedsSave } from '../sim/needs';
 import type { WorldSave } from './worldMemory';
@@ -14,7 +14,7 @@ import { WATER_RESERVE_MAX } from '../sim/fluids';
 import { cleanPanels } from '../sim/paint';
 
 export interface PlayerSave {
-  /** Who this seat plays: Chinsky or Leo. Their face, build and name come with it. */
+  /** Who this seat plays: Chinsky, Leo or Nar. Their face, build and name come with it. */
   hero: HeroId;
   name: string;
   /** Uid of the build this player rolls out in. */
@@ -31,6 +31,8 @@ export interface Items extends Record<DrugId, number> {
   medkit: number;
   /** Field dressings: stop a bleed and mend a little. Cheap, so they are the thing to reach for mid-fight. */
   bandage: number;
+  /** Arrows for a bow: found with one, made at camp, and pulled back out of whatever they were shot into. */
+  arrow: number;
   molotov: number;
   flare: number;
   charge: number;
@@ -40,23 +42,51 @@ export interface Items extends Record<DrugId, number> {
   diesel: number;
   /** Water for the radiators, in litres. */
   water: number;
+  /** Hides off butchered game: the Ledger buys them, or cuts them into leather wraps. */
+  hides: number;
 }
 
 /** The most spare oil the convoy can stow. */
 export const OIL_RESERVE_MAX = 4;
 
 /**
- * What the heroes set out in: the starter kit, but bareheaded, so their faces are seen. The helmet rides in the bag,
- * one swap away in the inventory.
+ * What the heroes set out in: the starter kit, but bareheaded and bare-handed, so their faces and hands are seen. The
+ * helmet and gloves ride in the bag, one swap away in the inventory.
  */
-export function heroLoadout(): Loadout {
+export function heroLoadout(hero?: HeroId): Loadout {
   const l = starterLoadout();
-  const helmet = l.worn.head;
-  if (helmet) {
-    delete l.worn.head;
-    l.bag.unshift(helmet);
+  for (const slot of ['hands', 'head'] as const) {
+    const it = l.worn[slot];
+    if (!it) continue;
+    delete l.worn[slot];
+    l.bag.unshift(it);
+  }
+  if (hero === 'iati' || hero === 'nuhat' || hero === 'udud') {
+    // Their own shirts stay visible; starter protection remains available in the bag.
+    for (const slot of ['body', 'face'] as const) {
+      const it = l.worn[slot];
+      if (it) l.bag.push(it);
+      delete l.worn[slot];
+    }
+    if (hero === 'iati') l.worn.legs = newGear('l_iati');
   }
   return l;
+}
+
+/** God mode's bag room: enough for every weapon in the game on top of the usual kit. */
+export const GOD_BAG_SLOTS = 32;
+
+/**
+ * God mode: every gun and blade in the game goes in each player's bag (only the ones they don't already carry, so it is
+ * safe to run again on a loaded save), with ammunition and arrows to feed them. Needs `setExtraBagSlots(GOD_BAG_SLOTS)`.
+ */
+export function grantAllWeapons(c: Campaign) {
+  for (const p of c.players) {
+    const have = new Set(allItems(p.gear).map((it) => it.id));
+    for (const d of GEAR.items) if (isWeapon(d) && !have.has(d.id)) p.gear.bag.push(newGear(d.id));
+  }
+  c.ammo = Math.max(c.ammo, 999);
+  c.items.arrow = Math.max(c.items.arrow, 60);
 }
 
 /** The heroes for each seat from a save: what it names, or the usual seating for anything it does not. */
@@ -87,7 +117,7 @@ export class Campaign {
   hub: string | null = null;
   stocks: Stocks = newStocks(LEGS.start.stocks);
   ammo = LEGS.start.ammo;
-  items: Items = { medkit: 1, bandage: 2, molotov: 1, flare: 2, charge: 0, painkiller: 1, stim: 1, adrenaline: 0, alcohol: 1, weed: 0, haze: 0, mushrooms: 0, lsd: 0, ayahuasca: 0, oil: 1, diesel: 0, water: 30 };
+  items: Items = { medkit: 1, bandage: 2, arrow: 0, molotov: 1, flare: 2, charge: 0, painkiller: 1, stim: 1, adrenaline: 0, alcohol: 1, weed: 0, haze: 0, mushrooms: 0, lsd: 0, ayahuasca: 0, oil: 1, diesel: 0, water: 30, hides: 0 };
   /** What each player has in their blood. Saved, so a trip survives a camp and a reload. */
   drugs: [DrugState, DrugState] = [new DrugState(), new DrugState()];
   /** Hunger, thirst, bladder and bowels, one body each. Carried across camps and legs and saved. */
@@ -127,7 +157,7 @@ export class Campaign {
       vehicle: mopeds[i]?.uid ?? '',
       utility: i === 0 ? 'flare' : 'horn',
       alive: true,
-      gear: heroLoadout(),
+      gear: heroLoadout(who[i]),
     })) as [PlayerSave, PlayerSave];
   }
 
@@ -424,7 +454,7 @@ function migrateV1(c: Campaign, d: LegacySave) {
     }
     c.garage.push(b);
     const hero = c.players[i].hero;
-    return { hero, name: HEROES[hero].name, vehicle: b.uid, utility: p.utility, alive: p.alive, gear: heroLoadout() };
+    return { hero, name: HEROES[hero].name, vehicle: b.uid, utility: p.utility, alive: p.alive, gear: heroLoadout(hero) };
   }) as [PlayerSave, PlayerSave];
 }
 

@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { VehicleBody, defaultEnv, rotateByQuat, type DriveEnv, type DriveInput } from '../physics/vehicle';
+import { RAPIER } from '../physics/physics';
 import { BoatBody, type Chassis } from '../physics/boat';
 import { buildBoatVisual, type BoatVisual } from '../render/boatModels';
 import { boatFx, waterTick } from './waterfx';
-import { applyHit, collisionDamage, facingOf, newHealth, performance, repairStep, tickHazards, type DamageEvent, type VehicleHealth } from '../sim/damage';
+import { applyHit, collisionDamage, facingOf, newHealth, performance, repairStep, tickHazards, type DamageEvent, type HitZone, type VehicleHealth } from '../sim/damage';
 import { effectiveStats, terrainDrag, terrainGrip, type PartItem, type Stats } from '../sim/parts';
 import { fromHealth, toHealth, type VehicleBuild } from '../sim/garage';
 import { bayFit, engineSpec, hoodState } from '../sim/engines';
+import { engineCharacter } from '../audio/vehicleAcoustics';
 import { heatCoolingMult, stormOilMult } from '../sim/weather';
 import { oilBurn, oilState, oilWear, type OilState } from '../sim/oil';
 import { gearboxPower, gearboxRatingNow, gearboxWear } from '../sim/drivetrain';
@@ -21,6 +23,7 @@ import type { Humanoid, Palette } from '../render/humanoid';
 import { shared, disposeTree } from '../render/dispose';
 import { clamp, damp, lerp } from '../core/math';
 import { chassisDef, partDef, type FuelType, type VehicleDef } from '../data';
+import { cabinLayout } from '../render/interior';
 import { Bodywork } from './bodywork';
 import { PANELS, effectiveOpen, panelsOf, panelStripped, type Panel, type PanelOpen } from '../sim/access';
 import { CarGlass } from './carGlass';
@@ -65,6 +68,7 @@ export const SEIZED = 0.1;
 let nextId = 1;
 const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
+const _lv = new THREE.Vector3();
 
 export class Vehicle {
   id = nextId++;
@@ -99,6 +103,13 @@ export class Vehicle {
   hornT = 0;
   sirenT = 0;
   wreck = false;
+  /**
+   * A raider car whose crew is dead or has bailed out: still whole, but nobody is fighting from it any more. It rolls to a
+   * stop and is left for anyone to strip.
+   */
+  abandoned = false;
+  /** The driver was shot dead in the seat: drawn slumped over the wheel. */
+  slumped = false;
   parkedAt = 0;
   /** Set by the leg's tether: >1 = slipstream boost, <1 = leader slowed. */
   tetherPower = 1;
@@ -128,6 +139,8 @@ export class Vehicle {
   carId = '';
   /** Why the engine would not start last time, for the prompt. */
   startFail = '';
+  /** A held accelerator must not stack a new cranking recording every fixed tick. */
+  private starterCooldown = 0;
   /** Distance tracker for the seized-engine check. */
   private seizedWarned = false;
   /** The convoy's stowed spares as they ride on this vehicle: what is shown, and when it was last checked. */
@@ -185,6 +198,7 @@ export class Vehicle {
     this.glass = new CarGlass(this);
     this.cargoRig = new CargoRig(this);
     if (o.hulk) this.makeHulk();
+    this.syncStands();
   }
 
   /** The model for this vehicle's chassis, paint and fitted parts. */
@@ -234,6 +248,8 @@ export class Vehicle {
     this.tankMax = this.stats.tank;
     this.fuel = fuelFrac * this.tankMax;
     if (fromBuild) this.fuelType = b.tank;
+    // New glass in the build starts as it was carried: forget what the old panes took before the body is written back.
+    this.glass.reconcile();
     const old = this.visual;
     const wasSeated = { d: old.driver?.root.visible, p: old.passenger?.root.visible };
     this.bodywork.commit();
@@ -252,6 +268,7 @@ export class Vehicle {
     if (this.visual.passenger && wasSeated.p !== undefined) this.visual.passenger.root.visible = wasSeated.p;
     this.spin = this.body.wheelLocal.map(() => 0);
     if (this.wreck) this.charVisual();
+    this.syncStands();
   }
 
   /** The build was edited directly (the workbench): pull its parts and condition into this live vehicle. */
@@ -336,6 +353,11 @@ export class Vehicle {
     return this.faction === 'neutral';
   }
 
+  /** A raider car that is still in the fight: not burnt out, and somebody aboard. */
+  get hostile() {
+    return this.faction === 'raider' && !this.wreck && !this.abandoned;
+  }
+
   /** What this vehicle shoots: its own gun, or whatever a weapon part gave it. */
   get weapon(): string | null {
     return this.build ? this.stats.weapon : this.def.weapon;
@@ -371,15 +393,87 @@ export class Vehicle {
     return !!this.driver;
   }
 
+  /** Driven by its riders' legs: no fuel, no engine, nothing to start (a pedal boat). */
+  get pedal(): boolean {
+    return !!this.def.physics.boat?.pedal;
+  }
+
+  /** Where a pedal boat was tied up when the last of its riders stepped off (null while anyone is aboard). */
+  moored: { x: number; z: number; yaw: number } | null = null;
+
+  /**
+   * A pedal boat is tied up wherever it is left, so the river does not carry it off: with nobody aboard its way is taken off
+   * and the line draws it back to where it was left, its head as it was.
+   */
+  private moorTick(dt: number) {
+    const b = this.body.body;
+    if (this.driver || this.passenger) {
+      this.moored = null;
+      return;
+    }
+    const p = b.translation();
+    if (!this.moored) this.moored = { x: p.x, z: p.z, yaw: this.yaw };
+    const m = this.moored;
+    const k = Math.exp(-3 * dt);
+    const lv = b.linvel();
+    b.setLinvel({ x: lv.x * k + (m.x - p.x) * 2.5 * dt, y: lv.y, z: lv.z * k + (m.z - p.z) * 2.5 * dt }, true);
+    let dy = m.yaw - this.yaw;
+    while (dy > Math.PI) dy -= Math.PI * 2;
+    while (dy < -Math.PI) dy += Math.PI * 2;
+    const av = b.angvel();
+    b.setAngvel({ x: av.x, y: av.y * k + dy * 2.5 * dt, z: av.z }, true);
+  }
+
+  /**
+   * Up on its stand: a chassis whose wheels are whole parts (`physics.wholeWheels`, the trike) with one of them off. The
+   * frame rests where it is, fixed, until every wheel is back on; then it drops onto its tyres and can roll again.
+   */
+  onStands = false;
+
+  /** Names the wheels that are off a whole-wheel chassis ("Front wheel", "2 wheels"). */
+  missingWheels(): string {
+    const b = this.build;
+    if (!b) return '';
+    const gone = b.tyres.map((t, i) => (t && partDef(t.id).empty ? i : -1)).filter((i) => i >= 0);
+    if (gone.length > 1) return `${gone.length} wheels`;
+    return gone[0] === 0 ? 'Front wheel' : 'A back wheel';
+  }
+
+  /** Put the frame on its stand or take it off, from what the build has on its hubs. Call after the parts change. */
+  syncStands() {
+    const b = this.build;
+    const want = !!b && !!this.def.physics.wholeWheels && b.tyres.some((t) => !!t && partDef(t.id).empty);
+    if (want === this.onStands || !(this.body instanceof VehicleBody)) return;
+    this.onStands = want;
+    const rb = this.body.body;
+    if (want) {
+      // Settle it level at its ride height on the ground under it, then pin it there.
+      const t = rb.translation();
+      const p = this.def.physics;
+      const n = Math.max(1, this.body.wheelCount);
+      const sag = 9.81 / (n * p.suspension.stiffness);
+      const y = this.ctx.groundAt(t.x, t.z) + Math.abs(p.hardY) + p.suspension.rest + p.wheelRadius - sag;
+      this.body.setPose(t.x, y, t.z, this.body.yaw);
+      rb.setBodyType(RAPIER.RigidBodyType.Fixed, true);
+      this.engineOn = false;
+    } else {
+      rb.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+      rb.wakeUp();
+    }
+  }
+
   /** Why this vehicle cannot start right now, or '' if it can. */
   cantStart(): string {
     if (this.wreck) return 'Burnt out';
+    if (this.pedal) return '';
+    // Missing parts first: an empty tank is the least of a frame's worries.
+    if (this.convoyEngine && this.stats.noEngine) return 'No engine in the bay';
+    if (this.onStands) return `${this.missingWheels()} missing: it is up on its stand`;
     if (this.fuel <= 0.001) return 'Out of fuel';
     if (this.flooded) return 'Engine flooded: get it out of the water';
     // Raiders limp on whatever state their engine is in; a convoy engine that is gone has to be rebuilt.
     if (this.faction !== 'raider' && this.health.comp.engine < SEIZED) return 'Engine seized: needs a rebuild';
     if (this.convoyEngine) {
-      if (this.stats.noEngine) return 'No engine in the bay';
       if (this.stats.noDrive) return 'No gearbox: nothing turns the wheels';
       const wrong = fuelMismatch(this.stats.fuel, this.fuelType, this.fuel);
       if (wrong) return `${wrong}: drain it with the jerrycan`;
@@ -394,12 +488,27 @@ export class Vehicle {
   }
 
   setEngine(on: boolean) {
+    if (on && this.engineOn) return;
+    // Legs need no starter: the pedals are simply there to push.
+    if (this.pedal) {
+      this.engineOn = on && !this.wreck;
+      return;
+    }
+    const spec = engineSpec(this.def, this.build?.fit ?? {});
+    const character = engineCharacter({id:this.id,x:0,z:0,rpm:0,throttle:0,tier:this.def.tier,signature:0,litres:spec.litres,fuel:spec.fuel,layout:spec.layout});
+    const family = character.family;
     if (!on) {
+      if (this.engineOn) this.ctx.audio.play('engineStop',this.position.x,this.position.z,.45*character.body,{bank:`engineStop-${family}`,pitch:character.pitch});
       this.engineOn = false;
       return;
     }
     this.startFail = this.cantStart();
     this.engineOn = !this.startFail;
+    // Recheck the tank and parts on every attempt so refuelling can start it immediately,
+    // but let a failed crank finish before another attempt can make a sound.
+    if (this.startFail && this.starterCooldown > 0) return;
+    this.starterCooldown = this.startFail ? 2.5 : 0;
+    this.ctx.audio.play(this.startFail ? 'starterFail' : 'engineStart',this.position.x,this.position.z,.5*character.body,{bank:this.startFail ? undefined : `engineStart-${family}`,pitch:character.pitch});
   }
 
   /** The load on the outside (roof, bed, racks): what rides there, what is secure, and what falls off when driven. See `game/cargo.ts`. */
@@ -454,7 +563,7 @@ export class Vehicle {
     const thr = Math.max(0, this.lastIntent.throttle);
     const load = this.engineOn ? clamp(0.12 + 0.62 * thr + 0.26 * clamp(speed / top, 0, 1) * (thr > 0.1 ? 1 : 0.4), 0, 1) : 0;
     const comp = this.health.comp;
-    this.temp = thermalStep(this.temp, { heat: st.heat, cooling: st.coolKw, radiator: comp.radiator ?? 1, airflow: st.airflow, load, speed, running: this.engineOn, coolant: comp.coolant ?? 1, ambient: heatCoolingMult(this.ctx.heat) }, dt);
+    this.temp = thermalStep(this.temp, { heat: st.heat, cooling: st.coolKw, radiator: comp.radiator ?? 1, airflow: st.airflow, load, speed, running: this.engineOn, coolant: comp.coolant ?? 1, ambient: heatCoolingMult(this.ctx.heat) * (1 + 0.15 * (this.ctx.rain ?? 0)) }, dt);
     const T = this.temp;
     // Water: a little evaporates, a holed radiator leaks, a cooking engine boils it away.
     comp.coolant = Math.max(0, (comp.coolant ?? 1) - coolantLoss({ T, radiator: comp.radiator ?? 1, coolantL: st.coolantL, running: this.engineOn, dt }));
@@ -563,6 +672,7 @@ export class Vehicle {
   /** Called once per fixed tick, before the world step. */
   update(dt: number) {
     const ctx = this.ctx;
+    this.starterCooldown = Math.max(0, this.starterCooldown - dt);
     this.sinceHit += dt;
     if (this.hornT > 0) this.hornT -= dt;
     if (this.sirenT > 0) this.sirenT -= dt;
@@ -577,7 +687,7 @@ export class Vehicle {
       this.lastIntent = input;
       const perf = performance(this.health);
       const e = this.env;
-      e.engineOn = this.engineOn && this.fuel > 0.001;
+      e.engineOn = this.engineOn && (this.pedal || this.fuel > 0.001);
       if (!e.engineOn && this.engineOn) this.engineOn = false;
       e.power = perf.power * this.tetherPower * (this.convoyEngine ? overheatPower(this.temp) * gearboxPower(this.health.comp.gearbox ?? 1) : 1);
       e.grip = perf.grip * this.stats.gripMult;
@@ -594,6 +704,7 @@ export class Vehicle {
       };
     }
     this.body.update(this.wreck ? { steer: 0, throttle: 0, brake: 0, handbrake: true } : input, this.env, dt);
+    if (this.pedal && !this.wreck) this.moorTick(dt);
     this.onGround = this.body.grounded > 0;
     waterTick(this, dt);
 
@@ -606,8 +717,8 @@ export class Vehicle {
     if (this.health.comp.engine >= SEIZED) this.seizedWarned = false;
     if (this.convoyEngine && !this.wreck) this.engineHeat(dt);
 
-    // Fuel burn per km driven, scaled by the Drain slider. Raiders never run dry.
-    if (this.faction === 'convoy' && this.engineOn && !this.wreck) {
+    // Fuel burn per km driven, scaled by the Drain slider. Raiders never run dry, and legs run on rations.
+    if (this.faction === 'convoy' && this.engineOn && !this.wreck && !this.pedal) {
       const d = Math.abs(this.speed) * dt;
       this.distance += d;
       this.fuel = Math.max(0, this.fuel - (this.def.burn / 1000) * this.stats.burnMult * d * ctx.campaign.difficulty.drain - 0.0006 * this.stats.burnMult * dt);
@@ -648,7 +759,8 @@ export class Vehicle {
           const pl = ctx.players[this.driver.index];
           pl?.cam.addShake(clamp(this.body.impact / 18, 0.1, 0.9));
         }
-        ctx.audio.play('crash', this.position.x, this.position.z, clamp(this.body.impact / 14, 0.3, 1));
+        ctx.audio.play('crash', this.position.x, this.position.z, clamp(this.body.impact / 14, 0.3, 1), { intensity: clamp(this.body.impact / 14, 0, 1), pitch: clamp(1.1-this.mass/12000,.72,1.1) });
+        ctx.audio.play('carPanel', this.position.x, this.position.z, clamp(this.body.impact / 18,.15,.7), {intensity:clamp(this.body.impact/18,0,1)});
         ctx.fx.spark(this.position.x, this.position.y, this.position.z, 5, 5);
       }
     }
@@ -680,8 +792,26 @@ export class Vehicle {
       ctx.fx.dust(bx, ctx.groundAt(bx, bz), bz, -Math.sin(this.yaw) * this.speed, -Math.cos(this.yaw) * this.speed, k, tint);
     }
     if (this.health.burning || (this.wreck && this.burnT > 0)) {
-      ctx.fx.fire(p.x, p.y + 0.6, p.z, this.wreck ? 1.4 : 0.7);
-      if (Math.random() < 0.5) ctx.fx.blackSmoke(p.x, p.y + 1.0, p.z);
+      // A running fire is in the engine bay; a wreck burns from end to end and dies down over its last seconds. The fire
+      // engine draws it (flames streaming back as it drives, oily black smoke, its light) and lets it light the grass.
+      if (ctx.fires) {
+        const [bx, by, bz] = this.wreck ? [p.x, p.y + 0.1, p.z] : this.body.toWorld(0, 0.35, this.def.length * 0.3);
+        ctx.fires.hold(this, {
+          x: bx,
+          y: by,
+          z: bz,
+          r: this.wreck ? Math.min(1.8, this.def.length * 0.32) : 0.55,
+          fuel: 'rubber',
+          heat: this.wreck ? Math.min(1, this.burnT / 8) : 0.85,
+          bed: false,
+          spreads: true,
+          vx: Math.sin(this.yaw) * this.speed,
+          vz: Math.cos(this.yaw) * this.speed,
+        });
+      } else {
+        ctx.fx.fire(p.x, p.y + 0.6, p.z, this.wreck ? 1.4 : 0.7);
+        if (Math.random() < 0.5) ctx.fx.blackSmoke(p.x, p.y + 1.0, p.z);
+      }
     } else if (this.hpFrac < 0.4 && !this.wreck && Math.random() < 0.3) {
       ctx.fx.blackSmoke(p.x, p.y + 0.9, p.z);
     }
@@ -759,8 +889,11 @@ export class Vehicle {
     return true;
   }
 
-  /** Apply damage from a source at (srcX, srcZ). Returns true if this killed the vehicle. */
-  takeHit(raw: number, srcX: number, srcZ: number, o: { incendiary?: boolean; ram?: boolean; pierce?: number; silent?: boolean; wheel?: number; at?: [number, number, number]; blast?: number; smash?: boolean } = {}): boolean {
+  /**
+   * Apply damage from a source at (srcX, srcZ). Returns true if this killed the vehicle. `bullet` marks a round from a gun,
+   * with how hard it is on sheet metal: it holes the car where it lands (`at`) and cannot finish it off on its own.
+   */
+  takeHit(raw: number, srcX: number, srcZ: number, o: { incendiary?: boolean; ram?: boolean; pierce?: number; silent?: boolean; wheel?: number; at?: [number, number, number]; blast?: number; smash?: boolean; bullet?: number } = {}): boolean {
     if (this.wreck) return false;
     const ctx = this.ctx;
     const dir = Math.atan2(srcX - this.position.x, srcZ - this.position.z);
@@ -768,9 +901,11 @@ export class Vehicle {
     const h = this.health;
     const savedArmor = h.armor;
     if (o.pierce) h.armor = h.armor * (1 - o.pierce);
-    const res = applyHit(h, raw, { facing, roll: () => ctx.rng.next(), incendiary: o.incendiary, ram: o.ram, wheel: o.wheel });
+    const spot = o.bullet !== undefined && o.at ? this.zoneAt(o.at) : null;
+    const res = applyHit(h, raw, { facing, roll: () => ctx.rng.next(), incendiary: o.incendiary, ram: o.ram, wheel: spot?.wheel ?? o.wheel, bullet: o.bullet, zone: spot?.zone });
     h.armor = savedArmor;
     this.sinceHit = 0;
+    if (!o.silent && res.dealt>0) ctx.audio.play('carPanel',this.position.x,this.position.z,clamp(res.dealt/90,.08,.65),{intensity:clamp(res.dealt/70,0,1)});
     // Crashes dent the body where the physics found the contact; everything else is shaped here.
     if (!o.ram || o.blast !== undefined || o.smash) this.bodywork.hit({ dmg: res.dealt, srcX, srcZ, at: o.at, blast: o.blast, smash: o.smash });
     if (o.blast !== undefined) this.glass.blast(o.blast);
@@ -781,13 +916,46 @@ export class Vehicle {
     return h.destroyed;
   }
 
+  /** A world point in this vehicle's own frame (x right, y up, z forward). */
+  localOf(x: number, y: number, z: number): [number, number, number] {
+    const t = this.body.body.translation();
+    const r = this.body.body.rotation();
+    _q.set(r.x, r.y, r.z, r.w).invert();
+    _lv.set(x - t.x, y - t.y, z - t.z).applyQuaternion(_q);
+    return [_lv.x, _lv.y, _lv.z];
+  }
+
+  /**
+   * What a round that struck this world point hit: a wheel, the engine bay, the tank, or only panel. The engine is in the
+   * nose, the tank low in the tail; a raider buggy carries its engine behind the seats.
+   */
+  zoneAt(at: [number, number, number]): { zone: HitZone; wheel?: number } {
+    const [x, y, z] = this.localOf(at[0], at[1], at[2]);
+    const wl = this.body.wheelLocal;
+    const r = this.def.physics.wheelRadius + 0.12;
+    for (let i = 0; i < wl.length; i++) {
+      const [wx, wy, wz] = wl[i];
+      if (Math.abs(x - wx) < 0.45 && Math.hypot(y - (wy - this.body.wheelSusp(i)), z - wz) < r) return { zone: 'wheel', wheel: i };
+    }
+    const half = this.def.length / 2;
+    const rearEngine = this.kind === 'raiderBuggy';
+    if (rearEngine ? z < -half * 0.4 : z > half * 0.4) return { zone: 'engine' };
+    if (!rearEngine && z < -half * 0.45 && y < 0.05) return { zone: 'tank' };
+    return { zone: 'body' };
+  }
+
   private report(events: DamageEvent[]) {
     const ctx = this.ctx;
     const who = this.driver?.isPlayer ? this.driver.index : this.passenger ? this.passenger.index : -1;
     for (const e of events) {
       let msg = '';
       let kind: 'warn' | 'bad' = 'warn';
-      if (e.kind === 'tire') msg = 'Tire blown';
+      if (e.kind === 'tire') {
+        msg = 'Tire blown';
+        const w = this.body.wheelLocal[e.wheel];
+        const point = w ? this.body.toWorld(...w) : [this.position.x,0,this.position.z];
+        ctx.audio.play('tirePuncture',point[0],point[2],.45);
+      }
       else if (e.kind === 'engine') msg = 'Engine damaged';
       else if (e.kind === 'leak') msg = 'Fuel leak!';
       else if (e.kind === 'fire') {
@@ -814,6 +982,7 @@ export class Vehicle {
     this.burnT = 30;
     const p = this.position;
     this.ctx.fx.explosion(p.x, p.y + 0.6, p.z, this.mass > 1500 ? 1.4 : 0.9);
+    this.ctx.fires?.flash(p.x, p.y + 1, p.z, this.mass > 1500 ? 1800 : 1000, 0.55);
     this.ctx.audio.play('boom', p.x, p.z, 1);
     this.body.body.applyImpulse({ x: 0, y: this.mass * 3.2, z: 0 }, true);
     this.ctx.onVehicleDestroyed(this);
@@ -857,6 +1026,25 @@ export class Vehicle {
     return this.body.toWorld(x, y, z);
   }
 
+  /**
+   * World point under a seated rider's feet, exactly where the cabin sits them (`seatOccupant`), or null where the vehicle has
+   * no cab seat for them (a moped, a bed gun post): the caller falls back to a guess.
+   */
+  seatFeet(who: 'driver' | 'gunner'): [number, number, number] | null {
+    if (!this.def.seat || (who === 'gunner' && (this.weapon === 'bedMG' || this.visual.gun))) return null;
+    const L = cabinLayout(this.def);
+    const spot = L && (who === 'driver' ? L.seats.seatD : L.seats.seatP);
+    return spot ? this.body.toWorld(spot.x, L.floor - L.g0, spot.z) : null;
+  }
+
+  /** Like `seatFeet`, but also for a bike or quad: where the visual sits its rider. Null for a boat or a gun post. */
+  riderFeet(who: 'driver' | 'gunner'): [number, number, number] | null {
+    const cab = this.seatFeet(who);
+    if (cab || who !== 'driver' || this.def.seat || this.def.physics.kind === 'boat') return cab;
+    const d = this.visual.driver?.root.position;
+    return d ? this.body.toWorld(d.x, d.y, d.z) : null;
+  }
+
   /** Where a player ends up after bailing or exiting: a free side, or on top. */
   exitSpot(): { x: number; z: number } {
     for (const side of [1, -1] as const) {
@@ -891,7 +1079,7 @@ export class Vehicle {
       const flat = !w.bare && this.health.comp.tires[i] <= 0.001;
       w.flatK = damp(w.flatK, flat ? 1 : 0, 10, dt);
       w.pivot.scale.y = 1 - 0.22 * w.flatK;
-      w.pivot.position.y = this.def.physics.hardY - susp - w.radius * 0.22 * w.flatK;
+      w.pivot.position.y = (this.body.wheelLocal[i]?.[1] ?? this.def.physics.hardY) - susp - w.radius * 0.22 * w.flatK;
       w.pivot.rotation.y = w.steered ? this.body.steerAngle : 0;
       this.spin[i] += (sp * dt) / w.radius;
       w.spin.rotation.x = this.spin[i];
@@ -920,6 +1108,19 @@ export class Vehicle {
     if (v.driver) v.driver.update(dt, this.def.tier === 1 ? 'ride' : 'seat', 0, 0, 0);
     // Sit them in the seat the cabin really has (or on the floor where it has none).
     if (v.driver && v.seat) v.seat('driver', v.driver, this.stats.seatDrop);
+    if (v.driver && this.slumped) {
+      // Shot dead at the wheel: folded forward over it, head down, arms hanging.
+      const d = v.driver;
+      d.torso.rotation.x = 0.75;
+      d.head.rotation.x = 0.7;
+      d.head.rotation.z = 0.35;
+      d.armL.rotation.x = -0.15;
+      d.armR.rotation.x = -0.3;
+      d.armL.rotation.z = 0.05;
+      d.armR.rotation.z = -0.1;
+      d.elbowL.rotation.x = -0.1;
+      d.elbowR.rotation.x = -0.2;
+    }
     if (v.passenger) {
       v.passenger.setWeapon('none');
       v.passenger.update(dt, 'gun', 0, 1, 0);

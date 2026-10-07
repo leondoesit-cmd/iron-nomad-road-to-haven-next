@@ -38,6 +38,12 @@ const MUZZLE_BASE: Record<BaseGun, MuzzleFx> = {
   rifle: { flash: 1.4, star: 0.18, tongue: 0.3, cone: 6, reach: 1.2, sparks: 5, smoke: 3, light: 1.2, tint: [1, 0.9, 0.62] },
 };
 export const MUZZLE = forGuns(MUZZLE_BASE);
+// A string throws no flame, smoke or light.
+const NO_FLASH: MuzzleFx = { flash: 0, star: 0, tongue: 0, cone: 0, reach: 0, sparks: 0, smoke: 0, light: 0, tint: [1, 1, 1] };
+MUZZLE.crossbow = NO_FLASH;
+MUZZLE.bow = NO_FLASH;
+/** Whether a gun throws a flame at the muzzle at all. */
+export const flashes = (model: GunModel) => MUZZLE[model].star > 0;
 
 /** How long the flame at the muzzle lasts, seconds: a couple of frames. */
 export const FLASH_SECS = 0.035;
@@ -72,7 +78,9 @@ export const TRACER: Record<AmmoKind, TracerStyle> = {
   carbine: { color: [1, 0.9, 0.62], life: 0.14, chance: 0.6, glow: 1.2 },
   battle: { color: [1, 0.92, 0.66], life: 0.16, chance: 0.9, glow: 1.4 },
   lever: { color: [1, 0.85, 0.5], life: 0.13, chance: 1, glow: 1.2 },
-  bolt: { color: [1, 0.6, 0.4], life: 0.17, chance: 1, glow: 1.4 },
+  bolt: { color: [1, 1, 1], life: 0, chance: 0, glow: 0 },
+  // An arrow is drawn as itself in flight (`game/arrows.ts`), never as a streak of light.
+  arrow: { color: [1, 1, 1], life: 0, chance: 0, glow: 0 },
 };
 
 /** Raiders' fire is warmer and redder than the convoy's, so you can tell who is shooting at whom. */
@@ -167,7 +175,7 @@ export interface Skipped {
  */
 export function skipOf(kind: AmmoKind, surface: Surface, speed: number, d: [number, number, number], n: [number, number, number], roll: number, jitter: [number, number, number]): Skipped | null {
   const base = SKIP[surface];
-  if (!base || kind === 'pellet' || speed < 60) return null;
+  if (!base || kind === 'pellet' || kind === 'arrow' || kind === 'bolt' || speed < 60) return null;
   const nl = Math.hypot(n[0], n[1], n[2]);
   if (nl < 1e-6) return null;
   let nx = n[0] / nl;

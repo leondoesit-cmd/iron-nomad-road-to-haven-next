@@ -29,6 +29,7 @@ export const PIN_COLOR: Record<MapPinKind, string> = {
   spring: '#7fe8d6',
   swamp: '#a9b86a',
   river: '#8fd4e8',
+  heritage: '#e8c48a',
 };
 
 /** What a map needs to know about the seat it is drawn for. */
@@ -485,6 +486,25 @@ export class MapPainter {
         break;
       case 'river':
         // No marker: only its name, beside the water on the larger maps.
+        break;
+      case 'heritage':
+        // A little tower with a crenellated top: a building with a name and a past.
+        g.beginPath();
+        g.moveTo(x - r * 0.8, y + r);
+        g.lineTo(x - r * 0.8, y - r);
+        g.lineTo(x - r * 0.4, y - r);
+        g.lineTo(x - r * 0.4, y - r * 0.6);
+        g.lineTo(x - r * 0.1, y - r * 0.6);
+        g.lineTo(x - r * 0.1, y - r);
+        g.lineTo(x + r * 0.2, y - r);
+        g.lineTo(x + r * 0.2, y - r * 0.6);
+        g.lineTo(x + r * 0.5, y - r * 0.6);
+        g.lineTo(x + r * 0.5, y - r);
+        g.lineTo(x + r * 0.8, y - r);
+        g.lineTo(x + r * 0.8, y + r);
+        g.closePath();
+        g.fill();
+        g.stroke();
         break;
       case 'site':
         g.beginPath();

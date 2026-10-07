@@ -1,6 +1,6 @@
 # Iron Nomad: Road to Haven
 
-A shared-screen survival-convoy game for the browser, for two players or one. Two scavengers, Chinsky and Leo (or one of them), start on matching 50cc scrap mopeds and
+A shared-screen survival-convoy game for the browser, for two players or one. Two scavengers (any two of Chinsky, Leo and Nar Divad, or one of them alone) start on matching 50cc scrap mopeds and
 grow into a war convoy, driving north toward a sanctuary called Haven. The vehicle is the character: every upgrade changes
 where you can go, how loud you are, and who wants to kill you.
 
@@ -22,6 +22,102 @@ straight on one of the older single-road legs, which is how a map is checked wit
 
 Chrome or Edge are the reference browsers. Gamepads are only exposed to secure contexts, so use `localhost`, `127.0.0.1`
 or HTTPS. Add `?debug` to the URL for a frame-time and draw-call readout and data validation at boot.
+
+### Performance and audio packaging
+
+The game plays compact Opus versions of the WAV recordings: 64 kb/s VBR for mono, 128 kb/s for stereo. The current 265
+derivatives total 8.54 MB instead of 74.65 MB of WAVs. Existing compressed foley stays in its original format. Originals
+and recording credits remain in `public/audio` for editing; the production build excludes the replaced WAVs.
+These are lossy audio derivatives; visual quality settings,
+effect capacities and simulation rates are unchanged.
+
+Run `npm run pack:audio` after adding or editing a WAV (requires `ffmpeg` and `ffprobe`). It reuses unchanged encodes,
+checks decoded duration and channel count, and writes `src/audio/packedRecordings.json` plus derivative checksums
+and original-file attribution in `public/audio/packed/sources.json`. Ordinary builds need no encoder. Builds reject
+stale or damaged derivatives instead of shipping audio that no longer matches the source. Web Audio decodes each
+recording once; playback reuses both the decoded buffers and cached take banks, including the anti-repeat decks.
+
+Particle and tracer pools update live slots and upload changed buffer ranges. Their GPU slot order stays stable, so
+smoke blending stays the same; idle pools submit no vertices. Terrain queries use a spatial index of building
+foundations, updated as settlements append pads, while retaining the same overlap order and height calculations.
+`tests/performance.test.ts` checks retirement, recycling, pending uploads, boundary lookups and exact terrain heights.
+
+Tree batches share the original vertex buffers but index only their selected variant, instead of submitting all three
+variants and rejecting two in the shader. Models, wind, leaf alpha tests, shadows, collision meshes and impostor fades
+stay the same. A balanced mix submits 66.7% fewer tree triangles. Far props share prototypes across 256 m regions,
+allowing each view to cull unseen regions; bounds include the maximum trip-breath displacement.
+
+Immutable scenery caches its local transform. Animated descendants and per-view visibility still update normally.
+Moving-body motion is sampled once for all vegetation chunks, convex radii are cached by shape identity, and sleeping
+fallen trees stop rewriting saved poses and uploading instance matrices until they wake. Changed instances upload
+only their own matrix/color ranges. Streaming shares its 4 ms calm / 10 ms urgent allowance across a browser frame's
+catch-up ticks, with one indivisible build slice allowed to finish. Headless standalone ticks keep independent budgets.
+Adaptive resolution retains the existing levels and limits, with 250 ms settling when reducing and 500 ms when recovering,
+so GPU render targets cannot be recreated on consecutive frames.
+
+Sight queries walk only grid cells crossed by the segment, with early exit for blocked/not-blocked checks. Sparse hearing
+queries scan occupied cells when that costs less than the original grid window. Both retain exact hit/source selection,
+including ties, glass, terrain height and indoor hearing rules. Character rendering scores distance once per candidate
+and uses a reusable bounded heap to select the same nearest visible actors in the same order, across either one or two
+cameras. Separation buckets and visibility scratch arrays are recycled between frames.
+
+Zombie, animal and ambient-life batches upload only the active attribute prefix, keeping pending writes until the GPU
+consumes them. A 12-zombie batch uploads 98% less instance data than its 600-slot capacity. Track marks upload two small
+spans when their ring buffer wraps instead of rewriting all 7,000 segments; wheel-edge scratch buffers are reused.
+These changes retain the existing draw limits, models, animation data and simulation rates.
+
+Ground-cover batches cache their instance-root bounds and skip submission separately for each camera when every root is
+beyond the shader's existing full-fade distance. Shadow casters and batches with moving roots retain their original
+visibility. This removes triangles that the unchanged shader would already collapse to points; it keeps the original
+density, fade distances, bending, wind and instance order. Flexible plants share one immutable geometry snapshot per
+batch and create their scaled contact mesh only on the first nearby contact or ray query, then reuse it as before.
+`tests/renderEfficiency.test.ts` checks transformed bounds, both cameras, fade boundaries, shadow/moving-root fallbacks,
+and exact original collision vertices with native Rapier sensors.
+
+The development-only `/tools/scatter-performance.html` comparison uses 19,600 grass instances in 49 batches and checks
+single screen and both split orientations at three wind times. All nine comparisons matched pixels exactly. Its
+top/bottom workload submitted 158,404 / 33,604 triangles. Two interleaved comparisons measured 1.23 / 0.59 ms and
+0.43 / 0.17 ms GPU time (52–60% less); CPU submission in the final comparison was 0.60 / 0.40 ms. These are isolated
+ground-cover measurements, not whole-game FPS gains. Start `npm run dev` to repeat it.
+
+Production Standard A/B runs at 1280×720 and 1.4875 render pixels per CSS pixel showed effectively unchanged whole-game
+average FPS in the final pair: case differences ranged from −1.68% to +1.71%. Earlier identical controls varied substantially.
+These opening routes showed little ground-cover triangle reduction; the dense-vegetation comparison above measures that
+workload separately. `output/render-efficiency-comparison-2026-10-07.json` retains every run and the measurement limits.
+
+The engine CPU benchmark measured 128 city sight queries at 2.49 / 0.20 ms (12.6×), 800 hearing queries with 13 emitters
+at 1.43 / 0.15 ms (9.5×), and selecting 160 characters from 3,000 candidates for two views at 0.47 / 0.032 ms (14.9×).
+Those ratios apply to these isolated workloads, not whole-game FPS. `tests/engineEfficiency.test.ts` compares optimized
+queries and actual render selection against the original algorithms, and checks pending uploads and ring-buffer wraps.
+
+Production builds externalize Rapier's byte-identical WASM binary, checked against the embedded copy before packaging.
+The measured JavaScript total fell from 7.26 MB to 3.16 MB, plus a separately cached 3.08 MB WASM asset: about 1.03 MB less
+total output and 0.44 MB less gzip transfer. Development and Node physics tests retain the unmodified compatibility package.
+
+Use `npm run bench:performance` for repeatable CPU subsystem comparisons. A 10,000-node, two-view transform benchmark
+measured about 1.24 ms before / 0.16 ms after. The development-only `tools/render-performance.html` page compares the
+original and variant tree batches, including shadows, pixels at several wind times, and asynchronous GPU timer queries
+when supported. One 108-tree comparison submitted 132,936 / 44,312 triangles and measured 0.81 / 0.60 ms GPU time;
+CPU submission was 0.20 / 0.30 ms because variant batching adds draw calls. Two wind times matched pixels exactly;
+the initial comparison differed at one pixel. These are subsystem measurements, not whole-game FPS gains.
+Start `npm run dev`, then open `/tools/render-performance.html` on that server to repeat the rendering check.
+`?debug` now shows simulation/render CPU times and frame-wide draw/triangle totals, including shadows, both views,
+environment captures and post-processing. CPU submission time does not measure GPU execution.
+
+The opening screen's **Benchmark** button runs desert driving, open-country streaming, dense city streets, and night
+crowds with smoke/glow effects. Every scenario runs with one player, two players split top/bottom, and two players split
+left/right. Quick runs warm up for 1 second and measure for 3 seconds per case; Standard runs use 3 and 8 seconds.
+Scene construction and warm-up frames are excluded. The selected graphics preset stays in effect, with adaptive
+resolution held at scale 1 throughout so a slower case cannot compensate by drawing fewer pixels. Audio is muted.
+
+Results show elapsed-time FPS, the slowest 1% average FPS, 95th-percentile frame time, simulation and render-submission
+CPU times, and whole-frame draw/triangle counts. **Download results** exports JSON with settings, viewport, browser,
+sample counts, 99th-percentile timings, frames over 33.3 ms, and discarded simulation steps. Display refresh and browser
+frame pacing can cap FPS; CPU submission is not GPU timing. The benchmark uses isolated campaigns with seed 4242;
+normal gameplay includes unseeded cosmetic randomness. It never writes saves or settings. Cancel with Esc, the on-screen
+button or the controller's cancel action. Hidden tabs restart the interrupted case after returning; changing window size
+or losing the graphics context cancels the run. Player mode, split orientation, joined devices, volume and render scale
+return afterwards. The last completed result remains available in the Benchmark panel until the page reloads.
 
 ## Play
 
@@ -52,15 +148,16 @@ Dusk Bell turns each day into the same loop, and every decision is shared:
   Parking and walking is quiet.
 - **Dust storms**: from the second day, about half the days bring one, somewhere in the morning and midday (never past the Dusk Bell). The sky browns over, the fog closes to about a hundred metres, the minimap halves its reach and the wind rises. Raiders see about 40% as far, so a storm is cover for a run past them, but your engine's oil burns more than twice as fast in the grit and you cannot see them either. The clock line says `DUST WALL`, `DUST STORM` or `DUST CLEARING`, and the radio announces both ends. A storm is fixed by the campaign seed and the day (`sim/weather.ts`), so a reload gives the same weather.
 - **Heat waves and warnings**: from the third day, about one storm-free day in four is a scorcher. The clock line says `HEAT BUILDING` or `HEAT WAVE`, the heat peaks around noon and eases before the Dusk Bell, and every radiator sheds about a fifth less heat at the peak, so a build that runs warm can cook (`sim/weather.ts`, fixed by seed and day like the storms). The radio now calls a dust wall a few minutes before the first gust, gives a heads-up shortly before the Dusk Bell so you can pick a camp, and warns a driver whose tank is nearly dry. A night raid also carries whatever a wave could not spend into the next one, so the night's size tracks its threat.
-- **Hunting**: a kill leaves a carcass. Hold A on it to butcher: meat becomes Rations and big game also pays Scrap from the hide. Carcasses keep for a minute. Everyone eats supper from the Rations at camp unless they are already full (see [Eat, drink, piss, shit](#eat-drink-piss-shit)); whoever goes unfed wakes at 65% health.
+- **Hunting**: game has to notice you (sight, hearing and scent on the wind), so stalk it crouched, from cover and from downwind. A kill leaves a carcass. Hold A on it to butcher: meat becomes Rations and game with a coat also gives hides for the Ledger. Carcasses keep for a minute. See [Hunting](#hunting-stalking-shot-placement-and-tracking). Everyone eats supper from the Rations at camp unless they are already full (see [Eat, drink, piss, shit](#eat-drink-piss-shit)); whoever goes unfed wakes at 65% health.
 - **Shared stocks**: Fuel, Rations, Scrap, Parts, Tech, Medicine. Fuel and Rations are one pool for both players.
 - **Tether**: stay within about 300 m of your partner. The trailing player gets a slipstream bonus; the leader slows when the
   gap grows.
 - **Downed, not dead**: at 0 HP you crawl for 20 s. Your partner can revive you (hold A, faster with a medkit). The run ends
   only when both of you are down, or the last vehicle is lost.
 - **Gear**: you wear, hold and carry a personal kit. Armour, masks and boots change what hurts you; guns, melee weapons and tools sit on a four-slot belt (LB swaps); the bag holds the rest. D-pad ← (or `3` / `I`) opens the inventory.
-- **Wind, wounds and wear**: sprinting, jumping and swinging spend **stamina** (the thin blue bar under your health, shown only while it is low). Run it dry and you are *winded*: no sprint, a slower walk, weaker and slower swings, a shakier aim, until a third has come back. Bites, blades and bullets can open a **wound** (up to three at once; armour turns some away). Each drains health until it clots on its own after about 15 s or is bound, and bleeding alone never kills: it leaves you at 1 HP. **Bandages** (3 for 3 Scrap at the Ledger, also found in bunkers) bind every wound and mend 8; a **Medkit** binds and heals 60. Both sit first on the quick belt (hold the use button, lean to choose, tap to use) and busy your hands for under a second and a bit over one, so dressing a wound mid-fight costs you a shot. Weapons **wear** with use: found ones are already worn (a bar on the tile in the inventory, and a label on the HUD when low). Below 60% a gun wanders and a blade dulls; below 30% a gun can **jam** (clearing it takes about a reload). **Repair** it from the inventory for Scrap, sort the bag with **Sort**, and see rounds, dressings and health at a glance under the bag.
+- **Wind, wounds and wear**: sprinting, jumping and swinging spend **stamina** (the thin blue bar under your health, shown only while it is low). Run it dry and you are *winded*: no sprint, a slower walk, weaker and slower swings, a shakier aim, until a third has come back. Bites, blades and bullets can open a **wound** (up to three at once; armour turns some away). Each drains health until it clots on its own after about 15 s or is bound, and bleeding alone never kills: it leaves you at 1 HP. **Bandages** (3 for 3 Scrap at the Ledger, also found in bunkers) bind every wound and mend 8; a **Medkit** binds and heals 60. Both sit first on the quick belt (hold the use button, lean to choose, tap to use) and busy your hands for under a second and a bit over one, so dressing a wound mid-fight costs you a shot. Weapons **wear** with use: found ones are already worn (a bar on the tile in the inventory, and a label on the HUD when low). Below 60% a gun wanders and a blade dulls; any gun can now and then **misfire**, more often as it wears and often below 30%, where real jams (stovepipes, double feeds, stuck cases) take over; the hands clear each the way its action needs (see *The hands keep busy* below). **Repair** it from the inventory for Scrap, sort the bag with **Sort**, and see rounds, dressings and health at a glance under the bag.
 - **Eat, drink, piss, shit**: every scavenger has a belly, a water level, a bladder and bowels. On a pad they are four more slots at the end of the quick belt (hold D-pad ↓, lean to choose, tap); on the keyboard each has its own rebindable key (`5 6 7 8` for Player 1, `9 0 - =` for Player 2). Eating spends a Ration, drinking spends litres from the water reserve (or is free at a lake), and the other two take a few seconds standing still. Ignore them and your aim, wind and walk suffer. Nothing ever happens on its own: a full bladder just nags.
+- **Foraging**: wild figs, blackberries, prickly pears, za'atar, yarrow and mushrooms grow in the open world. Hold A at one: hungry, you eat it on the spot; fed, it goes in the stores. Wear gloves in the thorns, carry a blade for herbs, and never eat a mushroom you don't know when a death cap looks much the same.
 - **Crew** have a Loyalty meter and a loot cut that is withheld from every pickup. Betrayal is telegraphed by two radio
   warnings and a camp dispute before anyone deserts.
 - **Roadside Encounters** are decided by both players voting in their own half. If you disagree the Encounter Lead decides, and
@@ -77,18 +174,199 @@ Lead or Trust override. A downed player can hold `A` to use a convoy Medkit on t
 the run (there is nobody to revive you, so the "you both went down" rule becomes "you went down and could not get up").
 The garage and Ledger show one vehicle, and Settings drops the Player 2 and split-screen rows.
 
-### Chinsky and Leo
+### Chinsky, Leo and Nar Divad
 
-The two scavengers are real people (`data/heroes.ts`): **Chinsky** (1.72 m, 80 kg) takes the left seat, Player 1, and **Leo**
-(1.80 m, 66 kg) the right, Player 2. A solo run is Leo's. The name under each seat on the title screen picks who plays it:
-in split screen it swaps the two, alone it switches between them. The seat colours stay with the seat (Player 1 orange,
-Player 2 blue), so a solo Chinsky or Leo wears Player 1's orange.
+The scavengers are real people (`data/heroes.ts`): **Chinsky** (1.72 m, 80 kg) takes the left seat, Player 1, and **Leo**
+(1.80 m, 66 kg) the right, Player 2. A solo run is Leo's. **Nar Divad** (1.75 m, 82 kg) is the third: the name under each
+seat on the title screen steps through all three (in split screen it passes over whoever has the other seat, so nobody is
+seated twice). The seat colours stay with the seat (Player 1 orange, Player 2 blue), so a solo hero wears Player 1's orange.
 
 Each is drawn as themselves wherever they appear, on foot and in any vehicle's seat: their own face, hair and build, at
 their real height (the rig is scaled to it) and as broad as their weight makes them. With nothing over the body they wear
-their own clothes (Chinsky a black knit cardigan over a grey T-shirt, Leo a navy T-shirt). They set out bareheaded with
+their own clothes (Chinsky a black knit cardigan over a grey T-shirt, Leo a navy T-shirt, Nar a pale mint T-shirt with a big
+dark print down its right side and a dark cord round his neck). They set out bareheaded with
 the starter helmet in the bag, and wear the starter bandana down round the neck, so their faces are seen; put the helmet on
 in the inventory and the hair flattens under it. Saves from before carry over: each seat becomes whoever plays it now.
+
+Nar's head was measured off a selfie the same way as the others: a broad, ruddy face in a wide open grin (his top teeth
+show: the portrait mouth takes an optional `teeth` colour for the gap between parted lips), brown eyes narrowed by it, big
+ears, salt-and-pepper hair brushed up and back, and a full short beard that is dark through the moustache and the middle of
+the chin and greys along the jaw (`salt` on a full beard sets the grey share in the middle and at the sides, mixed hair by
+hair).
+
+**Poses at rest.** Besides standing, the body rig (`render/humanoid.ts`, `PoseKind`) can **sit** on the ground (knees up,
+elbows on the knees, forearms folded in front of the shins) and **lie** on its back (one knee up, elbows on the ground, hands
+on the belly, the head resting on the ground; with a pack on, it reclines against the pack). Both breathe a little. They work
+for anyone the rig draws, but nothing in play uses them yet; see them in the portrait viewer: `/portrait.html?hero=nar&pose=sheet&view=body&kit=shirt`
+puts him standing, sitting and lying side by side (`pose=stand|sit|lie|sheet`, `kit=shirt` is his own T-shirt over the
+starter trousers and boots). The rig's root now turns before it tips (`YXZ`), so a body lying down (also a downed player)
+lies on its back along the way it faced instead of rolling onto its side when it faced anywhere but north.
+### Udud
+
+**Udud** is selectable in either seat or solo at **176 cm, 82 kg**. His supplied photograph guides the dark curls,
+short brown beard, smiling face, blue rectangular prescription glasses and grey T-shirt. His seated idle leans back,
+with his head upright and hands resting comfortably. After uneven pauses he raises his right hand, pushes his glasses
+back up and lowers it again. Aiming, holding gear or moving interrupts the gesture; goggles and full face masks hide
+his prescription glasses, as does the owner's first-person view.
+
+Open `/portrait.html?hero=udud&view=body&yaw=25` for his canvas-chair showcase. Selecting Udud in the portrait viewer
+defaults to `pose=lounge`; `pose=sit` shows his laid-back ground pose, and `pose=walk` previews the playable rig.
+
+### Nuhat
+
+**Nuhat** is selectable in either seat or solo at **170 cm, 73 kg**. Her portrait follows the supplied photograph:
+warm brown skin, dark almond eyes, berry lipstick, long black box braids swept over her right shoulder, a cream
+buttoned blouse, two fine necklaces and small gold earrings. Her starter jacket and bandana stay in her bag.
+
+Open `/portrait.html?hero=nuhat&kit=shirt&view=body&pose=walk&expression=talking` to preview her. `pose=stand|sit|walk`
+sets the body action; `expression=neutral|talking|smiling|wondering` works independently, including while sitting or
+walking. Speech moves the jaw and lips through syllables and phrase pauses; the smile lifts the mouth corners and
+cheeks; wondering raises the brows, tilts the head and brings a hand toward the chin when her hands are free.
+These are visual animations; speech audio is not generated. Add `&ref=/characters/nuhat-reference.png` to compare
+with the photograph. `Humanoid.expression` controls the expressions in other scenes. The braids sway slightly,
+disappear from her own first-person camera and are removed when changing character. `tests/nuhat.test.ts` covers
+selection and saves, dimensions, independent expression blending, gait, sitting, dressing and camera visibility.
+
+### Iati
+
+**Iati** is selectable in either seat, including solo, at **179 cm**. His portrait follows the supplied front and side photographs:
+a bare receding crown with dark hair at the sides, a full dark beard, clear rectangular glasses, an open navy tropical
+overshirt with turquoise foliage and orange spotted cats, purple edging, dense curled chest, belly and forearm hair,
+and brown trousers. The rounded torso stays inside the overshirt. His 86 kg
+build is an appearance estimate; only his height was supplied. His starter jacket and bandana are in his bag so the
+shirt and face are visible, and equipping armour or face protection replaces them normally.
+
+When standing quietly in third person, he alternates a sip from an amber bottle with a puff from a lit joint; movement,
+aiming, firing, nearby enemies and hands-on work interrupt it. This idle animation does not dose him or spend supplies.
+Taking alcohol or weed through the existing quick belt plays the corresponding pose and uses the existing drug rules.
+Each puff produces a broad, billowing exhale that rises and fades before the next puff.
+
+Open `/portrait.html?hero=iati&view=body&kit=shirt&pose=relax&yaw=35` for the animated model; `pose=drink` and
+`pose=smoke` isolate the actions. Add `&ref=/characters/iati-reference.png` to compare against the original photograph.
+Use `&ref=/characters/iati-side-reference.png` for the second photograph.
+`tests/iati.test.ts` checks his height, saved selection and clothing, hand and mouth contact, shirt clearance,
+smoke expansion and fading, props, and gameplay interruption.
+
+### Amirat's barbecue garden
+
+**Amirat** is selectable in either seat: 175 cm and 77 kg, with a portrait sculpted from the supplied doughnut and barbecue photographs:
+full cheeks, a broad rounded nose, a shorter broad jaw, dense dark curls, light stubble and a toothy smile. His own clothes are an orange pullover hoodie with the hood down,
+drawstrings, a kangaroo pocket and sleeves pushed up to expose his forearms. Armour covers these clothes as usual.
+
+Choose **Amirat's garden** on the title screen, or open `/garden.html`. This inspectable 3D scene recreates the barbecue
+at a single-storey family home: a long tiled patio with its house-to-lawn depth halved to 3.25 m, a pale curved cover with metal ribs over all the tiles,
+lawn, exactly three small fruiting orange trees, a children's slide, a trampoline with safety net, a wooden sofa with cream cushions against the house wall,
+an oval coffee table and six chairs with white legs and wooden seats. One orange tree is near the trampoline and one is in the lawn's centre.
+The house and its covered patio end beside the sofa's right arm. A paved side passage connects the main garden to a front garden
+one-third of the main garden's width, aligned beside the passage. Metal railings carry a semi-dark blue privacy screen on the exterior;
+the front gate has a matching screen and two concrete steps on the inside, descending from the garden to the entrance.
+A round ivory preparation table with bowls stands between the house door and sofa. The storage cabinet is rotated 90 degrees
+against the left fence, with a compact 70-litre office refrigerator beside it; both face into the patio.
+Amirat tends two tomahawk steaks with steel tongs; smoke rises from the coals.
+The hanging flag strip is omitted. **Garden** shows the main layout, **Photo view** frames the man and grill, **Passage** shows the side route,
+**Front gate** shows the small garden, privacy screen and entrance steps,
+**Hide / Show cover** reveals the furniture layout, **Daylight / Evening** changes the lighting, and **Pause / Resume** stops the cooking animation. Drag to orbit and scroll
+to zoom. His close portrait is `/portrait.html?hero=amirat&kit=shirt&view=face`.
+
+The scene is reusable as `AmiratGarden` in `render/amiratGarden.ts`; `GARDEN_LAYOUT` defines its placements in metres.
+`tests/amirat.test.ts` checks selection and saves, dimensions and object counts, complete geometry, and tongs staying
+in his hand through the animation when the entire garden is moved or rotated. The production build includes both viewers.
+
+### Mission two: Udud and Nuhat's house
+
+The garden above is **Udud and Nuhat's house**, number 18, and it stands in the open world inside Petah Tikva: in the last
+row of blocks at the city's north end, on the right of the boulevard, squeezed in between apartment blocks (the block it
+took the end of keeps the rest of its lot). `open.house` in `legs.json`, numbers in `world/ududHouse.ts`. A paved driveway
+crosses the pavement from the boulevard to the front gate, and the side passage leads round to the garden. The house,
+fence, furniture and the people are solid (`LegLayoutImpl.buildHouse`).
+
+**The gate is shut.** Ring the buzzer on its post (**Ring the buzzer**): it buzzes, the host answers on the intercom, and
+five seconds later the gate buzzes again and swings open (it stays open: `house.gate`). Walk round into the garden and
+**Iati**, on his chair by the way in, turns, takes a long drag and blows a great cloud of smoke over you: a blessing, and a
+real dose of weed from the drug system (its slow, green, glowing look and all). While it lasts the party turns strange:
+Lag Karab's spoon grows until its bowl is bigger than his head and his cake swells, Ro's burger swells, everyone floats up
+off their seats and sways, Udud's glasses leave his face to circle his head, Nar's tea glass drifts up out of his hand, and
+Amirat's steaks lift off the grill and turn in the air while he sways at it. Talk to Iati again once it wears off and he
+blesses you again.
+
+Everyone with a name who is not out on the road is at the barbecue, in their own clothes (jeans or dark trousers and
+trainers; no helmets or packs). **Amirat** grills out on the lawn, facing the patio; everyone else is round the coffee table
+by the sofa, crowded with takeaway (foil trays of shawarma and kebabs, hummus tubs, pitas, chips, cans), holding their food
+in their hands and on their knees: **Nuhat** (telling a story) and **Udud** (in his canvas chair) nearest the house door,
+**Nar Divad** with a glass of tea on the end of the sofa nearest the way out, **Iati** smoking on the chair beside him, the
+**Karab brothers** across the table from the sofa (**Lag** with the cake on his knees and his big spoon, **Ro** with his
+burger and beer), and **Chinsky** and **Leo** on the rest of the sofa with a pita each whenever neither is playing.
+Whoever is in a player's seat is left out. Heads turn toward whoever walks up, and **Talk to ...** prompts give each of them
+a few lines (`render/partyCast.ts`, `game/partyMission.ts`).
+
+In story mode, mission two takes over when mission one ends (`story.m1`, Nar in the trike's cab): the objective and a
+**HOUSE** compass pin point up the boulevard. Reaching the house sets `story.house`: Nar gets out of the cab and joins the
+party, everyone waves; then ring the buzzer, go in, and Iati's blessing (or saying hello, or walking onto the patio)
+completes the mission (`story.m2`). The house shows on the map once seen. Outside story mode the house and the party are
+simply there, buzzer and blessing included.
+
+`tests/ududHouse.test.ts` checks the placement and levelling, the cleared plot, a Rapier capsule walking from the driveway
+through the gate and passage to the patio (and not through the house, fence or grill), the party clothes and seating,
+and the merging of the garden's static meshes.
+
+### Ro Karab
+
+**Ro Karab**, Lag Karab's younger brother, is selectable in either seat: 175 cm and 88 kg, so he is built heavier than Lag
+at the same height. His portrait (`RO` in `render/heroLooks.ts`) comes from the two supplied photos: a long straight nose,
+heavy dark brows, ears that stand out, and short wavy near-black hair with grey through it (the hair is from the burger
+photo). He is clean-shaven, as he usually is, though both photos show a beard. He grins with his top teeth showing. His own clothes are a charcoal pullover hoodie with the
+hood down, full-length sleeves and no drawstrings (`drawstrings: null`). Two extra faces get swapped in as he eats:
+`RO_BITE` (jaw wide, squinting) and `RO_LAUGH` (mouth wide open with top and bottom teeth; the face painter's new
+`mouth.lowerTeeth` adds the bottom row).
+
+`BurgerEater` in `render/burger.ts` sits him on a crate at a crate table with a double cheeseburger in a brioche bun and a
+brown longneck beer. The loop lasts 12.5 s: he lifts the burger in both hands, tipped up with its top facing out as in
+the photo, and takes a bite (each bite cuts a crescent from the front, with the crumb, patty, cheese and lettuce showing).
+Then he chews, puts it back on the plate, takes a long pull on the beer with his head back, and laughs: first leaning
+back, then bent over the table pounding it with his right fist. Free hands rest on his knees while he sits up. A burger
+lasts five bites, then a new one is on the plate. Any hero can sit at it; only Ro pulls the faces. See it at
+`/portrait.html?hero=ro&pose=burger&view=body&kit=shirt&yaw=-35&light=sun`, and add
+`&ref=/characters/ro-burger-reference.webp` (or `ro-laugh-reference.webp`) to compare with the photos.
+`tests/ro.test.ts` checks his height and build, saves, the hoodie, the teeth in both faces, the bites, and the burger
+and bottle meeting his lips in time with the faces.
+
+### Story mode: Nar's yard
+
+**Story** on the title screen starts a run that begins somewhere else: on foot, in a ruined scrap yard on **Nar's Flat**, a
+dry salt pan about 1.3 km east of Dustwell (it is a place on the open-world map like any other, and stays there in every run).
+Your uncle **Nar Divad** lies out cold on a pallet in his own lean-to, to the left of the garage as you look in from its open
+front, the big rusty skip beside him and a fire burning in a rusty basin out in front (look at him and the label reads
+"NAR - IS HE ALIVE?"). The **Rickshaw Trike** he was building stands in pieces in the garage: the bare frame up on its stand, the 594cc twin, the motorcycle front wheel, two
+*Small Wheel T2*s and the tin cab lying about the yard, with a can of petrol, an oil can, a tin of dog food on the bench and a
+*Suspension Lift Kit* by the sacks. Mission one, step by step on the objective panel under your name:
+
+1. **Check on Nar** (hold interact at his pallet). He is alive, and tells you to finish the trike.
+2. **Build the trike**: the engine, the front wheel, both back wheels and the cab, each carried to its place on the frame and
+   attached. The checklist ticks as each goes on; with every wheel on, the frame drops off its stand onto its tyres.
+3. **Fill the tank** from the can (the trike starts dry, and so do the convoy's reserves).
+4. **Help Nar into the cab**, with the trike brought near his lean-to. He rides on the bench from then on.
+5. **Drive out of the yard**: mission one is done (`story.m1`), and mission two takes the objective from there.
+
+Progress is saved in the campaign's flags (`story.checked`, `story.built`, `story.aboard`, `story.m1`), so a night or a reload
+picks up where it was; whatever was put down in the yard stays there overnight. The trike is a one-off chassis (`special` in
+`vehicles.json`): a three-wheeler (`physics.axles`: one 0.33 m wheel in front, two 0.26 m wheels on the back axle, rear drive)
+whose wheels are **whole parts** (`physics.wholeWheels`): a wheel taken off leaves nothing on the hub, so a trike missing one sits
+fixed on its stand and will not start. Each hub only takes its own kind (`PartDef.wheel`: `moto` in front, `small` behind).
+
+### Hands on: looking at, holding and placing things
+
+On foot, whatever you look at is named in white under the crosshair, the way a mechanic reads it: an engine as size, layout,
+power, torque and fuel ("594CC I2 23HP 39NM GASOLINE", its wear, "FUEL CONSUMPTION: 0.6"), a wheel by its grip, food by what it
+does for hunger and health. The buttons that do something with it are listed down the left side in your own bindings (GRAB,
+RELEASE, THROW, ROTATE, MOVE, ATTACH, DETACH, EAT, STOW). Lifting is still a short hold of interact; what you look at is what you
+lift. Held, it floats out in front of you along your line of sight: the **mouse wheel** brings it nearer or pushes it out, the
+**swap** button (Q / LB) turns it, **fire** lets go of it exactly where it is, and **aim** throws it (it tumbles and can be
+lifted again once it lies still). Let go over a deck of one of your vehicles (the rickshaw's cab, a pickup's bed, a roof) and
+it stays there, at that spot and that heading, and rides along: that is how things are stored on a vehicle now. A part held to
+its mount still goes on with the interact hold, and X still stows or sets down as before. **Food** is carried too: a tin of dog
+food (hunger -30, health +15) or a lizard snatched off the hot ground (crouch to creep up on one; hunger -7, health +3), eaten
+with the eat key. The rules are `game/grab.ts`; foods are `sim/food.ts`.
+
 ### Learning the game
 
 Two things on the title screen (and **How to play** also in the pause menu) teach the game without a manual:
@@ -117,26 +395,28 @@ them; the scene itself only gains a `training` flag that mutes the hostile syste
 |---|---|---|---|---|
 | Left stick | Move | Steer | | Move |
 | Right stick | Aim / look | Free look | Aim gun | Aim reticle |
-| RT / LT | Fire / aim | Throttle / brake | Fire / zoom | Place / remove |
+| RT / LT | Fire / aim (a bow: hold RT to draw, let go to loose) | Throttle / brake | Fire / zoom | Place / remove |
 | RB | Tap melee, hold takedown | Fire front gun, or the sidearm if the ride has none (drive-by) | Fire | Next element |
 | LB | Swap what is in hand along your belt | | | Previous element |
 | A | Tap: jump (when nothing is in reach). Hold: loot, repair, refuel, revive | Handbrake | | Rotate |
 | B | Crouch | Tap lights, hold engine off | | Hold: ready for night |
 | X | Reload (hold: swap utility) | Tap horn, hold siren | | Assign watch post |
-| Y | Tap: switch first / third person. Hold: enter a vehicle | Tap: switch view. Hold: exit, or bail at speed | Tap: switch view. Hold: exit | |
+| Y | Get in a vehicle (one press, no hold) | Get out; hold to bail at speed | Get out | |
 | D-pad ↑ | Tap ping, hold command wheel | | | |
 | D-pad ↓ | Tap to take the selected drug (or eat, drink, piss, shit from the belt), hold to open the belt | Same, except piss and shit | Same, except piss and shit | Same |
 | D-pad → | Tap map: closer look, whole leg, close | Same | Same | Same |
 | D-pad ← | Inventory: change what you wear and hold (the game pauses) | Same | Same | Same |
-| L3 / R3 | Sprint / reset camera | Camera distance / look back | | |
-| Start / Back | Pause / hold for convoy sheet | | | |
+| L3 / R3 | Click to sprint (stays on until you stop), or hold, per Control settings / reset camera | Camera distance / look back | | |
+| Start | Pause | Same | Same | Same |
+| Back | Tap: switch first / third person. Hold: convoy sheet | Same | Same | |
 
-**First and third person**: tap **Y** on a pad to switch the camera between the chase view and the eyes. It works on foot (the
+**First and third person**: tap **Back** on a pad to switch the camera between the chase view and the eyes. It works on foot (the
 camera sits at head height, you see your arms and what they hold), in the driver's seat (the camera is the driver's head: the
 right stick or the mouse looks around and springs back to the road) and at a bed gun or passenger seat. Each player has their
 own view, so one can drive from the cab while the other watches the road from behind. The choice is remembered. On a pad, view
-and the vehicle action share Y: a quick tap switches the view, holding it (about a third of a second) gets you in or out, and
-the prompt says *Hold*. Rebind either one and the share goes away. On the keyboard the view keys are `B` (Player 1) and `P`
+and the convoy sheet share Back: a quick tap switches the view, holding it (about a third of a second) shows the sheet. Getting
+in or out of a vehicle stays an instant press of Y, because it happens constantly while the view is a once-in-a-while switch.
+Rebind either one and the share goes away. On the keyboard the view keys are `B` (Player 1) and `P`
 (Player 2), and the middle mouse button.
 
 **Jumping**: on foot you can jump about a metre. The take-off speed carries through the air (a sprint jump goes furthest) and the
@@ -152,7 +432,7 @@ a camp, a delve and a reload; a night's sleep clears it, and half-clears the hab
 
 | Drug | Works for | Good | Bad |
 |---|---|---|---|
-| **Painkillers** | 90 s | half damage | a sore comedown |
+| **Painkillers** | 90 s | half damage; current drug morphing is a further 20% weaker and its remaining time is 30% shorter | a sore comedown |
 | **Stim** | 40 s | 25% faster | worse aim; a slow, shaky crash |
 | **Adrenaline** | 12 s | heals 30, takes 70% less damage, **wakes you from anything** | a hard crash; very toxic |
 | **Moonshine** | 70 s *a drink*, stacks to six | liquid courage: tougher, hits harder | sway, double vision, a worse shot, loud, and past four drinks you **pass out** (a hard hit wakes you). A hangover scales with how much you had |
@@ -172,6 +452,8 @@ round you), *Giggle Fit* (weed + mushrooms), *Deep Trip* (LSD + mushrooms), *Spi
 stim: the stim hides the drunk, the drunk does not care), *Overdrive*, *Purge Fest*. Some are dangerous: alcohol and painkillers
 (*Liver Roulette*), two stimulants (*Heart Race*), and anything stimulating on top of the vine. Ayahuasca makes everything else in you
 hit harder and cost more, and its purge can undo a drink problem. Adrenaline sobers you up. The HUD names each blend as it starts.
+
+Default spatial morphing (warp, kaleidoscope, view pulse and world breathing) is reduced by 20%; painkillers reduce it by another 20%.
 
 **What you see and what changes**, only in the tripping player's own half of the screen: hue swim and swirl, wavy warp, chromatic
 aberration, double vision, neon outlines, kaleidoscope folds toward the edges, motion trails that slide round the colour wheel (a
@@ -216,7 +498,7 @@ keyboard layout and the mouse, in separate tabs: pick a row, press the new butto
 already taken swaps the two, so nothing is ever double-bound by accident and nobody loses a control they need. Optional actions
 on the keyboard and mouse can be unbound with `Del` while binding; `Esc` (or `Start` on a pad) cancels, and `Esc`, `F1` to `F12`
 and the Alt and Meta keys are kept. Each tab has its look options (stick deadzone, look sensitivity, key turn speed, mouse
-sensitivity, invert look Y), and a *Camera & play* tab holds the view per seat, the first-person field of view (70 to 120
+sensitivity, invert look Y; the gamepad tab also has sprint as one click or hold), and a *Camera & play* tab holds the view per seat, the first-person field of view (70 to 120
 degrees), the bodycam lens strength and crouch as toggle or hold. Reset a tab to its defaults at any time. Everything is saved with the other settings,
 and the in-game Controls screen and the button prompts follow whatever you bind. The sticks and the D-pad menu navigation stay fixed.
 
@@ -244,7 +526,7 @@ src/
   ui/        HUD, shared-cursor focus UI, overlays (title, votes, report), the Dawn Ledger, the inventory, the illustrated guide
              and training cards (`guide.ts`, `guideArt.ts`, `coach.ts`), styles
   input/     gamepad, keyboard and mouse sampling into per-player intents; `bindings.ts` holds the rebindable action table
-  audio/     procedural Web Audio: engines, weapons, stems that crossfade by state
+  audio/     recorded Web Audio: licensed effects, engines and dynamic ambience
   save/      IndexedDB (with a localStorage mirror), written at every Dawn Ledger
 tests/       Vitest suites for the sim, vehicle physics, world generation and game logic
 ```
@@ -306,12 +588,25 @@ Raiders are not just buggies that turn up out of the dust. Three gangs hold the 
 
 A camp is a ring of torn fence round a fire, with tents, tarped wrecks, barrels and tyres, the gang's banners on either side of the gate and over the stash, and a stash of loot on the far side from the gate: Scrap, Parts, ammo, Rations, fuel, and from the second tier medicine, Tech and a vehicle part. Hold A to take it, as with any pickup. Further from the start the camps are stronger: tier 1 has three gunmen, tier 2 four gunmen and a sniper, tier 3 five gunmen and two snipers (the gunmen scale a little with the Aggro slider), and the stash is richer.
 
-- **Sentries** stand on their posts once anyone comes within about 170 m (a far camp costs nothing), wander a few metres or scan the horizon, and notice by sight and sound: about 45 m on foot, 20 crouched, 55 m for a parked vehicle and 120 m for one under way, longer when your Signature is high or you have just fired, and shorter in a dust storm. Anyone within 14 m is noticed regardless of cover.
+- **Sentries** stand on their posts once anyone comes within about 170 m (a far camp costs nothing), wander a few metres or scan the horizon, and notice people on foot the way any raider does ([Raider sight and cover](#raider-sight-and-cover)) at about half the reach while nothing is up: about 55 m walking in the open, 33 m crouched, less again standing still, and not at all behind a rock or down in a bush. A shot they hear, or a glimpse, brings one over to look. Vehicles they notice at 55 m parked and 120 m under way, longer when your Signature is high or you have just fired, and shorter in a dust storm.
+- **Shoot the crew, keep the car.** A raider car's crew can be hit in their seats (`RaiderSystem.crewRayTest`): the buggy's driver sits up in its open frame, the battle-wagon's two behind its visor slits, where the armour takes 60% of each round (`crewHp`, `crewCover` in `enemies.json`). Kill them and the car rolls to a stop with the driver slumped over the wheel, counts as a kill, and is left whole (*ABANDONED*) for the crowbar, which gets more out of it than out of a burnt hulk. Shoot the car itself until its engine dies and the crew climbs out and fights on foot. A car with nobody fighting from it no longer counts for waves, map pins or "raiders nearby" (`Vehicle.hostile`).
 - **The alarm** is shared. A hit raises it (a clean silent takedown with the blade does not), the whole camp turns on you, and the camp's buggies, and sometimes a battle-wagon, roll out ahead of you. A sentry gives up at 150 m from its post and walks back; with no one in sight for 14 s the camp stands down.
 - **A broken camp stays broken.** Sentries you kill stay dead across nights and reloads (`WorldMemory.gangKilled`, saved with the campaign; older saves load without it). When the last one falls the radio says so and the gang's pin leaves the map. The loot you did not take stays where it lies, as everywhere else.
 - **On the map.** A camp is drawn on the minimap, the whole-leg map and the compass (as a threat, labelled with the gang's name) once the convoy has come within about 420 m of it, and stays there until it is broken. The radio names a gang the first time you come near one of its camps.
 
 Code: placement and dressing in `world/gangCamps.ts` (called from `Layout.raiderCamps`), the `tent` and `campfire` props in `render/props.ts`, sentry behaviour in `game/raiders.ts` (`Infantry.post`, `guardNotices`, `guardStep`, `alertCamp`), and the runtime in `game/gangCamps.ts`. Tests: `tests/gangcamps.test.ts`.
+
+### Raider sight and cover
+
+A raider (on foot, in a buggy's gun seat, a sentry, or an armed traveller you have crossed) has to **see** you before it shoots, and seeing takes a moment:
+
+- **What shows.** A line is drawn from its eye to your head, chest and hips (`game/sight.ts`). The ground, walls, rocks, boulders, tree trunks and cars block a line outright; bushes, oleander, reeds, cane, bramble, prickly pear and fig thin it by how much leaf it crosses (`Vegetation.seeThrough`). Crouched behind a waist-high rock, only your head shows; down in a big bush, nothing does. Glass and grass hide nothing. Within 3 m you are noticed whatever you hide in; leaves stop hiding you within about 2 m.
+- **Noticing builds up** (`sim/enemySight.ts`, `SIGHT`). Walking in the open by day it can pick you out at about 110 m; crouched, standing still, at night, in dust or rain, or with only part of you showing, much nearer, and more slowly. Once it is fighting you it looks harder.
+- **Ears.** A shot is heard out to about 90 m (less with a suppressor) and footsteps a few metres. A noise brings it to look where it came from, roughly, but it never fires at a noise. Hit one and it knows roughly which way the round came from, and a camp's alarm passes that on.
+- **Fire discipline** (`FIRE`). After it picks you up it takes 0.6 to 1.2 s to bring the gun round. Its first rounds go wide (three times the spread) and settle over about 3 s of unbroken sight, a runner is harder to hit, and a gunman's pistol holds 7 rounds and then needs 2 to 3 s to reload. It aims at whatever of you shows, so a rock in front of you takes the rounds. Lose it and it puts a round or two where you were for under a second, then stops, comes looking (gunmen walk to the spot and search round it; snipers hold and watch), and gives up after about 12 s. Nobody shoots at someone who is already down.
+- **Zombies** use the same lines for spotting you on foot, though once one is on you it follows by smell and sound at close range.
+
+Tests: `tests/enemySight.test.ts`.
 
 ### Travellers on the road
 
@@ -383,12 +678,32 @@ Starving and thirst cost health but, like a wound, never the last of it: it stop
 
 At camp the night does the rest: anyone under 60% fed eats supper (one Ration; an extra one with the munchies), and anyone who has been snacking through the day skips it and keeps the Ration. Anyone under 80% watered drinks a litre from the reserve. Whoever goes without wakes hollow (and an unfed one still wakes at 65% health, and a dry reserve is on the report), and everyone wakes with a fuller bladder. HUD chips (`HUNGRY`, `PARCHED`, `NEED A PISS`, `CLENCHING`) show only while something is wrong; the convoy sheet (hold Back) lists the four levels. The first warning of a run brings up a tip. Tests: `tests/needs.test.ts`.
 
+### Foraging
+
+The open world feeds whoever knows where to look. Wild plants are planted per chunk like the trees (`world/forage.ts`, pure and seeded, so every plant has the same id every time), drawn as instanced meshes (`render/forageRender.ts`), and each is a hold-A spot while someone on foot is within reach (`game/foraging.ts`, through the interact registry). The rules are pure (`sim/forage.ts`).
+
+| Plant | Where it grows | A handful | Handfuls · regrows |
+|---|---|---|---|
+| **Wild fig** | round springs and oases, along rivers, by lakes | eaten: food; put by: 0.35 Ration | 3 · 3 days |
+| **Bramble** (blackberries) | river banks, lake shores, swamp edges, the edges of woods | food and a little water; 0.25 Ration. **Thorns** | 4 · 2 days |
+| **Prickly pear** (sabra) | the hedge round every old place, here and there along dry roads | food and water; 0.3 Ration. **Spines** | 3 · 3 days |
+| **Za'atar** | open dry hillsides and grass | 0.25 Medicine (never eaten) | 2 · 2 days |
+| **Yarrow** | meadows | packed into a bleeding wound it stops the bleed; otherwise a Bandage | 1 · 4 days |
+| **Mushrooms** | under the trees in the woods | field mushrooms: food or 0.3 Ration. Liberty caps: one dose on the drug belt. Death caps: see below | 2 · 2 days |
+
+- **Graze or keep.** Under 78% fed (or watered, for juicy fruit) you eat what you pick there and then; otherwise it goes in the convoy's stores. The prompt says which: *Eat figs · 3 left* or *Pick figs · 3 left*.
+- **Hands.** Thorns and spines tear bare hands: a few points of health a handful, and a bramble can open a bleeding scratch. Any gloves do for brambles; prickly pear needs proper gloves (fingerless ones are not enough). The heroes set out bare-handed, gloves in the bag. Gloved, thorny picking is also quicker. A **blade** on the belt (knife, machete, axe, katana) cuts herbs and pads in about half the time.
+- **Mushrooms are the gamble.** They fruit in about a third of patches on a dry day and in all of them after rain. A forager who does not know a kind sees only *mushrooms (unknown)*. Hungry, they eat them and find out: field mushrooms feed you, liberty caps start a trip, and **death caps** do nothing for 45 s and then make you very sick for over two minutes (health down to a quarter, water and belly drained, retching that stops you in your tracks), never fatally, and a night's sleep sees the rest through. Fed, they look them over instead, and about half the time recognise them. Once learned, a kind is picked for what it is, and known death caps are left alone. What each hero knows is theirs (`campaign.flags`, saved).
+- **Memory.** Each plant remembers the handfuls taken and the day (`WorldMemory.forage`, saved), and comes back whole once its regrow days have passed. A picked plant visibly loses that share of its fruit, flowers or caps.
+
+Tests: `tests/forage.test.ts` (the rules, where things grow, and picking in a real scene, including bare hands in the spines, a remembered plant across nights and a reload, and a death cap's poisoning).
+
 ### Gear and the inventory
 
 Each scavenger has a personal kit (`data/gear.json`, `sim/gear.ts`) in three parts, and the inventory screen is where you change it. Press **D-pad ←** (keyboard: `3` for Player 1, `I` for Player 2; rebindable under Control settings) on foot. The game pauses, the panel opens over the *other* half of the screen, and your own camera swings into a slow orbit of your survivor so every change shows on the model.
 
 - **Wearing** (seven slots: head, face, body, hands, legs, feet, back). Every piece changes both stats and looks. **Armour** cuts the damage from bullets, claws, blasts and rams; **spore guard** (masks) cuts bloater clouds; **fall protection** (boots, knee pads) cuts falls; **speed** and **footstep noise** trade against each other (plate is slow and loud, sneakers are quiet, trail runners are quick); **reload** and **gun spread** come from gloves and goggles; **melee** from gauntlets; and a pack, vest or cargo trousers add **bag slots**. Fire ignores armour. Clothing is built in `render/outfit.ts` from a style and two colours per slot: 31 wearable pieces across the seven slots, in three rarities. Starter pieces use your own colours; any other body armour puts an armband in your colour on the sleeve so you are still recognisable in a split screen.
-- **In hand** (the belt: four slots, plus the utility). The slot in hand decides what the on-foot buttons do, and **LB** steps along the belt, then to the throwable (flare, molotov, charge or decoy horn, chosen with hold-X as before, or in the inventory). The belt holds firearms, melee weapons and the three tools (wrench, crowbar, jerrycan), so carrying a shotgun means leaving the crowbar at home. The belt always keeps one weapon. **Guns** each have their own damage, fire rate, magazine, reload, spread, range, noise and pierce. There are twenty: the 9mm pistol you start with, a compact 9mm, a .38 revolver (slow, hard-hitting, punches through plate) and a .44 hand cannon; a scrap SMG, a police SMG and a machine pistol; a sawn-off, a coach gun, a pump and a combat shotgun (eight or nine pellets a shot, only the first is loud); a hunting rifle (its worn scope now really magnifies a little), a lever-action, a scrap carbine, an assault rifle, a battle rifle, a marksman rifle and a bolt sniper; an LMG with a seventy-five round box; and a crossbow (a slow, heavy bolt that drops, and six points of noise against a rifle's ninety: the quiet way to play). Every gun keeps its own magazine, wear and add-ons when you swap. **Melee weapons** (knife, bat, machete, fire axe, lead pipe, sledgehammer, katana) swing on RT as well as RB, each with its own damage, reach and pace; bare hands are still the old 35. Hold RB for the silent takedown as before. Ammunition is still the one shared pool of Rounds (a crossbow bolt costs one like anything else); what changed is the *round*: the rifles, the lever, the bolt and the LMG each fire a ballistic type of their own (`sim/ballistics.ts`), with their own speed, drop, penetration and brass (a short carbine case, a nickel magnum case).
+- **In hand** (the belt: four slots, plus the utility). The slot in hand decides what the on-foot buttons do, and **LB** steps along the belt, then to the throwable (flare, molotov, charge or decoy horn, chosen with hold-X as before, or in the inventory). The belt holds firearms, melee weapons and the three tools (wrench, crowbar, jerrycan), so carrying a shotgun means leaving the crowbar at home. The belt always keeps one weapon. **Guns** each have their own damage, fire rate, magazine, reload, spread, range, noise and pierce. There are twenty-one: the 9mm pistol you start with, a compact 9mm, a .38 revolver (slow, hard-hitting, punches through plate) and a .44 hand cannon; a scrap SMG, a police SMG and a machine pistol; a sawn-off, a coach gun, a pump and a combat shotgun (eight or nine pellets a shot, only the first is loud); a hunting rifle (its worn scope now really magnifies a little), a lever-action, a scrap carbine, an assault rifle, a battle rifle, a marksman rifle and a bolt sniper; an LMG with a seventy-five round box; a crossbow (a slow, heavy bolt that drops, and six points of noise against a rifle's ninety: the quiet way to play); and a recurve bow, which is drawn rather than fired and shoots arrows you can pick back up (see *The bow* below). Every gun keeps its own magazine, wear and add-ons when you swap. **Melee weapons** (knife, bat, machete, fire axe, lead pipe, sledgehammer, katana) swing on RT as well as RB, each with its own damage, reach and pace; bare hands are still the old 35. Hold RB for the silent takedown as before. Ammunition is still the one shared pool of Rounds (a crossbow bolt costs one like anything else); what changed is the *round*: the rifles, the lever, the bolt and the LMG each fire a ballistic type of their own (`sim/ballistics.ts`), with their own speed, drop, penetration and brass (a short carbine case, a nickel magnum case).
 - **Customising a gun** (`sim/gunmods.ts`, `render/gunMods.ts`). Add-ons are items (57 of them, `kind: "mod"` in `data/gear.json`) that sit in the bag until fitted. Every gun declares its own slots out of *optic, muzzle, barrel, underbarrel, magazine, stock and side rail*, and for each slot which families fit: a pistol takes a pistol suppressor and a micro dot, a rifle takes a rifle suppressor, a 4x or 8x scope and a bipod, a shotgun takes chokes, a tube and a shell carrier but no sight, the crossbow takes limbs and a cocking aid. Select a gun (belt or bag) and press **Customise**: the panel lists its slots, shows what is fitted, and for the slot you pick lists every fitting add-on in the bag *with what it would change before you fit it* (bullet speed, noise, kick, aim speed, magazine, reload, spread, range, zoom). It is all buttons, so it works on the pad like the rest of the screen. X on a bag add-on fits it to the gun in hand. Effects are summed into a kit (`kitOf`) and wired into the real rules: a **suppressor** cuts the shot's Signature, flash and sound (the audio takes a low-pass for it) at a cost in speed and reach; a **scope** narrows the view while aiming (the camera's field of view is divided by the zoom, the look sensitivity is too, and a long scope magnifies the wander); a **brake, compensator, grip, stock or bipod** tames the kick and sway but may slow the sights; **barrels** (three rarities per family: improved parts) trade speed, range and spread for weight; **extended magazines and drums** raise capacity at a cost in reload; a **laser** tightens the hip shot and puts a dot where the barrel points; a **torch** throws a cone of light and a pool of light where it lands (a flat additive glow on the ground or square to the beam on a wall, so no real light and no shader recompiles), and the laser's dot has a small halo. A gun with its add-ons on is drawn that way: scope tubes, cans, grips, drums and stocks are solids on the held model, and small pictures on the inventory icon and the card on the ground. Add-ons live on the weapon (`GearItem.att`), so they follow it from the belt to the bag to a partner and into the save; a damaged save drops what does not fit, and gives back what is real.
 - **Where the guns are.** `rollGunLoot(context, seed, depth)` in `sim/gunLoot.ts` is a seeded loot table for world placement: `gun_shop`, `police`, `military`, `house`, `raider`, `wreck`, `bunker` or `cache`. The same arguments always give the same weapons and add-ons; guns come dressed as their source would have them (a shop stocks sights and magazines on the counter, the army has scopes and suppressors fitted, a house has a pistol or a shotgun in a drawer and nothing else). The ordinary finds (shelves, lockers, chests, trunks, raiders) now sometimes come with add-ons fitted, or are one.
 - **Guns lie where they are.** Gear on the ground is a real model, not a card (`render/gearModels.ts`, `game/groundGear.ts`): the gun's own held model with its fitted add-ons, a blade or tool, armour and clothing as folded or laid-out shapes, an add-on as a small solid. Each rests on the floor, shelf or rack at a fixed heading with a slight natural tilt (a gun on its flank on the ground, belly down on a rack), never spinning or hovering; a small name tag of fixed screen size shows only within four metres. Gun shops, police stations and armouries have wall racks (`gunrack` furniture, three tiers) and a gun on the till counter, laid out by `placeGuns` in `world/interiors.ts` from `rollGunLoot` seeded by the rack itself, so the same shop always shows the same stock. Each displayed gun is a `kind: 'gear'` pickup with a `gun` roll reference; taking it (hold A) records its id in `takenPickups`, so it never comes back. A searched locker still sets its guns down beside it as lying models.
@@ -399,6 +714,42 @@ The Dawn Ledger has a **Gear** tab with the same screen (switch between the two 
 Gear is found, not crafted. A searched shelf or locker (deeper is better), a delve chest (a hoard always pays in rare gear), a car's cabin and trunk (a raider's wagon most often) and a fallen raider's kit can each turn one up. Finds are seeded by the container or car, so reloading can't reroll them, they skew better the further the convoy has come, and they go to your bag, then your partner's, then become Scrap, so nothing is lost on the floor. The loadout is saved with the campaign (`PlayerSave.gear`); older saves get the starter kit, and a damaged save is repaired rather than trusted (`sanitizeLoadout`).
 
 Tests: `tests/groundgear.test.ts` (lying models for every item, guns on racks, taken guns stay taken), `tests/weapons.test.ts` (the weapon and add-on catalogue, what each add-on does to the numbers, what fits what, state following a weapon, saves and their repair, the seeded loot tables, the models and icons, and real scenes with scopes, suppressors, recoil and a crossbow), `tests/loot.test.ts` (the loot contexts, anchors on every generated pickup, the trades, found-car odds, near-start viability, the fresh-run rebuild economy, delve chests, loose things lying still), `tests/gear.test.ts` (the catalogue, capacity and stat rules, equip and unequip, sharing, save repair, loot odds) and `tests/gearplay.test.ts` (real leg scenes: armour, speed and noise, the belt and LB, each gun's numbers and magazine, melee weapons, the inventory key, saves, finds and the inventory camera).
+
+### The bow
+
+A **Recurve Bow** (`w_bow`, model `bow`) turns up in gun shops, houses, raider stashes, wrecks and caches. It is a gun to the
+belt, the inventory and the save, but it is used differently, and its rules are pure in `sim/archery.ts`:
+
+- **Draw and loose.** Hold RT (left mouse) and the string comes back over 0.7 s; let go and the arrow flies as hard as it was
+  drawn (`loosePower`: a snatched quarter draw is a slow, weak, wild arrow, a full draw drops a walker). Under a fifth of a draw,
+  letting go only eases the string down. LT still steadies and slows the walk; a drawn bow also slows you and stops a sprint.
+  Full draw can be held for 1.8 s; after that the bow shakes more and more and it costs stamina, and when the wind is gone the
+  string comes down on its own. There is no room to draw from a car seat.
+- **Arrows** are their own stock (`campaign.items.arrow`, saved; old saves start with none), not Rounds. A found bow comes with
+  a quiver of 8, and the camp crafts 6 for 3 Scrap. The next arrow goes on the string by itself after each shot (half a
+  second); X nocks one by hand.
+- **In the air** an arrow is an `arrow` round in `sim/ballistics.ts` (80 m/s at full draw, so it arcs and has to be led: about
+  half a metre low at 40 m past its 25 m zero), drawn as an arrow, not a tracer. It sticks in what it hits rather than going
+  through: a body, the ground or a plank wall stops it, a pane of glass breaks and lets it on. It barely marks a car, is hardly
+  heard (3 points of noise; travellers do not react to it), and kills quietly, which keeps a herd standing (see *Hunting*).
+- **Getting them back** (`game/arrows.ts`). Landed arrows stay where they hit: in the ground at the angle they came down, in a
+  wall, or in a body that walks on with them in it and drops them where it falls. Walk up to one and it goes back in the quiver.
+  Some break when they land (`BREAK`: few in earth, wood or flesh, most on stone and steel). Up to 48 lie about at once.
+- **Seen.** In third person the bow is in the left hand, raised along the aim as it is drawn, the right arm solved onto the
+  string (`Humanoid.bowPose`/`reachTo`); in first person (`ViewModel.bowBase`/`bowHands`) the bow arm comes up from the lower
+  left and the draw hand sits low on the right with the arrow running in to just under the crosshair (the string's travel and
+  the arrow are shortened there so the hand stays in front of the near plane). The limbs bend and the string comes back with
+  the draw (`render/bow.ts` `BowRig`). The reticle closes with the draw and a ring round it fills: gold at full draw, red once
+  the arm shakes. The string twangs, creaks as it loads, and an arrow thunks home.
+
+Along the way the extra guns (everything past the first six) are now treated as guns by the rigs, so they get their sights and
+flash in first person (holding one in first person used to throw every frame), and the crossbow lost its pistol flash, its
+dropped pistol magazine and its sniper-rifle report.
+
+Tests: `tests/bow.test.ts` (the draw, power, shake and breakage rules, the arrow's flight numbers, the rig bending, every gun
+posed in first person, the arrow in the first-person view and the third-person arms on the string, and real leg scenes: drawing
+and loosing, a tap, no arrows, a tiring hold, an arrow riding in a walker and falling out where it drops, an arrow stuck in the
+ground and pulled out, breakage, the quiver with a found bow, the save).
 
 ### Ballistics, weapon handling and gore
 
@@ -415,6 +766,7 @@ Shots are real objects now. `Combat.shoot` still takes the same arguments, but i
 - **Muzzle and tracers** (`sim/weaponfx.ts`, `render/particles.ts`). Each gun throws its own flash down the line of the barrel: a core, a tongue of flame, burning grains and a wisp of smoke that hangs behind (a sawn-off is a fireball, a pistol a snap). Every shot also flashes one shared light on its surroundings, so night fights light the people in them. Tracers are drawn per round type, fade out over their life, are warmer and redder for raiders, and only a share of rounds are drawn (a burst of pellets or SMG fire is not a wall of lines; a rifle round always is).
 - **Skips and impact sounds.** A glancing round on something hard (steel, stone, concrete, sheet, a car body; never wood, plaster or earth, never a pellet) skips off instead of stopping: it leaves at a third to two thirds of its speed, scattered a little, with 40% of its damage, a shower of sparks and a whine. Only once per round. Rounds that land now sound: a ring on metal, a dull crack in stone, plaster or wood.
 - **Sustained fire opens the spread.** Each shot adds *bloom* (per gun, `BLOOM`), which widens the next shot and the reticle, and closes up between shots. A slow gun has nearly closed up before its next round; an SMG held down walks off the target (up to 2.2 times its spread), and a pistol held down opens to 1.7 times. Braced behind the sights it opens less.
+- **Ground impacts** (`sim/groundImpact.ts`). Every gun uses its round's mass and remaining speed to size the strike: pellets make separate small pits, pistols small puffs, full-power rifles stronger plumes. Glancing hits leave longer marks and raise less soil. Sand throws dust and grains, mud clods, asphalt and masonry small chips; rain and grass suppress dust. Debris leaves along the surface normal and falls under gravity. Arrows and crossbow bolts land as visible shafts without firearm sparks or ricochets; bolts are shorter and do not enter the bow's quiver. Looking down with a melee weapon strikes reachable ground, with heavier tools disturbing more soil. Molotov bottles scatter glass and burning fuel without a detonation. Ground explosions throw debris and scorch according to their height; high airbursts leave no ground scorch. These effects use the existing bounded particle, fragment and decal pools. `tests/groundImpact.test.ts` covers the catalogue, materials, energy and angle, physics hits, melee contact, thrown fire and blasts.
 - **Reloading.** A pistol or SMG with a round still in it reloads in 78% of the time (no slide to rack); the pump loads a **shell at a time** (each shell is a click, a full reload takes the gun's reload time, a part-empty one less) and pulling the trigger stops the loading and fires what is in. The revolver, sawn-off and rifle still take the whole reload at once.
 - **Melee has weight.** Each weapon has its own swing: a knife is a flick, an axe a long chop, and the blow **lands as the arm comes through**, not on the click (about 0.13 s for the knife, 0.25 s for the axe; the weapon's blade comes over the top and down in front, and a streak is drawn along the tip's path). Each weapon has its own knockback and stagger (a bat throws a walker about 9 m/s and staggers it nearly a second, a brute barely moves), cleave (an axe goes through three bodies, a knife one), whoosh pitch, hit sound and shake. A blow that lands hangs the arm for a moment, jolts the view, rumbles the pad and sprays what it hit back along the swing.
 - **Thrown fire.** A flare and a molotov are things you can see, tumbling end over end as they fly, with a trail of sparks or flame and smoke. A molotov bursts on the first body it reaches (a walker or a raider) or the ground, in a fireball with embers flung along the ground and a scorch; a burning patch now has taller flames, black smoke, flying embers and a flickering light that dies down as it burns out.
@@ -437,8 +789,9 @@ On foot you move, and handle a gun, like a tactical shooter (`sim/gait.ts`, `sim
 - **The muzzle flash is a flame, not a ball** (`render/muzzleFlash.ts`). From in front a white-hot core with uneven petals, from the side a tongue of fire thrown out along the barrel with a bright bulb at the muzzle; each shot has its own shape and turn, it lasts a couple of frames (`FLASH_SECS`), fading and spreading as it goes, and each card fades as it turns edge-on so it never shows as a line. Sized per gun (`MUZZLE[gun].star`/`tongue`: a pistol's is about a hand across, a sawn-off's nearly three times that); the glow sprites round it are now a soft halo. The shot's light is gentle and sits out in front of the muzzle (`MUZZLE_LIGHT_POWER`, `MUZZLE_LIGHT_AHEAD`), so it lights the surroundings without blowing out the shooter; raiders throw the same flame from the gun in their hands.
 - **Smoke and shells come from the gun.** The flash, its light, the powder smoke and the ejected case start at the real muzzle and ejection port of the gun as it is drawn (in first person that means where you see it, not where the body is). Powder smoke is denser, greyer and hangs for a couple of seconds, a thin wisp curls off the barrel for a few seconds after a shot (longer after a shotgun) and off the breech as each case leaves; cases and magazines sit a little proud of the ground so they show on rough terrain, and sprites close to the lens no longer vanish.
 - **First person is a body camera** (`render/viewmodel.ts`). Your own arms and weapon are drawn in the camera's space, so they sit in the same place on screen whichever way you look: two whole arms from shoulders below and behind the eye (a two-bone reach with a wrist, so the hands never leave the grips and the forearms run off the bottom of the frame), gloved hands closed round the grip with the thumbs laid forward along the frame, the support hand on the fore-end of a long gun. A handgun is held low in the middle in both hands, a long gun low with the stock in. On top of that the gun trails a turn of the view, rocks and cants with the steps, swings out against a sidestep, drops with a landing, breathes at rest, kicks back into the hands, goes low and across for a sprint, comes in to the chest for a reload (the support hand off to the belt) and up against a wall. Melee weapons are held up in the right hand and chopped over and across; bare hands jab. The body **leans** into a sidestep and into a turn of the view (harder on the move and in a sprint, hardly at all behind the sights), which rolls the view and tilts the survivor a partner sees (`leanTarget`/`stepLean` in `sim/gait.ts`). The **bodycam lens** (Control settings, *Camera & play*, 0 to 100 %, default 70 %) draws your first-person view through a wide barrel lens: the middle keeps its size, the rim takes in more and bends, with colour fringes and a darker rim (resampled with a Catmull-Rom filter, so the stretched middle does not band). A load in the arms, hands at work on a car and a greeting still use the third-person rig's forearms.
+- **The hands keep busy, and clear their own jams** (`sim/gunDrills.ts`). Every weapon has its own habits, played now and then once things have been quiet a couple of seconds (no shot, no sights, no reload, no sprint): the support hand opens and re-grips, the firing hand works up the grip, a long gun is eased forward and settled back into the shoulder, the support hand slides along the fore-end or pats the magazine home, a pistol gets a press check, a revolver's cylinder is rolled under the thumb, a pump is pressed home or its port checked, a bolt handle pressed down, a lever squeezed, a crossbow bolt seated, a belt gun heaved up; a knife is rolled through the fingers, a blade flicked or turned to look along the edge, a haft slid along, a wrench tapped into the free palm. Any of them lets go the moment the trigger, the sights or a sprint need the hands. A trigger pull can also fail (rarely in a sound gun, about one in a thousand; often in a worn-out one), and each action clears it its own way: a pistol is tapped and racked (a stovepipe swept, a double feed racked three times), a rifle's charging handle run, an AK-style carbine racked with the firing hand, a police SMG's handle locked and slapped, a revolver turns to the next chamber (or its cylinder is knocked out and turned), a pump is run again or the stuck shell picked out, a break-action thrown open and the dud flicked away, a bolt gun's bolt worked (or slapped up off a stuck case), a lever gun's lever thrown, a belt gun's feed cover opened, the belt seated and the handle charged, a crossbow bolt pushed back on the latch. The round in the chamber is lost and flies out of the port, and the clearing does not refill the magazine (it used to). The hands move from spot to spot on the weapon, open their fingers for a slap or a let-go, and tuck their elbows so the lens does not cut the sleeves; a partner sees the gun turn and the support arm leave it. All numbers and every routine are in one table.
 
-Tests: `tests/bodycam.test.ts` (the gait, inertia, draw, wall, reload and rack rules; the rig's poses; the sights lined up on the eye for every gun and projected through the camera in a real scene; the magazine pool and the reload that drops it; effects starting at the drawn muzzle and port; the first-person arms: hands on the grips, bones joined, arms running off the bottom of the frame, the same on screen at any pitch, the melee swing, the lean and the lens setting; and real scenes: speed ramps, the sprint carry blocking the trigger, drawing, a wall in front, animated reloads, the first-person eye, a sidestep leaning the view).
+Tests: `tests/gunDrills.test.ts` (every weapon has habits and every gun its own clearing; each routine starts and ends at rest with the hands on their grips; the first-person arms stay joined and clear of the lens through every frame of every routine; a palm lands on the magazine and a hand on the slide; a knife turns in the fingers; a drill fades out cleanly; a worn gun faults, clears without filling the magazine and fires again; habits start when calm and stop for the trigger; every action clears in a real scene). `tests/bodycam.test.ts` (the gait, inertia, draw, wall, reload and rack rules; the rig's poses; the sights lined up on the eye for every gun and projected through the camera in a real scene; the magazine pool and the reload that drops it; effects starting at the drawn muzzle and port; the first-person arms: hands on the grips, bones joined, arms running off the bottom of the frame, the same on screen at any pitch, the melee swing, the lean and the lens setting; and real scenes: speed ramps, the sprint carry blocking the trigger, drawing, a wall in front, animated reloads, the first-person eye, a sidestep leaning the view).
 
 
 ### Cars, parts and the garage
@@ -446,6 +799,7 @@ Tests: `tests/bodycam.test.ts` (the gait, inertia, draw, wall, reload and rack r
 Every car standing in the world is a real vehicle. Hatchbacks, sedans, pickups and vans (`vehicles.json` `cars`) are streamed in as the convoy approaches and put away, with their state, once it moves on (`game/cars.ts`). Each car rolls its condition from its seed: a **burnt-out hulk** (strip it for parts), a **rough runner** with at least two real faults (flat tyres, a seized engine, a leaking tank), or one **sound enough to drive**. Roadside wastelands also have stalled-traffic jams on the shoulder, and city boulevards are full of them.
 
 - **Take any car.** Walk up and press Y. Climbing into an abandoned car claims it for the convoy and adds it to the **yard** (six vehicles). Whatever you drove last rolls out with you. A second player can ride along as passenger, or as bed gunner in a pickup with a gun mount.
+- **Gunfire holes a car, it does not blow it up.** A bullet takes only a share of its damage out of the hull (`BULLET_HULL` in `sim/damage.ts`, scaled again by how hard the round is on sheet metal: a pistol round about a third of a rifle's), so a hatchback takes a few magazines of pistol fire. What a round breaks is what it lands on (`Vehicle.zoneAt`): a wheel's tyre goes easily, the engine bay takes a few rounds to kill the engine (and holes the radiator), the tank low in the tail leaks, and a door or a wing breaks nothing. Bullets alone never finish a car: shot down to a tenth of its health its engine quits and it smokes, but it stays a car you can repair or strip. Blowing one up takes a blast, a hard crash or a fire burning it out.
 - **Repair is real work.** With the wrench, hold A: the most urgent fault is fixed in turn (fire, leak, tyre, engine, weapon mount, bodywork). Each job names its cost, such as a tyre patch for 2 Scrap or an engine rebuild for 3 Parts. With no Parts, an improvised Scrap job still works so nobody is stranded. A convoy engine below 10% will not start until rebuilt.
 - **Strip what you can't drive.** With the crowbar, hold A on a hulk or an abandoned car to take four stages: the tyres, the engine with its gearbox and exhaust (and the oil in the sump), the bodywork and running gear (bonnet, doors, springs, brakes, radiator, every bolt-on, and the water), and the cabin and trunk. You get exactly the named parts that are fitted, as worn as they are, and the car loses exactly those (`sim/salvage.ts`, `stripBuild`): a car with no engine has none to give. No Scrap, Parts or Tech comes out; a full trunk sets the rest on the ground beside the car. Raider wrecks carry better kit, and a gun now and then (`rollGunLoot`). The loot is fixed by the car's seed, so leaving and coming back can't reroll it. The jerrycan siphons fuel from abandoned tanks into the convoy reserve.
 - **Parts are items** (`data/parts.json`, `sim/parts.ts`): aftermarket parts across twenty-two slots (engine, radiator, gearbox, exhaust, springs, brakes, tyres, bonnet, both doors, armour, weapon mount, fuel and cargo, plus front, roof, rear and side mounts, and the cabin: driver, passenger and rear seats, steering wheel and dashboard), in three qualities with a wear value. Every car's factory engine, radiator, gearbox, exhaust, springs, brakes, tyres, bonnet, doors, seats, wheel and dash are parts too. An engine, radiator, tyre set or armour kit replaces a damaged component, so swapping in a good one repairs it. Parts turn up in salvage, in yards and settlements, beside parts wrecks, and can be fabricated at camp.
@@ -559,6 +913,7 @@ Every pane you can see through can be shattered, and glass shows what it has bee
 - **City shopfronts.** The facade shader paints every ground-floor bay as a shutter or a window, chosen by a hash of the bay. `world/shopGlass.ts` makes the same choice on the CPU (the shader's hash in single precision, checked by eye against the render), so a pane of glass with its own collider stands in front of each painted window bay on the boulevard side of every ordinary building, and none in front of a shutter. A pane that has gone is also gone from the chunk's cached data, so streaming the chunk back keeps it broken.
 - **Cars.** The four found-car bodies no longer have solid dark slabs for glass: the shell is open and the windscreen, the rear window (a van has none) and the side windows either side of the pillar are panes on the car's visual (`carPanes`). `game/carGlass.ts` follows a bullet's line through the car (the collider is a box, so where it struck says nothing about the glass) to the first pane it crosses; a crash hurts the glass that faces it and barely touches the rest; a blast breaks the lot by distance; a burnt-out car loses every window. A beaten-up car comes with its screen already cracked. Broken glass stays broken when the car is put away (`BodySave.glass`), and a wrench job (**Cut and fit new glass**, two scrap, once the body is straight) puts it back.
 - **What breaks it.** Bullets (a pistol round breaks a house window; a shop pane takes two close up and more at range; a windscreen takes two or three), blasts, a car at a walking pace or faster (its nose takes a pane out; its own glass may crack), a swing of a weapon (a swing also breaks the window of a car you stand beside; walls are left alone), and a crash.
+- **Glass as a part.** A car's glass is four fit slots, `glassF` (windscreen), `glassB` (rear window; the van has none), `glassL` and `glassR` (the windows of the left and right door, which fit either side like doors), each with a factory pane (`gls_*_std`) and an empty-frame placeholder (`gls_*_none`). Not every car has its glass: found cars come with bare frames some of the time (`glassFit` in `sim/cars.ts`, a burnt-out hulk has none left), and a car with no windscreen part has no windscreen pane. A door's window goes with the door: a door that is off, a canvas flap or an armoured slit (`window: false` in `parts.json`) shows no door glass, a door knocked off in a crash takes its pane with it, and a window will not fit a door that has no window frame. The quarter window behind the pillar is part of the body. Glass can be **taken from a car and fitted to yours**: the crowbar's bodywork stage lifts every pane out of an abandoned car, the wrench unbolts a pane from your own (hold A at the windscreen, the rear glass or a door), and the pane you carry wears what its panes took (whole, cracked, crazed; a pane that smashed is nothing to take but its frame takes a new one). Wrecks, garages, dealerships and warehouses also hold loose panes (`gls_*_pane`, laminated `gls_*_lam` at Mk2 which takes 2.2x the plain pane, and bulletproof `gls_*_bullet` at Mk3 which takes 5x and adds a little armour). The garage has a Glass group of mounts. The rules that tie the parts to the panes are `sim/glassfit.ts`; the live panes (`CarGlass.reconcile`/`syncFit`) take a new part's wear when the build changes and write theirs back when it is saved.
 
 Not done: glass does not deform with a crumpled body, zombies do not break it, scenery wrecks and the tier chassis (buggy, trucks) keep their painted glass, and the painted windows of upper floors in the city cannot be broken.
 
@@ -574,7 +929,15 @@ Not done: glass does not deform with a crumpled body, zombies do not break it, s
 
 **Wheels in water** (`game/waterfx.ts`): shallows drag and spray, water past the axles drowns the engine ("Engine flooded"), a swamped vehicle floats and a current carries it toward the nearest shore, and the engine restarts a couple of seconds after it dries out.
 
-**On foot**: wading slows you; deep water means swimming (slow, no sprint, no crouch, head above the surface). The dead will not follow into water deeper than a metre.
+**On foot**: wading slows you; deep water means swimming. The dead will not follow into water deeper than a metre.
+
+**Swimming** (`sim/swim.ts`, `Humanoid.swimPose`, `Player.updateSwim`). Afloat the survivor treads water upright when still and swims a
+front crawl when moving: face down, the arms turning right round (in ahead, a pull under the chest, out over the water with a high
+elbow), the shoulders rolling, the legs fluttering, the head turning for air. Hold sprint for a harder crawl (3.2 m/s against an easy
+1.9, at a stamina cost). The crouch button ducks under (a toggle, or a hold when crouch is set to hold); ducked, looking down goes
+deeper and looking up comes back, level holds the depth, and jump kicks for the surface. Under, the first-person view goes blue and
+murky, the lungs run down in about 28 s (a BREATH bar shows), a long hold ends in a gasp at the surface, and out of air the water hurts
+(6 HP/s) but never takes you below 8% health. Both hands are swimming: the weapon is slung and cannot be fired. Tests: `tests/swim.test.ts`.
 
 **Delves** (`world/delve.ts`, `world/delveSites.ts`, `game/delveScene.ts`). Four kinds of way underground, each a pure function of `(theme, seed, tier)`:
 
@@ -686,16 +1049,18 @@ or through a swamp or a spring.
 (rivers and big lakes out to about 70 m fully and 120 to 140 m in all, streams and springs less), the spec's `greens` green whole
 regions (the north-west and north-east woods, the west valley, the fen, the fields round Haven), dune seas stay sandier, the city
 stays bare and so does the dusty middle round the start. `forestAt` turns lush ground into clumps of wood with clearings between,
-and `woodsAt` says what grows: broadleaf, pine, fen or riparian. About a third of the map is green and a seventh wooded.
+and `woodsAt` says what grows: broadleaf, pine, fen, riparian or gum (a river planted with eucalyptus, `grove` in its spec). About a
+third of the map is green and a seventh wooded.
 
 **Trees** (`world/flora.ts`) are planted per chunk while its data is made (`ChunkSource`), from the chunk's own heightfield so they
 stand on the ground that is drawn: oaks and the odd pine or poplar in the broadleaf country, pines in the northern woods, willows
-and poplars within a few tens of metres of the rivers and lakes, swamp cypress and dead snags in the swamps (they may stand in the
+and poplars within a few tens of metres of the rivers and lakes, eucalyptus out to 90 m either side of the Yarkon (four in five of
+its trees, with willows, poplars and the odd oak between, as the real river's banks were planted), swamp cypress and dead snags in the swamps (they may stand in the
 shallows), date palms round an oasis, lone trees in the meadows and acacias out in the dry grass at their edge. Nothing grows on a
 road (a car's width of verge is left), in water, on a steep slope, on a place's pad, in a camp, by a parked car, a pickup, an
-encounter, a way underground or the start. A wood has 120 to 260 trees a chunk. Each trunk is an obstacle box of kind `tree`
-(`ChunkData.aabbs`): a collider for people and cars (invisible to the camera), an obstacle for the dead and the animals, and wood to a
-bullet, so a wood is cover.
+encounter, a way underground or the start. A wood has 120 to 260 trees a chunk. Each trunk keeps an obstacle box of kind `tree`
+(`ChunkData.aabbs`) for navigation. Physical collisions and bullets use the rendered variant's wood triangle mesh, including branches,
+with the same scale, yaw and lean; foliage remains passable. Fallen trunks leave the standing navigation obstacles.
 
 **Green on screen.** The ground shader takes two more channels (`tdata.z` is `lushAt`, `tdata.w` is `forestAt`, packed the same
 by the chunks and the far landscape): lush ground turns to meadow (fresh green, olive and yellow-green, straw at the fraying edge,
@@ -707,14 +1072,114 @@ meadows, ferns and bracken under the woods, reeds and cattails in the shallows a
 1.2 m deep.
 
 **Trees on screen** (`render/trees.ts`) are built in code: round oaks and terebinths, conical pines, weeping willows, Lombardy poplars, date
-palms with a skirt of dead fronds, flat umbrella acacias, buttressed swamp cypress with knees and hanging moss, and dead snags, three
-variants each. Wood is tapered tubes with vertex colour, foliage alpha-tested leaf cards from one atlas, so a tree is one draw; a
+palms with a skirt of dead fronds, flat umbrella acacias, buttressed swamp cypress with knees and hanging moss, dead snags, and
+river red gums (eucalyptus: tall, pale and smooth with tan patches where the bark has shed and small dark scars, leaning or
+parting low into two or three stems, sinuous limbs and an open crown of drooping sprays of sickle leaves), three variants each.
+The leaf atlas is 4 x 3 cells (the gum's spray and its bark took two new ones) and the impostor atlas follows it. Wood is tapered tubes with vertex colour, foliage alpha-tested leaf cards from one atlas, so a tree is one draw; a
 chunk draws one instanced mesh per species, the variants sharing it. They sway in the shared wind and cast alpha-tested shadows. Each
 species is also baked into an impostor atlas at load (about 0.1 s), and between 80 and 100 m from each camera the 3D trees dither into
 three crossed impostor cards. Past the streamed chunks the **far forest** (`planFarForest`, `Landscape.buildFarForest`) plants
 impostors on a 9 m grid by the same rules (about 36,000 trees in 79 regions of 512 m, one draw each, about 215k triangles for the
 whole map), standing on the far terrain mesh and stepping aside inside loaded chunks like it does, so the woods read out to the haze.
-In the dense west woods the vegetation costs about a millisecond a frame on the reference machine.
+**Vegetation impacts** (`render/vegetation.ts`, `sim/vegetation.ts`) use mesh contacts and damped springs: grass, herbs, shrubs,
+reeds and aquatic plants bend away from moving bodies and recover; heavier bodies crush soft plants. Effective mass, speed,
+angular motion, scale and impact height determine the response. Species have distinct stiffness and failure work: live willow and
+palm flex more than oak, while dead snags and scorched wood fail earlier. These are gameplay approximations, not measured botanical
+constants. Bullets tear plants along their actual path, blades cut and blasts damage nearby growth. Sufficient work severs a tree's
+roots/wood and releases a falling body made from convex pieces of its rendered limbs. Desert dead-tree props also use their own mesh.
+Near meshes, impostors and forage crops follow the same motion. Crushed plants, cumulative damage and fallen poses survive streaming,
+nights and saves through `WorldMemory.vegetation`; destroyed forage cannot still be harvested. Soft mesh sensors are created only near
+moving bodies or projectile paths and released when idle. `tests/vegetationphysics.test.ts` covers these reactions and cleanup.
+
+**The Concrete House.** On the Yarkon's bank toward Petah Tikva, where the river comes nearest the city, stands the Concrete House
+(Beit HaBeton), the pumping station Gdaliyahu Wilbushevich built there in 1912. It is hand-set in `legs.json` (`open.heritage`:
+the river, the district it faces and the gap) and planned by `world/heritage.ts` once the water is: its front wall stands 15 m from
+the water's edge at the nearest point (about (95, -337), front to the south), its yaw a whole quarter turn, on a level pad that
+`heightAt` sets last (built up on the river side), which the woods, the scatter and the ambient passes leave clear while the gums
+stand close round it. `render/heritageProps.ts` draws it from the same numbers as a landmark: a grey rendered block with an arcade
+of round arches on the front and right side, pilasters with capitals, a deep cornice, a smaller upper storey set back behind a
+railed terrace with two tall arches onto it and narrow arched windows down its sides, a crenellated parapet, an open stair up the
+left wall, the old pump in the hall (well head and grate, engine on its bed with a spoked flywheel, pipes), a welded mesh fence along
+the front and right side with one panel down and a faded heritage plate, felled logs and a fluted stone drum in the yard. It has no
+mesh collider: `heritageAabbs` gives it boxes (the wall pieces round every arch stop zombies, bullets and the camera; floors,
+railings, the fence and the stair's walkable slope are physics only), and `heritageRoofAt` tells `interiorAt` it is under a roof
+(the camera closes in, the rain stays off). A tool chest in the hall and a cabinet upstairs can be searched; two of the dead
+wander outside. `tests/heritage.test.ts` checks the distance, the bank, the pad, the layout and the trees, and walks a Rapier capsule
+in through the fallen panel, up the stair, round the terrace and into the upper room.
+
+**The Yarkon itself.** It is a lowland river and looks like one. Its water is always cloudy (`silt` in its spec, a per-river
+`uSilt` in `render/riverWater.ts`): an opaque olive-grey, greener in the deep, beige foam, still mirroring the trees. Five stony
+**riffles** (`riffles`, placed by `placeRiffles` in `world/hydro.ts` clear of crossings and falls) raise the bed to about 30 cm under
+the surface over some 40 m and nearly double the current there; the level never changes, so nothing climbs. The ribbon whitens
+just over and below them (`riffleChurn`), grey river stones (`rock` props with `tag` 1, rounder and grey) lie across them with their
+backs breaking the surface and along the banks beside them, and no reeds root in the quick water. **Giant cane** (Arundo,
+`cane`) walls its banks: tall jointed culms with arching strap leaves and the odd silvery plume (`caneTexture`), in the shallows
+and over the damp floodplain, where it shades the reeds out; vehicles and people push it aside like the other plants. Willows and
+gums on the very lip of a bank (trees may now stand 1.3 m from any river's water) **lean out over it**, up to half a radian the
+nearer the edge (`leanToward` in `world/flora.ts`; perched birds follow the crown with `leanOffset`), and both stand on **surface
+roots** flaring off the foot of the trunk and diving into the ground, exposed where a bank falls away. On its open meadows (the
+`gum` country with no wood) spring comes as a carpet of **poppies and white chamomile**, three flowers to each one elsewhere,
+poppies with black hearts. Out on the most open, level meadow downstream of the highway, above the river and on the city's bank,
+stands **the mud hut** (`open.heritage` with an `open` stretch; `meadowSample` in `world/heritage.ts`): one room of mud brick, two
+small windows toward the river 28 m off, a door on the side, a flat roof of reed thatch on round beams with deep ragged eaves, and
+inside a clay oven, a bench, a straw mat and clay jars, the big one worth searching. It collides as boxes like the house.
+`tests/heritage.test.ts` checks the riffles (depth, current, white water, stones, the level), the cane only on the Yarkon, the
+meadow's poppies and chamomile, the bank trees' crowns over the water, and the hut's place, and walks a capsule in at its door.
+Both buildings are **named the first time the convoy comes within 130 m** (`waterNews`, after the lakes and before the rivers): a
+banner (*The Concrete House · Pumping station · 1912*, *The mud hut · Mud hut*), a word on the radio when it has been quiet a while
+(`radio.heritage.*`), and from then on a `heritage` pin on the map and the minimap, a little crenellated tower in warm stone with
+the name under it, kept by the world's `mapSeen` like the water's names.
+
+**The Half Island and Abu Rabah mill.** Four or five minutes on foot upstream of the Concrete House (about 800 m at the game's
+walking pace) the Yarkon swings round an omega bend, as it does at Abu Rabah mill (`loops` in its spec; `spliceLoop`,
+`prepareLoop`, `finishLoop`, `Loop` in `world/hydro.ts`). The river leaves its line, runs straight down two legs and round a
+near-circle and back, so the ground inside is water all round: across the neck's mouth the legs open out until their waters run
+together (`closed` in the spec), so the one way in is the crossing by the mill. At the top of the left-hand leg
+the river comes round square, a straight run (`SHOULDER` in `spliceLoop`), and the mill stands lengthwise out in it, the water
+under its floor and through its races (`finishLoop`, `millAt`; `millFits` checks the building and its steps keep off every other
+stretch). The way in is the **crossing** beside it (`Loop.cross`): a strip of earth some 5 m wide on the mill's old foundations,
+from the outer bank along the mill's door side, past its steps, and over the top of the leg, where it is a causeway with the
+river running through culverts under it (`causewayAt`; its two faces of old coursed stone, low arches at the water, creepers
+hanging over and big cut stones lying along the top, are `culvert` props), onto the strip of land about 4 m wide where on your right the stream opens into a little pond with a tiny island and
+two old gums on it (`ISLAND_WIDEN`), and on up onto the meadow (`crossingPath`). You come to the crossing through a thicket of
+giant cane, a tangle of tunnels through it (`caneTunnels`, `caneThicket` in `world/millBend.ts`): the way on out from the
+crossing, ways off it and off those, some coming out, some dead ends, the canes either side leaning in over each until they
+meet well over a head's height (`render/scatter.ts`). No cane grows on the island (`onIsland`: inside the loop's centre-line). Inside, the ground lies a metre over the water
+at the banks and rises to a low hill in the middle (`loopPlain`), so from one side the water on the other is out of sight; low
+grass on top, and all round between the grass and the water a strip of mud where the bank gums' roots run out (`innerBank`).
+On the outer bank the cane stands as a wall with bushes behind it, and behind those a dirt road follows the bend round
+(`ringRoad`, one of the open world's tracks, laid before the levels like every road; it keeps back from the neck and never
+jumps a leg) with a track from it out to the nearest road, fording the river once well away from the neck. Along it round the far
+side stands a second row of old gums, big and pale (`roadRow`). The mill (`oldMill` in `world/heritage.ts`, `OM`/`OM_WALLS`, drawn by
+`oldMill` in `render/heritageProps.ts`) is a long block of honey-coloured kurkar in courses, dark and green at the waterline,
+patched with plaster, three round-arched races through its base with a sluice gate wound up over one, narrow arched windows, a
+barred square one, a low gable roof with white fascias and over one end the
+restorers' tall lantern of grey panels and glass (`OM.lantern`), the roof of red clay tiles; it levels no ground (the river
+runs under it, `y = 0` is the water), and the door in its long side, an iron gate of bars standing open, gives onto stone steps
+down to the crossing, so you can walk in over the
+races, past the millstones in their tuns, the sacks, the grain bin and the miller's chest (searchable). On the
+meadow (`world/millBend.ts`, planned by the layout) stand seven **old eucalyptus**, a century old: forked into the eucalyptus's
+own V, split open down one side, or all burls, their feet two and three metres wide, dark and fire-scarred below and going pale
+into the stems (ordinary eucalyptus planted by the chunks, so they sway, burn and fall like any tree), their own leaves round
+their feet (the ground shader's wood floor and flat leaf cards). In the foot of each is a **face** or two (`render/faceGums.ts`),
+carved rather than painted: knot holes for eyes with the bark half rolled round them, a burl of a nose, a split for a mouth, the
+dark only deep in the holes, a little lopsided and broken up by the bark; sober they are only hinted. Round their roots grow
+**liberty caps**, every day (`always` forage spots), and on a trip the faces come forward: the renderer sets `FACE_TRIP` for each
+view from that viewer's own trip (`faceStrength`, mushrooms most), and the feet's shader deepens the holes, raises brows, nose and
+cheeks, works the mouths slowly as if they were saying something and lights the eyes from inside, all from vertex attributes. At
+the landing by the pond: a fire ring, stumps of felled gums, and a **pedal boat for two** (`pedalo` in `data/boats.json`,
+`physics.boat.pedal`): two seats side by side, legs on the pedals going round with the cranks and the paddle wheel
+(`buildPedalo` in `render/boatModels.ts`), a brisk walking pace, no fuel, no engine, no starter; with nobody aboard it stays tied
+up where it was left (`Vehicle.moorTick`). The place is named like the rest (*The Half Island · Old gums on a half island*,
+`radio.bend`), its name on the map over the meadow, and the mill gets its tower pin (*Abu Rabah mill*). The eucalyptus everywhere
+now vary more: three shapes (the broad old red gum, rough-barked low down under pale sweeping limbs; the many-stemmed clump; the
+V), each tree's bark its own colour in the shader (white, cream, salmon, pinkish, grey-brown, `barkTint`), and each tree's crown
+a little wider or narrower, taller or squatter (`treeAspect`). `tests/millbend.test.ts` checks the walk from the house, the water
+all round but the neck, the 4 m crossing, the hill, the dirt road and its track out, the mud of the inner bank, the pond and its
+island, the mill lengthwise in the square run at the top of the left-hand leg (and walks a capsule up its steps and through it),
+the crossing beside it (the mill on the left, the causeway dry over the water, the pond on the right, no way in at the neck),
+the cane thicket and its tunnels (none in them, none on the island), the row of gums on the far road, the gums, their stems, their faces sober and tripping, the liberty
+caps, and in a scene the names and the pedal boat tied up, then pedalled away.
 
 **On the green.** Grass binds the ground: where the land is lush the surface is firm soil, never loose sand, and a vehicle raises
 about half the dust it would on bare ground (`LegScene.groundDust`), so its Dust signature carries less far and the green country
@@ -746,7 +1211,7 @@ river now and then (12%), a lake often (30%), a swamp usually (65%). The note na
 and clean* (`sim/needs.ts`).
 
 **What you see and hear of it.** Every fall within 150 m throws mist off its foot (more for a tall or wide one) and spray down its
-face if it is over 6 m. Procedural loops (`setWaterAmbience` in `audio/audio.ts`) follow the nearest water: a waterfall's roar,
+face if it is over 6 m. Recorded loops (`setWaterAmbience` in `audio/audio.ts`) follow the nearest water: a waterfall's roar,
 heard out to 70 m plus 6 m for every metre of drop and lower for a tall one; river babble within 45 m of a channel and a quieter
 trickle at a spring; insects over a swamp, loudest at dusk, and frogs after dark. The first time the convoy comes near a
 waterfall (280 m for a big one), a spring, a swamp, a named lake or a river, a banner and the radio name it, and it goes on the map
@@ -768,25 +1233,231 @@ the meadows and wolves and bears keep to the woods),
 `tests/waterrender.test.ts` (the river ribbon, the fall sheets, swamp and spring water, the bridge) and `tests/vegetation.test.ts`
 (every tree species and variant builds, the ground packing matches the fields, ground cover in the dust and on the green).
 
+### Living country: animals, small life, water plants and the beds
+
+The green country and its water are lived in, from big game down to the crabs on a stream bed.
+
+**Ten more wild animals** join the seven in `wildlife.json`, each with a model in `render/animalRender.ts` and the AI in
+`game/wildlife.ts`:
+
+| Animal | Temper | Where and how |
+|---|---|---|
+| **Nubian ibex** | prey | dry, rocky country and the springs; long ridged horns sweeping back |
+| **Feral camel** | prey | the bare dust, in small strings; lows now and then |
+| **Red fox** | prey | meadows and wood edges, alone, by day and night; curious: lets you come closer than other game, sits on its haunches to watch you, trots a few paces to see better, and pounces on mice in the grass |
+| **Golden jackal** | scavenger (out by night) | keeps its distance from people (less after dark), runs from engines and the dead, comes in to eat a carcass, and the pack howls together at night, the leader first and the rest answering |
+| **Water buffalo** | brute | only by water; wades in to wallow up to 1.3 m deep, walks back down to the water if it strays, warns and charges like a bear |
+| **Grey heron** | wader | stands in the shallows and stabs at fish (sometimes with a splash); goes up when someone comes close and flies off along the water to other shallows, legs trailing |
+| **White stork** | wader | walks the meadows pecking, in flocks; glides on the way to other open ground |
+| **Mallard** | swimmer | rafts on lakes, swamps and slow rivers; paddles, up-ends to feed, quacks; swims off from a stranger and the whole raft takes off to other water when anyone comes close, splashing down at the far end |
+| **Hooded crow** | bird | in the country and the city; comes down in flocks to hop and peck over open ground, and goes up when walked over |
+| **Little egret** | wader | white, in small groups in the shallows and on wet meadows; bold, it lets you closer than a heron |
+
+Wading, swimming and scavenging are new tempers (`wader`, `swimmer`, `scavenger`). A species' `land` taste can now say how much it
+likes being by water (`water`) or that it lives nowhere else (`needWater`): herons and buffalo only spawn near water, and are put
+at its edge. Ducks come with the water itself: when the spawner looks at open water deep and slow enough, it puts a raft there.
+`nocturnal` species are more common after dark, not less. Every bird can lose a wing to a shot (`WINGED` in `sim/anatomy.ts`).
+
+**Nerve.** Animals no longer bolt from every engine in sight. A vehicle is noticed out to an animal's sight, but it only runs
+when the vehicle is near (40% of its sight) or coming straight at it fast; one going by at a distance gets a look, and then the
+animal walks off. Each species has a `nerve` that scales the distances it runs at: a camel (0.45) watches you drive past and
+strolls away, a buffalo (0.6) or an egret stands its ground, a deer or a hog runs much as before. Herons and ducks are flushed
+from further by a car coming at them than by one going by.
+
+**Drinking.** Grazers and hunters get thirsty: every few minutes one walks down to the nearest water within 40 m, stands at the
+edge facing it with its head down for several seconds, and the herd comes too. Anything that alarms them breaks it off.
+
+**Small life** (`game/ambientLife.ts`, drawn by `render/lifeRender.ts`) is only for the eye: nothing in it is simulated with
+the game, it never touches gameplay, and it runs on render time. Around each player, a couple of spots a frame are looked at
+(how green, how wooded, what water and how deep, city or not, the hour, the weather) and whatever lives there is put there,
+and it leaves again when nobody is near:
+
+- Butterflies (whites, yellows, painted ladies, blues) and bees over the meadow flowers by day; dragonflies hawking over the
+  water's edge; fireflies at dusk and in the dark; gnats dancing over a swamp; flies on a fresh carcass; grasshoppers springing
+  out of the grass ahead of someone walking.
+- Flocks of sparrows, bulbuls, bee-eaters, hoopoes and goldfinches pecking about the ground, which go up together when someone
+  comes near and land again further off; pigeons in the city that loop round and come back; swallows sweeping low over the
+  water and the meadows by day, bats by night.
+- Fish schooling in the water (facing into the current in a river and holding there), scattering from a wader or a boat;
+  catfish and carp grubbing along the bed; fish leaping in the lakes and rivers with a plop and a ring, more at dusk.
+- Frogs and turtles on the banks that go into the water when you come down to it; lizards doing push-ups on the hot ground
+  and darting off.
+- Under the water: freshwater crabs on the beds of streams and springs that walk sideways and scuttle off to hide; tadpoles
+  wriggling about the bed of still shallows; water striders skating on the surface, a ring where each one stops.
+- At the banks: crabs out on the mud; wagtails running along the waterline with their tails bobbing; parties of small birds
+  and doves come down to drink at the edge, facing the water; damselflies settled on the reeds with their wings closed; a pied
+  kingfisher hovering a few metres over the water, folding up to dive in with a splash, and hovering again further along.
+  Water snails creep on the wet mud at the very edge (ground cover, `render/scatter.ts`).
+- In the trees: small parties of birds sitting on the outside of the crowns (doves and bulbuls in the palms, sparrows,
+  goldfinches and starlings in the broadleaves, jays and crows in the pines, crows and shrikes on dead snags and acacias),
+  which all go to another tree on the far side when you come near (`LegScene.treesNear`).
+- In the dry country: lizards, an agama doing its push-ups, a fringe-toed lizard flicking over the sand faster than the eye, a
+  spiny-tailed lizard that runs for its burrow and is gone, and now and then a desert monitor, a metre of it, walking slowly
+  with its tail swinging. And snakes (below).
+
+**Snakes bite.** They are the one part of the small life that touches the game, so they run on the fixed tick
+(`AmbientLife.tick`, from `Scene.tick`). They are as aggressive as real ones, which is to say defensive: none hunts you.
+
+| Snake | Where | What it does |
+|---|---|---|
+| **Palestine viper** | stony dry ground, fields and scrub of the green; more about at night | lies still; feels your footsteps at about 3 m (further if you run, much closer if you creep), coils, faces you and hisses every couple of seconds; strikes whoever stays within reach of its head (about a metre), again and again; give it room and it slides off into cover |
+| **Horned viper** | sand, half buried | warns only from 2 m, then strikes like the viper; sidewinds away |
+| **Black whip snake** | anywhere warm, by day | off into cover at speed from 5 m; bites only when cornered, and has no venom |
+
+Step on any of them before it knows you are there (in the dark, at a run) and it bites at once. Engines scare them off the road,
+and one a wheel goes over is dead; so is one a round passes over (`AmbientLife.shootThrough`, from `Combat.firstHit`) or a blow
+lands on (`AmbientLife.meleeHit`).
+
+**Venom** (`sim/venom.ts`, on `Player.venom`): a viper's fangs do a few points (boots and armour count), then the dose works in over
+a minute or so: about 45 health from a Palestine viper, 28 from a horned viper, faster while you run, slower if you keep still, and
+you walk slower while it works. Unlike bleeding it can put you down: a healthy person lives through one bite untreated, but a second,
+or one on top of other wounds, will not. A bandage on the belt is a pressure bandage (it spreads half as fast); a medkit draws most of
+it. Going down or being revived clears it.
+
+Everything small is set on the ground as it is drawn (`LegScene.drawnGroundAt`, which in a hollow lies a few centimetres over
+`groundAt`), so a crab on a river bed is not sunk into the mesh. Only brine, ash and flood water hold no life. It is about 16 draw
+calls when everything is about.
+
+**Water plants and the beds** (`render/scatter.ts`). By the water: papyrus in the fens, yellow iris and sedge on the banks of
+streams and springs, flowering oleander a little way up them (more of it in the dry country and round the oases), weed
+streaming in the current of the rivers, and lily pads, some in flower, on calm lake and river margins as well as the swamps.
+Under the water, by what water it is and how deep:
+
+| Water | The bed |
+|---|---|
+| River or stream | cobbles everywhere it runs, thickest in the quick stretches; mud and algae and tape grass in the slack by the banks; pondweed; sunken branches under the woods; mussel and snail shells |
+| Clear lake | stones in the shallows, mud and green algae, meadows of tape grass reaching for the surface, pondweed, sunken logs, shells |
+| Brine or ash lake | salt-crusted stones and white salt, or grey ash silt; nothing growing |
+| Spring | pale pebbles, carpets of stonewort and hornwort, the odd rust-red seep of iron |
+| Swamp | black peat, pondweed and hornwort, drowned branches with one end sticking out of the water |
+
+The plants that live under water sway with the water, slowly, not with the wind, and are sized to the depth so they never break
+the surface. The stones on the beds have no colliders (the pebbles on dry ground still do). Rivers and clear lakes are clearer
+than before, so the cobbles, weed and fish show down to a metre or two (a flood's silt still turns a river opaque), and the fen's
+peaty pools let the plants just under the surface through. A submerged bed never takes the hardpan's dried, cracked plates
+(`mixWater`): it is sand, silt and gravel, and black peat under a swamp; dry clay pans on land keep their cracks. The beds add about a tenth to the time it takes to build a watery chunk (one look at the water per point serves the
+bank plants and the bed alike).
+
+**Sound.** New calls: `quack`, `howl` (a jackal's wavering wail and yips), `bellow` (a buffalo's or a camel's low), `flutter`
+(wings going up all at once) and `chirp`. `AudioEngine.setNatureAmbience` lays the living country under everything, driven by
+`LegScene.updateNature`: birdsong by day (bulbul, warbler, collared dove, hoopoe and finch phrases; a few over the dust, many in the
+woods and meadows, busier in the morning, hardly any in the city), cicadas in the heat of the day among trees and scrub, crickets in
+the grass after dark and scops owls in the woods at night; a storm quietens all of it.
+
+**Tests.** `tests/fauna.test.ts`: every species complete and modelled; ducks stay on the water and fly to other water; a heron
+never wades deep and flies when flushed; jackals feed on a carcass, flee people and howl in chorus only at night; buffalo wallow
+but never go out of their depth; crows come down to forage; water species only by water and the night ones at night; the spawner
+puts rafts on open water; fish only in living water and under the surface; a school scatters; frogs go into the water; a flock
+flushes and lands again; pigeons in the city; grasshoppers; flies on a carcass; crabs walk sideways and hide; tadpoles keep to the
+bed; water striders skate and leave rings; bottom fish keep to the bed; butterflies by day and fireflies by night on a real meadow;
+fish and dragonflies on a real river; birds in the trees fly to another tree; a kingfisher dives; wagtails and drinking birds keep
+to the edge; damselflies settle over the water; a viper coils, hisses and strikes only at someone who stays in reach, a horned viper bites whoever steps on it, a whip snake bites only when cornered, and a shot, a blow or a wheel kills one; a monitor walks and a
+spiny-tail runs for its burrow; a camel watches a passing car and only runs from one coming at it; a fox sits and watches you;
+a herd walks down to drink; egrets keep to the shallows. `tests/venom.test.ts` (one bite survivable, two can kill, running speeds it, bandage halves it, a medkit draws it) and `tests/snakeplay.test.ts` (a viper strikes a real player in a real scene and the venom works on; a medkit draws it). `tests/vegetation.test.ts` adds snails along a stream, the beds of a river, a fen, a clear lake and a spring, nothing
+of them poking out of the water, and nothing of them in the desert.
+
+### Hunting: stalking, shot placement and tracking
+
+Grazing game (antelope, ibex, camels, hares, foxes) no longer spots anyone on foot the moment they are inside its sight. It
+builds up **awareness** from what it sees, hears and smells of you, and lets it fade when nothing is there. The rules are pure, in
+`sim/hunting.ts` (`STALK`, `notice`, `SHOT`, `BED`, `carcassYield`); the animals use them in `game/wildlife.ts` (`stalk`,
+`thinkPrey`, `bedDown`, `bulletHit`).
+
+- **Eyes**: movement is what it sees. Frozen you are seen at 0.6 of its sight range, walking at its full range, running at 1.45x.
+  A crouch takes off 45%, a wall, rock or wreck between you hides you outright, woods and (crouched) tall grass hide you in part,
+  and day animals see less at night. Head down grazing it sees 70% as far: move while the heads are down, freeze when one comes up.
+- **Ears**: your footsteps, the same noise level as the Signature meter. Crouch-walking is nearly silent; sprinting is heard 40 m off.
+- **Nose**: the wind carries your scent downwind in a cone (about 23 m in the everyday breeze, up to 70 m in a dust storm). Inside
+  it nothing else matters: crouched, still and hidden, it smells you and bolts. Rain washes most of the scent and the footsteps out.
+- **What it does**: at 0.35 awareness it stops and stares (the herd with it); freeze and it goes back to grazing. Fully aware, it
+  stares for a moment, then bolts (steady camels walk off, a hare sits tight, a fox sits down to watch). Anything that notices you
+  inside its flight distance goes at once. A quiet kill (a crossbow, a suppressor, a bow) does not send the herd off: they throw
+  their heads up and stare toward you, so a patient hunter can take a second.
+- **HUD**: on foot near game, two chips: `SCENT ↗` (which way your scent drifts, relative to your view) and how the most watchful
+  animal reads you: `UNSEEN`, `GAME UNEASY`, `GAME WATCHING`, `GAME SMELLS YOU`, `GAME SPOOKED`.
+
+**Shot placement.** A body hit is split into the heart and lungs (low in the chest behind the foreleg: 1.5x damage, a fast bleed,
+it runs a few dozen metres and drops), the gut (the back third: 0.8x, a slow bleed, and it taints the meat) and the rest. Head
+shots stay 1.8x. A hit that does not drop it tells the shooter what they hit ("Lung shot: … Follow the blood."). Wounded game
+bleeds a trail of drops on the ground, thicker the harder it bleeds.
+
+**Tracking.** A badly hit animal (bleeding, under 60% of its life) that has run out of sight lies down on its brisket to stiffen,
+head up, watching its back trail. Bedded, it bleeds at half the rate. It gets up and runs again the moment it notices you, so follow
+the blood, come in slow and from downwind, and finish it. Something that bled out lies two and a half minutes for you to find.
+
+**The carcass.** Rations: a clean kill (head or heart-lung, within two hits) gives 25% more on big game; a gut shot loses 35%, a
+blast 50%, roadkill 40%, fire 20%, and scavengers eat into it while it lies. **Hides** come off foxes, jackals, wolves, antelope,
+ibex and hogs (one), camels (two), buffalo and bears (three); a blast, a fire or a bumper ruins them, five or more holes cost one.
+Hides go in the convoy stores; at the Ledger's **Tanner** sell them for 3 Scrap each, or cut two into three leather wraps
+(bandages). `tests/hunting.test.ts` covers the rules and the behaviour (unseen when crouched upwind, seen walking, smelled when
+downwind even behind a wall, freezing calms a staring deer, lung vs gut shot, bedding and flushing, yields, hides to the stores).
+
+### Fire: flames, firelight and burning ground
+
+Every fire in the game runs through one fire engine (`game/fires.ts`, on the scene as `scene.fires`): campfires, the camp's
+fire ring, gang camps, Nar's cooking fire, the fire ring at a river bend's landing, cave braziers, trees lightning sets
+alight, molotov pools and flares (in flight too), burning cars and wrecks, burning zombies and animals, and the grass any of
+them light. What burns, and how, is `sim/combustion.ts`, plain functions the tests run bare.
+
+- **Flames** (`render/fireRender.ts`): each fire is a handful of flame tongues, strips that stand on the fuel, turn to face
+  the camera and bend downwind along their length. The shader draws the flame itself: a teardrop torn by turbulence that
+  climbs it as fast as hot gas rises (a small flame flickers faster than a big one), coloured off a black-body ramp from a
+  yellow-white body through orange to a cooling red fringe, soot on burning oil and rubber, a strontium red for flares. It is
+  HDR and premultiplied, so a fire blooms at night and still reads against a bright sky by day. Pool fires lie on a bed of
+  breathing coals; embers lift away on the wind, smoke rises and leans downwind, wood pops sparks.
+- **Firelight** (`render/fireLight.ts`): three's light chunks are extended with up to eight fire lights per view, fed
+  through each material's own lighting, so asphalt, paint and wet ground catch highlights and the road reflects a burning
+  car. Each light is a glowing body the size of its flames (the ground beside a fire is bright, not white-hot), flickers with
+  the flames and wanders as they do. Each view keeps the brightest and nearest of every fire burning; fires crowded together
+  are merged into one light and saturate (a wall of flame is not a hundred campfires), and the last places fade by score so
+  nothing pops. The same lights glow in the haze, rain and dust in the screen-space light pass, and light the smoke from
+  below. The air over a fire shimmers: the composite bends what lies behind the flames, never what stands in front.
+  Firelight is dimmed by day (the sun swamps it) and the eye stops down by a big fire at night.
+- **The world answers back**: wind leans the flames by their Froude number, fans an open fire and carries smoke, embers and
+  spread downwind. Rain beats fire down by how wet its fuel gets (grass drowns, a tended campfire dims to half, burning petrol
+  hardly notices) and makes it steam, except under a roof. Water puts a wood fire out in a burst of steam; petrol floats, so a
+  molotov that lands in a lake becomes a burning slick that drifts on the current. A held fire (a car, a body) that goes under
+  vanishes in steam.
+- **Grass fire**: dry ground burns on a 2.5 m grid. What there is to burn is `world/fuel.ts` (the scatter's own grass clumps,
+  meadows, leaf litter under the woods; nothing on roads, asphalt, the city or water). A molotov pool, a burning car, a
+  zombie on fire, a tree's falling litter or an explosion lights it; it spreads cell by cell at a rate set by how dry the land
+  is (`fireDanger`, slowed by dew at night), running downwind and creeping back against it, into the trees standing in it, and
+  a crown fire throws brands ahead for spot fires. Behind the front the ground is black and the grass is burnt to stubble
+  (`Vegetation.burnArea`); both are remembered overnight (`WorldMemory.scorched`). Those standing in it burn; a car parked in
+  it can catch.
+- **Explosions** flash their light over everything round them for a moment.
+
+`tests/fire.test.ts` covers the model (lean, flame height, rain by fuel, water, spread with and against the wind, light) and
+real leg scenes in Node: a campfire's light in the view and its flicker, more fires than lights, a held fire dying down,
+rain on a campfire and a grass fire, a wood fire drowned and a petrol slick floating in a lake, a grass fire running
+downwind, leaving black ground that survives a save, refusing wet and bare ground, burning a player, and lightning's tree
+fire as a crown fire.
+
 ### Petah Tikva Center: an authored city
 
 Leg 3 has a third road, **Petah Tikva Center** (`L3P`), which the open world also uses as its city: a recreation of the old centre of Petah Tikva, "Em HaMoshavot" (Mother of the Colonies). It is a city leg whose block grid is drawn by hand instead of rolled: `legs.json` names a `plan`, and `world/plans/petahTikva.ts` holds it (`world/cityPlan.ts` has the types). A plan keeps the usual skeleton (a boulevard down the middle, building columns either side, cross streets between blocks) so physics, zombies, camps and set pieces all keep working, and replaces the dice with fixed block lengths, strip widths, named streets and landmark lots.
 
 What is on the map, driving north up Haim Ozer Street (the order is the real one: City Hall to the south, then the square, then the Red Line and the Central Bus Station, then the stadium):
 
+- **Ofer Grand Mall** (עופר הקניון הגדול פ״ת, `grandMall`, `world/mall.ts`), the first thing on the left coming into town from the south, filling the first two blocks: a real walk-in building of two 5.6 m storeys raised through the same `SiteBuilder` and plan system as every other interior (look `mall`, `genMall` in `world/interiors.ts`), so its walls, shop glass, fittings, loot, stockrooms, cutaway and dead all work as elsewhere. Outside, as in the photographs: a long block in bands of cream and pink stone, a raised grey box over the main doors with the red Ofer sign, a white ribbed cone over the court, a grey block clad in horizontal panels with walls that lean out as they rise (H&M, a sale banner), and an angular cantilevered wing on two slim columns over a blue glass corner (`render/mallView.ts`). Inside: a mall street with twenty-one shops behind glass fronts (Zara, Mango, Golf & Co, Aroma, GAP, American Eagle, Super-Pharm, Fox, Castro, Steimatzky, KSP and H&M downstairs; Bershka, Pull&Bear, Foot Locker, ACE, a food court, Shufersal, iDigital, Max Stock and Lametayel upstairs; each with its own fascia sign in its own colours, `SignTheme 'brand'`, and fitted out for what it sells: clothes rails, shelving, gondolas, coolers, counters, tables), kiosk carts, benches and planters, and a round court with an oval void through the upper floor under the cone, a white bulkhead with a ring of lights, a glass balustrade with a steel handrail, round columns, and a pair of 30° escalators climbing through the void (`Stair.kind 'escalator'`: they collide as a ramp like any stair, with sloped balustrades either side). A shattered shop window is the game's shop glass. The upper floor's colliders are marked `overhead` so they do not stop things spawning downstairs, and the storeys are only cut away when the camera is up in them, so the gallery stays in view from the court.
+- **The footbridge** (`footbridge` prop, `render/footbridge.ts`): from the mall's upper-floor door beside the grey block, a cable-stayed bridge crosses Haim Ozer at the mall's first-floor height (over 4.5 m clear for buses), swings round to the south on a curve hung from one inclined white mast, and comes down a ramp into a paved plaza with a bus stop and the glass **Prima Link** tower (`mallPlaza`). It has a pale deck with green glass under it on white ribs, a big cream tube along its outer edge, white hooked posts with wires between, a fan of cables and a pink light strip under both edges. It is drawn whole by the far landscape and collides as a lean mesh of its own (deck, railing walls, tube, mast, piers), so you can walk it, or ride it.
 - **Named streets**, each announced the first time you drive into it: Haim Ozer (the spine), Jabotinsky, Herzl, Stampfer, HaBaron Hirsch, Pinsker, Krol, Ze'ev Orlov, Ussishkin, Hovevei Zion, Rothschild and HaHistadrut. Cross streets and side streets are paved asphalt (`TerrainDef.streets` also makes them asphalt underfoot).
 - **Founders' Square** (כיכר המייסדים): a paved level beside Haim Ozer and a raised lawn behind it, a fountain where the first well was dug, five founders' plaques, benches and dead trees, with an encounter, *The First Well*, at the pump.
 - **The Great Synagogue** (בית הכנסת הגדול) across Hovevei Zion Street from the square: a long hall with a pitched tile roof, a cupola and a four-column portico.
 - **City Hall**, drawn from a photograph: a tall square tower with bands of narrow windows and a lattice mast, a four-storey wing with an entrance canopy and a blue and yellow sign over it, and a six-storey wing with a colonnade, sun-shade ledges and air-conditioning units, round a tarmac car park with painted bays and parked cars that opens onto the street.
-- **Shawarma Malabes** (שווארמה מלאבס), directly across the street from City Hall: a drawn shopfront (black sign band, two white-framed boards, the red kosher badge, flame-and-knives logos, an open front with the counter and spit) with tables and chairs out on the sidewalk and something to eat inside.
+- **Shawarma Melabes** (שווארמה מלאבס), at **Haim Ozer 4**, directly across the street from City Hall: Hebrew signs with the shop's slogan, two white-framed boards and the red kosher badge, paired modelled shawarma spits, a solid stainless serving counter with salad trays, pale tiles and a framed glass doorway. Tables and chairs stand on the sidewalk with food to scavenge. The [restaurant listing](https://wolt.com/en/isr/petah-tikva/restaurant/shawarma-melabes) supplies the address and slogan; the storefront details follow the Haim Ozer street photograph in [Mynet](https://petahtikva.mynet.co.il/local_news/article/byajw1zqjl).
 - **The Red Line** (`CityPlan.rail`): Jabotinsky Road is a wide cross street with the Tel Aviv light rail down the middle of it, drawn from `PlannedStreet` kinds `rail` and `platform`: a concrete slab with two tracks, an island platform with a canopy and a red name board (Hebrew over English) at **Petah Tikva Central Station** (the real end of the line, a buffer by Haim Ozer and the bus station), **Pinsker** and **Kiryat Arye**, masts every 26 m with contact and messenger wire, and a 36 m five-module tram (`tram` prop, white with a red band) standing at each end, solid but with room to walk round.
 - **The Central Bus Station** (`busStation`): a five-storey terminal hall along Haim Ozer behind a tarmac forecourt of bus bays (`bus` and `busShelter` props, one livery per operator), a pilotis canopy, a green Hebrew sign over the doors and a glass hub tower beside it, with the commuters still waiting.
 - **HaMoshava Stadium** (`stadium`): two long grandstands with the seating rake as stepped blue, white and red sectors (the tall one has a cantilever roof), two low end stands, striped pitch with lines and goals (`pitch` patch), four lattice floodlight masts, and a corner left open at each end as the way in. The real one is out by the Kiryat Arye station; here it stands where the line's last stop is.
 - **The ordinary buildings** (`CityPlan.vernacular: 'israeli'`) are dressed as the real ones are: cream, sand and warm-white render; stacks of balconies with solid parapets, condensers and half-lowered roller shutters on the long walls; solar water heaters on the roof; and over the ground floors on Haim Ozer a Hebrew shop sign (`render/signs.ts`, drawn on a canvas, one material per distinct sign, merged per chunk).
 
-What is real and what is not: the street names, the order along the spine (City Hall, Founders' Square, the Red Line, the bus station), that the Red Line ends at the Central Bus Station on Orlov Street and passes Pinsker and Krol, that HaMoshava Stadium stands by Kiryat Arye station, which streets bound Founders' Square, what the square contains, that the Great Synagogue is on Hovevei Zion Street and City Hall on Haim Ozer Street, and the shape of City Hall and of the shop's front, come from published descriptions and photographs. Which side of the spine things are on, every distance, block depth and building height, and the straightening of the real street pattern onto one spine are invented to fit the engine. It is a recreation in the spirit of a game level, not a survey; the tables in `petahTikva.ts` are meant to be redrawn.
+What is real and what is not: the street names, the order along the spine (City Hall, Founders' Square, the Red Line, the bus station), that the Red Line ends at the Central Bus Station on Orlov Street and passes Pinsker and Krol, that HaMoshava Stadium stands by Kiryat Arye station, which streets bound Founders' Square, what the square contains, that the Great Synagogue is on Hovevei Zion Street and City Hall on Haim Ozer Street, and the shape of City Hall and of the shop's front, come from published descriptions and photographs, as do the look of Ofer Grand Mall (on Jabotinsky Road at the city's entrance), its court and its footbridge; which shop is where in the mall is invented. Which side of the spine things are on, every distance, block depth and building height, and the straightening of the real street pattern onto one spine are invented to fit the engine. It is a recreation in the spirit of a game level, not a survey; the tables in `petahTikva.ts` are meant to be redrawn.
 
-**Shopfront art.** `render/shopFront.ts` draws the shop's front on a canvas at load time, like every other texture here. It is a redraw from a photograph, with the phone numbers left off. To use a real image instead, save it as `public/shops/malabes.png` (the whole panel, 14 m by 4.8 m, so 70:24, with transparency above the sign band if wanted): it replaces the drawing once it has loaded, and with no file there the drawing stays.
+**Shopfront art.** `render/shopFront.ts` draws the shop's signage and interior backdrop on a canvas at load time, and `buildShopFrontDetails` supplies the three-dimensional counter, twin spits and door frames. The phone numbers are left off. To replace the drawn backdrop, save an image as `public/shops/malabes.png` (the whole panel, 14 m by 4.8 m, so 70:24, with transparency above the sign band if wanted): it replaces the drawing once it has loaded; the modelled equipment remains in front.
+
+The worker at Melabes (`render/shopWorker.ts`) follows the supplied appearance reference: a bald crown, grey side hair, a lined face, an open white collar and a navy jacket. The shop has a 4.8 m recessed interior with matching obstacle volumes and solid equipment. He walks around the two large spits, carves each with a long knife, and returns to offer portions across the counter. Hold interact during the serving phase to take and eat a portion; each player can take one per round. A random existing drug dose activates 30 seconds after that player eats, without spending convoy stock. Each timer follows its player across scene changes and saves. The city chunk owns his model, the scene advances his animation, and unloading the chunk releases his local geometry while retaining the shared portrait assets.
+
+The clearer face reference adds fuller cheeks and jowls, lower-eyelid bags, a broader rounded nose, a fuller parted mouth and sparse grey crown hair above a dense side fringe. The portrait's optional age, gloss and thinning controls keep these details in his sculpted head and painted skin; the other portraits retain their own specifications.
 
 ## Smoothness
 
@@ -805,7 +1476,7 @@ sideways speed bleeds off and the car swings back to where it is going) instead 
 
 ## Rendering
 
-Everything on screen is generated in code at load time: no meshes, images or audio files ship with the game.
+Visual assets are generated in code at load time. Licensed sound recordings ship in `public/audio`; see `public/audio/CREDITS.txt` for attribution and `sources.json` for the per-file license and checksum inventory.
 
 - **Pipeline**: both views render into one multisampled half-float target, then a bloom mip chain and a composite pass
   (ACES tone mapping, colour grading, a per-half vignette and film grain) draw to the canvas. Every post pass clamps its taps
@@ -835,13 +1506,13 @@ Everything on screen is generated in code at load time: no meshes, images or aud
 - **Models**: vehicles have lathed tyres with tread, rims, hubs, coil-over suspension, riveted armour, glowing lamps and
   strapped cargo; survivors and raiders have jointed elbows and knees and full kit; zombies are one instanced mesh with a
   two-joint walk, per-instance clothing and skin palettes, and inflated brutes and bloaters.
-- **Portrait heads** (`render/portrait.ts`, `render/portraitPaint.ts`, the people in `render/heroLooks.ts`): Chinsky's and
-  Leo's heads were measured off their photographs (landmarks in head-local metres, the selfie distortion taken out) and are
+- **Portrait heads** (`render/portrait.ts`, `render/portraitPaint.ts`, the people in `render/heroLooks.ts`): Chinsky's,
+  Leo's and Nar's heads were measured off their photographs (landmarks in head-local metres, the selfie distortion taken out) and are
   sculpted as a signed distance field: skull, brow, eye sockets, nose, lips, jaw, chin, neck and Chinsky's beard volume.
   Rays from inside the head sample it on a grid that crowds round the face; the grid is the mesh and its UVs, and a second
   shell grown off it is the hair (Leo's quiff, Chinsky's crop, flattened under a hat). The texture (skin, brows, eyes,
   lips, beard or stubble, painted hair) is painted texel by texel from the 3D point under it, in a worker on first sight,
-  with a quick low-resolution paint in the meantime. Open `/portrait.html` on the dev server for a close look at both,
+  with a quick low-resolution paint in the meantime. Open `/portrait.html` on the dev server for a close look at all three,
   turned, re-dressed or lit as you like (its header comment lists the URL options, including a reference photo beside them).
 
 `window.__game.setPhoto({ pos, look, fov })` frames one full-screen shot from a fixed camera (pass `null` to return to the
@@ -867,9 +1538,25 @@ five endings are implemented and unit tested in `sim/endings.ts`. Beyond the sli
 planning, ending selection, day clock, damage model, vehicle handling (acceleration, braking, turning, ride height and a
 stability regression), world generation (determinism, seams, passages, barricades, set pieces), game logic (obstacle index,
 campaign save round trip, input helpers, camera FOV) and rendering helpers (visual terrain detail stays out of the drivable
-corridor, mesh builder attributes, procedural noise). Lakes, boats and delves have theirs (see their section above), and so does the authored city: `tests/petahtikva.test.ts` (the plan lays out and names its streets, Founders' Square, the Great Synagogue, City Hall and the shop stand where the plan says on the streets it says, the real south-to-north order, the Red Line's slab, platforms, trams and stations, the bus station and the stadium, shop signs, streets are paved and open, everything on the route is reachable by flood fill, places are announced once). The car system has its own suites: `tests/garage.test.ts` (parts, stats, fitting, repair, salvage, world-car rolls), `tests/engines.test.ts` (the engine catalogue, every engine in every chassis, bays, petrol and diesel, radiators, heat, hot rods, saves), `tests/engineplay.test.ts` (real leg scenes: attach points and reach, wrong-fuel starts and draining, overheating under load, diesel cans, spray cans, stripping a car), `tests/paint.test.ts` (panel paint rules and the recoloured geometry), `tests/garageui.test.ts` (the garage view, grouped mounts, per-wheel tyres, water and oil, and swap forecasts with a fake host), `tests/wave2.test.ts` (gearbox strain, brakes, springs, exhaust, per-wheel tyres, removable doors and bonnet, sump and water volumes), `tests/wave2play.test.ts` (real leg scenes: a tyre on one wheel, the crowbar prying a door or bonnet, a V8 drinking more fuel, oil and water, water cans), `tests/wave2render.test.ts` (bare rims, missing panels, exposed engine, exhaust and spring kits, carry models), `tests/cars.test.ts` (Rapier handling of each found chassis, and that the model sits on the ground) `tests/carplay.test.ts` (real leg scenes in Node: streaming, claiming, repairing with held buttons, stripping, siphoning, saving the fleet), `tests/oil.test.ts` (the oil model, planning a fit or stow, old saves) and `tests/haul.test.ts` (real leg scenes: lifting, bolting on, pouring, stowing, dropping, driving over loose items without taking them, taking goods by hand, running dry). Bodywork has `tests/bodywork.test.ts` (the crash, joint, dirt and mark rules, the part tags in every model, the lattice: where it folds, normals, caps, slicing, extracting and hiding a part, replaying saved dents, lamps carried along, the dirt shader hooks, the track buffer) and `tests/bodywork-scene.test.ts` (real leg scenes: a wall crash dents the nose where it hit, a gentle bump does not, a bull bar tears off and can be lifted, two-sided modules, doors, mirrors working loose first, wrecks, spare wheels that roll, bullet and blast dents, debris as an obstacle, parts stowed or kept as pickups, save round trips, hammering and welding, mud, blood, tyre marks, and the open world remembering the road overnight). Dust storms have `tests/weather.test.ts` (the day's window is fixed by seed and day, level shape, what a storm does to raiders' sight, oil burn and the map, and a real leg building and clearing a storm). Personal gear has `tests/gear.test.ts` and `tests/gearplay.test.ts` (see its section above). Eating, drinking and the rest have `tests/needs.test.ts` (draining and filling, warnings that fire once, what each level does to you, saves, then real leg and camp scenes: the belt slots, rations and litres spent, a piss and a shit running their course and being cut short, supper and the night, and the keys).
+corridor, mesh builder attributes, procedural noise). Lakes, boats and delves have theirs (see their section above), and so does the authored city: `tests/petahtikva.test.ts` (the plan lays out and names its streets, Founders' Square, the Great Synagogue, City Hall and the shop stand where the plan says on the streets it says, the real south-to-north order, the Red Line's slab, platforms, trams and stations, the bus station and the stadium, shop signs, streets are paved and open, everything on the route is reachable by flood fill, places are announced once), and `tests/mall.test.ts` (the mall is the first thing on the left, every shop has its room, door and sign, the court's void and balustrade and the escalators, upstairs colliders overhead, the bridge's clearance over the street, and a real-Rapier walk up the bridge ramp, over the street, into the upper floor, down an escalator and out of the main doors). The car system has its own suites: `tests/garage.test.ts` (parts, stats, fitting, repair, salvage, world-car rolls), `tests/engines.test.ts` (the engine catalogue, every engine in every chassis, bays, petrol and diesel, radiators, heat, hot rods, saves), `tests/engineplay.test.ts` (real leg scenes: attach points and reach, wrong-fuel starts and draining, overheating under load, diesel cans, spray cans, stripping a car), `tests/paint.test.ts` (panel paint rules and the recoloured geometry), `tests/garageui.test.ts` (the garage view, grouped mounts, per-wheel tyres, water and oil, and swap forecasts with a fake host), `tests/wave2.test.ts` (gearbox strain, brakes, springs, exhaust, per-wheel tyres, removable doors and bonnet, sump and water volumes), `tests/wave2play.test.ts` (real leg scenes: a tyre on one wheel, the crowbar prying a door or bonnet, a V8 drinking more fuel, oil and water, water cans), `tests/wave2render.test.ts` (bare rims, missing panels, exposed engine, exhaust and spring kits, carry models), `tests/cars.test.ts` (Rapier handling of each found chassis, and that the model sits on the ground) `tests/carplay.test.ts` (real leg scenes in Node: streaming, claiming, repairing with held buttons, stripping, siphoning, saving the fleet), `tests/oil.test.ts` (the oil model, planning a fit or stow, old saves) and `tests/haul.test.ts` (real leg scenes: lifting, bolting on, pouring, stowing, dropping, driving over loose items without taking them, taking goods by hand, running dry). Bodywork has `tests/bodywork.test.ts` (the crash, joint, dirt and mark rules, the part tags in every model, the lattice: where it folds, normals, caps, slicing, extracting and hiding a part, replaying saved dents, lamps carried along, the dirt shader hooks, the track buffer) and `tests/bodywork-scene.test.ts` (real leg scenes: a wall crash dents the nose where it hit, a gentle bump does not, a bull bar tears off and can be lifted, two-sided modules, doors, mirrors working loose first, wrecks, spare wheels that roll, bullet and blast dents, debris as an obstacle, parts stowed or kept as pickups, save round trips, hammering and welding, mud, blood, tyre marks, and the open world remembering the road overnight). Dust storms have `tests/weather.test.ts` (the day's window is fixed by seed and day, level shape, what a storm does to raiders' sight, oil burn and the map, and a real leg building and clearing a storm). Personal gear has `tests/gear.test.ts` and `tests/gearplay.test.ts` (see its section above). Eating, drinking and the rest have `tests/needs.test.ts` (draining and filling, warnings that fire once, what each level does to you, saves, then real leg and camp scenes: the belt slots, rations and litres spent, a piss and a shit running their course and being cut short, supper and the night, and the keys).
 
 Training has `tests/tutorial.test.ts`: a real open-world scene in Node walked through all twelve lessons with real held buttons and sticks (walking, sprinting, a jump, aiming and firing, taking goods and searching a crate, climbing into the moped, driving, the horn, getting out, repairing with the wrench, lifting and pouring a fuel can, the map, the pack and making camp), plus solo play, skipping, the key names in lesson text, and that nobody can bleed out.
 
 The page also exposes `window.__game` with `advance(seconds)` for running the simulation deterministically from the console,
 which is how most of the in-browser checks were done.
+
+### Recorded audio
+
+Effects and ambience use bundled recordings with no generated sound fallback. Vegetation rustles and wood impacts, wildlife and insects, rain, wind, fire and moving water respond to the scene; swimming, wading, wheel and boat splashes follow movement speed. Footsteps use recorded sand, grass, wood and concrete takes. Bike, car and diesel engines blend recorded idle/load sections with RPM, throttle, vehicle identity and bounded Doppler. Each event cue has at least three recorded takes or excerpts; firearm families have six. Some related cues share recordings.
+
+Most recordings are CC0. The deer recording is CC BY 4.0 and requires the supplied attribution when distributing a commercial build. Keep `public/audio/CREDITS.txt` with distributions. Settings shows recording load status and a credits link. Radio uses captions and recorded receiver noise by default; optional browser TTS is explicitly labeled synthesized speech. The generated soundtrack has been removed; player-imported music remains available.
+
+Playback uses shuffled take decks, with no immediate repeat across deck boundaries. A physical event shares its take and pitch between both listeners. Cue-specific hearing ranges fade smoothly; moving listeners update existing sounds, with air absorption and continuous wall occlusion. Each listener has separate enclosure reflections, sampled at four directions outdoors or supplied by interior state. Action intensity controls loudness and brightness independently of suppression. Ambient beds gently swell and crossfade between recorded takes and starting offsets. At most 64 positional playback routes and six active vehicle sources run at once. The asset bank and licenses are checked by `tests/recordings.test.ts`; `tests/audioDynamics.test.ts` covers variation, intensity, spatial updates and room separation.
+
+Vehicle sound follows the fitted motor's fuel, layout and displacement rather than the chassis model. Real bike/car/diesel/V8 banks blend by load; motor swaps rebuild the source. Gearbox wear/strain, exhaust noise, cooling capacity, heat, oil, coolant and engine wear drive separate recorded layers. Road/off-road tires, mixed per-wheel treads, bare rims, flat tires, sliding, airborne wheels and wheel radius affect rolling texture, squeal and thump cadence. Shutdown leaves heat ticks and coolant steam audible. Crashes layer recorded panel impacts with action intensity and vehicle mass.
+
+The current simulation supplies a final-drive ratio but no discrete selected gear; audio infers automatic gear bands from speed with hysteresis and a brief load dip. Component sounds use recorded foley and filtering where isolated component recordings are unavailable (fan, steam, flat-tire thumps and damaged gear metal). These are documented in the credits, rather than claimed as separate recordings of every engine/part.
+
+Weapon draw, magazine removal/insertion, dry trigger, jam clearing, pump/bolt cycles, cylinder actions and individual shell loading use shuffled real recording banks. Reload landmarks follow animation progress, so cancelled reloads cannot leave queued mechanical sounds. Weapon family and size adjust playback; tactical reloads omit an unnecessary pistol rack. `tests/componentAudio.test.ts` checks customized part responses and reload timing; `tests/audio.test.ts` checks motor swap and component-loop cleanup.
+
+Running motors and sustained component beds also crossfade to shuffled alternate recorded takes at staggered intervals, preserving current pitch and filtering; retired sources are stopped and released.

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { MeshBuilder } from './builder';
 import { propProto } from './props';
 import { landmarkProto, LANDMARK_KINDS } from './landmarks';
+import { footbridgeCollider } from './footbridge';
 import type { PropKind, PropSpawn } from '../world/layout';
 
 /**
@@ -67,6 +68,16 @@ export const PROP_COLLISION: Record<PropKind, 'mesh' | 'hull' | 'dynamic' | 'non
   campfire: 'none',
   tent: 'hull',
   bridge: 'mesh',
+  // Deck, railings, mast, cables and piers: walked on, driven up, leant on, all as drawn.
+  footbridge: 'mesh',
+  // Collides as boxes (`heritageAabbs`): walls, floors, railings, the stair's slope, the fence, the machinery.
+  concreteHouse: 'none',
+  mudHut: 'none',
+  oldMill: 'none',
+  // The causeway's own ground is what is walked on.
+  culvert: 'none',
+  // Collides as boxes (`YARD_SOLIDS`): the fence, the frame's legs, the bench, the skip.
+  narYard: 'none',
 };
 
 /**
@@ -95,7 +106,11 @@ export interface CollisionMesh {
 /** A dead tree's branches reach far; only its trunk and low limbs (below this height, metres, unscaled) are solid. */
 const TRUNK_TOP = 2.5;
 
+let bridgeProto: MeshBuilder | null = null;
+
 function protoOf(p: PropSpawn): MeshBuilder | null {
+  // The footbridge's drawn mesh is all cables and wires: it collides as a lean mesh of its own.
+  if (p.kind === 'footbridge') return (bridgeProto ??= footbridgeCollider());
   return LANDMARK_KINDS.has(p.kind) ? landmarkProto(p.kind, p.seed, p.tag ?? 0) : propProto(p.kind, p.seed, p.tag ?? 0);
 }
 
@@ -194,6 +209,7 @@ const PROP_SURFACE: Partial<Record<PropKind, string>> = {
   waterTower: 'steel',
   fence: 'steel',
   overpass: 'concrete',
+  footbridge: 'steel',
   lighthouse: 'concrete',
   fountain: 'concrete',
   metroEntrance: 'concrete',

@@ -30,9 +30,11 @@ import {
   type TraderStock,
   type TravellerRoll,
 } from '../sim/travellers';
+import { FIRE, SIGHT } from '../sim/enemySight';
 import type { Ctx } from './ctx';
 import type { Interactable } from './interact';
 import type { Player } from './player';
+import { playerShows } from './sight';
 import type { Vehicle } from './vehicle';
 
 const R = TRAVELLERS.rules;
@@ -241,6 +243,10 @@ export class Traveller {
   threatX = 0;
   threatZ = 0;
   threat: Player | null = null;
+  /** Can an armed one see its threat (checked a few times a second), and where on them it aims. */
+  inSight = false;
+  sightCd = 0;
+  aimY = 1.1;
   near: Player | null = null;
   nearD = Infinity;
   nearX = 0;
@@ -872,8 +878,23 @@ export class TravellerSystem {
         tv.moveSpeed = damp(tv.moveSpeed, 0, 8, dt);
         const target = tv.threat;
         if (!target) break;
-        tv.threatX = target.pos.x;
-        tv.threatZ = target.pos.z;
+        // They shoot only at what they can see: behind a rock or down in a bush, they watch where they last saw you.
+        tv.sightCd -= dt;
+        if (tv.sightCd <= 0) {
+          tv.sightCd = 0.3;
+          const s = playerShows(ctx, tv.x, tv.y + 1.55, tv.z, target);
+          const was = tv.inSight;
+          tv.inSight = target.state !== 'downed' && (Math.hypot(target.pos.x - tv.x, target.pos.z - tv.z) < SIGHT.touch || s.show >= SIGHT.minShow);
+          if (tv.inSight) {
+            tv.aimY = s.aimY;
+            // Caught sight of them again: a beat to bring the gun round.
+            if (!was) tv.fireCd = Math.max(tv.fireCd, FIRE.react[0] + this.rng.next() * (FIRE.react[1] - FIRE.react[0]));
+          }
+        }
+        if (tv.inSight) {
+          tv.threatX = target.pos.x;
+          tv.threatZ = target.pos.z;
+        }
         const dx = tv.threatX - tv.x;
         const dz = tv.threatZ - tv.z;
         const d = Math.hypot(dx, dz) || 1;
@@ -881,7 +902,7 @@ export class TravellerSystem {
         // Hold at a distance: close in if far, give ground if close.
         if (d > 32) this.step(tv, dx / d, dz / d, tv.walk, dt);
         else if (d < 14) this.step(tv, -dx / d, -dz / d, tv.walk, dt);
-        if (d < 60 && tv.fireCd <= 0 && Math.abs(wrapAngle(Math.atan2(dx, dz) - tv.yaw)) < 0.3 && !ctx.obs.segmentBlocked(tv.x, tv.z, tv.threatX, tv.threatZ, 1.4)) {
+        if (d < 60 && tv.inSight && tv.fireCd <= 0 && Math.abs(wrapAngle(Math.atan2(dx, dz) - tv.yaw)) < 0.3) {
           tv.fireCd = 1.1 + this.rng.next() * 0.9;
           this.shootAt(tv, target, d);
         }
@@ -970,9 +991,9 @@ export class TravellerSystem {
     const ox = tv.x + Math.sin(tv.yaw) * 0.5;
     const oy = tv.y + 1.4;
     const oz = tv.z + Math.cos(tv.yaw) * 0.5;
-    let dx = target.pos.x - ox;
-    let dy = target.pos.y + 1.1 - oy;
-    let dz = target.pos.z - oz;
+    let dx = tv.threatX - ox;
+    let dy = tv.aimY - oy;
+    let dz = tv.threatZ - oz;
     const l = Math.hypot(dx, dy, dz) || 1;
     dx /= l;
     dy /= l;

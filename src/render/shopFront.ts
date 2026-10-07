@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { shared } from './dispose';
+import { MeshBuilder, S } from './builder';
+import { MELABES } from '../world/melabes';
 
 /**
- * Shopfronts with their own drawn sign, for the recreation of a real street. A shopfront is one flat panel laid over
- * the ground storey of a building, 14 m wide and 4.8 m tall, drawn on a canvas at load time like every other texture
- * in the game. Everything above the sign band is transparent except the logos that stand over it.
+ * Shopfronts with their own drawn sign, for the recreation of a real street. The signage and interior backdrop are a
+ * 14 m wide, 4.8 m tall canvas panel; modelled serving equipment and door frames give the ground storey depth.
+ * Everything above the sign band is transparent except the logos that stand over it.
  *
  * The drawing is a redraw from a photograph, not the photograph. If a real image of the front is dropped in at
  * `public/shops/<id>.png` (the whole panel, 14:4.8, with transparency above the sign if wanted) it replaces the drawing
@@ -16,6 +18,24 @@ export const SHOP_H = 4.8;
 const PX = 80;
 
 export type ShopId = 'malabes';
+
+/** Sign and shutters surround a real opening even if a photo replaces the canvas. */
+export function buildShopFrontPanel(): THREE.BufferGeometry {
+  const pos: number[] = [], uv: number[] = [];
+  const quad = (x0: number, x1: number, y0: number, y1: number) => {
+    for (const [x, y] of [[x0, y0], [x1, y0], [x1, y1], [x0, y0], [x1, y1], [x0, y1]]) {
+      pos.push(x, y, 0); uv.push(x / SHOP_W + 0.5, y / SHOP_H);
+    }
+  };
+  quad(-SHOP_W / 2, -MELABES.halfWidth, 0, MELABES.height);
+  quad(MELABES.halfWidth, SHOP_W / 2, 0, MELABES.height);
+  quad(-SHOP_W / 2, SHOP_W / 2, MELABES.height, SHOP_H);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.computeVertexNormals();
+  return g;
+}
 
 /** Where an optional photograph of the front is looked for. */
 export const shopImageUrl = (id: ShopId) => `/shops/${id}.png`;
@@ -140,12 +160,67 @@ function signBox(g: Ctx, x: number, y: number, w: number, h: number) {
   g.fillStyle = '#ffffff';
   fitText(g, 'שווארמה מלאבס', x + w / 2, y + h * 0.42, w * 0.84, h * 0.4, 'bold');
   g.fillStyle = '#e8e8e2';
-  fitText(g, 'איכות וטעם מסעדה', x + w / 2, y + h * 0.78, w * 0.7, h * 0.2);
+  fitText(g, 'איכות וטעם ליותר מפעם', x + w / 2, y + h * 0.78, w * 0.86, h * 0.2);
   (g as unknown as { direction: string }).direction = 'ltr';
-  g.font = `${Math.round(h * 0.1)}px Arial, sans-serif`;
-  g.textAlign = 'right';
-  g.fillStyle = '#c8c8c2';
-  g.fillText('SINCE 1975', x + w - 12, y + 14);
+}
+
+/**
+ * Depth over the drawn backdrop, in the panel's local frame (+z faces the street).
+ * Reference: https://petahtikva.mynet.co.il/local_news/article/byajw1zqjl (Haim Ozer street photograph).
+ * The paired spits, stainless equipment, black door frames and pale tiled surround are modelled rather than painted.
+ */
+export function buildShopFrontDetails(id: ShopId): THREE.BufferGeometry {
+  const b = new MeshBuilder();
+  b.seed(1978);
+  const steel = S.metal(0xb7bab9, 0.24);
+  const black = S.paint(0x19191b, 0.32);
+  const tile = S.concrete(0xd5d0be, 0.35);
+  // Lintel and jambs, leaving the entrance on the right of the serving counter.
+  b.box(0, 2.94, 0.2, 7.4, 0.16, 0.38, tile);
+  for (const x of [-3.65, 3.65]) b.box(x, 1.48, 0.18, 0.14, 2.96, 0.36, tile);
+  b.box(0, 3.55, -0.12, 9.6, 1.24, 0.2, black);
+  // Raised white borders around the two sign boards.
+  for (const x of [-2.075, 2.075]) {
+    for (const y of [3.09, 4.15]) b.box(x, y, 0.15, 2.96, 0.035, 0.045, S.paint(0xe9e9e2));
+    for (const dx of [-1.475, 1.475]) b.box(x + dx, 3.62, 0.15, 0.035, 1.06, 0.045, S.paint(0xe9e9e2));
+  }
+  // A full-depth tiled room with an open street wall.
+  // Top at 4 cm: clear the terrain (0) and the sidewalk/paving overlays (3–3.2 cm).
+  b.box(0, 0.005, -MELABES.depth / 2, 7.4, 0.07, MELABES.depth, S.concrete(0x99978e, 0.35));
+  b.box(0, 2.97, -MELABES.depth / 2, 7.4, 0.07, MELABES.depth, tile);
+  for (const x of [-3.65, 3.65]) b.box(x, 1.46, -2.4, 0.10, 2.92, 4.8, tile);
+  b.box(0, 1.46, -4.75, 7.3, 2.92, 0.1, tile);
+  const grout = S.paint(0x8f938e, 0.4);
+  for (let y = 0.28; y < 2.9; y += 0.28) b.box(0, y, -4.689, 7.25, 0.012, 0.006, grout);
+  for (let x = -3.6; x < 3.7; x += 0.48) b.box(x, 1.46, -4.689, 0.012, 2.9, 0.006, grout);
+  for (const z of [-1.2, -3.8]) b.box(0, 2.88, z, 6.8, 0.045, 0.14, S.glow(0xffedc8, 0.65));
+  // Stainless serving counter and salad trays.
+  b.box(MELABES.counter.x, 0.48, MELABES.counter.z, MELABES.counter.w, 0.96, MELABES.counter.d, steel);
+  b.box(MELABES.counter.x, 0.98, MELABES.counter.z, MELABES.counter.w + 0.1, 0.055, MELABES.counter.d + 0.1, S.chrome());
+  for (const x of [-3.1, -2.3, -1.5, -0.7]) b.box(x, 0.46, 0.22, 0.015, 0.78, 0.012, S.steel(0x74797b));
+  for (const [i, color] of [0x688540, 0xab3927, 0xcec499, 0x719846].entries()) {
+    const x = -1.9 + i * 0.37;
+    b.box(x, 1.035, -0.15, 0.31, 0.045, 0.39, S.chrome());
+    b.box(x, 1.06, -0.15, 0.25, 0.035, 0.32, S.plastic(color));
+  }
+  // Two tall stacks, as seen at the front of the real shop.
+  for (const [i, x] of MELABES.spits.entries()) {
+    b.box(x, 0.51, MELABES.spitZ, 0.84, 1.02, 0.84, steel);
+    b.box(x, 1.84, MELABES.spitZ - 0.55, 0.75, 1.66, 0.13, S.steel(0x5e6263, 0.32));
+    for (const y of [1.36, 1.78, 2.2]) b.box(x, y, MELABES.spitZ - 0.47, 0.47, 0.31, 0.035, S.glow(0xe47836, 0.65));
+    b.cyl(x, 1.83, MELABES.spitZ, 0.035, 1.82, 0.035, S.chrome(), 0, 0, 0, 8);
+    for (let k = 0; k < 28; k++) {
+      const radius = 0.30 + k * 0.0045 + Math.sin(k * 2.4 + i) * 0.012;
+      const colors = i ? [0x9b6338, 0xb77b48, 0x794729] : [0xbe9362, 0xc5a170, 0x986c43];
+      b.frustum(x, 1.16 + k * 0.051, MELABES.spitZ, radius + 0.004, radius, 0.054, S.plastic(colors[k % 3], 0.12), 0, k * 0.14, 0, 14);
+    }
+    b.cyl(x, 1.08, MELABES.spitZ, 0.88, 0.045, 0.88, S.chrome(), 0, 0, 0, 16);
+    b.box(x, 2.7, MELABES.spitZ - 0.24, 0.84, 0.15, 0.48, steel);
+  }
+  // The right side stays open as the entrance; a dark frame marks the service bay.
+  b.box(0, 2.79, 0.32, 6.9, 0.04, 0.06, S.glow(0xffedc8, 0.6));
+  void id; // All currently authored shopfronts use the Melabes design.
+  return b.build();
 }
 
 /**
@@ -170,52 +245,42 @@ function malabes(g: Ctx) {
     g.fillStyle = x0 === 0 ? '#d9b82a' : '#ece2d6';
     for (let i = 0; i < 4; i++) g.fillRect(x + m(0.2), bandY + m(0.22) + i * m(0.22), w - m(0.4 + (i % 2) * 0.5), m(0.09));
   }
-  // The open front: warm and dark, a counter, the spit, a fridge, a lit menu.
+  // Pale ceiling and dark tiled interior, behind the three-dimensional serving equipment.
   const ox = m(3.3);
   const ow = m(7.4);
   const oy = bandY + bandH;
   const grad = g.createLinearGradient(0, oy, 0, m(SHOP_H));
-  grad.addColorStop(0, '#2a1a10');
-  grad.addColorStop(0.55, '#6b4424');
-  grad.addColorStop(1, '#1d130c');
+  grad.addColorStop(0, '#d6d5cd');
+  grad.addColorStop(0.2, '#434541');
+  grad.addColorStop(1, '#181a18');
   g.fillStyle = grad;
   g.fillRect(ox, oy, ow, m(SHOP_H) - oy);
   g.fillStyle = '#f6dfa4';
   g.fillRect(ox + m(0.3), oy + m(0.12), ow - m(0.6), m(0.07));
-  // Menu board and fridge.
-  g.fillStyle = '#e8b53a';
-  g.fillRect(m(7.5), oy + m(0.45), m(1.3), m(0.8));
-  g.fillStyle = '#3a2410';
-  for (let i = 0; i < 4; i++) g.fillRect(m(7.6), oy + m(0.55) + i * m(0.17), m(1.1 - (i % 2) * 0.3), m(0.07));
-  g.fillStyle = '#a8231c';
-  g.fillRect(m(9.0), oy + m(0.45), m(0.9), m(1.9));
-  g.fillStyle = '#f0f0ea';
-  g.fillRect(m(9.0), oy + m(0.45), m(0.9), m(0.22));
-  g.fillStyle = 'rgba(255,255,255,0.35)';
-  g.fillRect(m(9.12), oy + m(0.8), m(0.66), m(1.2));
-  // The spit, glowing at the front left.
-  const spit = g.createLinearGradient(m(3.9), 0, m(4.5), 0);
-  spit.addColorStop(0, '#7b4a2c');
-  spit.addColorStop(0.5, '#c98a4c');
-  spit.addColorStop(1, '#6a3d22');
-  g.fillStyle = spit;
-  g.beginPath();
-  g.moveTo(m(3.95), oy + m(0.5));
-  g.lineTo(m(4.45), oy + m(0.5));
-  g.lineTo(m(4.62), oy + m(1.9));
-  g.lineTo(m(3.78), oy + m(1.9));
-  g.closePath();
-  g.fill();
-  g.fillStyle = '#ffb04a';
-  g.fillRect(m(3.6), oy + m(0.6), m(0.1), m(1.3));
-  // The counter: stainless steel with a bright edge.
-  const cy = m(3.7);
-  g.fillStyle = '#aeb3b7';
-  g.fillRect(ox, cy, m(3.1), m(SHOP_H) - cy);
-  g.fillStyle = '#e4e7e9';
-  g.fillRect(ox, cy, m(3.1), m(0.1));
-  g.fillStyle = 'rgba(0,0,0,0.22)';
-  for (let i = 1; i < 4; i++) g.fillRect(ox + i * m(0.78), cy + m(0.14), 2, m(SHOP_H) - cy);
+  // White tiled rear wall and a small Hebrew menu, without invented prices.
+  g.fillStyle = '#b7b8b0';
+  g.fillRect(ox + m(0.4), oy + m(0.45), m(3.0), m(2.3));
+  g.fillStyle = '#727772';
+  for (let y = oy + m(0.45); y < m(SHOP_H); y += m(0.28)) g.fillRect(ox + m(0.4), y, m(3), 1);
+  for (let x = ox + m(0.4); x < ox + m(3.4); x += m(0.48)) g.fillRect(x, oy + m(0.45), 1, m(2.3));
+  g.fillStyle = '#111314';
+  g.fillRect(m(6.6), oy + m(0.42), m(0.9), m(1.05));
+  g.fillStyle = '#f3f0e5';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.direction = 'rtl';
+  for (const [i, text] of ['שווארמה', 'בפיתה · בלאפה', 'בצלחת'].entries()) fitText(g, text, m(7.05), oy + m(0.64 + i * 0.27), m(0.8), m(0.15));
+  // Dark reflective glass on the right, with the street reflected in it.
+  const glass = g.createLinearGradient(m(7.6), oy, m(10.6), m(SHOP_H));
+  glass.addColorStop(0, '#657369');
+  glass.addColorStop(0.5, '#2d3833');
+  glass.addColorStop(1, '#141a19');
+  g.fillStyle = glass;
+  g.fillRect(m(7.6), oy + m(0.12), m(3), m(2.8));
+  g.fillStyle = 'rgba(210,218,200,0.18)';
+  g.fillRect(m(7.75), oy + m(0.5), m(2.7), m(0.25));
+  g.fillRect(m(8.65), oy + m(0.75), m(0.13), m(1.8));
+  g.direction = 'ltr';
   // Pillars with a fire glow at the foot and a strip of vertical lettering.
   for (const x0 of [2.2, 10.7]) {
     const x = m(x0);
@@ -229,6 +294,13 @@ function malabes(g: Ctx) {
     g.fillStyle = 'rgba(235,235,230,0.55)';
     for (let i = 0; i < 9; i++) g.fillRect(x + m(0.18), bandY + m(1.6) + i * m(0.22), m(0.1), m(0.12 + (i % 3) * 0.04));
   }
+  // The real address; the birth date previously painted on the sign was unverified.
+  g.fillStyle = '#ededdf';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.direction = 'rtl';
+  fitText(g, 'חיים עוזר', m(2.75), m(2.15), m(0.94), m(0.16));
+  fitText(g, '4', m(2.75), m(2.48), m(0.7), m(0.3), 'bold');
   for (const x0 of [3.3, 10.3]) {
     const x = m(x0);
     const wood = g.createLinearGradient(x, 0, x + m(0.4), 0);

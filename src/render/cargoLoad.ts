@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { MeshBuilder } from './builder';
 import { crate, jerryCan, oilCan } from './parts';
 import { buildPartModel } from './partModels';
+import { drawFood } from './foodModels';
+import type { FoodId } from '../sim/carry';
 import { C } from './palette';
 import { bodyMat } from './vehicleKit';
 import type { Mounts } from './attachments';
@@ -44,7 +46,10 @@ export function deckOfZone(m: Mounts, g0: number, zone: Zone, holder: boolean): 
 export interface Placed {
   /** The cargo entry it is. */
   id: string;
-  kind: 'part' | 'fuel' | 'diesel' | 'oil' | 'water';
+  kind: 'part' | 'fuel' | 'diesel' | 'oil' | 'water' | 'food';
+  food?: FoodId;
+  /** Drawn at full size: put there by hand, where it was put (`CargoEntry.at`). */
+  full?: boolean;
   partId?: string;
   x: number;
   y: number;
@@ -52,15 +57,20 @@ export interface Placed {
   yaw: number;
 }
 
-const kindOf = (c: Carried): Placed['kind'] => (c.kind === 'part' ? 'part' : c.kind === 'fuel' ? (c.fuel === 'diesel' ? 'diesel' : 'fuel') : c.kind === 'oil' ? 'oil' : 'water');
+const kindOf = (c: Carried): Placed['kind'] => (c.kind === 'part' ? 'part' : c.kind === 'fuel' ? (c.fuel === 'diesel' ? 'diesel' : 'fuel') : c.kind === 'oil' ? 'oil' : c.kind === 'food' ? 'food' : 'water');
 
 /** Where each entry sits on its deck: a grid of spots, stacking up when it is full. */
-export function layoutEntries(deck: Deck, entries: { id: string; c: Carried }[]): Placed[] {
+export function layoutEntries(deck: Deck, entries: { id: string; c: Carried; at?: [number, number, number]; yaw?: number }[]): Placed[] {
   const cols = Math.max(1, Math.floor((deck.hw * 2) / 0.34));
   const rows = Math.max(1, Math.floor((deck.z1 - deck.z0) / 0.36));
   const cells = cols * rows;
   const zc = (deck.z0 + deck.z1) / 2;
-  return entries.map((e, i) => {
+  // Things set down by hand keep the very spot and heading they were given; the rest are dealt into the grid.
+  let k = 0;
+  return entries.map((e) => {
+    const food = e.c.kind === 'food' ? e.c.food : undefined;
+    if (e.at) return { id: e.id, kind: kindOf(e.c), partId: e.c.kind === 'part' ? e.c.item.id : undefined, food, x: e.at[0], y: e.at[1], z: e.at[2], yaw: e.yaw ?? 0, full: true };
+    const i = k++;
     const cell = i % cells;
     const layer = Math.floor(i / cells);
     const col = cell % cols;
@@ -68,7 +78,7 @@ export function layoutEntries(deck: Deck, entries: { id: string; c: Carried }[])
     const x = cols === 1 ? 0 : (col / (cols - 1) - 0.5) * (deck.hw * 2 - 0.3);
     const z = rows === 1 ? zc : deck.z1 - 0.18 - row * 0.36;
     const yaw = ((i * 53) % 17) * 0.05 - 0.4;
-    return { id: e.id, kind: kindOf(e.c), partId: e.c.kind === 'part' ? e.c.item.id : undefined, x, y: deck.y + layer * 0.3, z, yaw };
+    return { id: e.id, kind: kindOf(e.c), partId: e.c.kind === 'part' ? e.c.item.id : undefined, food, x, y: deck.y + layer * 0.3, z, yaw };
   });
 }
 
@@ -80,14 +90,19 @@ function drawThing(b: MeshBuilder, t: Placed) {
   if (t.kind === 'part') {
     const pm = new MeshBuilder();
     buildPartModel(pm, t.partId!);
-    b.appendMatrix(pm, new THREE.Matrix4().compose(new THREE.Vector3(t.x, t.y, t.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), t.yaw), new THREE.Vector3(PART_SCALE, PART_SCALE, PART_SCALE)));
+    const k = t.full ? 1 : PART_SCALE;
+    b.appendMatrix(pm, new THREE.Matrix4().compose(new THREE.Vector3(t.x, t.y, t.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), t.yaw), new THREE.Vector3(k, k, k)));
+  } else if (t.kind === 'food') {
+    const fm = new MeshBuilder();
+    drawFood(fm, t.food ?? 'dogfood');
+    b.appendMatrix(fm, new THREE.Matrix4().compose(new THREE.Vector3(t.x, t.y, t.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), t.yaw), new THREE.Vector3(1, 1, 1)));
   } else if (t.kind === 'fuel' || t.kind === 'diesel') jerryCan(b, t.x, t.y, t.z, t.kind === 'diesel' ? C.diesel : C.fuel, t.yaw);
   else if (t.kind === 'water') jerryCan(b, t.x, t.y, t.z, 0x3a6ea5, t.yaw);
   else oilCan(b, t.x, t.y, t.z, t.yaw);
 }
 
 /** A mesh of everything on the decks. Null when there is nothing to draw. */
-export function buildCargoMesh(decks: { deck: Deck; entries: { id: string; c: Carried }[] }[]): THREE.Mesh | null {
+export function buildCargoMesh(decks: { deck: Deck; entries: { id: string; c: Carried; at?: [number, number, number]; yaw?: number }[] }[]): THREE.Mesh | null {
   const b = new MeshBuilder();
   b.jitter = 0.02;
   let n = 0;
@@ -114,6 +129,7 @@ export function pieceGeometry(c: Carried): THREE.BufferGeometry {
   } else if (c.kind === 'fuel') jerryCan(b, 0, 0, 0, c.fuel === 'diesel' ? C.diesel : C.fuel, 0);
   else if (c.kind === 'water') jerryCan(b, 0, 0, 0, 0x3a6ea5, 0);
   else if (c.kind === 'oil') oilCan(b, 0, 0, 0, 0);
+  else if (c.kind === 'food') drawFood(b, c.food);
   else crate(b, 0, 0.11, 0, 0.32, 0.22, 0.3, 0);
   return b.build();
 }

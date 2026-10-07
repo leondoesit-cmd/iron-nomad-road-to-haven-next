@@ -10,7 +10,7 @@
  * (three.js looks down -z, so with +z as forward, +x is to the left); `side` -1 is on the right. Everything is in metres.
  */
 
-export type LandmarkKind = 'foundersSquare' | 'greatSynagogue' | 'cityHall' | 'busStation' | 'stadium';
+export type LandmarkKind = 'foundersSquare' | 'greatSynagogue' | 'cityHall' | 'busStation' | 'stadium' | 'grandMall' | 'mallPlaza';
 
 /** The way a facade faces, as a compass-style letter on the engine's axes: w is -x, e is +x, s is -z, n is +z. */
 export type Facing = 'w' | 'e' | 'n' | 's';
@@ -25,7 +25,9 @@ export type BuildingRole =
   | 'busTerminal'
   /** HaMoshava Stadium: a grandstand along a touchline, a lower stand behind a goal. */
   | 'standSide'
-  | 'standEnd';
+  | 'standEnd'
+  /** A plain glass office tower (Prima Link, across the road from the mall). */
+  | 'officeTower';
 
 /** One building standing inside a landmark lot. */
 export interface PlanBuilding {

@@ -37,6 +37,12 @@ export interface HeadShape {
   /** Cheekbones and cheeks: [half width, height, depth, size] against the eye line and the eye front. */
   cheekbone: [number, number, number, number];
   cheek: [number, number, number, number];
+  /** Soft tissue beside the lower jaw: [half width, height, depth, radius] relative to the eye line/front. */
+  jowl?: [number, number, number, number];
+  /** Fullness of the lower eyelids, in metres. */
+  eyeBag?: number;
+  /** Soft tissue below the chin, in metres. */
+  underChin?: number;
   nose: {
     /** Tip: height against the eye line, how far in front of the eyes, roundness. */
     tipY: number;
@@ -59,6 +65,14 @@ export interface HeadShape {
     lower: number;
     /** How much each corner (the person's right, then left) is lifted: a smile, or a smirk when they differ. */
     lift: [number, number];
+    /** Gap between the lips at the centre (0 is closed). */
+    open?: number;
+    /** Colour of the upper teeth showing in that gap (a grin); without it the gap is dark. */
+    teeth?: number;
+    /** Depth of the hollow below the lower lip; defaults to 6 mm. */
+    hollow?: number;
+    /** The lower teeth showing along the bottom of the gap too (a laugh), in the same colour. */
+    lowerTeeth?: boolean;
   };
   /** Jaw angle: [half width, height, depth] against the eye line and the eye front. */
   jaw: [number, number, number];
@@ -89,6 +103,10 @@ export interface HairSpec {
   color: number;
   tip: number;
   rough: number;
+  /** Density above the upper forehead; the side fringe stays full. Defaults to 1. */
+  crownDensity?: number;
+  /** Tight curls: the height of the little knots the hair stands up in (metres), painted as coils instead of strands. */
+  curl?: number;
 }
 
 export interface FacialHair {
@@ -103,6 +121,11 @@ export interface FacialHair {
   cheek: number;
   /** The share of hairs that are grey. */
   grey: number;
+  /**
+   * A full beard going grey unevenly: the share of grey hairs through the moustache and the middle of the chin, and along
+   * the jaw and up the cheeks. Each hair is dark or grey, finely mixed. Without it the full beard is mottled in clumps.
+   */
+  salt?: [number, number];
 }
 
 export interface FacePaint {
@@ -123,6 +146,12 @@ export interface FacePaint {
   forehead: number;
   crows: number;
   folds: number;
+  skinRoughness?: number;
+  lipRoughness?: number;
+  /** Extra gloss on the exposed upper forehead and crown, 0 to 1. */
+  scalpGloss?: number;
+  /** Lower-eyelid folds and small age spots, 0 to 1. */
+  age?: number;
 }
 
 export interface PortraitSpec {
@@ -210,7 +239,12 @@ export function hairlineAt(spec: PortraitSpec, th: number): number {
 
 /** 0 to 1: how much hair grows on the scalp here, with a soft hairline. */
 export function scalpCover(spec: PortraitSpec, th: number, y: number): number {
-  return smoothstep(-0.002, 0.004, y - hairlineAt(spec, th));
+  return smoothstep(-0.002, 0.004, y - hairlineAt(spec, th)) * scalpDensity(spec, y);
+}
+
+/** Thinning above a full side fringe, shared by the painter and hair shell. */
+export function scalpDensity(spec: PortraitSpec, y: number): number {
+  return lerp(1, spec.hair.crownDensity ?? 1, smoothstep(spec.shape.eyeY + 0.05, spec.shape.eyeY + 0.10, y));
 }
 
 /**
@@ -272,7 +306,7 @@ const vn2 = valueNoise2;
  * channel is roughness. Each feature writes its colour into `tmp` and returns how much of it covers the texel.
  */
 export class FacePainter {
-  private c: Record<'skin' | 'flush' | 'shade' | 'lip' | 'iris' | 'brow' | 'hair' | 'hairTip' | 'beard' | 'beardTip', RGB>;
+  private c: Record<'skin' | 'flush' | 'shade' | 'lip' | 'iris' | 'brow' | 'hair' | 'hairTip' | 'beard' | 'beardTip' | 'teeth', RGB>;
   private seg = new Float64Array(2);
   private tmp = new Float32Array(4);
   private r = 0;
@@ -292,6 +326,7 @@ export class FacePainter {
       hairTip: rgb(s.hair.tip),
       beard: rgb(s.beard.color),
       beardTip: rgb(s.beard.tip),
+      teeth: rgb(s.shape.mouth.teeth ?? 0x211311),
     };
   }
 
@@ -326,7 +361,8 @@ export class FacePainter {
     this.r = C.skin[0] * (1 + blotch * 0.08 + grain * 0.05);
     this.g = C.skin[1] * (1 + blotch * 0.03 + grain * 0.05);
     this.b = C.skin[2] * (1 + blotch * 0.04 + grain * 0.055);
-    let rough = 0.55;
+    let rough = p.skinRoughness ?? 0.55;
+    if (p.scalpGloss) rough -= p.scalpGloss * smoothstep(E + 0.045, E + 0.10, y) * smoothstep(-0.2, 0.7, ny);
     if (front) {
       // Flush on the cheeks and the nose.
       const cx = (ax - s.cheek[0] - 0.006) / 0.024;
@@ -339,10 +375,17 @@ export class FacePainter {
     // Under the jaw and down the neck the skin is in the jaw's shadow.
     if (y < E + s.jaw[1] + 0.01) {
       const throat = smoothstep(E + s.jaw[1], E + s.chin.y - 0.008, y) * smoothstep(E + s.chin.y - 0.075, E + s.chin.y - 0.02, y);
-      this.darken(0.12 * smoothstep(0.2, -0.6, ny) + 0.2 * throat);
+      const underJaw = smoothstep(E + s.jaw[1] + 0.01, E + s.jaw[1] - 0.012, y);
+      this.darken(underJaw * (0.12 * smoothstep(0.2, -0.6, ny) + 0.2 * throat));
     }
 
     if (front && z > Z - 0.04) this.creases(x, ax, y);
+    if (p.age) {
+      // Faint, irregular freckles on the temples and scalp; avoid a uniform spotted overlay.
+      const spots = smoothstep(0.73, 0.88, N(x * 590, y * 590, z * 590, 109));
+      const region = Math.max(smoothstep(0.037, 0.072, ax), smoothstep(E + 0.05, E + 0.11, y));
+      this.mix(C.shade, p.age * spots * region * 0.19);
+    }
 
     // Facial hair: a painted beard (with volume from the field) or stubble.
     const bc = beardCover(this.s, x, y, z);
@@ -367,10 +410,11 @@ export class FacePainter {
       const lip = this.lips(x, ax, y, side);
       if (lip > 0) {
         this.mix(tmp, lip);
-        rough = lerp(rough, 0.38, lip);
-        // A moustache hangs over the top of the upper lip.
+        rough = lerp(rough, p.lipRoughness ?? 0.38, lip);
+        // A moustache hangs over the top of the upper lip (above the gap, when the lips are parted).
         if (this.s.beard.depth > 0 && bc > 0.001) {
-          const over = smoothstep(E + s.mouth.y + 0.0015, E + s.mouth.y + s.mouth.upper, y) * smoothstep(s.mouth.halfW, s.mouth.halfW * 0.4, ax);
+          const top = E + s.mouth.y + (s.mouth.open ?? 0) / 2;
+          const over = smoothstep(top + 0.0015, top + s.mouth.upper, y) * smoothstep(s.mouth.halfW, s.mouth.halfW * 0.4, ax);
           if (over > 0) {
             this.facialHair(x, y, z, ny, 1);
             this.mix(tmp, over * 0.85);
@@ -406,6 +450,14 @@ export class FacePainter {
     this.mix(C.shade, 0.32 * Math.exp(-(((ax - s.eyeX + 0.016) / 0.007) ** 2) - ((y - E - 0.002) / 0.008) ** 2));
     this.mix(C.shade, 0.18 * Math.exp(-ex * ex - eyU * eyU));
     this.mix(C.shade, 0.16 * Math.exp(-(((ax - s.eyeX + 0.002) / 0.014) ** 2) - eyD * eyD));
+    if (p.age) {
+      const u = (ax - s.eyeX) / (s.eyeW * 1.4);
+      const span = Math.exp(-u * u * 1.8);
+      const arc = E - 0.014 - 0.003 * (1 - u * u);
+      const fold = Math.exp(-(((y - arc) / 0.0012) ** 2));
+      const bag = Math.exp(-(((y - arc - 0.003) / 0.003) ** 2));
+      this.mix(C.shade, p.age * span * (0.23 * fold + 0.08 * bag));
+    }
     const ny0 = E + s.nose.baseY;
     this.darken(0.12 * Math.exp(-((ax / 0.014) ** 2) - ((y - ny0 + 0.002) / 0.004) ** 2));
     this.darken(0.12 * Math.exp(-((ax / 0.016) ** 2) - ((y - (E + s.mouth.y - s.mouth.lower - 0.006)) / 0.004) ** 2));
@@ -468,7 +520,12 @@ export class FacePainter {
       const fine = N(x * 4200, y * 2600, z * 4200, 24);
       const clump = N(x * 340, y * 220, z * 340, 22);
       const k = 0.8 + 0.22 * (strand - 0.5) + 0.14 * (fine - 0.5);
-      const tipK = smoothstep(0.3, 0.9, strand * 0.45 + clump * 0.65);
+      let tipK = smoothstep(0.3, 0.9, strand * 0.45 + clump * 0.65);
+      if (h.salt) {
+        const share = lerp(h.salt[0], h.salt[1], smoothstep(0.005, 0.035, Math.abs(x)) * (1 - mous));
+        const hair = N(x * 950, y * 260, z * 950, 25) * 0.6 + N(x * 2400, y * 700, z * 2400, 26) * 0.2 + clump * 0.2;
+        tipK = smoothstep(0.42 + share * 0.4, 0.08 + share * 0.4, hair);
+      }
       tmp[0] = lerp(C.beard[0], C.beardTip[0], tipK) * k;
       tmp[1] = lerp(C.beard[1], C.beardTip[1], tipK) * k;
       tmp[2] = lerp(C.beard[2], C.beardTip[2], tipK) * k;
@@ -664,13 +721,32 @@ export class FacePainter {
     const m = s.mouth;
     const E = s.eyeY;
     const t = ax / m.halfW;
-    if (t > 1.15 || y > E + m.y + m.upper + 0.004 + m.lift[side] || y < E + m.y - m.lower - 0.004) return 0;
+    const opening = m.open ?? 0;
+    if (t > 1.15 || y > E + m.y + m.upper + opening / 2 + 0.004 + m.lift[side] || y < E + m.y - m.lower - opening / 2 - 0.004) return 0;
     const yl = E + m.y + m.lift[side] * Math.pow(Math.min(t, 1.2), 2.2);
     // Upper lip: a cupid's bow in the middle; lower lip: fuller, rounder.
     const bow = 1 - 0.22 * Math.exp(-((x / 0.0032) ** 2)) + 0.12 * Math.exp(-(((ax - 0.0065) / 0.003) ** 2));
     const hu = m.upper * Math.sqrt(clamp01(1 - t * t)) * bow;
     const hl = m.lower * Math.pow(clamp01(1 - (t / 0.97) ** 2), 0.6);
-    const dy = y - yl;
+    const gap = opening / 2 * Math.sqrt(clamp01(1 - t * t));
+    const centreDy = y - yl;
+    if (gap > 0 && Math.abs(centreDy) < gap) {
+      this.tmp[0] = 0.13;
+      this.tmp[1] = 0.055;
+      this.tmp[2] = 0.045;
+      const v = (gap - centreDy) / (2 * gap);
+      // A mouth open wide: the tongue fills the bottom of it, darker toward the throat.
+      if (opening > 0.016) {
+        const tongue = smoothstep(0.55, 0.8, v) * smoothstep(1.05, 0.6, t);
+        this.tmp[0] = lerp(this.tmp[0], 0.5, tongue * 0.85);
+        this.tmp[1] = lerp(this.tmp[1], 0.2, tongue * 0.85);
+        this.tmp[2] = lerp(this.tmp[2], 0.2, tongue * 0.85);
+      }
+      if (m.teeth !== undefined) this.teeth(ax, t, v, opening);
+      if (m.teeth !== undefined && m.lowerTeeth) this.teeth(ax, t, 1 - v, opening, 0.0075, 0.85);
+      return smoothstep(0, 0.0005, gap - Math.abs(centreDy));
+    }
+    const dy = centreDy - Math.sign(centreDy) * gap;
     const C = this.c;
     let k = dy >= 0 ? smoothstep(0, 0.0005, hu - dy) : smoothstep(0, 0.0005, hl + dy);
     // Darker toward the line where the lips meet, lit along the middle of the lower lip.
@@ -694,6 +770,30 @@ export class FacePainter {
     return k;
   }
 
+  /**
+   * Upper teeth in a grin, over the dark of the mouth already in tmp: `t` across the mouth (0 middle, 1 corner) and `v` down
+   * the gap (0 under the upper lip, 1 on the lower). The teeth fill the top three quarters, a little shadow under the lip,
+   * a grey line between each, and the side teeth sink into the dark toward the corners.
+   */
+  private teeth(ax: number, t: number, v: number, opening: number, long = 0.0105, light = 1) {
+    const T = this.c.teeth;
+    // The upper teeth are about a centimetre long: in a grin they fill most of the gap, in a wide-open mouth only its top.
+    // Called again with `v` flipped for the lower teeth, which are shorter, narrower and in the shadow of the upper lip.
+    const edge = Math.min(0.74, long / opening) + 0.05 * Math.cos(ax * 420) * Math.min(1, long / opening);
+    const k = smoothstep(edge + 0.03, edge - 0.04, v) * smoothstep(1.02, 0.7, t);
+    if (k <= 0) return;
+    // Centrals 8.5 mm, laterals 6.5, canines 7, then the premolars, narrower as the arch turns away.
+    let gapK = 0;
+    for (const at of [0, 0.0085, 0.015, 0.022, 0.0275]) gapK = Math.max(gapK, Math.exp(-(((ax - at) / 0.0006) ** 2)));
+    const shade = (1 - 0.32 * smoothstep(0.25, 0.95, t)) * (1 - 0.3 * smoothstep(0.22, 0, v)) * (1 - 0.35 * gapK);
+    // The biting edge is a touch translucent.
+    const tip = 1 - 0.12 * smoothstep(edge - 0.18, edge, v);
+    const f = shade * tip * light;
+    this.tmp[0] = lerp(this.tmp[0], T[0] * f, k);
+    this.tmp[1] = lerp(this.tmp[1], T[1] * f, k);
+    this.tmp[2] = lerp(this.tmp[2], T[2] * f, k);
+  }
+
   /** Hair painted on the scalp, strands running along its sweep: colour in tmp, coverage returned. */
   private scalp(x: number, y: number, z: number, th: number, cover: number): number {
     const h = this.s.hair;
@@ -703,7 +803,13 @@ export class FacePainter {
     const ph = Math.atan2(y - rayY(this.s.shape), Math.hypot(x, z - RAY_Z));
     const along = ph * 14 * h.strand;
     const across = (th + h.sweep * clamp01(ph)) * 42;
-    const strand = vn2(across, along, 81) * 0.6 + vn2(across * 2.7, along * 2.2, 82) * 0.4;
+    let strand = vn2(across, along, 81) * 0.6 + vn2(across * 2.7, along * 2.2, 82) * 0.4;
+    if (h.curl) {
+      // Coils: little rings a few millimetres across, each lit on its top and dark in its middle.
+      const c = vn2(th * 45, ph * 45, 84) * 0.65 + vn2(th * 95, ph * 95, 85) * 0.35;
+      const ring = Math.abs(Math.sin(c * 7));
+      strand = lerp(strand, ring * 0.85 + 0.1, 0.75);
+    }
     const tipK = 0.6 * smoothstep(0.6, 0.95, strand);
     const k = 0.84 + 0.22 * (strand - 0.5);
     this.tmp[0] = lerp(C.hair[0], C.hairTip[0], tipK) * k;

@@ -10,6 +10,7 @@ import type { Ctx } from './ctx';
 import { BODY, type AnimalPart } from '../sim/anatomy';
 import type { Zombie } from './zombies';
 import type { Animal } from './wildlife';
+import { groundImpact, type GroundMaterial, type GroundWeapon } from '../sim/groundImpact';
 
 const RAY = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
 const _c = new THREE.Color();
@@ -19,7 +20,25 @@ const SKIN: Record<ZombieKind, number> = { walker: 0x6f7660, runner: 0x7a7660, s
 const CLOTH = [0x5a5446, 0x3e4a58, 0x6a3a32, 0x7a7262, 0x2e3a2c, 0x4a3a52];
 const TROUSERS = [0x2e3036, 0x3a3a2e, 0x4a4238, 0x252830];
 /** Coat of each animal, as the animal renderer draws it. */
-const COAT: Record<AnimalKind, number> = { hare: 0x9a8460, deer: 0xa87e50, vulture: 0x2b2622, dog: 0x6a5846, wolf: 0x6e7174, boar: 0x54443a, bear: 0x4c443e };
+const COAT: Record<AnimalKind, number> = {
+  hare: 0x9a8460,
+  deer: 0xa87e50,
+  vulture: 0x2b2622,
+  dog: 0x6a5846,
+  wolf: 0x6e7174,
+  boar: 0x54443a,
+  bear: 0x4c443e,
+  ibex: 0xa88a64,
+  camel: 0xb8946a,
+  fox: 0xb8642a,
+  jackal: 0xa88a5e,
+  buffalo: 0x34302e,
+  heron: 0x8a9096,
+  stork: 0xeae6dc,
+  duck: 0x7a6248,
+  crow: 0x5e5e60,
+  egret: 0xf2f2ee,
+};
 
 /** Anything with a body that can bleed from a stump: where it stands, which way it faces, and whether it is down. */
 interface Bleedable {
@@ -46,6 +65,9 @@ interface Bleeder {
   dz: number;
   /** An open neck sprays higher and harder than a limb. */
   head: boolean;
+  /** Animals roll onto their side rather than toppling backward. */
+  roll?: number;
+  lift?: number;
 }
 
 /**
@@ -72,13 +94,25 @@ export class Gore {
     };
     this.brass = new Brass({
       floorAt,
-      ring: (x, _y, z, loud) => {
-        if (loud > 0.06) ctx.audio.play('shell', x, z, 0.12 + loud * 0.2);
+      ring: (x, y, z, loud) => {
+        if (loud <= 0.06) return;
+        // What it fell on decides what it sounds like: brass on stone is a dry tick, in sand a hush, on a car roof a short metal tap.
+        const r = ctx.P.raycast(x, y + 0.3, z, 0, -1, 0, 1, RAY);
+        const hard = r ? ctx.P.surfaces.get(r.collider.handle) : undefined;
+        const ground = ctx.surfaceAt(x, z).name;
+        const v = (0.12 + loud * 0.2) * 0.7;
+        // Only the dry foot-step recordings are used: the metal and wood impact takes ring like a chime when pitched up.
+        switch (hard ?? ground) {
+          case 'car': case 'steel': case 'sheet': ctx.audio.play('footStone', x, z, v * 0.8, { pitch: 1.5 }); break;
+          case 'wood': ctx.audio.play('footWood', x, z, v * 0.7, { pitch: 1.5 }); break;
+          case 'glass': ctx.audio.play('footStone', x, z, v * 0.6, { pitch: 1.7 }); break;
+          case 'sand': case 'dirt': case 'mud': ctx.audio.play('footSand', x, z, v * 0.7, { pitch: 1.4 }); break;
+          default: ctx.audio.play('footStone', x, z, v * 0.7, { pitch: 1.6 });
+        }
       },
       clunk: (x, _y, z, loud) => {
         if (loud > 0.08) {
           ctx.audio.play('thud', x, z, 0.1 + loud * 0.25);
-          ctx.audio.play('tink', x, z, 0.08 + loud * 0.15);
         }
       },
     });
@@ -92,7 +126,7 @@ export class Gore {
       splash: (x, y, z, speed) => {
         const s = Math.min(1, speed / 6);
         ctx.fx.bloodSpray(x, y + 0.05, z, 0, 1, 0, 3, 2 + s * 3, 0.9);
-        this.groundSplat(x, z, 0.25 + s * 0.3, CELL.splat0 + Math.floor(Math.random() * 4), 0.85);
+        this.groundSplat(x, z, 0.25 + s * 0.3, CELL.splat0 + Math.floor(Math.random() * 4), 0.85, undefined, undefined, y);
         if (speed > 3) ctx.audio.play('thud', x, z, 0.25);
       },
     });
@@ -190,6 +224,44 @@ export class Gore {
 
   // ------------------------------------------------------------------ what a round does to the world
 
+  /** Local soil displacement: a short directional plume, small falling fragments, and a shallow persistent strike. */
+  groundStrike(weapon: GroundWeapon, material: GroundMaterial, x: number, y: number, z: number, nx: number, ny: number, nz: number, dx: number, dy: number, dz: number, speed: number) {
+    const ctx = this.ctx;
+    const nl = Math.hypot(nx, ny, nz) || 1;
+    nx /= nl; ny /= nl; nz /= nl;
+    const incidence = Math.abs(dx * nx + dy * ny + dz * nz);
+    const f = groundImpact(weapon, material, speed, incidence, ctx.groundDust?.(x, z) ?? 1);
+    const [r, g, b] = f.tint;
+    // Ground normals face out; shallow shots throw material ahead along the surface.
+    const along = dx * nx + dy * ny + dz * nz;
+    const tx = dx - along * nx, ty = dy - along * ny, tz = dz - along * nz;
+    const lift = ctx.terrain && Math.abs(y - ctx.groundAt(x, z)) < 0.7 ? roadLift(ctx.terrain, x, z) : 0;
+    y += lift;
+    const px = x + nx * 0.025, py = y + ny * 0.025, pz = z + nz * 0.025;
+    if (f.dust > 0.02) {
+      const count = Math.min(5, Math.ceil(f.dust * 2));
+      for (let i = 0; i < count; i++) {
+        const out = f.eject * (0.3 + Math.random() * 0.35);
+        ctx.fx.smoke.emit(px, py, pz, nx * out + tx * f.eject * 0.5, ny * out + ty * f.eject * 0.5, nz * out + tz * f.eject * 0.5,
+          f.life, f.plume * 0.35, f.plume, r, g, b, 0.35, 0.5, 2);
+      }
+    }
+    // Debris stays tiny even for a rifle. Mud throws clods rather than dry smoke.
+    for (let i = 0; i < f.chips; i++) {
+      const rx = Math.random() - 0.5, ry = Math.random() - 0.5, rz = Math.random() - 0.5;
+      const dot = rx * nx + ry * ny + rz * nz;
+      const out = f.eject * (0.5 + Math.random() * 0.5);
+      this.gibs.throw('chunk', px, py, pz, nx * out + (tx + rx - dot * nx) * f.eject * 0.5,
+        ny * out + (ty + ry - dot * ny) * f.eject * 0.5, nz * out + (tz + rz - dot * nz) * f.eject * 0.5,
+        f.chipSize * (0.65 + Math.random() * 0.6), r, g, b);
+    }
+    if (f.sparks) ctx.fx.spark(px, py, pz, f.sparks, f.eject);
+    this.marks.add(x, y, z, { cell: f.hard && !f.shaft ? CELL.hole : CELL.scuff, w: f.size * f.stretch, h: f.size,
+      nx, ny, nz, dx, dy, dz, r: r * 0.6, g: g * 0.6, b: b * 0.6, opacity: f.shaft ? 0.45 : 0.8, hole: true });
+    this.placed++;
+    ctx.audio.play(f.sound, x, z, f.volume, { intensity: Math.min(1, f.power / 2), pitch: f.shaft ? 1.1 : 1.15 - Math.min(0.3, f.power * 0.1) });
+  }
+
   /** The colour of the exposed material around a hole: the surface, paler, as if the paint were blown off it. */
   private pale(surface: Surface, k = 1.3): [number, number, number] {
     const t = SURFACES[surface].tint;
@@ -222,10 +294,15 @@ export class Gore {
    * exposed material with splinters, as wide as the round made it; the ground and stone keep a scuffed pit. Nothing that
    * moves keeps a mark (it would stay behind in the air), and nor does a box that only roughly stands for something round.
    */
-  impact(surface: Surface, x: number, y: number, z: number, nx: number, ny: number, nz: number, dx: number, dz: number, energy: number, o: { moving?: boolean; size?: number; heavy?: boolean; mark?: boolean } = {}) {
+  impact(surface: Surface, x: number, y: number, z: number, nx: number, ny: number, nz: number, dx: number, dz: number, energy: number, o: { moving?: boolean; size?: number; heavy?: boolean; mark?: boolean; shaft?: boolean } = {}) {
     const ctx = this.ctx;
     const s = SURFACES[surface];
     const e = Math.max(0.2, Math.min(1.5, energy));
+    if (o.shaft) {
+      // A shaft punctures soft material or taps a hard surface without firearm sparks or a blast of masonry.
+      if (surface === 'wood' || surface === 'plaster') ctx.fx.puff(x, y, z, ...s.tint, 0.08, 0.2);
+      return;
+    }
     if (s.spark) ctx.fx.spark(x + nx * 0.05, y + ny * 0.05, z + nz * 0.05, Math.round(s.spark * e), 3 + e * 2);
     // Dust kicked back off the surface, or splinters for wood.
     ctx.fx.puff(x + nx * 0.08, y + ny * 0.08, z + nz * 0.08, s.tint[0], s.tint[1], s.tint[2], 0.5 + e * 0.5, 0.45);
@@ -325,6 +402,30 @@ export class Gore {
   }
 
   /** A charred ring where something blew up. */
+  groundBlast(x: number, y: number, z: number, radius: number, damage: number) {
+    const ctx = this.ctx;
+    const gy = ctx.groundAt(x, z);
+    // Airbursts disturb the ground less; explosions high overhead leave no ground mark.
+    const coupling = Math.max(0, 1 - Math.abs(y - gy) / Math.max(1, radius));
+    if (coupling <= 0 || ctx.waterAt(x, z)) return;
+    const material = ctx.surfaceAt(x, z).name;
+    const f = groundImpact('rifle', material, Math.sqrt(Math.max(0, damage) * 600), 1, ctx.groundDust?.(x, z) ?? 1);
+    const n = Math.min(24, Math.ceil(radius * 2 * coupling));
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const reach = Math.sqrt(Math.random()) * radius * 0.45;
+      const px = x + Math.sin(a) * reach, pz = z + Math.cos(a) * reach;
+      const py = (ctx.drawnGroundAt?.(px, pz) ?? ctx.groundAt(px, pz)) + 0.04;
+      const out = (1 + Math.random() * 3) * coupling;
+      if (f.dust > 0.02) ctx.fx.smoke.emit(px, py, pz, Math.sin(a) * out, 1 + out, Math.cos(a) * out,
+        0.6 + coupling, 0.12, Math.min(2, radius * 0.25) * coupling, ...f.tint, 0.35, 1, 1);
+      this.gibs.throw('chunk', px, py, pz, Math.sin(a) * out, 1 + out, Math.cos(a) * out,
+        (0.12 + Math.random() * 0.22) * coupling, ...f.tint);
+    }
+    if (radius >= 3) this.scorch(x, z, radius * 0.6 * coupling);
+  }
+
+  /** A charred ring where something burned. */
   scorch(x: number, z: number, radius: number) {
     const ctx = this.ctx;
     const y0 = ctx.groundAt(x, z) + 1.5;
@@ -389,7 +490,7 @@ export class Gore {
     const chunks = 3 + Math.round(p * 2);
     for (let i = 0; i < chunks; i++) {
       _c.setRGB(0.3 + Math.random() * 0.15, 0.02, 0.02);
-      this.gibs.throw('chunk', x, y, z, vx * (0.5 + Math.random()) + (Math.random() - 0.5) * 3, vy * (0.4 + Math.random() * 0.8), vz * (0.5 + Math.random()) + (Math.random() - 0.5) * 3, 0.6 + Math.random() * 0.8, _c.r, _c.g, _c.b);
+      this.gibs.throw('chunk', x, y, z, vx * (0.5 + Math.random()) + (Math.random() - 0.5) * 3, vy * (0.4 + Math.random() * 0.8), vz * (0.5 + Math.random()) + (Math.random() - 0.5) * 3, 0.6 + Math.random() * 0.8, _c.r, _c.g, _c.b, true);
     }
     ctx.fx.bloodSpray(x, y, z, dx, 0.6, dz, 8 + Math.round(p * 5), 5 + p * 2, 0.8);
     ctx.fx.bloodSpray(x, y, z, 0, 1, 0, 4, 3, 0.7);
@@ -441,19 +542,19 @@ export class Gore {
     // The coat colour of each species, a shade darker for the leg.
     const c = COAT[a.kind];
     _c.setHex(c).multiplyScalar(a.tint);
-    if (part === 'head') this.gibs.throw('head', x, y + 0.05, z, vx, vy + 0.8, vz, size, _c.r, _c.g, _c.b);
+    if (part === 'head') this.gibs.throw('animalHead', x, y + 0.05, z, vx, vy + 0.8, vz, size, _c.r, _c.g, _c.b);
     else if (part === 'wingL' || part === 'wingR') {
-      for (let i = 0; i < 6; i++) this.gibs.throw('shard', x, y, z, vx * 0.5 + (Math.random() - 0.5) * 2.4, vy * 0.6 + Math.random(), vz * 0.5 + (Math.random() - 0.5) * 2.4, 1.4 + Math.random(), 0.12, 0.1, 0.09);
+      for (let i = 0; i < 6; i++) this.gibs.throw('shard', x, y, z, vx * 0.5 + (Math.random() - 0.5) * 2.4, vy * 0.6 + Math.random(), vz * 0.5 + (Math.random() - 0.5) * 2.4, 1.4 + Math.random(), _c.r, _c.g, _c.b);
     } else this.gibs.throw('limb', x, y - 0.1 * a.def.size, z, vx, vy, vz, size * 0.8, _c.r * 0.85, _c.g * 0.85, _c.b * 0.85);
     const chunks = 2 + Math.round(p * 2);
     for (let i = 0; i < chunks; i++) {
       _c.setRGB(0.3 + Math.random() * 0.15, 0.02, 0.02);
-      this.gibs.throw('chunk', x, y, z, vx * (0.5 + Math.random()) + (Math.random() - 0.5) * 3, vy * (0.4 + Math.random() * 0.8), vz * (0.5 + Math.random()) + (Math.random() - 0.5) * 3, 0.5 + Math.random() * 0.6, _c.r, _c.g, _c.b);
+      this.gibs.throw('chunk', x, y, z, vx * (0.5 + Math.random()) + (Math.random() - 0.5) * 3, vy * (0.4 + Math.random() * 0.8), vz * (0.5 + Math.random()) + (Math.random() - 0.5) * 3, 0.5 + Math.random() * 0.6, _c.r, _c.g, _c.b, true);
     }
     ctx.fx.bloodSpray(x, y, z, dx, 0.6, dz, 6 + Math.round(p * 4), 4 + p * 2, 0.8);
     ctx.audio.play('thud', x, z, 0.3);
     this.groundSplat(x, z, 0.5 + p * 0.25, CELL.splat0 + Math.floor(Math.random() * 4), 0.9, dx, dz, y);
-    this.bleeders.push({ zb: a, lx, ly, lz, t: part === 'head' ? 3 : 4.5, power: p, pulse: 0, dx, dz, head: part === 'head' });
+    this.bleeders.push({ zb: a, lx, ly, lz, t: part === 'head' ? 3 : 4.5, power: p, pulse: 0, dx, dz, head: part === 'head', roll: Math.PI * 0.475 * (a.id % 2 ? 1 : -1), lift: a.flying ? 0 : 0.04 });
   }
 
   // ------------------------------------------------------------------ brass
@@ -501,15 +602,24 @@ export class Gore {
       }
       if (b.pulse > 0) continue;
       // Pumping: each beat is weaker than the last.
-      b.pulse = 0.22 + (1 - b.t / 3.2) * 0.35;
+      b.pulse = Math.max(0.18, 0.22 + (1 - b.t / 3.2) * 0.35);
       const zb = b.zb;
       const rx = Math.cos(zb.yaw);
       const rz = -Math.sin(zb.yaw);
       const fx = Math.sin(zb.yaw);
       const fz = Math.cos(zb.yaw);
-      const x = zb.x + rx * b.lx + fx * b.lz;
-      const z = zb.z + rz * b.lx + fz * b.lz;
-      const y = zb.y + b.ly - (zb.dead ? Math.min(1, zb.fall) * b.ly * 0.8 : 0);
+      // Match the renderer's death rotation so the spray remains attached to its stump.
+      const fall = zb.dead ? Math.min(1, zb.fall) : 0;
+      const tilt = fall * (b.roll ?? Math.PI * 0.475);
+      const cs = Math.cos(tilt);
+      const sn = Math.sin(tilt);
+      const lx = b.roll === undefined ? b.lx : b.lx * cs - b.ly * sn;
+      const ly = b.roll === undefined ? b.ly * cs + b.lz * sn : b.lx * sn + b.ly * cs;
+      const lz = b.roll === undefined ? -b.ly * sn + b.lz * cs : b.lz;
+      const sink = zb.dead && b.roll === undefined ? Math.max(0, zb.deadT - 2.2) * 0.8 : 0;
+      const x = zb.x + rx * lx + fx * lz;
+      const z = zb.z + rz * lx + fz * lz;
+      const y = zb.y + ly - sink + (zb.dead ? b.roll === undefined ? 0.1 : fall * (b.lift ?? 0) : 0);
       const up = b.head ? 1 : 0.35;
       const a = Math.random() * 6.28;
       const out = b.head ? 0.25 : 0.7;

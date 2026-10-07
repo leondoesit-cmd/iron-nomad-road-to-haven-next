@@ -87,7 +87,9 @@ describe('what they hold', () => {
       if (!model) continue;
       const h = new Humanoid(identityOf(0));
       h.setWeapon(model);
-      const mesh = h.hand.children.find((c): c is THREE.Mesh => (c as THREE.Mesh).isMesh);
+      // A bow is held in the left hand, the rest in the right.
+      let mesh: THREE.Mesh | undefined;
+      for (const hand of [h.hand, h.handL]) hand.traverse((c) => void (mesh ??= (c as THREE.Mesh).isMesh ? (c as THREE.Mesh) : undefined));
       expect(mesh, g.id).toBeDefined();
       expect(mesh!.geometry.getAttribute('position').count, g.id).toBeGreaterThan(0);
     }

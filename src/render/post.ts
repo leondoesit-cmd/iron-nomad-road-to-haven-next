@@ -3,6 +3,7 @@ import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import { clamp } from '../core/math';
 import { ScreenFX, type FxView } from './screenfx';
 import { lookActive, type TripView } from './trip';
+import { FIRE_HAZE } from './fireLight';
 
 /**
  * HDR post chain for the split screen: both views render into one multisampled half-float target, then
@@ -120,6 +121,11 @@ uniform float uAoK;
 uniform vec2 uLens;
 // 1 when the scene is drawn smaller than the screen and has to be scaled up.
 uniform float uUpscale;
+// Heat off the ground per half (A, B), and where each half's horizon crosses the screen (uv y).
+uniform vec2 uHeat;
+uniform vec2 uHorizon;
+// Heat haze over the fires: per half, four fires, two vec4s each (see fireLight.FIRE_HAZE).
+uniform vec4 uHaze[ 16 ];
 varying vec2 vUv;
 ${RECTS}
 vec4 gRect;
@@ -219,6 +225,12 @@ vec4 fxUp( vec2 uv ) {
 float lumaAt( vec2 uv ) {
   return log2( 1.0 + dot( sceneAt( uv ), vec3( 0.2126, 0.7152, 0.0722 ) ) );
 }
+float hNoise( vec2 p ) {
+  vec2 i = floor( p );
+  vec2 f = fract( p );
+  f = f * f * ( 3.0 - 2.0 * f );
+  return mix( mix( hash( i ), hash( i + vec2( 1.0, 0.0 ) ), f.x ), mix( hash( i + vec2( 0.0, 1.0 ) ), hash( i + vec2( 1.0, 1.0 ) ), f.x ), f.y );
+}
 void main() {
   vec4 r = rectFor( vUv );
   gRect = r;
@@ -248,6 +260,49 @@ void main() {
     lensOff = q0 * lens * 0.0075 * r2;
   }
   vec2 sUv = clamp( ctr + q0 * span, r.xy, r.zw );
+  // Heat off the ground: the air over hot sand bends the light. Distant things quiver, most just above the ground, and the
+  // far ground just under the horizon turns into a shimmering sheet of sky, the water that is never there.
+  float heatK = inA ? uHeat.x : uHeat.y;
+  vec2 heatOff = vec2( 0.0 );
+  float mirage = 0.0;
+  vec2 mirUv = sUv;
+  if ( heatK > 0.01 && f4.w < 0.5 ) {
+    float zH = abs( linZ( depthAt( sUv ) ) );
+    float far = smoothstep( 25.0, 180.0, zH );
+    vec2 hp = ( sUv - r.xy ) / span * vec2( aspect, 1.0 );
+    float hy = inA ? uHorizon.x : uHorizon.y;
+    // Strongest in a band round the horizon, where the line of sight skims the hot ground.
+    float nearH = 1.0 - smoothstep( 0.0, 0.22 * span.y, abs( sUv.y - hy ) );
+    float n1 = hNoise( hp * vec2( 90.0, 230.0 ) + vec2( 0.0, - uTime * 2.6 ) );
+    float n2 = hNoise( hp * vec2( 160.0, 330.0 ) + vec2( 3.1, - uTime * 4.1 ) );
+    heatOff = vec2( n1 - 0.5, n2 - 0.5 ) * vec2( 0.0011, 0.0024 ) * heatK * far * ( 0.35 + 0.65 * nearH ) * span;
+    float below = hy - sUv.y;
+    float band = 0.016 * span.y * heatK;
+    if ( below > 0.0 && below < band && zH > 140.0 ) {
+      mirage = heatK * smoothstep( band, band * 0.25, below ) * smoothstep( 140.0, 420.0, zH ) * ( 0.55 + 0.45 * n1 );
+      mirUv = clamp( vec2( sUv.x + heatOff.x * 3.0, hy + below * 1.3 + 0.0015 * span.y ), r.xy, r.zw );
+    }
+  }
+  // Hot air over a fire: whatever is behind it wavers, most a little above the flames, never what stands in front of it.
+  {
+    int hz = inA ? 0 : 8;
+    vec2 lp = ( sUv - r.xy ) / span;
+    for ( int j = 0; j < 4; j++ ) {
+      vec4 A = uHaze[ hz + j * 2 ];
+      vec4 B = uHaze[ hz + j * 2 + 1 ];
+      if ( B.x <= 0.0 ) continue;
+      vec2 q = vec2( ( lp.x - A.x ) / A.z, ( lp.y - A.y ) / A.w );
+      if ( q.y < -0.05 || q.y > 1.0 || abs( q.x ) > 1.0 ) continue;
+      float k = B.x * ( 1.0 - smoothstep( 0.35, 1.0, abs( q.x ) ) ) * smoothstep( -0.05, 0.2, q.y ) * ( 1.0 - smoothstep( 0.5, 1.0, q.y ) );
+      if ( uFxOn > 0.5 ) k *= smoothstep( B.y - 0.6, B.y + 0.4, abs( linZ( depthAt( sUv ) ) ) );
+      if ( k <= 0.0 ) continue;
+      float t = uTime;
+      // Fine, fast ripples rising through it, a few pixels at most.
+      float n1 = hNoise( vec2( q.x * 7.0 + float( j ) * 7.1, q.y * 16.0 - t * 6.5 ) );
+      float n2 = hNoise( vec2( q.x * 11.0 - 3.7, q.y * 24.0 - t * 8.3 ) );
+      heatOff += vec2( n1 - 0.5, n2 - 0.5 ) * k * min( A.z, 0.25 ) * 0.035 * span;
+    }
+  }
   vec3 col;
   vec3 bloom;
   vec3 edgeAdd = vec3( 0.0 );
@@ -302,16 +357,17 @@ void main() {
     hueA = f0.x * ( 1.4 * sin( ph * 0.37 ) + 1.1 * sin( rr * 5.0 - ph * 0.8 + q0.x * 2.0 ) );
   } else if ( lens > 0.001 ) {
     vec2 off = lensOff * span;
-    col = sceneSharp( sUv );
+    col = sceneSharp( sUv + heatOff );
     // The fringes: red and blue drawn a little out and in, only where they are apart enough to show.
-    if ( dot( off, off ) * dot( uRes, uRes ) > 0.25 ) col = vec3( sceneSharp( sUv + off ).r, col.g, sceneSharp( sUv - off ).b );
+    if ( dot( off, off ) * dot( uRes, uRes ) > 0.25 ) col = vec3( sceneSharp( sUv + heatOff + off ).r, col.g, sceneSharp( sUv + heatOff - off ).b );
     bloom = texture2D( tBloom, sUv ).rgb;
     fxUv = sUv;
   } else {
     // Scaled up to the screen, a plain bilinear tap would blur some rows and not others: the sharp filter keeps them even.
-    col = uUpscale > 0.5 ? sceneSharp( vUv ) : texture2D( tScene, vUv ).rgb;
+    col = uUpscale > 0.5 || heatK > 0.01 || dot( heatOff, heatOff ) > 0.0 ? sceneSharp( vUv + heatOff ) : texture2D( tScene, vUv ).rgb;
     bloom = texture2D( tBloom, vUv ).rgb;
   }
+  if ( mirage > 0.001 ) col = mix( col, sceneAt( mirUv ) * vec3( 0.97, 0.99, 1.03 ), clamp( mirage * 0.9, 0.0, 0.85 ) );
   if ( uFxOn > 0.5 ) {
     vec4 fl = fxUp( fxUv );
     // Occlusion dims the ambient light, so it eases off where the picture is already bright (sunlit ground, lamps). The
@@ -475,6 +531,9 @@ export class PostFX {
         uAoK: { value: 1 },
         uLens: { value: this.lens },
         uUpscale: { value: 0 },
+        uHeat: { value: this.heat },
+        uHorizon: { value: this.horizon },
+        uHaze: { value: FIRE_HAZE },
         ...rects,
       },
       vertexShader: VERT,
@@ -544,6 +603,9 @@ export class PostFX {
 
   /** Body-camera lens strength for the two halves, in the order of `setRects` (0 is a plain view). */
   readonly lens = new THREE.Vector2();
+  /** Heat shimmer off the ground for the two halves (0 none), and where each half's horizon lies (uv y). */
+  readonly heat = new THREE.Vector2();
+  readonly horizon = new THREE.Vector2(0.5, 0.5);
 
   /** View rects in UV space (origin bottom-left). Pass the same rect twice for a single view. */
   setRects(a: [number, number, number, number], b: [number, number, number, number]) {

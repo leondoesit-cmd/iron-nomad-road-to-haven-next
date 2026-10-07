@@ -4,6 +4,7 @@ import { SPOT_NAME, type Spot } from '../sim/access';
 import { mountsOfChassis } from './vehicleModels';
 import { cabinLayout } from './interior';
 import { socketFor, wheelCentres } from './sockets';
+import { carPanes } from './carModels';
 
 /**
  * Where on a vehicle each job is done: its access points, in the chassis frame (x left, y up, z forward, origin at the
@@ -84,6 +85,12 @@ function build(def: VehicleDef): AccessPoint[] {
     const g = socketFor(def, 'weapon')?.anchors[0];
     if (g) add('gun', g.x, g.y, g.z);
   }
+  // Glass: the windscreen is worked on from the front corner or the door, the rear window from the back; a door's window at the door.
+  const panes = carPanes(def);
+  const ws = panes.find((p) => p.key === 'ws');
+  const rw = panes.find((p) => p.key === 'rw');
+  if (ws && slots.includes('glassF')) add('screen', 0, ws.c[1] + 0.05, ws.c[2] + 0.1);
+  if (rw && slots.includes('glassB')) add('back', 0, rw.c[1] + 0.05, rw.c[2] - 0.1);
   return out;
 }
 

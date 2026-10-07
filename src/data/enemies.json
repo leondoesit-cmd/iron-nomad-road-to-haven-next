@@ -21,8 +21,8 @@
     "bleedOut": 20
   },
   "raiders": {
-    "buggy": { "name": "Dune buggy", "hp": 160, "armor": 0.15, "speed": 27, "mass": 520, "dps": 9, "range": 55, "weight": 3 },
-    "wagon": { "name": "Spiked battle-wagon", "hp": 650, "armor": 0.45, "speed": 17, "mass": 2600, "dps": 14, "range": 40, "ramDamage": 90, "weight": 9, "rearTireHp": 60 },
+    "buggy": { "name": "Dune buggy", "hp": 160, "armor": 0.15, "speed": 27, "mass": 520, "dps": 9, "range": 55, "weight": 3, "crewHp": 70, "crewCover": 0 },
+    "wagon": { "name": "Spiked battle-wagon", "hp": 650, "armor": 0.45, "speed": 17, "mass": 2600, "dps": 14, "range": 40, "ramDamage": 90, "weight": 9, "rearTireHp": 60, "crewHp": 120, "crewCover": 0.6 },
     "gunman": { "name": "Raider gunman", "hp": 55, "armor": 0, "speed": 3.8, "dps": 9, "range": 38, "weight": 1.5 },
     "sniper": { "name": "Raider sniper", "hp": 40, "armor": 0, "speed": 3.0, "dps": 22, "range": 90, "weight": 4 },
     "saboteur": { "name": "Saboteur", "hp": 45, "armor": 0, "speed": 5.0, "dps": 0, "range": 2, "weight": 3 }

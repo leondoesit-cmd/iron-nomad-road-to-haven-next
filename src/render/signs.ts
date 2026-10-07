@@ -27,6 +27,8 @@ const LOOK: Record<Exclude<SignTheme, 'shop'>, Look> = {
   pharmacy: { bg: '#f1f3ec', fg: '#17824a', edge: '#17824a', cross: true },
   cafe: { bg: '#f0bf2c', fg: '#3a1a10', edge: '#3a1a10' },
   market: { bg: '#2b8a3c', fg: '#ffffff', edge: '#f4f0e0' },
+  // A brand's sign carries its own colours (`SignSpawn.colors`); this is only the fallback.
+  brand: { bg: '#f2f0ea', fg: '#1a1a1a', edge: '#1a1a1a' },
 };
 /** Ordinary shops take one of these, by their name. */
 const SHOP_LOOKS: Look[] = [
@@ -40,9 +42,9 @@ const SHOP_LOOKS: Look[] = [
 const materials = new Map<string, THREE.MeshStandardMaterial>();
 
 /** One material per distinct sign (look, wording and proportions). */
-export const signKey = (s: Pick<SignSpawn, 'theme' | 'text' | 'sub' | 'w' | 'h'>) => `${s.theme}|${s.text}|${s.sub ?? ''}|${Math.round((s.w / s.h) * 4)}`;
+export const signKey = (s: Pick<SignSpawn, 'theme' | 'text' | 'sub' | 'w' | 'h' | 'colors'>) => `${s.theme}|${s.text}|${s.sub ?? ''}|${Math.round((s.w / s.h) * 4)}|${s.colors ? s.colors.bg + s.colors.fg : ''}`;
 
-export function signMaterial(s: Pick<SignSpawn, 'theme' | 'text' | 'sub' | 'w' | 'h'>): THREE.MeshStandardMaterial {
+export function signMaterial(s: Pick<SignSpawn, 'theme' | 'text' | 'sub' | 'w' | 'h' | 'colors'>): THREE.MeshStandardMaterial {
   const key = signKey(s);
   let m = materials.get(key);
   if (m) return m;
@@ -62,12 +64,13 @@ export function signMaterial(s: Pick<SignSpawn, 'theme' | 'text' | 'sub' | 'w' |
   return m;
 }
 
-function lookOf(s: Pick<SignSpawn, 'theme' | 'text'>): Look {
+function lookOf(s: Pick<SignSpawn, 'theme' | 'text' | 'colors'>): Look {
+  if (s.theme === 'brand' && s.colors) return { bg: s.colors.bg, fg: s.colors.fg, edge: s.colors.bg };
   if (s.theme !== 'shop') return LOOK[s.theme];
   return SHOP_LOOKS[Math.floor(hash2(s.text.length * 31 + s.text.charCodeAt(0), s.text.charCodeAt(s.text.length - 1), 7) * SHOP_LOOKS.length) % SHOP_LOOKS.length];
 }
 
-function draw(s: Pick<SignSpawn, 'theme' | 'text' | 'sub' | 'w' | 'h'>, look: Look): HTMLCanvasElement {
+function draw(s: Pick<SignSpawn, 'theme' | 'text' | 'sub' | 'w' | 'h' | 'colors'>, look: Look): HTMLCanvasElement {
   const W = Math.round(s.w * PX * 0.5);
   const H = Math.max(48, Math.round(s.h * PX * 0.5));
   const c = document.createElement('canvas');

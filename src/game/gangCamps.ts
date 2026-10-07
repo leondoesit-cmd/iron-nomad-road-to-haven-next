@@ -145,10 +145,15 @@ export class GangCamps {
 
   /** The fire in the middle of every camp, and the smoke over it. */
   private burn(c: CampState, dt: number) {
+    const { x, z } = c.spec;
+    // The fire engine draws the flames and lights the camp round them: from the road at night a gang camp is a glow.
+    if (this.ctx.fires) {
+      this.ctx.fires.hold(c, { x, y: heightAt(this.ctx.terrain!, x, z) + 0.06, z, r: 0.5, fuel: 'wood', heat: 0.95, bed: false });
+      return;
+    }
     c.fireT -= dt;
     if (c.fireT > 0) return;
     c.fireT = 0.07;
-    const { x, z } = c.spec;
     const y = heightAt(this.ctx.terrain!, x, z) + 0.15;
     this.ctx.fx.fire(x, y, z, 1.1);
     if (Math.random() < 0.3) this.ctx.fx.smoke.emit(x + (Math.random() - 0.5) * 0.4, y + 1.2, z + (Math.random() - 0.5) * 0.4, 0.3, 1.6, 0.2, 3.2, 0.5, 2.6, 0.2, 0.19, 0.18, 0.5, -0.1, 0.8);

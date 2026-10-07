@@ -117,7 +117,7 @@ const STEPS: Step[] = [
   {
     id: 'moves',
     title: 'Sprint, jump, crouch',
-    body: 'Hold {sprint} while moving to sprint, tap {jump} to jump (when nothing is in reach), and {crouch} to crouch. Sprinting and jumping spend stamina, and noise gives you away.',
+    body: 'Sprint with {sprint} while moving (on a pad one click keeps you sprinting until you stop), tap {jump} to jump (when nothing is in reach), and {crouch} to crouch. Sprinting and jumping spend stamina, and noise gives you away.',
     goals: [
       { id: 'sprint', label: 'Sprint for a second', test: ({ p, m, dt }) => (p.state === 'foot' && p.moveSpeed > 4.6 ? (m.s = (m.s ?? 0) + dt) : (m.s ?? 0)) >= 0.8 },
       { id: 'jump', label: 'Jump', test: ({ p }) => p.state === 'foot' && !p.grounded },
@@ -167,7 +167,7 @@ const STEPS: Step[] = [
   {
     id: 'enter',
     title: 'Get in your moped',
-    body: 'Walk to your moped (it is marked) and {hold} {vehicle} to climb in. Abandoned cars on the road work the same way, and become yours.',
+    body: 'Walk to your moped (it is marked) and press {vehicle} to climb in. Abandoned cars on the road work the same way, and become yours.',
     marks: (_d, sc) => sc.players.flatMap((p) => (p.ownVehicle && p.state === 'foot' ? [{ x: p.ownVehicle.position.x, z: p.ownVehicle.position.z }] : [])),
     goals: [{ id: 'in', label: 'Get in and start the engine', test: ({ p }) => p.state === 'driving' }],
   },
@@ -199,7 +199,7 @@ const STEPS: Step[] = [
   {
     id: 'exit',
     title: 'Park and get out',
-    body: 'Ease off, then {hold} {vehicle} to climb out. Parking and walking is quiet: the meter falls straight back down. (Hold it at speed and you bail out, which hurts.)',
+    body: 'Ease off, then press {vehicle} to climb out. Parking and walking is quiet: the meter falls straight back down. (Hold it at speed and you bail out, which hurts.)',
     goals: [{ id: 'out', label: 'Get out of the moped', test: ({ p }) => p.state === 'foot' }],
   },
   {

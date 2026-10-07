@@ -540,7 +540,84 @@ function rubble(b: MeshBuilder, f: Furn) {
   }
 }
 
+// ------------------------------------------------------------------------------------------ the mall
+
+const GARMENT = [0x1d1d22, 0xd8d2c4, 0x7a2a2e, 0x2c4466, 0x8a8a84, 0xb88a5a, 0x3e5a3a, 0xc85a6a, 0xe2c25a, 0x5a3a6a];
+
+/** A chrome rail of clothes on hangers, gaps where they were taken. */
+function clothesrail(b: MeshBuilder, f: Furn) {
+  const r = rnd(f.seed + 41);
+  const chrome = S.chrome(0xc8ccd0);
+  for (const x of [-f.w / 2 + 0.03, f.w / 2 - 0.03]) {
+    b.rod(x, 0.03, 0, x, f.h, 0, 0.018, chrome, 6);
+    b.box(x, 0.02, 0, 0.05, 0.03, f.d, chrome);
+  }
+  b.rod(-f.w / 2 + 0.03, f.h, 0, f.w / 2 - 0.03, f.h, 0, 0.014, chrome, 6);
+  let x = -f.w / 2 + 0.12;
+  while (x < f.w / 2 - 0.1) {
+    if (r() > 0.3) {
+      const len = 0.6 + r() * 0.5;
+      b.box(x, f.h - 0.08 - len / 2, 0, 0.035, len, f.d * (0.75 + r() * 0.2), S.cloth(GARMENT[Math.floor(r() * GARMENT.length)], 0.5), 0, 0, (r() - 0.5) * 0.12);
+      x += 0.07;
+    } else x += 0.18 + r() * 0.2;
+  }
+  // What fell off the rail.
+  if (r() > 0.6) b.box((r() - 0.5) * f.w * 0.6, 0.03, f.d * 0.7, 0.5, 0.04, 0.4, S.cloth(GARMENT[Math.floor(r() * GARMENT.length)], 0.7), 0, r() * 3, 0);
+}
+
+/** A raised planter, its tree long dead. */
+function planter(b: MeshBuilder, f: Furn) {
+  const r = rnd(f.seed + 43);
+  const big = f.w > 2;
+  b.rbox(0, f.h / 2, 0, f.w, f.h, f.d, 0.06, S.paint(0xe8e4dc, 0.35));
+  b.box(0, f.h + 0.01, 0, f.w - 0.16, 0.04, f.d - 0.16, S.concrete(0x4a3a2a, 0.9));
+  const top = f.h;
+  const trunkH = big ? 3.2 : 0.9;
+  b.limb(0, top, 0, (r() - 0.5) * 0.3, top + trunkH, (r() - 0.5) * 0.3, big ? 0.14 : 0.04, big ? 0.07 : 0.02, S.wood(0x5a4632, 0.9), 6, true);
+  const n = big ? 7 : 4;
+  for (let i = 0; i < n; i++) {
+    const a = r() * 6.28;
+    const y0 = top + trunkH * (0.45 + r() * 0.5);
+    const l = (big ? 1.2 : 0.4) * (0.6 + r() * 0.6);
+    b.rod(0, y0, 0, Math.cos(a) * l, y0 + l * (0.4 + r() * 0.5), Math.sin(a) * l, big ? 0.03 : 0.012, S.wood(0x6a5440, 0.9), 4);
+  }
+  // Dead leaves on the soil and round the rim.
+  for (let i = 0; i < (big ? 9 : 3); i++) b.box((r() - 0.5) * f.w * 0.8, top + 0.04, (r() - 0.5) * f.d * 0.8, 0.12, 0.01, 0.08, S.cloth(0x8a6a3a, 0.9), 0, r() * 6, 0);
+}
+
+/** A kiosk cart in the mall street: a counter with a shelf, a canopy on four posts and goods on top. */
+function kiosk(b: MeshBuilder, f: Furn) {
+  const r = rnd(f.seed + 47);
+  const body = S.paint(pickC([0xf0ece4, 0x2a2a2e, 0xc8a87a], f.seed), 0.3);
+  b.rbox(0, 0.5, 0, f.w, 1.0, f.d, 0.04, body);
+  b.box(0, 1.0, 0, f.w + 0.06, 0.04, f.d + 0.06, S.wood(0x8a6a44, 0.4));
+  for (const x of [-1, 1]) for (const z of [-1, 1]) b.rod(x * (f.w / 2 - 0.05), 1.0, z * (f.d / 2 - 0.05), x * (f.w / 2 - 0.05), 2.35, z * (f.d / 2 - 0.05), 0.025, S.chrome(0xc8ccd0), 6);
+  b.box(0, 2.38, 0, f.w + 0.2, 0.06, f.d + 0.2, S.paint(0xf4f2ec, 0.3));
+  b.box(0, 2.25, f.d / 2 + 0.09, f.w + 0.2, 0.2, 0.03, S.paint(pickC([0xcf1c24, 0x1f2a5c, 0x2f7a3a], f.seed), 0.3));
+  b.box(0, 2.25, -f.d / 2 - 0.09, f.w + 0.2, 0.2, 0.03, S.paint(pickC([0xcf1c24, 0x1f2a5c, 0x2f7a3a], f.seed), 0.3));
+  for (const sx of [-1, 1]) {
+    if (held(f, 0, sx * f.w * 0.25 - f.w * 0.2, sx * f.w * 0.25 + f.w * 0.2)) continue;
+    for (let i = 0; i < 4; i++) if (r() > 0.35) b.box(sx * f.w * 0.25 + (r() - 0.5) * f.w * 0.3, 1.06, (r() - 0.5) * f.d * 0.5, 0.12 + r() * 0.1, 0.08 + r() * 0.06, 0.1, S.paint(GOODS[Math.floor(r() * GOODS.length)], 0.6));
+  }
+}
+
+/** A mall bench: steel legs and timber slats. */
+function mallbench(b: MeshBuilder, f: Furn) {
+  const steel = S.steel(0x4a4e52, 0.4);
+  for (const x of [-f.w / 2 + 0.12, f.w / 2 - 0.12]) b.box(x, 0.2, 0, 0.06, 0.4, f.d - 0.04, steel);
+  for (let i = 0; i < 4; i++) b.box(0, 0.43, -f.d / 2 + 0.08 + (i * (f.d - 0.16)) / 3, f.w, 0.04, 0.1, S.wood(0x9a7448, 0.5));
+}
+
+/** A round plastered column, with a ring at its foot and its head. */
+function column(b: MeshBuilder, f: Furn) {
+  const white = S.paint(0xf0eee8, 0.25);
+  b.cyl(0, f.h / 2, 0, f.w, f.h, f.w, white, 0, 0, 0, 16);
+  b.cyl(0, 0.08, 0, f.w + 0.08, 0.16, f.w + 0.08, S.concrete(0xb8b2a6, 0.4), 0, 0, 0, 16);
+  b.cyl(0, f.h - 0.12, 0, f.w + 0.12, 0.24, f.w + 0.12, white, 0, 0, 0, 16);
+}
+
 const MODELS: Partial<Record<Furn['kind'], (b: MeshBuilder, f: Furn) => void>> = {
+  clothesrail, planter, kiosk, mallbench, column,
   bed, bunk, nightstand, wardrobe, dresser, sofa, armchair, table, coffeetable, chair, deskchair, tvstand, bookshelf, rug,
   counter, sinkunit, stove, fridge, toilet, vanity, tub, desk, filing, locker, safe, gondola, checkout, cooler, rack, pallet, crate, barrel,
   haybale, workbench, stall, woodstove, footlocker, shelf, rubble, partsshelf, enginestand, tyrerack, tyrestack, toolchest, gunrack,

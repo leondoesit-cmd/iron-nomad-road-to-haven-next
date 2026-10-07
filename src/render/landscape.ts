@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { staticTransform } from './staticTransform';
 import { CHUNK, corridorHalf, heightAt, roadX, type TerrainDef } from '../world/terrain';
 import { hash2, noise2 } from '../core/rng';
 import { smoothstep } from '../core/math';
@@ -6,7 +7,7 @@ import { FACADE_TINT, cliffDetail } from './chunkview';
 import type { BuildingSpec } from '../world/chunkgen';
 import { makeTerrainMaterial, type TerrainUniforms } from './terrainMaterial';
 import { forestAt, lushAt } from '../world/hydro';
-import { mixWater, wetGround, type GroundMix } from './groundMix';
+import { dryGround, mixDry, mixWater, wetGround, type GroundMix } from './groundMix';
 import { farForestMaterial, farForestMeshes, planFarForest, treeWarmup, type FarTree } from './trees';
 import { scatterWarmup } from './scatter';
 import { FacadeBuilder, facadeMaterial } from './facade';
@@ -29,7 +30,7 @@ import { FarDetail } from './farDetail';
  * of a fog wall. In the city, a skyline of towers stands behind the corridor using the facade shader.
  */
 export class Landscape {
-  group = new THREE.Group();
+  group = staticTransform(new THREE.Group());
   private loadedTex: THREE.DataTexture | null = null;
   private loaded: Uint8Array | null = null;
   private cx0 = 0;
@@ -72,6 +73,8 @@ export class Landscape {
       // City trades (a garage, a dealership, a depot) are real buildings with interiors, drawn like the roadside ones.
       if (layout?.rural.length) this.buildSettlements(layout);
     }
+    for (const child of this.group.children) staticTransform(child);
+    this.farDetail?.group.traverse(staticTransform);
   }
 
   /** Plain walls and roofs for every building of a district, so Petah Tikva shows on the horizon before its chunks stream in. */
@@ -139,8 +142,9 @@ export class Landscape {
       this.buildings.push(v);
       this.group.add(v.group);
     }
+    // A city leg's chunks draw its landmarks themselves (see ChunkView.buildProps); only the wasteland needs them here.
     for (const p of layout.props) {
-      if (LANDMARK_KINDS.has(p.kind)) appendLandmark(cell(p.x, p.z).det, p);
+      if (this.def.biome !== 'city' && LANDMARK_KINDS.has(p.kind)) appendLandmark(cell(p.x, p.z).det, p);
     }
     const addMesh = (g: THREE.BufferGeometry, mat: THREE.Material) => {
       this.geos.push(g);
@@ -222,6 +226,8 @@ export class Landscape {
         // Shores, banks and beds read the same as in the detailed chunks.
         const wg = wetGround(def, x, z, h + 0.6);
         if (wg) mixWater(gm, wg);
+        const dg = dryGround(def, x, z);
+        if (dg) mixDry(gm, dg);
         col[i * 3] = k * gm.tr;
         col[i * 3 + 1] = k * gm.tg;
         col[i * 3 + 2] = k * gm.tb;
