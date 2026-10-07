@@ -2,6 +2,7 @@ import { setMarkerUiScale } from '../render/markers';
 import { gearDef, t } from '../data';
 import { DRUGS } from '../sim/drugs';
 import { STAMINA, bleedLabel, wearLabel, wearOf } from '../sim/vitals';
+import { ARCHERY } from '../sim/archery';
 import { canRelieve, isNeedAct, needChips, type NeedAct } from '../sim/needs';
 import type { Campaign } from '../game/campaign';
 import { LABEL, whole } from '../sim/resources';
@@ -23,7 +24,8 @@ import type { Vehicle } from '../game/vehicle';
 import { promptLabel, type Slot } from '../input/input';
 import type { MapFrame } from './mapdata';
 import { MapPainter, PIN_COLOR } from './minimap';
-import { heatLabel, stormLabel, stormMapRadius } from '../sim/weather';
+import { heatLabel, stormLabel, stormMapRadius, windAt } from '../sim/weather';
+import { STALK } from '../sim/hunting';
 
 /** The key or button a prompt names, as this seat has it bound. */
 export function btnLabel(slot: Slot | null, btn: string): string {
@@ -48,6 +50,7 @@ class PlayerHud {
       <div class="gray" data-k="gray"></div>
       <div class="vignette" data-k="vig"></div>
       <div class="drugfx" data-k="drugfx"></div>
+      <div class="underwater" data-k="uw"></div>
       <div class="belt" data-k="belt"></div>
       <div class="corner tl">
         <div class="pane ident">
@@ -57,7 +60,9 @@ class PlayerHud {
           <div class="sighint" data-k="sighint"></div>
         </div>
         <div class="chips" data-k="chips"></div>
+        <div class="objective" data-k="obj"></div>
       </div>
+      <div class="toast" data-k="toast"></div>
       <div class="corner tc">
         <canvas class="compass" data-k="compass"></canvas>
         <div class="pane trip">
@@ -73,6 +78,7 @@ class PlayerHud {
           <div class="vhead"><span data-k="vname">ON FOOT</span><div class="speed" data-k="speed">0<small>km/h</small></div></div>
           <div class="gauge hp" data-k="hprow"><span class="gl" data-k="hplabel">HEALTH</span><div class="bar" data-k="hpbar"><div class="fill" data-k="hpfill"></div></div><span class="val" data-k="hpval"></span></div>
           <div class="gauge stamina" data-k="stamrow"><span class="gl">STAMINA</span><div class="bar stam" data-k="stambar"><div class="fill" data-k="stamfill"></div></div><span class="val" data-k="stamval"></span></div>
+          <div class="gauge breath" data-k="breathrow"><span class="gl">BREATH</span><div class="bar air" data-k="airbar"><div class="fill" data-k="airfill"></div></div><span class="val" data-k="airval"></span></div>
           <div class="gauge" data-k="fuelrow"><span class="gl">FUEL</span><div class="bar fuel" data-k="fuelbar"><div class="fill" data-k="fuelfill"></div></div><span class="val" data-k="fuelval"></span></div>
           <div class="gauge" data-k="oilrow"><span class="gl">OIL</span><div class="bar oil" data-k="oilbar"><div class="fill" data-k="oilfill"></div></div><span class="val" data-k="oilval"></span></div>
           <div class="gauge" data-k="waterrow"><span class="gl">COOLANT</span><div class="bar water" data-k="waterbar"><div class="fill" data-k="waterfill"></div></div><span class="val" data-k="waterval"></span></div>
@@ -94,7 +100,10 @@ class PlayerHud {
         <div class="prompt" data-k="prompt"><span class="btn" data-k="pbtn">A</span><span data-k="ptext"></span><div class="hold" data-k="phold"></div></div>
         <div class="prompt alt" data-k="prompt2"><span class="btn x" data-k="pbtn2">X</span><span data-k="ptext2"></span></div>
       </div>
-      <div class="reticle" data-k="reticle"></div>
+      <div class="reticle" data-k="reticle"><div class="drawring" data-k="drawring"></div></div>
+      <div class="handdot" data-k="handdot"></div>
+      <div class="lookinfo" data-k="look"></div>
+      <div class="handhints" data-k="hands"></div>
       <div class="mapfull" data-k="mapfull"><canvas data-k="mapcv"></canvas></div>
       <div class="msgs"><div class="sub" data-k="sub"></div><div class="tipbox" data-k="tip"></div></div>
       <div class="banner" data-k="banner"></div>
@@ -388,6 +397,14 @@ export class Hud {
     if (p.state === 'driving' && v && !v.engineOn) chips.push('<span class="chip">ENGINE OFF</span>');
     if (p.pinned >= 2) chips.push('<span class="chip bad">PINNED</span>');
     if (p.crouch && p.state === 'foot') chips.push('<span class="chip good">CROUCHED</span>');
+    // Stalking game on foot: which way your scent drifts, and how much the most watchful animal near you has made of you.
+    const stalk = p.state === 'foot' && scene.mode === 'leg' ? scene.wildlife?.stalkView(p) : null;
+    if (stalk) {
+      const [wx, wz] = windAt(scene.storm, scene.time);
+      chips.push(`<span class="chip">SCENT ${driftArrow(wrapAngle(Math.atan2(wx, wz) - p.cam.yaw))}</span>`);
+      const s = stalk.smelled ? ['bad', 'GAME SMELLS YOU'] : stalk.fleeing ? ['bad', 'GAME SPOOKED'] : stalk.aware >= STALK.alert ? ['warn', 'GAME WATCHING'] : stalk.aware >= STALK.calm ? ['warn', 'GAME UNEASY'] : ['good', 'UNSEEN'];
+      chips.push(`<span class="chip ${s[0]}">${s[1]}</span>`);
+    }
     if (leg && leg.hordeCountdown(p) > 0) chips.push(`<span class="chip bad">HORDE ${formatClock(leg.hordeCountdown(p))}</span>`);
     if (p.bleed.level > 0 && p.state !== 'downed') chips.push(`<span class="chip bad">${bleedLabel(p.bleed.level)}</span>`);
     if (p.stamina.winded && p.state === 'foot') chips.push('<span class="chip warn">WINDED</span>');
@@ -402,6 +419,17 @@ export class Hud {
       chips.push(`<span class="chip${dressing && p.bleed.level > 0 ? ' good' : ''}">${btnLabel(slot, 'Down')} ${quickName(qsel).toUpperCase()} ×${qn}</span>`);
     }
     h.setHtml('chips', chips.join(''));
+    // The story's objective: a heading, a checklist ticking off as it is done, and a line of advice.
+    const ob = scene.objective;
+    h.setStyle('obj', 'display', ob ? 'block' : 'none');
+    if (ob) {
+      const steps = (ob.steps ?? []).map((s) => `<div class="ostep${s.done ? ' done' : ''}">${s.done ? '✓' : '·'} ${escapeHtml(s.text)}</div>`).join('');
+      h.setHtml('obj', `<div class="otitle">${escapeHtml(ob.title)}</div>${steps}${ob.hint ? `<div class="ohint">${escapeHtml(ob.hint)}</div>` : ''}`);
+    }
+    const tl = scene.toastLine;
+    if (tl && p.index === 0) tl.t -= dt;
+    h.setStyle('toast', 'display', tl && tl.t > 0 ? 'block' : 'none');
+    if (tl && tl.t > 0) h.setText('toast', tl.text);
     this.updateTrip(h, p, scene, slot);
 
     // Compass
@@ -424,7 +452,7 @@ export class Hud {
       h.setStyle('legdusk', 'display', leg.leg.open ? 'none' : '');
       const sec = leg.clock.secondsToDark;
       h.setText('clock', leg.clock.night ? '+' + formatClock((leg.clock.t - 1) * leg.clock.dayLength) : formatClock(sec));
-      const dust = stormLabel(leg.storm, leg.stormRising) || heatLabel(leg.heat);
+      const dust = stormLabel(leg.storm, leg.stormRising) || leg.weather?.label() || heatLabel(leg.heat);
       h.setText('daytag', leg.clock.dusk ? (leg.clock.night ? 'INTO THE NIGHT' : 'TO DARK') : dust ? `TO DUSK BELL · ${dust}` : 'TO DUSK BELL');
       h.setStyle('legbar', 'display', '');
     } else {
@@ -491,6 +519,12 @@ export class Hud {
       h.setStyle('stamfill', 'width', `${wind * 100}%`);
       h.setClass('stambar', p.stamina.winded ? 'stam winded' : 'stam');
       h.setText('stamval', p.stamina.winded ? 'WINDED' : `${Math.round(wind * 100)}%`);
+      // Breath shows once the swimmer has gone under, and until the lungs are full again.
+      const air = p.breath.air;
+      h.setStyle('breathrow', 'display', p.state === 'foot' && (p.underwater || air < 0.995) ? 'flex' : 'none');
+      h.setStyle('airfill', 'width', `${air * 100}%`);
+      h.setClass('airbar', air < 0.3 ? 'low' : '');
+      h.setText('airval', air <= 0 ? 'DROWNING' : `${Math.round(air * 100)}%`);
       h.setText('hplabel', 'HEALTH');
       h.setText('hpval', p.bleed.level > 0 ? bleedLabel(p.bleed.level).toUpperCase() : String(Math.ceil(p.hp)));
       h.setStyle('hpfill', 'width', `${(p.hp / p.maxHp) * 100}%`);
@@ -541,7 +575,9 @@ export class Hud {
       h.setText('wname', p.reloadT > 0 ? 'RELOADING' : p.heldName().toUpperCase());
       const worn = eq === 'gun' || eq === 'melee' ? heldItem(p.gear) : null;
       const cond = worn && wearOf(worn.cond) < 0.6 ? `<small class="${wearOf(worn.cond) < 0.3 ? 'bad' : 'warn'}"> ${wearLabel(worn.cond).toUpperCase()}</small>` : '';
-      if (eq === 'gun') h.el('ammo').innerHTML = `${p.mag}<small>/${camp.ammo}</small>${cond}`;
+      const bowHeld = eq === 'gun' && !!worn && !!gearDef(worn.id).gun?.draw;
+      if (bowHeld) h.el('ammo').innerHTML = `${p.mag}<small>/${camp.items.arrow} ARROWS</small>${cond}`;
+      else if (eq === 'gun') h.el('ammo').innerHTML = `${p.mag}<small>/${camp.ammo}</small>${cond}`;
       else if (eq === 'melee') h.el('ammo').innerHTML = `<small>${Math.round(p.meleeDamage())} DMG</small>${cond}`;
       else if (eq === 'wrench') h.el('ammo').innerHTML = `<small>${whole(camp.stocks.scrap)} SCRAP · ${whole(camp.stocks.parts)} PARTS</small>`;
       else if (eq === 'crowbar') h.el('ammo').innerHTML = `<small>${camp.inventory.length}/${camp.inventoryCap} PARTS</small>`;
@@ -588,13 +624,29 @@ export class Hud {
     // Reticle: on foot aiming or manning the bed gun.
     const driveRet = p.state === 'driving' && p.equip === 'gun';
     const showRet = (p.state === 'foot' && p.equip === 'gun' && !p.carry) || p.state === 'gunner' || driveRet;
+    // What you hold or look at, named under the crosshair, and what the buttons do with it down the left side.
+    const look = p.state === 'foot' ? p.lookInfo : null;
+    h.setStyle('look', 'display', look ? 'block' : 'none');
+    if (look) h.setHtml('look', look.lines.map((l, i) => `<div${i > 0 && l.css ? ` style="color:${l.css}"` : ''}>${escapeHtml(l.text)}</div>`).join(''));
+    h.setStyle('handdot', 'display', !showRet && p.state === 'foot' && (look || p.carry) ? 'block' : 'none');
+    const hints = p.state === 'foot' ? p.handHints : [];
+    h.setStyle('hands', 'display', hints.length ? 'block' : 'none');
+    if (hints.length) h.setHtml('hands', hints.map((x) => `<div>${escapeHtml(x.text)}: <b>${escapeHtml(x.key)}</b></div>`).join(''));
     h.setStyle('reticle', 'display', showRet ? 'block' : 'none');
     h.setStyle('reticle', 'opacity', driveRet ? '0.5' : '1');
-    h.setStyle('reticle', 'transform', `scale(${((1 + (1 - p.ads) * 0.4) * (1 + p.bloom * 0.5)).toFixed(3)})`);
+    // A bow's reticle closes as the string comes back, and a ring round it fills with the draw: gold at full, red once the arm shakes.
+    const draw = showRet && p.state === 'foot' ? p.bowDraw : 0;
+    h.setStyle('reticle', 'transform', `scale(${((1 + (1 - Math.max(p.ads, draw)) * 0.4) * (1 + p.bloom * 0.5)).toFixed(3)})`);
+    h.setStyle('drawring', 'display', draw > 0.01 ? 'block' : 'none');
+    if (draw > 0.01) {
+      h.setStyle('drawring', '--d', draw.toFixed(2));
+      h.setClass('drawring', p.bowString.held > ARCHERY.holdFree ? 'shake' : draw >= 1 ? 'full' : '');
+    }
 
     // Damage / downed overlays
     const hurt = clamp(1 - p.hp / p.maxHp, 0, 1);
     h.setStyle('vig', 'opacity', String(p.state === 'foot' ? hurt * 0.9 * (p.sinceHit < 0.6 ? 1 : 0.55) : p.state === 'driving' && v ? clamp(1 - v.hpFrac, 0, 1) * 0.6 : 0));
+    h.setStyle('uw', 'opacity', p.state === 'foot' && p.underwater && p.firstPerson ? '1' : '0');
     h.setClass('gray', p.state === 'downed' || p.state === 'dead' ? 'on' : '');
 
     // Center messages
@@ -671,7 +723,7 @@ export class Hud {
   /** A card for the nearest vehicle when on foot: name, owner, and condition chips so it is clear what needs doing. */
   private vehicleReadout(p: Player, scene: Scene): string {
     if (p.state !== 'foot' || p.buildMode || p.action) return '';
-    const v = p.nearestVehicle(6.5, (q) => q.kind !== 'crew' && (q.faction !== 'raider' || q.wreck));
+    const v = p.nearestVehicle(6.5, (q) => q.kind !== 'crew' && !q.hostile);
     if (!v) return '';
     const c = v.health.comp;
     const tag = scene.cars.describe(v);
@@ -850,4 +902,11 @@ function quickCount(id: QuickId, p: Player, c: Campaign): { slot: string; label:
 }
 function quickName(id: QuickId): string {
   return quickDef(id).name;
+}
+
+/** An arrow for which way the wind carries your scent, relative to where you are looking (up: ahead of you). */
+function driftArrow(rel: number): string {
+  // Yaw grows toward the view's left, so the arrows run the other way round.
+  const i = (((Math.round(-rel / (Math.PI / 4)) % 8) + 8) % 8) as number;
+  return ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'][i];
 }

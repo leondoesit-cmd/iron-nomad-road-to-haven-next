@@ -23,7 +23,7 @@ export interface Handling {
   adsZeta: number;
   /** Barrel wander while held, radians at rest, and how much of it a sprint or walk adds. */
   sway: number;
-  /** When the brass leaves: right with the shot, a beat after (the bolt or pump cycling), at the reload (a revolver), or never (a crossbow). */
+  /** When the brass leaves: right with the shot, a beat after (the bolt or pump cycling), at the reload (a revolver), or never (a crossbow, a bow). */
   eject: 'shot' | 'cycle' | 'reload' | 'none';
   /** Seconds after the shot a cycled case leaves. */
   cycleDelay: number;
@@ -49,6 +49,8 @@ export const HANDLING: Record<GunModel, Handling> = {
   sniper: { kick: 0.075, kickYaw: 0.007, kickRoll: 0.009, kickBack: 0.06, settleK: 95, settleZeta: 0.5, adsK: 34, adsZeta: 0.55, sway: 0.0072, eject: 'cycle', cycleDelay: 0.55, shell: 'rifle' },
   lever: { kick: 0.04, kickYaw: 0.007, kickRoll: 0.007, kickBack: 0.038, settleK: 130, settleZeta: 0.52, adsK: 70, adsZeta: 0.62, sway: 0.0058, eject: 'cycle', cycleDelay: 0.35, shell: 'magnum' },
   crossbow: { kick: 0.01, kickYaw: 0.002, kickRoll: 0.003, kickBack: 0.015, settleK: 220, settleZeta: 0.7, adsK: 90, adsZeta: 0.7, sway: 0.005, eject: 'none', cycleDelay: 0, shell: 'pistol' },
+  // A bow throws next to nothing back into the hands: the bow arm jumps a little as the string goes.
+  bow: { kick: 0.004, kickYaw: 0.003, kickRoll: 0.002, kickBack: 0.004, settleK: 260, settleZeta: 0.6, adsK: 120, adsZeta: 0.75, sway: 0.0055, eject: 'none', cycleDelay: 0, shell: 'pistol' },
   combat: { kick: 0.05, kickYaw: 0.009, kickRoll: 0.012, kickBack: 0.05, settleK: 140, settleZeta: 0.5, adsK: 80, adsZeta: 0.62, sway: 0.0056, eject: 'shot', cycleDelay: 0, shell: 'hull' },
   coach: { kick: 0.065, kickYaw: 0.011, kickRoll: 0.016, kickBack: 0.058, settleK: 125, settleZeta: 0.46, adsK: 90, adsZeta: 0.62, sway: 0.0054, eject: 'reload', cycleDelay: 0, shell: 'hull' },
   lmg: { kick: 0.012, kickYaw: 0.008, kickRoll: 0.005, kickBack: 0.02, settleK: 180, settleZeta: 0.65, adsK: 40, adsZeta: 0.62, sway: 0.0075, eject: 'shot', cycleDelay: 0, shell: 'carbine' },

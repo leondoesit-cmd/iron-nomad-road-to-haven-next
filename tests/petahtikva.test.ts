@@ -194,7 +194,17 @@ describe('the Great Synagogue and City Hall', () => {
     const onWalk = (p: { x: number; z: number }) => p.x > BOULEVARD_HALF && p.x < BOULEVARD_HALF + SIDEWALK && p.z > shop.z0 && p.z < shop.z1;
     expect(L.props.filter((p) => p.kind === 'cafeTable' && onWalk(p))).toHaveLength(3);
     expect(L.props.filter((p) => p.kind === 'cafeChair' && onWalk(p))).toHaveLength(6);
-    expect(L.places.some((p) => p.id === 'malabes')).toBe(true);
+    const place = L.places.find((p) => p.id === 'malabes')!;
+    expect(place.name).toBe('SHAWARMA MELABES');
+    expect(place.sub).toContain('Haim Ozer 4');
+    // The recessed counter is solid and the entrance is open beside it.
+    const counter = L.aabbs.find((a) => a.kind === 'furniture' && a.mat === 'sheet' && a.minZ > shop.z0 && a.maxZ < shop.z1)!;
+    expect(counter).toBeDefined();
+    expect(counter.minX).toBeGreaterThan(BOULEVARD_HALF);
+    expect(counter.maxX).toBeGreaterThan(shop.x0);
+    expect(L.blockedAt(shop.x0 + 2, (shop.z0 + shop.z1) / 2 + 1.5, 0.25)).toBe(false);
+    expect(L.blockedAt((counter.minX + counter.maxX) / 2, (counter.minZ + counter.maxZ) / 2, 0.1)).toBe(true);
+    expect(L.blockedAt(BOULEVARD_HALF + 0.5, (counter.minZ + counter.maxZ) / 2, 0.1)).toBe(false);
   });
 
   it('landmark lots are never given to a scavenge zone or the metro headhouse', () => {
@@ -323,7 +333,7 @@ describe('arriving in the places', () => {
     const shop = L.places.find((p) => p.id === 'malabes')!;
     sc.players[0].placeAt(shop.x, shop.z, 0);
     run(sc, 4);
-    expect(h.banners.some((b) => b.startsWith('SHAWARMA MALABES'))).toBe(true);
+    expect(h.banners.some((b) => b.startsWith('SHAWARMA MELABES'))).toBe(true);
     // Back again: nothing is announced twice.
     const before = h.banners.length;
     sc.players[0].placeAt(sq.x, sq.z, 0);
@@ -355,7 +365,8 @@ describe('the real geography', () => {
     expect(ordinary.length).toBeGreaterThan(40);
     for (const b of ordinary) expect(b.israeli).toBe(true);
     for (const b of src.cityBuildings().filter((q) => q.role)) expect(b.israeli).toBeFalsy();
-    const shops = L.signs.filter((g) => g.theme !== 'bus' && g.theme !== 'rail' && g.theme !== 'stadium');
+    // The street's own shops: the mall and the tower across from it carry brands' signs, in their own colours.
+    const shops = L.signs.filter((g) => g.theme !== 'bus' && g.theme !== 'rail' && g.theme !== 'stadium' && g.theme !== 'brand');
     expect(shops.length).toBeGreaterThan(40);
     expect(shops.every((g) => /[\u0590-\u05ff]/.test(g.text) && !!g.sub)).toBe(true);
     // Each sits on a boulevard-facing wall, just off it, at shop height.

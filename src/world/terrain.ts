@@ -1,10 +1,16 @@
 import type { LegDef } from '../data';
+import { foundationsAt } from './foundationIndex';
 import { Rng, fbm2, hash2, noise2 } from '../core/rng';
 import { clamp, smoothstep, lerp } from '../core/math';
 import { dockDeckAt, lakeAdjust, lakeWater, planLakeSites, planLakes, planOpenLakes, type Bay, type Lake, type WaterHit } from './lakes';
 import { delveName, delveSiteKind, planMainlandDelve, snapYaw, type DelveSite, type DelveTheme } from './delveSites';
 import { addRoad, districtAt, districtMask, makeOpenWorld, nearestRoad, nearestRoadAny, type OpenWorld, type RoadPath } from './openWorld';
 import { courseAt, finishHydro, hydroAdjust, hydroMud, hydroWater, lushAt, mesaBlocked, nearHydro, planHydro, type Hydro } from './hydro';
+import { panAt, planWashes, washAdjust, washAt, type WashNet } from './washes';
+import { heritageGround, planHeritage, type Heritage } from './heritage';
+import { placeYard, type YardPlace } from './narYard';
+import { houseGround, placeHouse, type HousePlace } from './ududHouse';
+import type { Bend } from './millBend';
 
 export const CHUNK = 128;
 export const CELL = 2; // heightfield resolution in metres
@@ -114,9 +120,22 @@ export interface TerrainDef {
   delves: DelveSite[];
   /** The open world's rivers, streams, springs, swamps and green land (`world/hydro.ts`). */
   hydro?: Hydro;
+  /** The open world's dry washes and clay pans (`world/washes.ts`): dry ground that floods. */
+  washes?: WashNet;
   theme: 'dust' | 'salt' | 'cinder';
   /** Planned city legs: the paved side and cross streets (rectangles) beyond the boulevard. */
   streets?: { x0: number; x1: number; z0: number; z1: number }[];
+  /** Real buildings set by hand by the water (`world/heritage.ts`), each on its own level pad. */
+  heritage?: Heritage[];
+  /** Nar's yard (`world/narYard.ts`): the story's first place, on Nar's Flat. */
+  yard?: YardPlace;
+  /** Udud and Nuhat's house north of Petah Tikva (`world/ududHouse.ts`), on its own level pad. */
+  house?: HousePlace;
+  /**
+   * What stands in the omega bends of the rivers (`world/millBend.ts`): the old gums, the stumps, the landing. Planned by the
+   * layout as it takes the terrain (it changes no ground).
+   */
+  bends?: Bend[];
 }
 
 export function makeTerrainDef(leg: LegDef): TerrainDef {
@@ -179,8 +198,19 @@ export function makeTerrainDef(leg: LegDef): TerrainDef {
       def.sites.push(main.site);
       def.delves.push(main.delve);
     }
-    // How green the land is waits for every lake.
+    // The dry washes and their pans go in last, laid out clear of everything above, so nothing has to move for them.
+    if (def.open) planWashes(def, leg);
+    // How green the land is waits for every lake (and greens a thin line along each wash).
     finishHydro(def);
+    // The real buildings by the water stand where the water put them, each levelling its own pad into the ground.
+    if (def.open) {
+      const hs = planHeritage(def, leg);
+      if (hs.length) def.heritage = hs;
+      // Nar's yard stands on its salt flat, where the story begins.
+      def.yard = placeYard(leg.open?.yard, (x, z) => heightAt(def, x, z));
+      // Udud and Nuhat's house, levelling its plot flush with the road it opens onto.
+      def.house = placeHouse(leg.open?.house, (x, z) => heightAt(def, x, z));
+    }
   }
   return def;
 }
@@ -497,7 +527,10 @@ function rampHeight(r: Ramp, rx: number, z: number, xc: number): number {
 /** Terrain height under (x, z). The same function drives meshes, colliders, props and AI. */
 export function heightAt(def: TerrainDef, x: number, z: number): number {
   const h = lakeHeight(def, x, z);
-  return def.hydro ? hydroAdjust(def, def.hydro, x, z, h) : h;
+  const w = def.hydro ? hydroAdjust(def, def.hydro, x, z, h) : h;
+  const v = def.washes ? washAdjust(def, def.washes, x, z, w) : w;
+  const g = def.heritage ? heritageGround(def.heritage, x, z, v) : v;
+  return def.house ? houseGround(def.house, x, z, g) : g;
 }
 
 /** The ground with the lakes carved in (and nothing of the running water yet). */
@@ -510,7 +543,7 @@ function lakeHeight(def: TerrainDef, x: number, z: number): number {
     if (a === h) continue;
     // A building on a lake island still gets its level pad (the lake replaced the ground the pad was cut into).
     let out = a;
-    for (const f of def.foundations) {
+    for (const f of foundationsAt(def.foundations, x, z)) {
       if (z < f.z0 - 3.5 || z > f.z1 + 3.5 || x < f.x0 - 3.5 || x > f.x1 + 3.5) continue;
       const d = Math.hypot(Math.max(f.x0 - x, 0, x - f.x1), Math.max(f.z0 - z, 0, z - f.z1));
       out += (f.h - out) * (1 - smoothstep(0, 3.5, d));
@@ -545,7 +578,7 @@ export function baseHeight(def: TerrainDef, x: number, z: number): number {
     const p = 1 - smoothstep(s.radius * 0.78, s.radius * 1.3, Math.hypot(x - s.x, z - s.z));
     if (p > 0) h += ((s.h ?? re) - h) * p;
   }
-  for (const f of def.foundations) {
+  for (const f of foundationsAt(def.foundations, x, z)) {
     if (z < f.z0 - 3.5 || z > f.z1 + 3.5 || x < f.x0 - 3.5 || x > f.x1 + 3.5) continue;
     const out = Math.hypot(Math.max(f.x0 - x, 0, x - f.x1), Math.max(f.z0 - z, 0, z - f.z1));
     h += (f.h - h) * (1 - smoothstep(0, 3.5, out));
@@ -623,12 +656,31 @@ function openSurface(def: TerrainDef, x: number, z: number): Surface {
   }
   if (def.lakes.length && lakeWater(def.lakes, x, z)) return 'mud';
   if (def.hydro && hydroMud(def.hydro, x, z)) return 'mud';
+  // A wash bed is gravel the floods have packed; a pan is a crust of dry clay (soft only when wet: see `LegScene.surfaceAt`).
+  if (def.washes?.ready) {
+    if (panAt(def.washes, x, z, 1.05)) return 'hardpan';
+    const c = washAt(def.washes, x, z);
+    if (c && c.d < c.half + 0.5) return 'hardpan';
+  }
   const sand = noise2(x / 65 + 40, z / 65 - 11, def.seed + 21);
   // Grass binds the ground: a meadow is firm soil, not loose sand.
   if (sand > lerp(0.7, 0.5, duneness(def, z, x))) return def.hydro && lushAt(def, x, z) > 0.45 ? 'hardpan' : 'sand';
   const mud = noise2(x / 48 - 90, z / 48 + 33, def.seed + 45);
   if (mud > 0.76 && heightAt(def, x, z) < roadElev(def, z) + 0.8) return 'mud';
   return 'hardpan';
+}
+
+/**
+ * True on dry clay: the patches in the hollows of the desert and the floors of the pans. It reads as 'mud' or 'hardpan' to
+ * `surfaceAt`, which knows nothing of the weather; clay is hard when dry and turns to slick mud only while it is wet.
+ */
+export function clayAt(def: TerrainDef, x: number, z: number): boolean {
+  if (def.biome !== 'wasteland') return false;
+  if (def.washes?.ready && panAt(def.washes, x, z, 1.05)) return true;
+  // The 'mud' that is not water's: a clay patch in a hollow of the desert.
+  if (surfaceAt(def, x, z) !== 'mud') return false;
+  if (def.lakes.length && lakeWater(def.lakes, x, z)) return false;
+  return !(def.hydro && hydroMud(def.hydro, x, z));
 }
 
 /** Terrain normal by central differences. */

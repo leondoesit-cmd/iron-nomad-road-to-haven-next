@@ -1,4 +1,6 @@
 import { buildPartModel } from './partModels';
+import { drawFood } from './foodModels';
+import type { FoodId } from '../sim/carry';
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { C } from './palette';
@@ -44,18 +46,19 @@ function rng(seed: number) {
 // ------------------------------------------------------------------------------------------ nature
 
 /** Weathered sandstone boulder: lumpy mass split by bedding planes, faceted. */
-function rockProto(seed: number): MeshBuilder {
+/** A boulder: the desert's red-brown sandstone, or (`tag` 1) a river's grey stone, worn rounder by the water. */
+function rockProto(seed: number, tag = 0): MeshBuilder {
   const b = new MeshBuilder();
   b.seed(seed);
   b.jitter = 0.07;
   const r = rng(seed + 3);
-  const tones = [0x9a6a4e, 0x8a6248, 0xa47c5a, 0x7e5c46];
+  const tones = tag === 1 ? [0x77746c, 0x6a675f, 0x85806f, 0x5e5c56] : [0x9a6a4e, 0x8a6248, 0xa47c5a, 0x7e5c46];
   const base = tones[seed % 4];
   b.add('ico2', 0, 0.38, 0, 1.8 + r() * 0.7, 1.15 + r() * 0.45, 1.5 + r() * 0.7, S.rock(base), 0, r() * 6, 0);
   if (r() > 0.3) b.add('ico2', 0.75, 0.22, 0.45, 0.95, 0.62, 0.85, S.rock(tones[(seed + 1) % 4]), r() * 0.3, r() * 6, 0);
   if (r() > 0.45) b.add('ico1', -0.7, 0.12, -0.5, 0.6, 0.38, 0.55, S.rock(tones[(seed + 2) % 4]), 0, r() * 6, 0);
-  b.displace(0.3, 1.7, seed + 11);
-  b.terrace(0.2, 1.5);
+  b.displace(tag === 1 ? 0.18 : 0.3, 1.7, seed + 11);
+  if (tag !== 1) b.terrace(0.2, 1.5);
   b.flatNormals();
   return b;
 }
@@ -848,7 +851,7 @@ function campfireProto(seed: number): MeshBuilder {
 function build(kind: PropKind, seed: number, tag: number): MeshBuilder {
   switch (kind) {
     case 'rock':
-      return rockProto(seed);
+      return rockProto(seed, tag);
     case 'cairn':
       return cairnProto(seed);
     case 'deadTree':
@@ -972,6 +975,12 @@ function pickupGeometry(kind: string): THREE.BufferGeometry {
   const steel = S.steel(0x6a6e72, 0.6);
   if (kind.startsWith('part:')) {
     buildPartModel(b, kind.slice(5));
+    g = shared(b.build());
+    pickupGeo.set(kind, g);
+    return g;
+  }
+  if (kind.startsWith('food:')) {
+    drawFood(b, kind.slice(5) as FoodId);
     g = shared(b.build());
     pickupGeo.set(kind, g);
     return g;
@@ -1230,7 +1239,9 @@ export function makeCarryModel(kind: string): THREE.Group {
   const g = new THREE.Group();
   const m = new THREE.Mesh(pickupGeometry(kind), pickupMat);
   m.castShadow = true;
-  m.scale.setScalar(/^(part|engine|radiator|tyre|gear|spring|brake|pipe|hood|door)\d$/.test(kind) ? 0.9 : kind.startsWith('part:eng_') ? engineCarryScale(kind.slice(5)) : 1.1);
+  // The trike's own parts are carried at their true size: they are the very pieces that bolt on.
+  const trueSize = kind === 'part:rr_rickshaw' || kind === 'part:tyre_trike' || kind === 'part:tyre_trike_r' || kind === 'part:sus_lift';
+  m.scale.setScalar(/^(part|engine|radiator|tyre|gear|spring|brake|pipe|hood|door)\d$/.test(kind) ? 0.9 : kind.startsWith('part:eng_') ? engineCarryScale(kind.slice(5)) : trueSize ? 1 : 1.1);
   g.add(m);
   return g;
 }

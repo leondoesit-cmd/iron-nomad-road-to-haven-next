@@ -52,10 +52,11 @@ export type GunModel =
   | 'sniper'
   | 'lever'
   | 'crossbow'
+  | 'bow'
   | 'combat'
   | 'coach'
   | 'lmg';
-export const GUN_MODELS: GunModel[] = ['pistol', 'revolver', 'smg', 'sawn', 'pump', 'rifle', 'compact', 'cannon', 'mp', 'smg2', 'carbine', 'ar', 'br', 'dmr', 'sniper', 'lever', 'crossbow', 'combat', 'coach', 'lmg'];
+export const GUN_MODELS: GunModel[] = ['pistol', 'revolver', 'smg', 'sawn', 'pump', 'rifle', 'compact', 'cannon', 'mp', 'smg2', 'carbine', 'ar', 'br', 'dmr', 'sniper', 'lever', 'crossbow', 'bow', 'combat', 'coach', 'lmg'];
 export type MeleeModel = 'knife' | 'bat' | 'machete' | 'axe' | 'pipe' | 'sledge' | 'katana';
 
 /**
@@ -132,7 +133,12 @@ export interface GunStats {
   /** Aim-down-sights magnification the gun has on its own (a fixed scope). An optic that is fitted replaces it. Missing is 1. */
   zoom?: number;
   model: GunModel;
-  sound: 'pistol' | 'mg' | 'sniper' | 'shotgun' | 'bolt';
+  sound: 'pistol' | 'mg' | 'sniper' | 'shotgun' | 'bolt' | 'bow';
+  /**
+   * Seconds to full draw, for a bow: it is drawn by holding the trigger and loosed by letting go, and the arrow flies as hard
+   * as it was drawn. It shoots arrows (the convoy's `items.arrow`), not rounds. Missing for everything else.
+   */
+  draw?: number;
   /** The slots this gun has, and the attachment families each takes. Missing means a bare gun. */
   slots?: Partial<Record<AttachSlot, string[]>>;
 }
@@ -231,6 +237,7 @@ export function validateGear(): string[] {
     if (g.mod) need(g.mod.zoom === undefined || (g.mod.slot === 'optic' && g.mod.zoom >= 1 && g.mod.zoom <= 12), `gear ${g.id}: zoom belongs to optics and runs 1 to 12`);
     if (g.gun) {
       need(GUN_MODELS.includes(g.gun.model), `gear ${g.id}: unknown gun model ${g.gun.model}`);
+      need(g.gun.draw === undefined || (g.gun.draw > 0.1 && g.gun.draw < 3 && g.gun.mag === 1), `gear ${g.id}: a bow draws in 0.1 to 3 s and holds one arrow`);
       for (const [slot, fams] of Object.entries(g.gun.slots ?? {})) need(ATTACH_SLOTS.includes(slot as AttachSlot) && Array.isArray(fams) && fams.length > 0, `gear ${g.id}: bad attachment slot ${slot}`);
     }
     need(g.kind === 'wear' || !!g.short, `gear ${g.id}: held items need a short name`);

@@ -320,8 +320,11 @@ export class InventoryView {
     const it = this.c.items;
     const chip = (label: string, v: string, cls = '') => `<span class="pill ${cls}">${label} ${v}</span>`;
     const wounds = p.bleed.level > 0 ? chip('Bleeding', `×${p.bleed.level}`, 'badc') : '';
+    // Arrows show once there is a bow to shoot them from, or arrows to shoot.
+    const bow = it.arrow > 0 || [...p.gear.belt, ...p.gear.bag].some((g) => !!g && !!gearDef(g.id).gun?.draw);
     return [
       chip('Rounds', String(this.c.ammo), this.c.ammo < 20 ? 'badc' : 'good'),
+      bow ? chip('Arrows', String(it.arrow), it.arrow < 4 ? 'badc' : 'good') : '',
       chip('Bandages', String(it.bandage), it.bandage ? 'good' : 'badc'),
       chip('Medkits', String(it.medkit), it.medkit ? 'good' : 'badc'),
       chip('Health', `${Math.round(p.hp)}/${p.maxHp}`, p.hp < p.maxHp * 0.5 ? 'badc' : 'good'),

@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { crate, heavyGun, jerryCan, plate, rivets, spareTyre, strap } from './parts';
-import { isInteriorSlot, partDef } from '../data';
+import { isGlassSlot, isInteriorSlot, partDef } from '../data';
 import { cabinPartModel } from './cabinModels';
 import { drawEngine } from './engineModels';
 import { holderPartModel, isHolderModel } from './cargoParts';
+import { drawLiftKit, drawRickshawCab, drawTrikeWheel } from './trikeModel';
 
 /**
  * What a vehicle part looks like off the car: the thing you lift, carry, hover over its mount and bolt on. One shape per
@@ -164,11 +165,46 @@ function side(b: MeshBuilder, id: string) {
   }
 }
 
+/**
+ * A pane of glass leaning on its rubber seal: a windscreen is wide and short, a rear window flatter, a door's window tall and
+ * narrow. Laminated glass has a milky film edge, bulletproof glass is thick, tinted green and bolted in a steel frame.
+ */
+function glassPane(b: MeshBuilder, id: string, slot: string, mk: number) {
+  const [w, h] = slot === 'glassF' ? [1.1, 0.5] : slot === 'glassB' ? [0.95, 0.38] : [0.62, 0.42];
+  const bullet = mk >= 3;
+  const t = bullet ? 0.06 : mk === 2 ? 0.026 : 0.014;
+  const tint = bullet ? 0x2c4a3c : mk === 2 ? 0x34505a : id.endsWith('_pane') ? 0x3a4a52 : 0x2a3e4c;
+  const lean = -0.32;
+  const rubber = S.plastic(0x141516, 0.8);
+  // The pane, and the rubber seal round its edge.
+  b.rbox(0, h / 2 + 0.04, 0, w, h, t, 0.004, S.glass(tint), lean, 0, 0);
+  const sy = Math.sin(lean);
+  const cy = Math.cos(lean);
+  const edge = (x: number, y: number, sx: number, sy2: number) => b.rbox(x, h / 2 + 0.04 + y * cy, y * sy, sx, sy2 * cy + 0.02, t + 0.016, 0.004, rubber, lean, 0, 0);
+  edge(0, -h / 2, w + 0.04, 0.02);
+  edge(0, h / 2, w + 0.04, 0.02);
+  for (const sx of [1, -1]) b.rbox(sx * (w / 2), h / 2 + 0.04, 0, 0.02, h, t + 0.016, 0.004, rubber, lean, 0, 0);
+  if (mk === 2) b.rbox(0, h / 2 + 0.04 + (h / 2 - 0.03) * cy, (h / 2 - 0.03) * sy, w - 0.04, 0.05 * cy, t + 0.006, 0.003, S.plastic(0xc8d0cc, 0.7), lean, 0, 0);
+  if (bullet) {
+    const frame = steel(0x3c4044, 0.7);
+    for (const sx of [1, -1]) b.rbox(sx * (w / 2 + 0.01), h / 2 + 0.04, 0, 0.05, h + 0.04, t + 0.04, 0.006, frame, lean, 0, 0);
+    b.rbox(0, 0.04, 0, w + 0.06, 0.05, t + 0.04, 0.006, frame, lean, 0, 0);
+    rivets(b, [-w / 2 + 0.05, 0.06, 0.03], [w / 2 - 0.05, 0.06, 0.03], 6);
+  }
+  // Two blocks of foam under it, the way a pane is carried.
+  for (const sx of [-1, 1]) b.box(sx * w * 0.32, 0.02, 0.02, 0.1, 0.04, 0.1, S.plastic(0x6a6048, 0.9));
+}
+
 /** Fill `b` with the model of part `id`. */
 export function buildPartModel(b: MeshBuilder, id: string) {
   const d = partDef(id);
   b.jitter = 0.03;
+  // The rickshaw trike's own parts: its tin cab, its two kinds of whole wheel, the lift kit (render/trikeModel.ts).
+  if (id === 'rr_rickshaw') return drawRickshawCab(b);
+  if (id === 'tyre_trike' || id === 'tyre_trike_r') return drawTrikeWheel(b, id === 'tyre_trike_r');
+  if (id === 'sus_lift') return drawLiftKit(b);
   if (isInteriorSlot(d.slot)) return cabinPartModel(b, id);
+  if (isGlassSlot(d.slot)) return glassPane(b, id, d.slot, d.stock ? 1 : d.mk);
   // Cargo holders (roof baskets, the net rack, rear cages, bed kits) are drawn by render/cargoParts.ts.
   if (isHolderModel(id)) return holderPartModel(b, id);
   switch (d.slot) {

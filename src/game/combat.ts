@@ -16,6 +16,8 @@ import {
 import { structuralMul } from '../sim/breach';
 import { IMPACT_SOUND, MUZZLE_LIGHT_AHEAD, MUZZLE_LIGHT_LIFE, MUZZLE_LIGHT_POWER, SKIP_DAMAGE, TRACER, skipOf, tracerTint } from '../sim/weaponfx';
 import { windAt } from '../sim/weather';
+import { sticks } from '../sim/archery';
+import type { ArrowHost } from './arrows';
 import type { Ctx } from './ctx';
 import type { Vehicle } from './vehicle';
 import type { Player } from './player';
@@ -24,6 +26,7 @@ import type { Zombie } from './zombies';
 import type { Animal } from './wildlife';
 import type { Infantry } from './raiders';
 import type { Traveller } from './travellers';
+import type { GroundMaterial } from '../sim/groundImpact';
 
 export interface ShotOpts {
   side: 'convoy' | 'raider';
@@ -47,6 +50,11 @@ export interface ShotOpts {
   ammo?: AmmoKind;
   /** Muzzle velocity as a share of the round's: a suppressor or a short barrel slows it, a long barrel speeds it. */
   vel?: number;
+  /**
+   * Where the round is seen to leave from, when that is not where it is fired from: an arrow is drawn coming off the bow as
+   * it is held, and eases onto its true path over the first few metres.
+   */
+  seen?: [number, number, number];
 }
 
 /** A round in the air. */
@@ -54,6 +62,12 @@ interface Bullet {
   x: number;
   y: number;
   z: number;
+  /** Where it was a tick ago, for drawing it between ticks. */
+  px: number;
+  py: number;
+  pz: number;
+  /** How far the drawn round sits off its path as it leaves (see `ShotOpts.seen`). */
+  seen?: [number, number, number];
   vx: number;
   vy: number;
   vz: number;
@@ -70,6 +84,10 @@ interface Bullet {
   trace: boolean;
   /** Skipped off a hard surface already: it only does so once. */
   skipped: boolean;
+  /** The car whose panel it has just come through: it is inside the cab now, and the car's box no longer stops it. */
+  inside?: Vehicle;
+  /** The car whose crew it has already gone through. */
+  throughCrew?: Vehicle;
 }
 
 type Hit =
@@ -78,6 +96,7 @@ type Hit =
   | { t: 'infantry'; dist: number; unit: Infantry; head: boolean }
   | { t: 'animal'; dist: number; animal: Animal }
   | { t: 'traveller'; dist: number; unit: Traveller; head: boolean }
+  | { t: 'crew'; dist: number; vehicle: Vehicle; head: boolean }
   | { t: 'player'; dist: number; player: Player };
 
 const RAY_FILTER = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN | G.LOOSE);
@@ -197,10 +216,11 @@ export class Combat {
     dy /= l;
     dz /= l;
     const trace = o.tracer !== false && Math.random() < TRACER[kind].chance;
-    this.bullets.push({ x: ox, y: oy, z: oz, vx: dx * speed, vy: dy * speed, vz: dz * speed, spec, kind, o, ox, oz, range, travelled: 0, dead: false, trace, skipped: false });
+    const seen: [number, number, number] | undefined = o.seen ? [o.seen[0] - ox, o.seen[1] - oy, o.seen[2] - oz] : undefined;
+    this.bullets.push({ x: ox, y: oy, z: oz, px: ox, py: oy, pz: oz, seen, vx: dx * speed, vy: dy * speed, vz: dz * speed, spec, kind, o, ox, oz, range, travelled: 0, dead: false, trace, skipped: false });
     if (o.noise) ctx.sig.emit(ox, oz, o.noise * ctx.signatureMult, 'noise');
-    // Everyone within earshot on the road heard that.
-    ctx.travellers.heardShot(ox, oz);
+    // Everyone within earshot on the road heard that. A bow is not heard.
+    if (kind !== 'arrow') ctx.travellers.heardShot(ox, oz);
   }
 
   /** Fly every round in the air one tick. */
@@ -230,9 +250,9 @@ export class Combat {
 
   private advance(b: Bullet, dt: number) {
     const ctx = this.ctx;
-    const x0 = b.x;
-    const y0 = b.y;
-    const z0 = b.z;
+    const x0 = (b.px = b.x);
+    const y0 = (b.py = b.y);
+    const z0 = (b.pz = b.z);
     const [wx, wz] = this.wind;
     stepBullet(b, dt / 2, b.spec.drag, wx, wz);
     stepBullet(b, dt / 2, b.spec.drag, wx, wz);
@@ -255,6 +275,9 @@ export class Combat {
     let left = len;
     for (let stage = 0; stage < 6 && left > 1e-4 && !b.dead; stage++) {
       const h = this.firstHit(b, cx, cy, cz, dx, dy, dz, left);
+      const speed = Math.hypot(b.vx, b.vy, b.vz);
+      ctx.P.hitAlongRay({ x: cx, y: cy, z: cz, dx, dy, dz, impulse: b.spec.mass * speed,
+        energy: 0.5 * b.spec.mass * speed * speed, kind: 'bullet' }, h?.dist ?? left);
       if (!h) {
         cx += dx * left;
         cy += dy * left;
@@ -305,7 +328,7 @@ export class Combat {
     const friendly = (v: Vehicle) => (o.side === 'convoy' && v.faction === 'convoy') || (o.side === 'raider' && v.faction === 'raider');
     const rh = ctx.P.raycast(ox, oy, oz, dx, dy, dz, maxD, RAY_FILTER, own, (c) => {
       const v = ctx.vehicleByCollider.get(c.handle);
-      return !(v && !v.wreck && friendly(v));
+      return !(v && (v === b.inside || (!v.wreck && friendly(v))));
     });
     if (rh) {
       const v = ctx.vehicleByCollider.get(rh.collider.handle) ?? null;
@@ -313,6 +336,8 @@ export class Combat {
       bestD = rh.toi;
     }
     if (o.side === 'convoy') {
+      // A round passing over a snake kills it (and goes on).
+      ctx.life?.shootThrough(ox, oy, oz, dx, dy, dz, bestD);
       const an = ctx.wildlife.rayTest(ox, oy, oz, dx, dy, dz, bestD);
       if (an && an.dist < bestD) {
         best = { t: 'animal', dist: an.dist, animal: an.animal };
@@ -332,6 +357,12 @@ export class Combat {
       if (trv && trv.dist < bestD) {
         best = { t: 'traveller', dist: trv.dist, unit: trv.unit, head: trv.head };
         bestD = trv.dist;
+      }
+      // The crew of a raider car: up in a buggy's open frame, or behind a wagon's visor slits.
+      const cr = ctx.raiders.crewRayTest(ox, oy, oz, dx, dy, dz, bestD, null, b.throughCrew);
+      if (cr && cr.dist < bestD) {
+        best = { t: 'crew', dist: cr.dist, vehicle: cr.vehicle, head: cr.head };
+        bestD = cr.dist;
       }
     } else {
       const pl = this.playerRay(ox, oy, oz, dx, dy, dz, bestD);
@@ -365,6 +396,7 @@ export class Combat {
         this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
         after = throughFlesh(spec, speed);
         thickRun = zb.def.radius * 1.7;
+        if (b.kind === 'arrow') this.arrowIn(zb, x, y, z, dx, dy, dz, speed);
         break;
       }
       case 'infantry': {
@@ -374,6 +406,7 @@ export class Combat {
         this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
         after = throughFlesh(spec, speed);
         thickRun = 0.7;
+        if (b.kind === 'arrow') this.arrowIn(h.unit, x, y, z, dx, dy, dz, speed);
         break;
       }
       case 'traveller': {
@@ -383,6 +416,7 @@ export class Combat {
         this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
         after = throughFlesh(spec, speed);
         thickRun = 0.7;
+        if (b.kind === 'arrow') this.arrowIn(h.unit, x, y, z, dx, dy, dz, speed);
         break;
       }
       case 'animal': {
@@ -395,6 +429,20 @@ export class Combat {
         this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
         after = throughFlesh(spec, speed);
         thickRun = 0.6;
+        if (b.kind === 'arrow') this.arrowIn(a, x, y, z, dx, dy, dz, speed);
+        break;
+      }
+      case 'crew': {
+        // Shot in the seat. The car is not touched: only whoever is sitting in it.
+        const dmg = o.damage * frac * (h.head && o.headshots ? 2 : 1);
+        ctx.raiders.hurtCrew(h.vehicle, dmg, owner);
+        ctx.gore.flesh(x, y, z, dx, dy, dz, dmg / 60);
+        this.onImpact?.({ surface: 'flesh', x, y, z, speed, penetrated: false });
+        b.throughCrew = h.vehicle;
+        if (b.kind !== 'arrow' && b.kind !== 'bolt') {
+          after = throughFlesh(spec, speed);
+          thickRun = 0.6;
+        }
         break;
       }
       case 'player': {
@@ -408,8 +456,9 @@ export class Combat {
       case 'static': {
         const v = h.vehicle;
         if (v) {
-          const dmg = o.damage * frac * (o.side === 'raider' ? ctx.campaign.difficulty.damage : 1);
-          v.takeHit(dmg, b.ox, b.oz, { incendiary: o.incendiary, pierce: o.pierce, at: [h.x, h.y, h.z] });
+          // An arrow barely marks a car.
+          const dmg = o.damage * frac * (o.side === 'raider' ? ctx.campaign.difficulty.damage : 1) * (b.kind === 'arrow' ? 0.1 : 1);
+          v.takeHit(dmg, b.ox, b.oz, { incendiary: o.incendiary, pierce: o.pierce, at: [h.x, h.y, h.z], bullet: structuralMul(b.kind, 'sheet') });
           // The car is boxed roughly: follow the round on through it to see whether it crossed a window.
           v.glass.hitRay(h.x, h.y, h.z, dx, dy, dz, o.damage * frac * structuralMul(b.kind, 'glass'));
           ctx.fx.spark(h.x, h.y, h.z, 3, 4);
@@ -420,7 +469,10 @@ export class Combat {
         // A tagged collider (a prop, a stone) is its own thing: not the box of the world that happens to stand beside it.
         const box = v || tagged ? null : this.boxAt(h.x, h.y, h.z);
         const boxThin = box ? Math.min(box.maxX - box.minX, box.maxZ - box.minZ) : 0;
-        const surface: Surface = v ? 'car' : tagged ? tagged : box ? surfaceOfBox(box.kind, boxThin, box.mat) : h.ny > 0.6 ? 'dirt' : 'stone';
+        const ground = !v && !tagged && !box && Math.abs(h.y - ctx.groundAt(h.x, h.z)) < 0.7;
+        const groundMaterial: GroundMaterial = ctx.surfaceAt(h.x, h.z).name;
+        const terrainSurface: Surface = groundMaterial === 'asphalt' ? 'concrete' : 'dirt';
+        const surface: Surface = v ? 'car' : tagged ? tagged : box ? surfaceOfBox(box.kind, boxThin, box.mat) : ground ? terrainSurface : h.ny > 0.6 ? 'dirt' : 'stone';
         const info = SURFACES[surface];
         // Round things (rocks, tanks, pillars) are boxed roughly, so a mark put on the box would hang in the air beside them.
         const exact = tagged ? true : !box || !ROUGH_KINDS.has(box.kind);
@@ -429,12 +481,21 @@ export class Combat {
           const body = ctx.P.world.getCollider(h.handle)?.parent();
           if (body && body.isDynamic()) body.applyImpulseAtPoint({ x: dx * spec.mass * speed, y: dy * spec.mass * speed, z: dz * spec.mass * speed }, { x: h.x, y: h.y, z: h.z }, true);
         }
-        ctx.gore.impact(surface, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dz, (speed / spec.speed) * (o.damage / 30), { moving: !!v, size: spec.hole, heavy: spec.hole >= 0.15, mark: exact });
+        const floorImpact = ground || (!v && exact && h.ny > 0.6 && (surface === 'stone' || surface === 'concrete' || surface === 'dirt'));
+        const floorMaterial: GroundMaterial = ground || surface === 'dirt' ? groundMaterial : surface === 'stone' ? 'stone' : 'concrete';
+        if (floorImpact) ctx.gore.groundStrike(b.kind, floorMaterial, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dy, dz, speed);
+        else ctx.gore.impact(surface, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dz, (speed / spec.speed) * (o.damage / 30), { moving: !!v, size: spec.hole, heavy: spec.hole >= 0.15, mark: exact, shaft: b.kind === 'arrow' || b.kind === 'bolt' });
         // How far through it goes is worked out before the blow is dealt: a pane that breaks or a wall that gives way is
         // not there to be measured afterwards, and the round should carry on through it.
         let exit = 0;
         let geo = 0;
-        if (info.stop < 9) {
+        // A raider's crew sitting behind the panel it holed: the round goes on into the cab after them.
+        const cab = v && o.side === 'convoy' && b.kind !== 'arrow' && b.kind !== 'bolt' && ctx.raiders.crewRayTest(h.x, h.y, h.z, dx, dy, dz, MAX_SLAB, v, b.throughCrew);
+        if (cab) {
+          geo = 0.02;
+          exit = throughSlab(spec, speed, 'sheet', SURFACES.sheet.ref);
+          if (exit > 0) b.inside = v;
+        } else if (!ground && info.stop < 9) {
           const thinPlate = surface === 'sheet' || surface === 'glass';
           // A container or a tank is hollow: two skins with air between, however deep the box is.
           const hollow = surface === 'sheet' && boxThin > 0.6;
@@ -450,12 +511,15 @@ export class Combat {
           }
         }
         this.onImpact?.({ surface, x: h.x, y: h.y, z: h.z, speed, penetrated: exit > 0 });
-        const sound = IMPACT_SOUND[surface];
-        if (sound && speed > 60) ctx.audio.play(sound, h.x, h.z, 0.2 + 0.3 * Math.min(1, o.damage / 60));
+        const sound = floorImpact ? undefined : b.kind === 'arrow' || b.kind === 'bolt' ? (sticks(surface) ? 'thunk' : 'tink') : IMPACT_SOUND[surface];
+        if (box?.kind === 'tree') ctx.audio.play('rustle', h.x, h.z, 0.25);
+        if (sound && (speed > 60 || b.kind === 'arrow')) ctx.audio.play(sound, h.x, h.z, 0.2 + 0.3 * Math.min(1, o.damage / 60), { intensity: Math.min(1, o.damage / 60) });
         // Whatever it hit may give way: glass breaks, a plank wall opens, a barricade splinters. A pistol cannot bring down a
         // wall, but it shatters a pane and chews sheet metal. Done after the round's own marks are laid, so a wall that falls
         // takes them with it.
         const strike = () => {
+          ctx.P.hitCollider(h.handle, { x: h.x, y: h.y, z: h.z, dx, dy, dz,
+            impulse: spec.mass * Math.max(0, speed - exit), energy: 0.5 * spec.mass * Math.max(0, speed * speed - exit * exit), kind: 'bullet' });
           if (!box || !ctx.world) return;
           const mul = box.kind === 'barricade' ? 1 : structuralMul(b.kind, surface);
           if (mul > 0) ctx.world.hit(box, o.damage * frac * mul, 'bullet', { x: h.x, y: h.y, z: h.z, nx: h.nx, ny: h.ny, nz: h.nz });
@@ -486,7 +550,13 @@ export class Combat {
           return { x: px, y: py, z: pz, dx: ndx, dy: ndy, dz: ndz, run };
         }
         strike();
-        // A glancing blow on something hard skips off it, weaker and flying wide, with a spark and a whine. Only once.
+        // A glancing blow on something hard skips off it, weaker and flying wide, with a spark and a whine. Only once. An
+        // arrow does not: it goes in, or glances off and falls.
+        if (b.kind === 'arrow' || b.kind === 'bolt') {
+          b.dead = true;
+          ctx.arrows?.landed(surface, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dy, dz, speed / spec.speed, !!v, b.kind === 'bolt');
+          return null;
+        }
         if (!v && !b.skipped && exact) {
           const jit: [number, number, number] = [ctx.rng.next() * 2 - 1, ctx.rng.next() * 2 - 1, ctx.rng.next() * 2 - 1];
           const sk = skipOf(b.kind, surface, speed, [dx, dy, dz], [h.nx, h.ny, h.nz], ctx.rng.next(), jit);
@@ -514,6 +584,14 @@ export class Combat {
     }
     b.dead = true;
     return null;
+  }
+
+  /** An arrow went into a body: unless it carries on through, it stays in, riding with it. */
+  private arrowIn(host: ArrowHost, x: number, y: number, z: number, dx: number, dy: number, dz: number, speed: number) {
+    const spec = AMMO.arrow;
+    if (throughFlesh(spec, speed) > 0) return;
+    this.ctx.audio.play('thunk', x, z, 0.35);
+    this.ctx.arrows?.inBody(host, x, y, z, dx, dy, dz, speed / spec.speed);
   }
 
   /**
@@ -569,10 +647,15 @@ export class Combat {
   explode(x: number, y: number, z: number, radius: number, damage: number, o: { side: 'convoy' | 'raider' | 'neutral'; owner?: Player | null; incendiary?: boolean }) {
     const ctx = this.ctx;
     ctx.fx.explosion(x, y, z, Math.max(0.6, radius / 5));
+    // The fireball lights everything round it for a moment, and dry grass under it catches.
+    if (ctx.fires) {
+      ctx.fires.flash(x, y + 0.5, z, 900 * Math.max(0.6, radius / 5) ** 2, 0.45);
+      for (let k = 0; k < 4; k++) ctx.fires.igniteGround(x + (Math.random() - 0.5) * radius, z + (Math.random() - 0.5) * radius, 0.6, o.owner?.index ?? -1);
+    }
     ctx.audio.play('boom', x, z, 1);
     ctx.sig.emit(x, z, 100, 'noise');
     // A real blast breaks what it can and chars the ground.
-    if (radius >= 3) ctx.gore.scorch(x, z, radius * 0.6);
+    ctx.gore.groundBlast(x, y, z, radius, damage);
     ctx.world?.blast(x, y, z, radius, damage);
     for (const p of ctx.players) p.cam.addShake(Math.max(0, 0.9 - Math.hypot(p.pos.x - x, p.pos.z - z) / (radius * 4)));
     ctx.zombies.blast(x, z, radius, damage, o.owner?.index ?? -1);

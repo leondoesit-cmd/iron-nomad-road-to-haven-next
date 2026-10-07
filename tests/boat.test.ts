@@ -67,7 +67,8 @@ describe.each(BOATS.map((b) => b.id))('%s', (id) => {
     expect(left.log[left.log.length - 1].yaw).toBeGreaterThan(0.9);
     expect(right.log[right.log.length - 1].yaw).toBeLessThan(-0.9);
     expect(left.log[left.log.length - 1].up).toBeGreaterThan(0.9);
-    expect(left.log[left.log.length - 1].speed).toBeGreaterThan(3);
+    // Still under way through the turn (a pedal boat's best is a brisk walk).
+    expect(left.log[left.log.length - 1].speed).toBeGreaterThan(Math.min(3, (def.topSpeedKmh / 3.6) * 0.6));
   });
 
   it('stops when the throttle is cut and backs up when braked', () => {

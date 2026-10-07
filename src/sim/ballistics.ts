@@ -9,7 +9,7 @@ import { clamp, clamp01 } from '../core/math';
  * drop and wind drift, fast enough that anything inside a street is still near-instant.
  */
 
-export type AmmoKind = 'pistol' | 'magnum' | 'smg' | 'pellet' | 'rifle' | 'sniper' | 'turret' | 'raider' | 'carbine' | 'battle' | 'lever' | 'bolt';
+export type AmmoKind = 'pistol' | 'magnum' | 'smg' | 'pellet' | 'rifle' | 'sniper' | 'turret' | 'raider' | 'carbine' | 'battle' | 'lever' | 'bolt' | 'arrow';
 
 export interface AmmoSpec {
   /** Muzzle velocity, m/s. */
@@ -45,6 +45,9 @@ export const AMMO: Record<AmmoKind, AmmoSpec> = {
   lever: { speed: 380, drag: 0.0011, mass: 0.0105, pen: 0.62, gore: 1.0, zero: 70, hole: 0.13 },
   // A crossbow bolt: slow and heavy, so it drops and takes real flight time, and it goes through a body.
   bolt: { speed: 150, drag: 0.0016, mass: 0.03, pen: 0.55, gore: 1.2, zero: 45, hole: 0.1 },
+  // An arrow at full draw (a part-drawn one leaves slower): slow enough to arc and to be led, it sticks in what it hits
+  // rather than going through. A pane of glass it goes through; a body, a plank wall or sheet metal stops it.
+  arrow: { speed: 80, drag: 0.0025, mass: 0.027, pen: 0.12, gore: 0.1, zero: 25, hole: 0.04 },
 };
 
 /** The round a gun model fires. */
@@ -80,6 +83,8 @@ export function ammoForGun(model: string): AmmoKind {
       return 'lever';
     case 'crossbow':
       return 'bolt';
+    case 'bow':
+      return 'arrow';
     default:
       return 'pistol';
   }

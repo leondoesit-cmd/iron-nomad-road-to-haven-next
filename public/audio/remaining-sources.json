@@ -1,0 +1,50 @@
+[
+  {
+    "file": "howl.wav",
+    "author": "betchkal",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/betchkal/sounds/500646/",
+    "original": "500646 Freesound high-quality MP3 preview",
+    "edit": "Opening excerpt, mono 44.1kHz WAV, leading silence trimmed."
+  },
+  {
+    "file": "hiss.wav",
+    "author": "7h3_lark",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/7h3_lark/sounds/268580/",
+    "original": "268580 Freesound high-quality MP3 preview",
+    "edit": "Opening excerpt, mono 44.1kHz WAV, leading silence trimmed."
+  },
+  {
+    "file": "hiccup.wav",
+    "author": "eZZin",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/eZZin/sounds/619255/",
+    "original": "619255 Freesound high-quality MP3 preview",
+    "edit": "Opening excerpt, mono 44.1kHz WAV, leading silence trimmed."
+  },
+  {
+    "file": "sand.wav",
+    "author": "Daphne_in_Wonderland",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/Daphne_in_Wonderland/sounds/383490/",
+    "original": "383490 Freesound high-quality MP3 preview",
+    "edit": "Opening excerpt, mono 44.1kHz WAV, leading silence trimmed."
+  },
+  {
+    "file": "bellow.wav",
+    "author": "Alexander / Orange Free Sounds",
+    "license": "CC-BY-4.0",
+    "source": "https://orangefreesounds.com/deer-sound/",
+    "original": "https://www.orangefreesounds.com/wp-content/uploads/2016/11/Deer-sound.mp3",
+    "edit": "Mono 44.1kHz WAV, leading silence trimmed."
+  },
+  {
+    "file": "reload.wav",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "original": "gunreload1.wav",
+    "edit": "Unmodified"
+  }
+]

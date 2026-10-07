@@ -7,13 +7,19 @@ export const GLOBALS = {
   uTime: { value: 0 },
   /** Approximate scene light for unlit-shaded effects (smoke and dust particles). */
   uLight: { value: new THREE.Color(1, 1, 1) },
-  /** How wet the ground is, 0 bone dry to 1 soaked: darkens it, takes the roughness off and fills puddles. */
+  /**
+   * How wet the hard ground is, 0 bone dry to 1 streaming: darkens rock, asphalt, packed earth and clay and takes the
+   * roughness off them. Sand drinks the rain and never shows it (`sim/climate.ts`).
+   */
   uWet: { value: 0 },
+  /** How full the puddles in the flat hollows of hard ground are, 0 none to 1 brimming. Never on sand. */
+  uPuddle: { value: 0 },
 };
 
-/** Shared by the ground shaders: puddles that fill the low spots as the ground gets wetter. Needs `uWet` and a fragment `common` include. */
+/** Shared by the ground shaders: puddles that fill the low spots of hard ground in the rain. Needs `uWet`, `uPuddle` and a fragment `common` include. */
 export const WET_PARS = /* glsl */ `
 uniform float uWet;
+uniform float uPuddle;
 float wpHash( vec2 p ) {
   vec3 p3 = fract( vec3( p.xyx ) * 0.1031 );
   p3 += dot( p3, p3.yzx + 33.33 );
@@ -25,10 +31,11 @@ float wpNoise( vec2 p ) {
   f = f * f * ( 3.0 - 2.0 * f );
   return mix( mix( wpHash( i ), wpHash( i + vec2( 1.0, 0.0 ) ), f.x ), mix( wpHash( i + vec2( 0.0, 1.0 ) ), wpHash( i + vec2( 1.0, 1.0 ) ), f.x ), f.y );
 }
-// 1 inside a puddle. The basins are fixed in the world, so a puddle fills from its deepest point outward as uWet rises.
+// 1 inside a puddle. The basins are fixed in the world, so a puddle fills from its deepest point outward as uPuddle rises.
 float puddleMask( vec2 xz, float level ) {
+  if ( uPuddle < 0.004 ) return 0.0;
   float n = wpNoise( xz * 0.16 ) * 0.55 + wpNoise( xz * 0.43 + 7.3 ) * 0.3 + wpNoise( xz * 1.3 ) * 0.15;
-  float thr = uWet * 0.6;
+  float thr = uPuddle * 0.6;
   return ( 1.0 - smoothstep( thr - 0.06, thr, n ) ) * level;
 }
 `;

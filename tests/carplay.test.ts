@@ -7,6 +7,8 @@ import { newBuild } from '../src/sim/garage';
 import { newPart } from '../src/sim/parts';
 import { fakeServices } from './helpers/sim';
 import { standAt } from './helpers/access';
+import { wrapAngle } from '../src/core/math';
+import { toLocal } from '../src/game/access';
 import type { Vehicle } from '../src/game/vehicle';
 
 // Each test builds a real leg scene (terrain, textures, physics); give them room when the whole suite runs in parallel.
@@ -128,6 +130,59 @@ describe('abandoned cars in a live leg', () => {
     v.health.comp.engine = 0.6;
     v.setEngine(true);
     expect(v.engineOn).toBe(true);
+  });
+
+  it('climbing in goes by the near door and ends on the cabin seat, not the middle of the car', () => {
+    const { sc } = leg();
+    const v = carBeside(sc, 'sedan');
+    const p = sc.players[0];
+    expect(p.tryEnter()).toBe(true);
+    const seat = v.seatFeet('driver')!;
+    const side = v.def.seat!.driver[0];
+    let nearDoor = false;
+    let last = [p.pos.x, p.pos.y, p.pos.z];
+    let sideYaw: number | null = null;
+    let lastYaw = p.yaw;
+    let opened = false;
+    for (let i = 0; i < 400 && p.state === 'entering'; i++) {
+      last = [p.pos.x, p.pos.y, p.pos.z];
+      lastYaw = p.yaw;
+      run(sc, 1 / 60);
+      if (v.open.doorL || v.open.doorR) opened = true;
+      if (sideYaw === null && opened) sideYaw = p.yaw;
+      const [lx] = toLocal(v, p.pos.x, p.pos.y, p.pos.z);
+      if (Math.abs(lx) > Math.abs(side) + 0.3) nearDoor = true;
+    }
+    expect(p.state).toBe('driving');
+    expect(nearDoor).toBe(true);
+    // The body arrived on the seat the driver model sits in.
+    expect(Math.hypot(seat[0] - last[0], seat[2] - last[2])).toBeLessThan(0.15);
+    expect(Math.abs(seat[1] - last[1])).toBeLessThan(0.15);
+    // The door swung open, the body stood side-on to the car at the frame and turned a quarter turn to face the way it points.
+    expect(opened).toBe(true);
+    expect(Math.abs(Math.abs(wrapAngle(sideYaw! - v.yaw)) - Math.PI / 2)).toBeLessThan(0.5);
+    expect(Math.abs(wrapAngle(lastYaw - v.yaw))).toBeLessThan(0.2);
+  });
+
+  it('mounting a moped rises onto the saddle, never dips below it, and ends astride where the rider model sits', () => {
+    const { sc } = leg();
+    const v = carBeside(sc, 'moped');
+    const p = sc.players[0];
+    expect(p.tryEnter()).toBe(true);
+    const seat = v.riderFeet('driver')!;
+    let low = Infinity;
+    let last = [p.pos.x, p.pos.y, p.pos.z];
+    const start = p.pos.y;
+    for (let i = 0; i < 400 && p.state === 'entering'; i++) {
+      last = [p.pos.x, p.pos.y, p.pos.z];
+      run(sc, 1 / 60);
+      if (p.state === 'entering') low = Math.min(low, p.pos.y);
+    }
+    expect(p.state).toBe('driving');
+    expect(Math.hypot(seat[0] - last[0], seat[2] - last[2])).toBeLessThan(0.2);
+    expect(Math.abs(seat[1] - last[1])).toBeLessThan(0.2);
+    // No dive: the body stays at or above the lower of where it began and where it sits.
+    expect(low).toBeGreaterThan(Math.min(start, seat[1]) - 0.15);
   });
 
   it('a claimed car is never put away when the convoy drives on', () => {
@@ -279,7 +334,7 @@ describe('abandoned cars in a live leg', () => {
     p2.placeAt(g[0] + 0.6, g[2], 0);
     expect(p2.nearestDoor()?.seat).toBe('gunner');
     expect(p2.tryEnter()).toBe(true);
-    run(sc, 1);
+    run(sc, 2);
     expect(p2.state).toBe('gunner');
     expect(v.passenger?.index).toBe(1);
   });
@@ -294,7 +349,7 @@ describe('abandoned cars in a live leg', () => {
     const g = v.gunnerPos();
     p2.placeAt(g[0] + 0.6, g[2], 0);
     expect(p2.tryEnter()).toBe(true);
-    run(sc, 1);
+    run(sc, 2);
     expect(p2.state).toBe('gunner');
     p2.toggleView();
     expect(p2.firstPerson).toBe(true);

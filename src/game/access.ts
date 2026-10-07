@@ -20,7 +20,7 @@ import type { Vehicle } from './vehicle';
 export const isOwnRide = (v: Vehicle) => v.faction === 'convoy' && !!v.build && !v.wreck && v.kind !== 'crew';
 
 /** How far (m) a person reaches to each kind of point: the engine bay and the roof are big. */
-export const REACH: Record<Spot, number> = { hood: 1.8, doorL: 1.5, doorR: 1.5, trunk: 1.5, flap: 1.5, wheel: 1.5, under: 1.5, roof: 2.3, front: 1.5, rear: 1.5, flank: 1.5, gun: 1.8 };
+export const REACH: Record<Spot, number> = { hood: 1.8, doorL: 1.5, doorR: 1.5, trunk: 1.5, flap: 1.5, wheel: 1.5, under: 1.5, roof: 2.3, front: 1.5, rear: 1.5, flank: 1.5, gun: 1.8, screen: 1.7, back: 1.7 };
 
 /** How squarely a point has to be in front of you (dot of the way you face and the way it lies). */
 const FACING = 0.2;
@@ -275,7 +275,9 @@ export function toolHit(p: Player, v: Vehicle, only: readonly PartSlot[] | null,
     if (!hit || (keep && !keep(hit))) continue;
     const g = gate(v.def, slot, r.pt.spot, open);
     const panelOpen = PANEL_SLOTS.includes(slot) && open[slot as Panel];
-    const score = r.dist - 1.2 * r.facing + (g.ok ? 0 : 5) + (INTERNAL.includes(slot) ? 0.35 : 0) + (PANEL_SLOTS.includes(slot) ? (panelOpen ? 2 : -0.3) : 0);
+    // A door's window is outside work while the door is shut; with it open, the cabin behind it comes first.
+    const windowOpen = (slot === 'glassL' && open.doorL) || (slot === 'glassR' && open.doorR);
+    const score = r.dist - 1.2 * r.facing + (g.ok ? 0 : 5) + (INTERNAL.includes(slot) ? 0.35 : 0) + (PANEL_SLOTS.includes(slot) ? (panelOpen ? 2 : -0.3) : 0) + (windowOpen ? 0.6 : 0) + (slot === 'glassF' || slot === 'glassB' ? 0.6 : 0);
     if (score < bs) {
       bs = score;
       best = { hit, reach: r, gate: g };

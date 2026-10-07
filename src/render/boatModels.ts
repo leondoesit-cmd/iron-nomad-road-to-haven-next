@@ -4,6 +4,7 @@ import { blank, finish, headlamp, rider, type VehicleVisual } from './vehicleKit
 import { heavyGun, rivets, spareTyre } from './parts';
 import { C } from './palette';
 import type { VehicleDef } from '../data';
+import type { Humanoid } from './humanoid';
 
 /**
  * Boats. Local frame: +Z is the bow, y = 0 is the hull's centre (the keel is at -halfHeight), +X is the port side.
@@ -226,8 +227,149 @@ export function buildAirboat(def: VehicleDef, color: number): BoatVisual {
   return out;
 }
 
+/** The pedal boat's numbers: the bench, the footwell floor, the riders' hips and the pedal axle (boat frame). */
+const PEDALO = { seatZ: -0.22, floor: -0.08, hip: 0.25, axleY: 0.02, axleZ: 0.56, crank: 0.11, seatX: 0.34 };
+
+/**
+ * Sit a rider on the pedal boat's bench with their feet on the pedals, the cranks at `crank` (radians): each leg reaches its
+ * pedal round the axle, the two half a turn apart, so the knees come up and go down as the boat is pedalled.
+ */
+function pedalSeat(h: Humanoid, x: number, crank: number) {
+  const P = PEDALO;
+  const k = h.root.scale.y;
+  h.root.position.set(x, P.floor, P.seatZ);
+  h.hips.position.y = (P.hip - P.floor) / k;
+  h.hips.position.z = 0;
+  h.torso.rotation.x = -0.18;
+  for (const [leg, knee, sx, ph] of [
+    [h.legL, h.kneeL, 1, 0],
+    [h.legR, h.kneeR, -1, Math.PI],
+  ] as const) {
+    const a = crank + ph;
+    const R = P.axleZ - P.seatZ + Math.cos(a) * P.crank;
+    const D = Math.max(0.1, P.hip - (P.axleY + Math.sin(a) * P.crank) - 0.04);
+    const d = Math.min(0.85 * k, Math.hypot(R, D));
+    const phi = Math.atan2(R, D);
+    const alpha = Math.acos(Math.min(1, d / (0.86 * k)));
+    leg.rotation.x = -(phi + alpha);
+    leg.rotation.z = sx * 0.07;
+    knee.rotation.x = 2 * alpha;
+  }
+}
+
+/**
+ * The pedal boat at the Mill Bend's landing, the kind every park lake on the coast hired out by the hour: two white
+ * fibreglass floats with a blue stripe, a moulded tub between them with a bench for two side by side, a footwell with a pair
+ * of pedals for each, the steering stick between the seats and a paddle wheel under a cowl at the stern. The cranks and the
+ * wheel turn as it is pedalled, and the riders' legs go round with them.
+ */
+export function buildPedalo(def: VehicleDef, color: number): BoatVisual {
+  const v = blank(def) as BoatVisual;
+  const b = new MeshBuilder();
+  b.jitter = 0.02;
+  b.roundSeg = 3;
+  b.seed(91);
+  const r = rng(91);
+  const P = PEDALO;
+  const white = S.gloss(0xe6e4dc, 0.4);
+  const white2 = S.gloss(0xd4d2c8, 0.5);
+  const blue = S.gloss(color, 0.4);
+  const dark = S.plastic(0x2a2e33, 0.5);
+  const grey = S.steel(0x8a8e90, 0.5);
+  const grime = S.paint(0x8a8a6a, 0.9);
+  // Twin floats with upswept noses, a stripe down the outside of each.
+  for (const s of [-1, 1]) {
+    b.rbox(s * 0.56, -0.1, -0.08, 0.46, 0.42, 2.25, 0.2, white);
+    b.rbox(s * 0.56, -0.02, 1.08, 0.4, 0.34, 0.6, 0.17, white, -0.28, 0, 0);
+    b.box(s * 0.795, 0.05, -0.08, 0.02, 0.07, 2.05, blue);
+    // A green-brown tidemark of the river at the waterline.
+    b.box(s * 0.792, -0.14, -0.08, 0.02, 0.05, 2.1, grime);
+  }
+  // The tub between them: the deck, the footwell's floor, the foredeck.
+  b.rbox(0, 0.0, -0.2, 1.18, 0.2, 1.9, 0.07, white2);
+  b.box(0, P.floor + 0.005, 0.42, 0.86, 0.02, 0.82, dark);
+  b.rbox(0, 0.1, 1.0, 1.1, 0.1, 0.55, 0.05, white, -0.08, 0, 0);
+  // The bench and its back, and the boat's number on the backrest.
+  b.box(0, 0.06, P.seatZ, 1.02, 0.12, 0.42, white2);
+  b.rbox(0, P.hip - 0.09, P.seatZ, 1.06, 0.07, 0.44, 0.03, blue);
+  b.rbox(0, 0.46, P.seatZ - 0.27, 1.06, 0.5, 0.07, 0.03, blue, -0.22, 0, 0);
+  b.box(0, 0.52, P.seatZ - 0.33, 0.2, 0.18, 0.01, S.paint(0xf0eee6, 0.5), -0.22, 0, 0);
+  b.box(0.0, 0.52, P.seatZ - 0.335, 0.05, 0.12, 0.01, S.paint(0x1a3a6a, 0.5), -0.22, 0, 0);
+  // Axle brackets in the footwell, and the steering stick between the seats.
+  for (const s of [-1, 1]) for (const e of [-0.13, 0.13]) b.box(s * P.seatX + e, (P.floor + P.axleY) / 2, P.axleZ, 0.03, P.axleY - P.floor + 0.04, 0.06, grey);
+  b.rod(0, 0.1, P.seatZ + 0.18, 0.02, 0.6, P.seatZ + 0.26, 0.016, grey, 6);
+  b.add('sphere', 0.02, 0.62, P.seatZ + 0.27, 0.07, 0.07, 0.07, dark);
+  // The cowl over the paddle wheel at the stern, and the rudder behind it.
+  const wz = -1.08;
+  b.rbox(0, 0.16, wz, 0.6, 0.26, 0.72, 0.12, white);
+  for (const s of [-1, 1]) b.box(s * 0.31, -0.02, wz, 0.03, 0.34, 0.66, white2);
+  b.box(0, -0.12, -1.42, 0.03, 0.3, 0.22, dark);
+  // A coil of mooring line on the foredeck and a fender.
+  b.torus(0.25, 0.17, 1.02, 0.12, 0.022, S.cloth(0xc8b890, 0.7), Math.PI / 2, 0, 0, 5, 14);
+  b.rod(0.25, 0.17, 1.1, 0.4, -0.05, 1.45, 0.02, S.cloth(0xc8b890, 0.7), 4);
+  for (let i = 0; i < 5; i++) b.box((r() - 0.5) * 1.2, 0.105 + r() * 0.01, -0.6 + r() * 1.6, 0.1 + r() * 0.2, 0.004, 0.05 + r() * 0.1, grime, 0, r() * 3, 0);
+  // Riders: on the bench side by side.
+  const driver = rider(color, color);
+  v.inner.add(driver.root);
+  v.driver = driver;
+  v.passenger = rider(color, color);
+  v.gunSeat = [P.seatX, P.floor, P.seatZ];
+  const out = finish(v, b.build()) as BoatVisual;
+  // Moving parts: a pair of cranks for each seat, and the paddle wheel.
+  const parts = new MeshBuilder();
+  parts.jitter = 0.01;
+  const cranks: THREE.Group[] = [];
+  const crankGeo = (() => {
+    const cb = new MeshBuilder();
+    cb.cyl(0, 0, 0, 0.03, 0.34, 0.03, grey, 0, 0, Math.PI / 2, 6);
+    for (const [e, a] of [
+      [-0.14, 0],
+      [0.14, Math.PI],
+    ] as const) {
+      cb.box(e, Math.sin(a) * P.crank * 0.5, Math.cos(a) * P.crank * 0.5, 0.025, 0.025, P.crank, grey, a, 0, 0);
+      cb.box(e + Math.sign(e) * 0.05, Math.sin(a) * P.crank, Math.cos(a) * P.crank, 0.1, 0.03, 0.14, dark);
+    }
+    return cb.build();
+  })();
+  for (const s of [-1, 1]) {
+    const g = new THREE.Group();
+    g.position.set(s * P.seatX, P.axleY, P.axleZ);
+    const m = new THREE.Mesh(crankGeo, out.body.material);
+    m.castShadow = true;
+    g.add(m);
+    out.inner.add(g);
+    cranks.push(g);
+  }
+  const wheel = new THREE.Group();
+  wheel.position.set(0, -0.06, wz);
+  parts.cyl(0, 0, 0, 0.1, 0.56, 0.1, grey, 0, 0, Math.PI / 2, 8);
+  for (let k = 0; k < 6; k++) {
+    const a = (k / 6) * Math.PI * 2;
+    parts.box(0, Math.sin(a) * 0.17, Math.cos(a) * 0.17, 0.5, 0.025, 0.3, S.plastic(color, 0.5), a, 0, 0);
+  }
+  const wm = new THREE.Mesh(parts.build(), out.body.material);
+  wm.castShadow = true;
+  wheel.add(wm);
+  out.inner.add(wheel);
+  let crank = 0;
+  out.animate = (dt, throttle, speed) => {
+    const push = throttle * 5.5 + Math.min(2, Math.abs(speed)) * 0.6;
+    crank += dt * push * (speed < -0.15 ? -1 : 1);
+    for (const g of cranks) g.rotation.x = crank;
+    wheel.rotation.x = -crank * 1.3;
+  };
+  out.seat = (who, h) => pedalSeat(h, who === 'driver' ? -P.seatX : P.seatX, crank + (who === 'driver' ? 0 : 1.2));
+  const prevDispose = out.dispose;
+  out.dispose = () => {
+    prevDispose();
+    crankGeo.dispose();
+    wm.geometry.dispose();
+  };
+  return out;
+}
+
 export function buildBoatVisual(def: VehicleDef, color: number): BoatVisual {
-  return def.id === 'airboat' ? buildAirboat(def, color) : buildSkiff(def, color);
+  return def.id === 'airboat' ? buildAirboat(def, color) : def.id === 'pedalo' ? buildPedalo(def, color) : buildSkiff(def, color);
 }
 
 void C;

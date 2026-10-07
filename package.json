@@ -9,6 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
+    "pack:audio": "node scripts/pack-audio.mjs",
+    "bench:performance": "vitest bench --run tests/framePerformance.bench.ts --maxWorkers=1 --reporter=verbose",
     "test": "vitest run"
   },
   "dependencies": {

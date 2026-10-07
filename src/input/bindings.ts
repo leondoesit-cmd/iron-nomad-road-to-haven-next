@@ -75,8 +75,8 @@ export const ACTIONS: ActionDef[] = [
   { id: 'swap', label: 'Swap tool', hint: 'Gun, wrench, crowbar, jerrycan · Mouse wheel also cycles · Camp: previous element', group: 'combat', pad: Btn.LB, btn: [Btn.LB], devices: ALL },
   { id: 'interact', label: 'Interact', hint: 'Hold to loot, repair, strip, siphon, refuel, revive · Driving: handbrake on a pad', group: 'team', pad: Btn.A, btn: [Btn.A], devices: ALL },
   { id: 'jump', label: 'Jump', hint: 'On foot: jump · On a pad this shares the interact button and jumps only when nothing is in reach', group: 'move', pad: Btn.Jump, btn: [Btn.Jump], devices: ALL, optional: true },
-  { id: 'vehicle', label: 'Enter · exit vehicle', hint: 'Hold to bail out at speed · Shares the view button on a pad: tap view, hold this', group: 'vehicle', pad: Btn.Y, btn: [Btn.Y], devices: ALL },
-  { id: 'view', label: 'First / third person', hint: 'Switch the camera on foot, driving and manning the gun', group: 'camera', pad: Btn.View, btn: [Btn.View], devices: ALL, optional: true },
+  { id: 'vehicle', label: 'Enter · exit vehicle', hint: 'Tap to get in or out · Hold to bail out at speed', group: 'vehicle', pad: Btn.Y, btn: [Btn.Y], devices: ALL },
+  { id: 'view', label: 'First / third person', hint: 'Switch the camera on foot, driving and manning the gun · Shares the sheet button on a pad: tap view, hold the sheet', group: 'camera', pad: Btn.View, btn: [Btn.View], devices: ALL, optional: true },
   { id: 'camera', label: 'Reset camera · look back', hint: 'On foot: recentre · Driving: hold to look behind', group: 'camera', pad: Btn.R3, btn: [Btn.R3], devices: ALL, optional: true },
   { id: 'wheel', label: 'Ping · command wheel', hint: 'Tap to ping, hold for the wheel (aim with the look keys or stick)', group: 'team', pad: Btn.Up, btn: [Btn.Up], devices: ['pad', 'kb'], optional: true },
   { id: 'inventory', label: 'Inventory', hint: 'Open your gear: change what you wear and hold, and see what you carry', group: 'team', pad: Btn.Inventory, btn: [Btn.Inventory], devices: ['pad', 'kb'], optional: true },
@@ -87,7 +87,7 @@ export const ACTIONS: ActionDef[] = [
   { id: 'drink', label: 'Drink', hint: 'Drink from the water reserve, or the lake', group: 'team', btn: [Btn.Drink], devices: ['kb'], optional: true },
   { id: 'piss', label: 'Piss', hint: 'Take a piss: press again or walk off to stop', group: 'team', btn: [Btn.Piss], devices: ['kb'], optional: true },
   { id: 'shit', label: 'Shit', hint: 'Take a shit: press again or walk off to stop', group: 'team', btn: [Btn.Shit], devices: ['kb'], optional: true },
-  { id: 'sheet', label: 'Convoy sheet', hint: 'Hold for the convoy sheet', group: 'team', pad: Btn.Back, btn: [Btn.Back], devices: ALL, optional: true },
+  { id: 'sheet', label: 'Convoy sheet', hint: 'Hold for the convoy sheet · Shares the view button on a pad', group: 'team', pad: Btn.Back, btn: [Btn.Back], devices: ALL, optional: true },
   { id: 'map', label: 'Map', hint: 'Tap to open the map: a closer look, then the whole leg, then close · Hold next to a friend for a high five', group: 'team', pad: Btn.Map, btn: [Btn.Map], devices: ALL, optional: true },
 ];
 
@@ -101,7 +101,10 @@ export const actionsFor = (d: Device) => ACTIONS.filter((a) => a.devices.include
  */
 const coexists = (a: ActionId, b: ActionId) => (a === 'jump' && b === 'interact') || (a === 'interact' && b === 'jump');
 
-/** Marks a pad `view` binding that rides on the vehicle button: tap switches view, hold enters or exits. */
+/**
+ * Marks a pad `view` binding that rides on the convoy sheet button: a tap switches the view, a hold shows the sheet. The
+ * sheet is a glance, so a short delay costs nothing there; getting in a car, which happens all the time, is never delayed.
+ */
 export const SHARED = -2;
 
 export type PadMap = Partial<Record<ActionId, number>>;
@@ -170,16 +173,16 @@ export function isReservedKey(code: string): boolean {
   return code === 'Escape' || /^F\d+$/.test(code) || code === 'MetaLeft' || code === 'MetaRight' || code === 'ContextMenu' || code === 'AltLeft' || code === 'AltRight' || code === 'CapsLock' || code === 'NumLock';
 }
 
-/** The physical button an action reads from a pad, following a shared view binding to the vehicle button. */
+/** The physical button an action reads from a pad, following a shared view binding to the sheet button. */
 export function padPhysical(map: PadMap, a: ActionId): number | undefined {
   const v = map[a];
-  if (v === SHARED) return map.vehicle;
+  if (v === SHARED) return map.sheet;
   return v;
 }
 
-/** True when tap-for-view and hold-for-vehicle ride on one pad button. */
-export function viewSharesVehicle(map: PadMap): boolean {
-  return map.view === SHARED && map.vehicle !== undefined;
+/** True when tap-for-view and hold-for-sheet ride on one pad button. */
+export function viewSharesSheet(map: PadMap): boolean {
+  return map.view === SHARED && map.sheet !== undefined;
 }
 
 type AnyMap<V> = Partial<Record<ActionId, V>>;
@@ -187,30 +190,30 @@ type AnyMap<V> = Partial<Record<ActionId, V>>;
 /**
  * Bind an input to an action. If another action in the same map already uses it, the two swap, so nothing is ever
  * double-bound by accident and nobody loses a required control. Returns the action that was moved, or null.
- * On a pad, binding view to the vehicle button (or the reverse) is the deliberate tap / hold share.
+ * On a pad, binding view to the sheet button (or the reverse) is the deliberate tap / hold share.
  */
 export function assignBinding<V extends number | string>(device: Device, map: AnyMap<V>, id: ActionId, value: V): ActionId | null {
   const pool = actionsFor(device).map((a) => a.id);
   if (device === 'pad') {
     const pad = map as PadMap;
     const next = value as number;
-    if (id === 'view' && next === pad.vehicle) {
+    if (id === 'view' && next === pad.sheet) {
       pad.view = SHARED;
       return null;
     }
-    if (id === 'vehicle' && pad.view !== SHARED && next === pad.view) {
-      // Binding vehicle onto the view button: they now share it.
-      pad.vehicle = next;
+    if (id === 'sheet' && pad.view !== SHARED && next === pad.view) {
+      // Binding the sheet onto the view button: they now share it.
+      pad.sheet = next;
       pad.view = SHARED;
       return null;
     }
-    // A shared view follows the vehicle button, so it is never the one that clashes.
+    // A shared view follows the sheet button, so it is never the one that clashes.
     const viewOwns = pad.view !== undefined && pad.view !== SHARED && pad.view === next;
     const clash = pool.find((a) => a !== id && a !== 'view' && pad[a] === next && !coexists(a, id)) ?? (viewOwns && id !== 'view' ? 'view' : undefined);
     const prev = pad[id];
     pad[id] = next;
     if (clash) {
-      // The displaced action takes the button this one left. If that was the shared vehicle button, which the vehicle
+      // The displaced action takes the button this one left. If that was the shared sheet button, which the sheet
       // action still holds, it gets a button nobody uses instead.
       const home = prev === SHARED ? PAD_BUTTONS.find((b) => !Object.values(pad).includes(b)) : prev;
       if (home === undefined) delete pad[clash];
@@ -386,8 +389,9 @@ export function importBindings(raw: unknown): Bindings {
     take(r.kb[1], 'kb', b.kb[1] as AnyMap<string>, keyOk);
   }
   take(r.mouse, 'mouse', b.mouse as AnyMap<number>, mouseOk);
-  // A shared view needs a vehicle button to ride on.
-  if (b.pad.view === SHARED && b.pad.vehicle === undefined) b.pad.view = Btn.Y;
+  // A shared view needs a sheet button to ride on. (Saves from before the share moved off the vehicle button load
+  // the same way: view still says shared, and now rides on the sheet.)
+  if (b.pad.view === SHARED && b.pad.sheet === undefined) b.pad.view = Btn.Back;
   return b;
 }
 

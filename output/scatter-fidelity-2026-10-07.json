@@ -1,0 +1,151 @@
+{
+  "date": "2026-10-07",
+  "workload": "19,600 grass instances in 49 batches, original shader, three camera layouts, three wind times. Isolated subsystem; not whole-game FPS.",
+  "comparisons": [
+    {
+      "mode": "single",
+      "time": 0,
+      "changedChannels": 0,
+      "maxChannelDelta": 0,
+      "before": {
+        "calls": 20,
+        "triangles": 45602
+      },
+      "after": {
+        "calls": 8,
+        "triangles": 16802
+      }
+    },
+    {
+      "mode": "single",
+      "time": 3,
+      "changedChannels": 0,
+      "maxChannelDelta": 0,
+      "before": {
+        "calls": 20,
+        "triangles": 45602
+      },
+      "after": {
+        "calls": 8,
+        "triangles": 16802
+      }
+    },
+    {
+      "mode": "single",
+      "time": 19,
+      "changedChannels": 0,
+      "maxChannelDelta": 0,
+      "before": {
+        "calls": 20,
+        "triangles": 45602
+      },
+      "after": {
+        "calls": 8,
+        "triangles": 16802
+      }
+    },
+    {
+      "mode": "horizontal",
+      "time": 0,
+      "changedChannels": 0,
+      "maxChannelDelta": 0,
+      "before": {
+        "calls": 68,
+        "triangles": 158404
+      },
+      "after": {
+        "calls": 16,
+        "triangles": 33604
+      }
+    },
+    {
+      "mode": "horizontal",
+      "time": 3,
+      "changedChannels": 0,
+      "maxChannelDelta": 0,
+      "before": {
+        "calls": 68,
+        "triangles": 158404
+      },
+      "after": {
+        "calls": 16,
+        "triangles": 33604
+      }
+    },
+    {
+      "mode": "horizontal",
+      "time": 19,
+      "changedChannels": 0,
+      "maxChannelDelta": 0,
+      "before": {
+        "calls": 68,
+        "triangles": 158404
+      },
+      "after": {
+        "calls": 16,
+        "triangles": 33604
+      }
+    },
+    {
+      "mode": "vertical",
+      "time": 0,
+      "changedChannels": 0,
+      "maxChannelDelta": 0,
+      "before": {
+        "calls": 39,
+        "triangles": 88804
+      },
+      "after": {
+        "calls": 12,
+        "triangles": 24004
+      }
+    },
+    {
+      "mode": "vertical",
+      "time": 3,
+      "changedChannels": 0,
+      "maxChannelDelta": 0,
+      "before": {
+        "calls": 39,
+        "triangles": 88804
+      },
+      "after": {
+        "calls": 12,
+        "triangles": 24004
+      }
+    },
+    {
+      "mode": "vertical",
+      "time": 19,
+      "changedChannels": 0,
+      "maxChannelDelta": 0,
+      "before": {
+        "calls": 39,
+        "triangles": 88804
+      },
+      "after": {
+        "calls": 12,
+        "triangles": 24004
+      }
+    }
+  ],
+  "gpuTimer": true,
+  "gpuMs": {
+    "before": 0.428249,
+    "after": 0.171374
+  },
+  "cpuSubmissionMs": {
+    "before": 0.6000000014901161,
+    "after": 0.3999999985098839
+  },
+  "previousGpuMs": {
+    "before": 1.228624,
+    "after": 0.59375
+  },
+  "previousCpuSubmissionMs": {
+    "before": 0.8999999985098839,
+    "after": 0.6999999955296516
+  },
+  "method": "Final repeat uses one shared parent-transform refresh per view, followed by the same root bounds and unchanged shader. 30 alternating samples per path; first 4 samples excluded. All nine pixel comparisons remained exact.",
+  "proofScreenshot": "/private/tmp/iron-nomad-scatter-fidelity-final.png"
+}

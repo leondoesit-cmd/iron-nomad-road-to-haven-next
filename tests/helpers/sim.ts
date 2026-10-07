@@ -74,7 +74,7 @@ export function fakeServices(opts: { onRadio?: (t: string) => void; solo?: boole
     slots: [null, null],
     settings: defaultSettings(),
     onChange: () => {},
-    vehicleIsHold: () => false,
+    sheetIsHold: () => false,
     mouseLocked: false,
     rumble: () => {},
     pendingLook: () => [0, 0] as [number, number],

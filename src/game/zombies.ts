@@ -5,10 +5,15 @@ import type { Aabb } from '../world/layout';
 import type { Animal } from './wildlife';
 import { armDamageMult, damageFraction, legSpeedMult, limbsGone, maskOf, massOf, newWounds, staggerSpeed, wound, zoneOf, type AmmoSpec, type Wounds, type Zone } from '../sim/ballistics';
 import { MELEE, knockFor, type MeleeFeel } from '../sim/weaponfx';
+import { ZOMBIE_VARIANTS, zombieMotion, zombieStepPhase } from '../sim/zombieAnimation';
 import type { ZombieRenderer } from '../render/zombieRender';
 import type { Ctx } from './ctx';
 import type { Player } from './player';
+import { playerShows } from './sight';
+import { SIGHT } from '../sim/enemySight';
 import type { Vehicle } from './vehicle';
+import { footprints, pushOutOfVehicles, type Footprint } from './vehicleFootprint';
+import { Nearest } from '../core/nearest';
 
 export type ZState = 'dormant' | 'wander' | 'investigate' | 'chase' | 'swarm';
 
@@ -38,6 +43,11 @@ export class Zombie {
   deadT = 0;
   phase: number;
   stride = 4;
+  /** Continuous distance-driven gait phase; phase remains the stable personality seed. */
+  walkPhase = 0;
+  locomotion = 0;
+  screamT = 0;
+  smashT = 0;
   chase = 0;
   attackCd = 0;
   grabbing: Player | null = null;
@@ -116,7 +126,8 @@ export class Zombie {
     this.state = dormant ? 'dormant' : 'wander';
     this.yaw = Math.random() * Math.PI * 2;
     this.phase = Math.random() * 6.28;
-    this.variant = Math.floor(Math.random() * 5);
+    this.walkPhase = this.phase;
+    this.variant = Math.floor(Math.random() * ZOMBIE_VARIANTS);
     this.flank = (Math.floor(Math.random() * 5) - 2) / 2;
     this.aiT = Math.random() * 0.05;
     this.lastX = x;
@@ -164,7 +175,13 @@ export class ZombieSystem {
   private cascadeT = 0;
   private cascadeTold = false;
   private grid = new Map<number, Zombie[]>();
+  private gridPool: Zombie[][] = [];
+  private renderNearest = new Nearest<Zombie>();
+  private renderPoint = new THREE.Vector3();
   private grabbers = new Map<Player, Zombie[]>();
+  /** Every vehicle's footprint this tick: the dead walk around cars, not through them. */
+  private cars: Footprint[] = [];
+  private carN = { x: 0, z: 0 };
   killedByPlayer: [number, number] = [0, 0];
   private time = 0;
 
@@ -535,11 +552,13 @@ export class ZombieSystem {
     const ctx = this.ctx;
     this.time += dt;
     // Remove corpses and build the spatial grid for separation.
+    for (const bucket of this.grid.values()) { bucket.length = 0; this.gridPool.push(bucket); }
     this.grid.clear();
     let chasers = 0;
     let anyPlayerActive = false;
     for (const p of ctx.players) if (p.alive) anyPlayerActive = true;
     if (!anyPlayerActive) return;
+    footprints(ctx.vehicles, this.cars);
     const act = 150;
     for (let i = this.list.length - 1; i >= 0; i--) {
       const zb = this.list[i];
@@ -549,6 +568,7 @@ export class ZombieSystem {
         // A body thrown by the round that killed it slides on and settles.
         if (Math.abs(zb.vx) + Math.abs(zb.vz) > 0.05) {
           const p = { x: zb.x + zb.vx * dt, z: zb.z + zb.vz * dt };
+          pushOutOfVehicles(this.cars, p, 0.3, zb.y);
           ctx.obs.resolveCircle(p, 0.3, undefined, zb.y);
           zb.x = p.x;
           zb.z = p.z;
@@ -577,7 +597,7 @@ export class ZombieSystem {
       zb.y = ctx.groundAt(zb.x, zb.z);
       const k = (Math.floor(zb.x / 3) + 1000) * 4096 + Math.floor(zb.z / 3);
       let c = this.grid.get(k);
-      if (!c) this.grid.set(k, (c = []));
+      if (!c) this.grid.set(k, (c = this.gridPool.pop() ?? []));
       c.push(zb);
       if (zb.chasing) chasers++;
     }
@@ -755,6 +775,8 @@ export class ZombieSystem {
     const def = zb.def;
     zb.stateT += dt;
     zb.attackCd -= dt;
+    zb.screamT = Math.max(0, zb.screamT - dt);
+    zb.smashT = Math.max(0, zb.smashT - dt);
     zb.shriekCd -= dt;
     zb.restCd -= dt;
     zb.chargeCd -= dt;
@@ -765,7 +787,9 @@ export class ZombieSystem {
     if (zb.stagger > 0) zb.stagger = Math.max(0, zb.stagger - dt * 2.4);
     if (zb.burn > 0) {
       zb.burn -= dt;
-      if (Math.random() < 0.4) ctx.fx.fire(zb.x, zb.y + 1.0, zb.z, 0.4);
+      // Alight from the legs up; it lights the ground it staggers over, and the dry grass under it.
+      if (ctx.fires) ctx.fires.hold(zb, { x: zb.x, y: zb.y + 0.4, z: zb.z, r: 0.3 * def.scale, fuel: 'flesh', heat: Math.min(1, zb.burn / 0.8), bed: false, light: 0.7, spreads: true });
+      else if (Math.random() < 0.4) ctx.fx.fire(zb.x, zb.y + 1.0, zb.z, 0.4);
     }
     // Shot or shoved out of a charge, a brute loses it.
     if (zb.charge === 'run' && zb.stun > 0.3) {
@@ -782,7 +806,7 @@ export class ZombieSystem {
 
     // ---- eating: it stands over the body with its head down, and what it eats is gone for the hunter
     let eating = false;
-    if (zb.feedT > 0 && zb.feed && !zb.chasing) {
+    if (zb.feedT > 0 && zb.feed && !zb.feed.butchered && !zb.chasing) {
       zb.feedT -= dt;
       eating = true;
       ctx.wildlife?.gnaw(zb.feed, dt * 0.8);
@@ -798,7 +822,8 @@ export class ZombieSystem {
     if (zb.stun <= 0 && !grabbed) {
       switch (zb.state) {
         case 'dormant':
-          speed = 0;
+          // Not asleep, just unaware: they shuffle about their patch rather than stand like statues.
+          speed = def.wander * 0.55;
           break;
         case 'wander':
           speed = def.wander * 1.1;
@@ -951,19 +976,34 @@ export class ZombieSystem {
         zb.vz *= 0.9;
       }
     }
+    // Cars are solid: the dead crowd against the doors instead of walking into the seats. Walls get the last word.
+    const n = this.carN;
+    const car = pushOutOfVehicles(this.cars, p, def.radius, zb.y, n);
     const hit = ctx.obs.resolveCircle(p, def.radius, undefined, ctx.groundAt(zb.x, zb.z));
     zb.x = p.x;
     zb.z = p.z;
     zb.slow = 1;
     if (hit && hit.breakable && zb.hasTarget && speed > 0) this.onObstacleHit(hit, def.damage * dt * (zb.kind === 'brute' ? 3 : 0.6), zb);
-    // A charge that meets a wall ends in a dazed brute (and, if the wall is a barricade, a broken one).
-    if (hit && zb.charge === 'run' && Math.hypot(zb.vx, zb.vz) > 3) {
+    // A charge that meets a wall ends in a dazed brute (and, if the wall is a barricade, a broken one). A car takes the blow.
+    if ((hit || car) && zb.charge === 'run' && Math.hypot(zb.vx, zb.vz) > 3) {
+      if (car && !car.v.wreck) {
+        car.v.takeHit((def.vehicleDamage ?? 28) * 1.5, zb.x, zb.z, { ram: true, smash: true });
+        car.v.shove(-n.x * car.v.mass * 1.2, -n.z * car.v.mass * 1.2);
+      }
       zb.charge = 'none';
       zb.chargeCd = 7;
       zb.stun = 1.1;
       zb.vx = zb.vz = 0;
-      if (hit.breakable) this.onObstacleHit(hit, def.damage * 2.5, zb);
+      if (hit?.breakable) this.onObstacleHit(hit, def.damage * 2.5, zb);
       ctx.audio.play('crash', zb.x, zb.z, 0.8);
+    }
+    // Whatever was carrying it into the car is spent on the panel.
+    if (car) {
+      const vn = zb.vx * n.x + zb.vz * n.z;
+      if (vn < 0) {
+        zb.vx -= vn * n.x;
+        zb.vz -= vn * n.z;
+      }
     }
     // Facing.
     const spd = Math.hypot(zb.vx, zb.vz);
@@ -983,6 +1023,11 @@ export class ZombieSystem {
         }
       } else zb.stuckT = 0;
     }
+    // Measure resolved travel, so feet stop cycling against walls and while holding a victim.
+    const travel = Math.hypot(zb.x - zb.lastX, zb.z - zb.lastZ);
+    const walking = zb.stun <= 0 && !grabbed && !eating && zb.charge !== 'wind' && speed > 0;
+    if (walking) zb.walkPhase = (zb.walkPhase + zombieStepPhase(zb.kind, zb.variant, travel, zb.def.scale)) % (Math.PI * 2);
+    zb.locomotion = damp(zb.locomotion, walking ? clamp(travel / Math.max(dt, 0.001) / 0.8, 0, 1) : 0, 10, dt);
     zb.lastX = zb.x;
     zb.lastZ = zb.z;
     // Animation drivers.
@@ -1032,7 +1077,11 @@ export class ZombieSystem {
     }
     // The stoned are easy to miss; the drunk are easy to find.
     const notice = tgt?.player ? tgt.player.drugs.mods().aggro : 1;
-    const seesTarget = !!tgt && tgt.d < sight * notice * (tgt.vehicle ? 1.4 : tgt.player && tgt.player.crouch ? 0.5 : 1) && !ctx.obs.segmentBlocked(zb.x, zb.z, tgt.x, tgt.z, 1.1);
+    // Someone on foot has to show: behind a rock or down in a bush they are not seen (heard, and smelt close in, still).
+    const inRange = !!tgt && tgt.d < sight * notice * (tgt.vehicle ? 1.4 : tgt.player && tgt.player.crouch ? 0.5 : 1);
+    const seesTarget = inRange && (tgt!.player && !tgt!.player.inVehicle
+      ? tgt!.d < SIGHT.touch || playerShows(ctx, zb.x, zb.y + 1.5, zb.z, tgt!.player).show >= SIGHT.minShow
+      : !ctx.obs.segmentBlocked(zb.x, zb.z, tgt!.x, tgt!.z, 1.1));
     // A stalker that someone is looking straight at holds back, and the instant they look away it is on them.
     if (zb.kind === 'stalker') {
       const was = zb.watched;
@@ -1046,6 +1095,19 @@ export class ZombieSystem {
     }
     switch (zb.state) {
       case 'dormant':
+        if (zb.idleT <= 0 && (!zb.hasTarget || zb.stateT > 6 + (zb.id % 5) || dist2(zb.x, zb.z, zb.tx, zb.tz) < 0.6)) {
+          if (Math.random() < 0.4) {
+            zb.idleT = 1 + Math.random() * 3;
+            zb.hasTarget = false;
+          } else {
+            const a = Math.random() * 6.28;
+            const r = 1.5 + Math.random() * 4.5;
+            zb.tx = zb.homeX + Math.cos(a) * r;
+            zb.tz = zb.homeZ + Math.sin(a) * r;
+            zb.hasTarget = true;
+          }
+          zb.stateT = 0;
+        }
         if (seesTarget && tgt && tgt.d < 12) this.startChase(zb, tgt);
         else if (heard && heard.level * aggro >= 45) {
           zb.state = 'investigate';
@@ -1199,11 +1261,20 @@ export class ZombieSystem {
   /** Idle dead go after animals and raiders on foot nearby. Returns true while it has live prey. */
   private findPrey(zb: Zombie, dt: number): boolean {
     const ctx = this.ctx;
+    if (zb.prey?.dead) {
+      this.preyMeal(zb);
+      return false;
+    }
+    if (zb.feed || zb.eatT > 0) return false;
     if (zb.prey && !zb.prey.dead) {
       zb.tx = zb.prey.x;
       zb.tz = zb.prey.z;
       zb.hasTarget = true;
-      if (Math.hypot(zb.prey.x - zb.x, zb.prey.z - zb.z) > 40) zb.prey = null;
+      if (Math.hypot(zb.prey.x - zb.x, zb.prey.z - zb.z) > 40 || (zb.preyKind === 'animal' && (zb.prey as Animal).flying)) {
+        zb.prey = null;
+        zb.preyKind = null;
+        zb.hasTarget = false;
+      }
       else return true;
     }
     zb.preyCd -= dt;
@@ -1212,10 +1283,18 @@ export class ZombieSystem {
     let best: { x: number; z: number; dead: boolean } | null = null;
     let kind: 'animal' | 'raider' = 'animal';
     let bd = 22 * 22;
-    for (const a of ctx.wildlife?.list ?? []) {
+    // A passing opportunity, rather than every grazer becoming a permanent target.
+    const animals = ctx.wildlife?.list ?? [];
+    if (ctx.rng.chance(0.18)) for (const a of animals) {
       if (a.dead || a.flying) continue;
       const d = (a.x - zb.x) ** 2 + (a.z - zb.z) ** 2;
-      if (d < bd) { bd = d; best = a; kind = 'animal'; }
+      if (d >= bd) continue;
+      const injured = a.hp < a.def.hp * 0.65 || a.moveMult < 0.8;
+      const together = !injured && animals.some((other) => other !== a && !other.dead && other.herd === a.herd && dist2(a.x, a.z, other.x, other.z) < 14);
+      if (together || ctx.obs.segmentBlocked(zb.x, zb.z, a.x, a.z, Math.max(0.3, a.height * 0.6))) continue;
+      bd = d;
+      best = a;
+      kind = 'animal';
     }
     for (const u of ctx.raiders?.units ?? []) {
       if (u.dead) continue;
@@ -1225,6 +1304,7 @@ export class ZombieSystem {
     if (!best) return false;
     zb.prey = best;
     zb.preyKind = kind;
+    zb.idleT = 0;
     zb.tx = best.x;
     zb.tz = best.z;
     zb.hasTarget = true;
@@ -1242,16 +1322,35 @@ export class ZombieSystem {
         else ctx.raiders.damageInfantry(pr as never, dmg, -1);
         zb.vx *= 0.3;
         zb.vz *= 0.3;
-        if (pr.dead) zb.eatT = 6 + Math.random() * 6;
+        if (pr.dead) this.preyMeal(zb);
       }
     } else if (pr) {
-      zb.prey = null;
-      zb.eatT = zb.eatT || 6;
+      this.preyMeal(zb);
     }
     if (zb.eatT > 0) {
       zb.eatT -= dt;
       if (zb.eatT <= 0) zb.hasTarget = false;
     }
+  }
+
+  /** Keep the actual kill as the meal, so feeding consumes it and uses the feeding pose. */
+  private preyMeal(zb: Zombie) {
+    const pr = zb.prey;
+    if (!pr) return;
+    const duration = 6 + this.ctx.rng.range(0, 6);
+    if (zb.preyKind === 'animal' && !(pr as Animal).butchered) {
+      zb.feed = pr as Animal;
+      zb.feedT = dist2(zb.x, zb.z, pr.x, pr.z) < 1.5 ? duration : 0;
+      zb.eatT = 0;
+      zb.tx = pr.x;
+      zb.tz = pr.z;
+      zb.stateT = 0;
+    } else if (zb.preyKind === 'raider') zb.eatT = duration;
+    else zb.hasTarget = false;
+    zb.prey = null;
+    zb.preyKind = null;
+    zb.vx = zb.vz = 0;
+    zb.idleT = 0;
   }
 
   private startChase(zb: Zombie, tgt: { x: number; z: number; player: Player | null }) {
@@ -1261,6 +1360,9 @@ export class ZombieSystem {
     zb.tz = tgt.z;
     zb.hasTarget = true;
     zb.targetPlayer = tgt.player;
+    zb.prey = null;
+    zb.preyKind = null;
+    zb.eatT = 0;
     zb.lostT = 0;
     zb.stateT = 0;
     zb.idleT = 0;
@@ -1275,6 +1377,7 @@ export class ZombieSystem {
   private shriek(zb: Zombie, x: number, z: number, first: boolean) {
     const ctx = this.ctx;
     zb.shriekCd = first ? 12 : 9;
+    zb.screamT = 1.3;
     ctx.sig.emit(zb.x, zb.z, 100, 'noise');
     const n = this.hordeAlert(zb.x, zb.z, (ENEMIES.zombies.screamer.shriek ?? 3) * 20, x, z);
     ctx.audio.play('scream', zb.x, zb.z, 1);
@@ -1310,6 +1413,7 @@ export class ZombieSystem {
       if (p.invuln > 0) continue;
       const d = Math.hypot(p.pos.x - zb.x, p.pos.z - zb.z);
       if (d < def.radius + 0.62) {
+        zb.yaw += wrapAngle(Math.atan2(p.pos.x - zb.x, p.pos.z - zb.z) - zb.yaw) * Math.min(1, dt * 8);
         if (zb.grabbing !== p) {
           this.release(zb);
           zb.grabbing = p;
@@ -1330,6 +1434,7 @@ export class ZombieSystem {
         const d = Math.hypot(v.position.x - zb.x, v.position.z - zb.z);
         if (d < v.def.length * 0.5 + def.radius + 0.8) {
           zb.attackCd = 1.4;
+          zb.smashT = 0.65;
           v.takeHit(def.vehicleDamage ?? 28, zb.x, zb.z, { ram: true, smash: true });
           const dx = v.position.x - zb.x;
           const dz = v.position.z - zb.z;
@@ -1347,14 +1452,15 @@ export class ZombieSystem {
 
   render(zr: ZombieRenderer, time: number, frustums: THREE.Frustum[], maxPerView: number, camPos: THREE.Vector3[]) {
     zr.begin();
-    const sp = new THREE.Vector3();
-    let drawn = 0;
+    const sp = this.renderPoint;
     const budget = maxPerView * 2;
-    // Nearest first so the budget cuts distant ones.
-    const live = this.list.filter((z) => z.active || z.dead);
-    live.sort((a, b) => minDist(a, camPos) - minDist(b, camPos));
-    for (const zb of live) {
-      if (drawn >= budget) break;
+    const nearest = this.renderNearest;
+    nearest.begin(Math.ceil(budget));
+    for (let order = 0; order < this.list.length; order++) {
+      const zb = this.list[order];
+      if (!zb.active && !zb.dead) continue;
+      const distance = minDist(zb, camPos);
+      if (!nearest.accepts(distance, order)) continue;
       sp.set(zb.x, zb.y + 0.9, zb.z);
       let seen = false;
       for (const f of frustums) {
@@ -1364,14 +1470,16 @@ export class ZombieSystem {
         }
       }
       if (!seen) continue;
-      drawn++;
+      nearest.offer(zb, distance, order);
+    }
+    for (const { value: zb } of nearest.finish()) {
       const sc = zb.def.scale;
       const tilt = zb.dead ? zb.fall : 0;
       const sink = zb.dead ? Math.max(0, zb.deadT - 2.2) * 0.8 : 0;
       const legs = limbsGone(zb.wounds.mask).legs;
       // Without legs a body drops to the ground and drags itself; with one it lists to the side.
       const drop = zb.dead ? 0 : legs >= 2 ? 0.78 * sc : legs === 1 ? 0.06 * sc : 0;
-      zr.push(zb.kind, sc, zb.x, zb.y - sink + (zb.dead ? 0.1 : 0) - drop, zb.z, zb.yaw, zb.phase, zb.dead ? 0 : zb.stride, zb.dead ? 0 : zb.chase, tilt, zb.variant, 1, zb.wounds.mask, zb.stagger, (legs >= 2 ? 0.75 : legs === 1 ? 0.12 : 0) + (zb.charge !== 'none' ? 0.35 : 0) + (zb.feedT > 0 ? 0.55 : 0));
+      zr.push(zb.kind, sc, zb.x, zb.y - sink + (zb.dead ? 0.1 : 0) - drop, zb.z, zb.yaw, zb.walkPhase, 0, zb.dead ? 0 : zb.chase, tilt, zb.variant, 1, zb.wounds.mask, zb.stagger, (legs >= 2 ? 0.75 : legs === 1 ? 0.12 : 0) + (zb.charge !== 'none' ? 0.35 : 0) + (zb.feedT > 0 || zb.eatT > 0 ? 0.55 : 0), zombieMotion(zb));
     }
     zr.end(time);
   }

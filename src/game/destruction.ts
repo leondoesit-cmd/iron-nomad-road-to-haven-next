@@ -65,6 +65,14 @@ export class Destruction implements WorldDamage {
 
   hit(a: Aabb, dmg: number, how: DamageHow, at: HitAt, radius = 0): boolean {
     const ctx = this.ctx;
+    if (a.kind === 'tree') {
+      const view = this.chunkOf(a)?.view;
+      const index = view?.data.trees.findIndex((t) => Math.abs(t.x - (a.minX + a.maxX) / 2) < 0.01 && Math.abs(t.z - (a.minZ + a.maxZ) / 2) < 0.01) ?? -1;
+      if (!view || index < 0) return false;
+      view.vegetation.hitTree(index, { ...at, dx: -(at.nx ?? 1), dy: 0, dz: -(at.nz ?? 0), impulse: dmg * 8,
+        energy: dmg * (how === 'blast' ? 1000 : how === 'ram' ? 150 : 30), kind: how === 'blast' ? 'blast' : how === 'bullet' ? 'bullet' : 'blunt' });
+      return view.vegetation.treeBroken(index);
+    }
     if (a.kind === 'barricade') {
       if (a.breakable !== 'flimsy' || how === 'ram') return false;
       a.hp -= dmg * (how === 'blast' ? 1.4 : 1);
@@ -93,6 +101,7 @@ export class Destruction implements WorldDamage {
   }
 
   blast(x: number, y: number, z: number, radius: number, damage: number) {
+    this.ctx.P.hitArea({ x, y, z, dx: 0, dy: 0, dz: 0, impulse: damage * 20, energy: damage * 1000, kind: 'blast', radius });
     const hits: { a: Aabb; d: number; px: number; pz: number }[] = [];
     this.ctx.obs.near(x, z, radius + 2, (a) => {
       if ((a.kind !== 'partition' && a.kind !== 'barricade') || y < a.y0 - 1.5 || y > a.y1 + 1.5) return;

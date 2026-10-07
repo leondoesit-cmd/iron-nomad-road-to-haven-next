@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { legById } from '../src/data';
 import { makeTerrainDef, type TerrainDef } from '../src/world/terrain';
-import { fallsGeometry, riverRibbonGeometry, waterfallSpots, buildRiverWater } from '../src/render/riverWater';
+import { fallsGeometry, riverRibbonGeometry, waterfallSpots, buildRiverWater, RIBBON_NX } from '../src/render/riverWater';
 import { buildSpringWater, buildSwampWater, springGeometry } from '../src/render/water';
 import { bridge } from '../src/render/waterProps';
 import { bridgeTag } from '../src/world/hydro';
@@ -28,14 +28,14 @@ describe('river and stream water', () => {
       expect(c.rows).toBeGreaterThan(r.end);
       // Up to where the course runs into other water, every vertex of a cross-section sits on that sample's level.
       for (let i = 0; i < r.end - 2; i++) {
-        for (let k = 0; k < 7; k++) {
-          const y = pos.getY(c.first + i * 7 + k);
+        for (let k = 0; k < RIBBON_NX; k++) {
+          const y = pos.getY(c.first + i * RIBBON_NX + k);
           if (r.spring >= 0 && Math.hypot(r.x[i] - hy.springs[r.spring].x, r.z[i] - hy.springs[r.spring].z) < hy.springs[r.spring].r + 2) continue;
           expect(Math.abs(y - r.level[i])).toBeLessThan(1e-3);
         }
       }
     }
-    for (const name of ['position', 'aFlow', 'aDir', 'aFade']) expect(finite(rib.geometry.getAttribute(name).array as Float32Array)).toBe(true);
+    for (const name of ['position', 'aFlow', 'aDir', 'aFade', 'aRise']) expect(finite(rib.geometry.getAttribute(name).array as Float32Array)).toBe(true);
     expect(rib.geometry.boundingSphere!.radius).toBeGreaterThan(1000);
   });
 
@@ -47,8 +47,8 @@ describe('river and stream water', () => {
     const drawn = new Set<string>();
     for (let t = 0; t < idx.length; t += 3) {
       const v = Math.min(idx[t], idx[t + 1], idx[t + 2]);
-      const c = rib.courses.find((q) => v >= q.first && v < q.first + q.rows * 7)!;
-      drawn.add(`${c.river}:${Math.floor((v - c.first) / 7)}`);
+      const c = rib.courses.find((q) => v >= q.first && v < q.first + q.rows * RIBBON_NX)!;
+      drawn.add(`${c.river}:${Math.floor((v - c.first) / RIBBON_NX)}`);
     }
     const fg = fallsGeometry(def)!;
     expect(finite(fg.getAttribute('position').array as Float32Array)).toBe(true);

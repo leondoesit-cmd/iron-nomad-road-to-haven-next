@@ -253,9 +253,9 @@ export class SiteBuilder {
       this.out.cars.push({ x: bay.x, y: plan.floorY, z: bay.z, yaw: bay.yaw, seed, grade: rb.look === 'dealership' ? 'showroom' : 'workshop', reach: this.reach });
     });
     // The dead who never left: more in warehouses and shops, fewer in barns and sheds.
-    const odds: Record<Look, number> = { house: 0.55, store: 0.7, motel: 0.6, barn: 0.35, warehouse: 0.85, shack: 0.3, garage: 0.6, dealership: 0.5, tyreshop: 0.5 };
+    const odds: Record<Look, number> = { house: 0.55, store: 0.7, motel: 0.6, barn: 0.35, warehouse: 0.85, shack: 0.3, garage: 0.6, dealership: 0.5, tyreshop: 0.5, mall: 1 };
     if (this.rng.next() < odds[rb.look] && plan.lairs.length) {
-      const rooms = this.rng.shuffle([...plan.lairs]).slice(0, rb.look === 'warehouse' || rb.look === 'motel' ? 2 : 1);
+      const rooms = this.rng.shuffle([...plan.lairs]).slice(0, rb.look === 'mall' ? 7 : rb.look === 'warehouse' || rb.look === 'motel' ? 2 : 1);
       for (const l of rooms) {
         const n = rb.look === 'warehouse' ? this.rng.int(2, 4) : this.rng.int(1, 3);
         this.out.zombies.push({ x: l.x, z: l.z, n, spread: 1.4, kinds: this.rng.chance(0.15) ? ['walker', 'runner', 'brute'] : WALKER });

@@ -4,19 +4,19 @@
     "spawnMin": 75,
     "spawnMax": 135,
     "despawnRadius": 210,
-    "maxAlive": 28,
+    "maxAlive": 36,
     "spawnEvery": 3,
     "corpseSeconds": 30
   },
   "species": {
     "hare": {
       "name": "Dust hare", "temper": "prey", "hp": 8, "armor": 0, "walk": 0.8, "run": 10, "radius": 0.18, "size": 0.85,
-      "cap": 8, "sight": 22, "meat": 1, "group": [1, 3], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt", "cinder"], "weight": 5,
+      "cap": 8, "sight": 22, "meat": 1, "group": [1, 3], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt", "cinder"], "weight": 5, "nerve": 0.85,
       "land": { "bare": 1, "meadow": 1.8, "wood": 0.5 }
     },
     "deer": {
       "name": "Scrub antelope", "temper": "prey", "hp": 42, "armor": 0, "walk": 1.2, "run": 13, "radius": 0.4, "size": 1.0,
-      "cap": 9, "sight": 45, "meat": 4, "group": [3, 6], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt"], "weight": 3,
+      "cap": 9, "sight": 45, "meat": 4, "group": [3, 6], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt"], "weight": 3, "nerve": 0.9,
       "land": { "bare": 0.6, "meadow": 2.6, "wood": 1.2 }
     },
     "vulture": {
@@ -36,13 +36,63 @@
     },
     "boar": {
       "name": "Tusker hog", "temper": "charger", "hp": 95, "armor": 0.1, "walk": 1.1, "run": 9.5, "radius": 0.5, "size": 1.0,
-      "cap": 4, "sight": 16, "damage": 14, "vehicleDamage": 12, "meat": 5, "group": [1, 3], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt", "cinder"], "weight": 2,
+      "cap": 4, "sight": 16, "damage": 14, "vehicleDamage": 12, "meat": 5, "group": [1, 3], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt", "cinder"], "weight": 2, "nerve": 0.9,
       "land": { "bare": 0.7, "meadow": 1.4, "wood": 2.2 }
     },
     "bear": {
       "name": "Ash bear", "temper": "brute", "hp": 330, "armor": 0.35, "walk": 1.3, "run": 7.0, "radius": 0.75, "size": 1.0,
       "cap": 1, "sight": 20, "damage": 24, "vehicleDamage": 22, "meat": 10, "group": [1, 1], "legs": 2, "biomes": ["wasteland"], "themes": ["cinder", "salt"], "weight": 1,
       "land": { "bare": 1, "meadow": 0.5, "wood": 3, "wild": true }
+    },
+    "ibex": {
+      "name": "Nubian ibex", "temper": "prey", "hp": 48, "armor": 0, "walk": 0.9, "run": 11.5, "radius": 0.36, "size": 1.0,
+      "cap": 8, "sight": 55, "meat": 3, "group": [2, 6], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt"], "weight": 2, "nerve": 0.85,
+      "land": { "bare": 1.5, "meadow": 0.6, "wood": 0.2, "water": 1.8 }
+    },
+    "camel": {
+      "name": "Feral camel", "temper": "prey", "hp": 160, "armor": 0.1, "walk": 0.9, "run": 8.5, "radius": 0.7, "size": 1.0,
+      "cap": 6, "sight": 40, "meat": 9, "group": [2, 5], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt"], "weight": 1.6, "nerve": 0.45, "call": "bellow",
+      "land": { "bare": 1.6, "meadow": 0.4, "wood": 0 }
+    },
+    "fox": {
+      "name": "Red fox", "temper": "prey", "hp": 14, "armor": 0, "walk": 0.9, "run": 11, "radius": 0.2, "size": 1.0,
+      "cap": 3, "sight": 30, "meat": 1, "group": [1, 1], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt", "cinder"], "weight": 2.2, "nerve": 0.7,
+      "land": { "bare": 0.6, "meadow": 1.6, "wood": 1.6 }
+    },
+    "jackal": {
+      "name": "Golden jackal", "temper": "scavenger", "hp": 22, "armor": 0, "walk": 1.2, "run": 9.5, "radius": 0.26, "size": 1.0,
+      "cap": 6, "sight": 38, "meat": 1, "group": [2, 5], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt", "cinder"], "weight": 2, "nerve": 0.8, "nocturnal": true, "call": "howl",
+      "land": { "bare": 1, "meadow": 1.3, "wood": 1.0, "water": 1.3 }
+    },
+    "buffalo": {
+      "name": "Water buffalo", "temper": "brute", "hp": 420, "armor": 0.3, "walk": 1.0, "run": 7.5, "radius": 0.8, "size": 1.0,
+      "cap": 5, "sight": 18, "damage": 26, "vehicleDamage": 20, "meat": 12, "group": [2, 5], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt", "cinder"], "weight": 1.4, "nerve": 0.6, "wade": 1.3, "call": "bellow",
+      "land": { "bare": 0.2, "meadow": 1.2, "wood": 0.4, "water": 4, "needWater": true }
+    },
+    "heron": {
+      "name": "Grey heron", "temper": "wader", "hp": 10, "armor": 0, "walk": 0.45, "run": 9, "radius": 0.25, "size": 1.0,
+      "cap": 4, "sight": 32, "meat": 1, "group": [1, 2], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt", "cinder"], "weight": 2.2, "nerve": 0.85, "altitude": 9, "wade": 0.45, "call": "caw",
+      "land": { "bare": 0.6, "meadow": 1, "wood": 0.8, "water": 5, "needWater": true }
+    },
+    "stork": {
+      "name": "White stork", "temper": "wader", "hp": 14, "armor": 0, "walk": 0.7, "run": 10, "radius": 0.28, "size": 1.0,
+      "cap": 10, "sight": 36, "meat": 1, "group": [3, 9], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt"], "weight": 1.6, "nerve": 0.65, "altitude": 22, "wade": 0.3,
+      "land": { "bare": 0.3, "meadow": 2.2, "wood": 0.2, "water": 1.8 }
+    },
+    "duck": {
+      "name": "Mallard", "temper": "swimmer", "hp": 6, "armor": 0, "walk": 0.6, "run": 13, "radius": 0.2, "size": 1.0,
+      "cap": 12, "sight": 26, "meat": 1, "group": [3, 8], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt", "cinder"], "weight": 0, "nerve": 0.8, "altitude": 8, "call": "quack",
+      "land": { "bare": 1, "meadow": 1, "wood": 1, "needWater": true }
+    },
+    "egret": {
+      "name": "Little egret", "temper": "wader", "hp": 6, "armor": 0, "walk": 0.6, "run": 9, "radius": 0.18, "size": 1.0,
+      "cap": 8, "sight": 24, "meat": 0, "group": [1, 4], "legs": 1, "biomes": ["wasteland"], "themes": ["dust", "salt", "cinder"], "weight": 2, "nerve": 0.6, "altitude": 7, "wade": 0.3, "call": "caw",
+      "land": { "bare": 0.5, "meadow": 1.2, "wood": 0.6, "water": 5, "needWater": true }
+    },
+    "crow": {
+      "name": "Hooded crow", "temper": "bird", "hp": 6, "armor": 0, "walk": 4.5, "run": 10, "radius": 0.2, "size": 1.0,
+      "cap": 8, "sight": 22, "meat": 0, "group": [2, 6], "legs": 1, "biomes": ["wasteland", "city"], "themes": ["dust", "salt", "cinder"], "weight": 2.2, "altitude": 7, "forage": true, "call": "caw",
+      "land": { "bare": 1.1, "meadow": 1.3, "wood": 0.6 }
     }
   }
 }

@@ -92,7 +92,7 @@ export class DebrisField {
       .setFriction(0.8)
       .setRestitution(0.28)
       // Until it is armed it belongs to the "people" group: solid to the ground, invisible to vehicles and to the wheel rays.
-      .setCollisionGroups(groups(G.PLAYER, G.STATIC));
+      .setCollisionGroups(groups(G.PLAYER, G.STATIC | G.ROAD));
     const collider = P.world.createCollider(desc, body);
     const mesh = new THREE.Mesh(o.geo, o.material);
     mesh.castShadow = true;
@@ -205,13 +205,14 @@ export class DebrisField {
   // ------------------------------------------------------------------ lifting
 
   /** The nearest settled piece that still carries a part, as something to lift. */
-  nearestLoose(x: number, z: number, r: number, prefer?: string): Loose | null {
+  nearestLoose(x: number, z: number, r: number, prefer?: string, skip?: string[]): Loose | null {
     let best: Loose | null = null;
     let bd = r;
     for (const p of this.pieces) {
       if ((!p.item && !p.carried) || p.rest < 0.8) continue;
       const t = p.body.translation();
       const id = `debris:${p.id}`;
+      if (skip?.includes(id)) continue;
       const d = Math.hypot(t.x - x, t.z - z) - (id === prefer ? 0.3 : 0);
       if (d < bd) {
         bd = d;

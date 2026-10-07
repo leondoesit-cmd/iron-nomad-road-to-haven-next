@@ -1,4 +1,5 @@
-import { PARTS, isInteriorSlot, mountsFor, partDef, type FuelType, type PartSlot, type VehicleDef } from '../data';
+import { FOODS, type FoodId } from './food';
+import { PARTS, isGlassSlot, isInteriorSlot, mountsFor, partDef, type FuelType, type PartSlot, type VehicleDef } from '../data';
 import { RARITY_CSS, describePart, isWorn, slotsOf, type PartItem } from './parts';
 import { OIL_CAN, pourOil } from './oil';
 import { bayFit, bayText, engineLine, type HoodState } from './engines';
@@ -22,7 +23,11 @@ export type Carried =
   /** A spray can: a colour and how many panels it has left in it. */
   | { kind: 'paint'; color: number; charges: number }
   /** Water in litres: a full can is ten. For the radiator. */
-  | { kind: 'water'; amount: number };
+  | { kind: 'water'; amount: number }
+  /** Something to eat, carried by hand: a tin of dog food, a lizard caught on the hot ground. Eaten on the spot or stowed. */
+  | { kind: 'food'; food: FoodId };
+
+export { FOODS, type FoodId } from './food';
 
 /** What a full fuel can holds. */
 export const FUEL_CAN = 5;
@@ -50,8 +55,12 @@ export function partModelKey(id: string): string {
   const d = partDef(id);
   // Every cabin part has a model of its own (`render/partModels.ts`), not one per quality.
   if (isInteriorSlot(d.slot)) return `part:${id}`;
+  // Panes of glass have a model each too.
+  if (isGlassSlot(d.slot)) return `part:${id}`;
   // Every engine has a model of its own, drawn from its spec (`render/engineModels.ts`).
   if (d.slot === 'engine') return `part:${id}`;
+  // The trike's whole wheels and the lift kit have models of their own (`render/trikeModel.ts`).
+  if (id === 'tyre_trike' || id === 'tyre_trike_r' || id === 'sus_lift' || id === 'rr_rickshaw') return `part:${id}`;
   const mk = Math.min(3, Math.max(1, d.stock ? 1 : d.mk));
   const KEY: Partial<Record<PartSlot, string>> = {
     engine: 'engine',
@@ -73,6 +82,7 @@ export function carryModelKey(c: Carried): string {
   if (c.kind === 'part') return /^part\d$/.test(partModelKey(c.item.id)) ? `part:${c.item.id}` : partModelKey(c.item.id);
   if (c.kind === 'fuel') return c.fuel === 'diesel' ? 'diesel' : 'fuel';
   if (c.kind === 'paint') return `paint:${c.color.toString(16)}`;
+  if (c.kind === 'food') return `food:${c.food}`;
   return c.kind;
 }
 
@@ -89,6 +99,7 @@ export function partInspect(it: PartItem): InspectLine[] {
     const pct = Math.round(it.cond * 100);
     lines.push({ text: `${pct} %`, css: pct < 35 ? '#ff8a6a' : pct < 70 ? '#ffcf6a' : '#c8f0b8' });
   }
+  if (isGlassSlot(d.slot) && !d.empty) lines.push({ text: it.cond >= 0.8 ? 'Whole' : it.cond >= 0.4 ? 'Cracked' : 'Crazed with cracks', css: it.cond >= 0.8 ? '#c8f0b8' : it.cond >= 0.4 ? '#ffcf6a' : '#ff8a6a' });
   const info = describePart(d);
   if (d.engine && !d.empty) lines.push({ text: `${engineLine(d.engine)}` });
   else if (d.cooling !== undefined && !d.empty) lines.push({ text: `Cooling - ${Math.round(d.cooling)} kW` });
@@ -109,7 +120,15 @@ export function inspectLines(c: Carried): InspectLine[] {
       return [{ text: 'Water can', css: '#8ecbff' }, { text: `${c.amount.toFixed(1)} L` }, { text: 'For the radiator' }];
     case 'paint':
       return [{ text: 'Spray can', css: `#${c.color.toString(16).padStart(6, '0')}` }, { text: colorName(c.color) }, { text: `${c.charges} panel${c.charges === 1 ? '' : 's'} left` }];
+    case 'food':
+      return foodLines(c.food);
   }
+}
+
+/** The tag over something to eat: its name, then what it does for hunger and health. */
+export function foodLines(food: FoodId): InspectLine[] {
+  const f = FOODS[food];
+  return [{ text: f.name, css: '#f0e2c0' }, { text: `Hunger -${f.hunger}`, css: '#ffd27a' }, { text: `Health +${f.health}`, css: '#c8f0b8' }];
 }
 
 export function carriedName(c: Carried): string {
@@ -124,6 +143,8 @@ export function carriedName(c: Carried): string {
       return `Spray can (${colorName(c.color)}, ${c.charges} left)`;
     case 'water':
       return c.amount >= WATER_CAN - 0.05 ? 'Water can' : `Water can (${c.amount.toFixed(1)} L)`;
+    case 'food':
+      return FOODS[c.food].name;
   }
 }
 
@@ -140,6 +161,8 @@ export function carrySlow(c: Carried): number {
       return 0.96;
     case 'water':
       return 0.8;
+    case 'food':
+      return 0.98;
   }
 }
 
@@ -194,6 +217,8 @@ function verbOf(c: Carried): string {
       return 'top up the radiator';
     case 'paint':
       return 'spray it';
+    case 'food':
+      return 'eat it';
   }
 }
 
@@ -203,6 +228,7 @@ export function planFit(c: Carried, t: FitTarget): FitPlan {
     const d = partDef(c.item.id);
     if (!mountsFor(d.slot).some((m) => slotsOf(t.def).includes(m))) return { ok: false, label: `A ${t.def.name} has no ${PARTS.labels[d.slot].toLowerCase()} mount`, secs: 1 };
   }
+  if (c.kind === 'food') return { ok: false, label: `${FOODS[c.food].name} does not go on a ${t.def.name}: put it in, or eat it`, secs: 1 };
   if (t.access && c.kind !== 'paint') {
     const job: Job = c.kind === 'part' ? t.access.mount ?? partDef(c.item.id).slot : c.kind;
     const g = gate(t.def, job, t.access.at, t.access.open);
@@ -211,6 +237,15 @@ export function planFit(c: Carried, t: FitTarget): FitPlan {
   switch (c.kind) {
     case 'part': {
       const d = partDef(c.item.id);
+      // A door's window goes in a door that is on and has a window to put it in.
+      const glassMount = t.access?.mount ?? d.slot;
+      if ((glassMount === 'glassL' || glassMount === 'glassR') && !d.empty) {
+        const door = glassMount === 'glassL' ? 'doorL' : 'doorR';
+        const dd = slotsOf(t.def).includes(door) ? t.fitted(door) : undefined;
+        if (slotsOf(t.def).includes(door) && (!dd || partDef(dd.id).empty || partDef(dd.id).window === false)) {
+          return { ok: false, label: `The ${glassMount === 'glassL' ? 'left' : 'right'} door has no window frame: fit a door with a window first`, secs: 1 };
+        }
+      }
       const old = t.current === undefined ? t.fitted(d.slot) : t.current ?? undefined;
       // A panel (the bonnet, a door) is not swapped in place: the old one comes off first.
       const mount = t.access?.mount ?? d.slot;
@@ -305,6 +340,8 @@ export function planStow(c: Carried, room: StowRoom, access?: { def: VehicleDef;
       return (room.water ?? 0) > 0.5 ? { ok: true, label: 'Stow the water' } : { ok: false, label: 'No room for more water' };
     case 'paint':
       return { ok: false, label: 'Spray cans stay on the road' };
+    case 'food':
+      return { ok: true, label: `Stow ${FOODS[c.food].name.toLowerCase()} with the rations` };
   }
 }
 

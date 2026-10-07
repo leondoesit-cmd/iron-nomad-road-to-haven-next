@@ -285,8 +285,9 @@ export class CarField {
   canSalvage(v: Vehicle): boolean {
     if (v.salvaged >= SALVAGE_STAGES.length) return false;
     if (v.faction === 'convoy' && !v.wreck) return false;
-    if (v.faction === 'raider' && !v.wreck) return false;
-    return v.faction === 'neutral' || v.wreck;
+    if (v.hostile) return false;
+    // A raider car left whole by its dead or fled crew is as good to strip as any.
+    return v.faction === 'neutral' || v.wreck || v.abandoned;
   }
 
   nextStage(v: Vehicle) {
@@ -308,6 +309,8 @@ export class CarField {
     const ctx = this.ctx;
     const stage = v.salvaged;
     const b = v.build;
+    // The windows have taken what they have taken: write it to the build before reading what can be pulled out of it.
+    if (b) v.bodywork.commit();
     const c: SalvageCtx = {
       seed: b?.seed ?? v.id * 977,
       kind: this.kindOf(v),
@@ -372,7 +375,7 @@ export class CarField {
   describe(v: Vehicle): string {
     if (v.wreck) return v.salvaged >= SALVAGE_STAGES.length ? 'STRIPPED HULK' : 'WRECK';
     if (v.faction === 'neutral') return 'ABANDONED';
-    if (v.faction === 'raider') return 'RAIDER';
+    if (v.faction === 'raider') return v.abandoned ? 'ABANDONED' : 'RAIDER';
     return 'CONVOY';
   }
 }

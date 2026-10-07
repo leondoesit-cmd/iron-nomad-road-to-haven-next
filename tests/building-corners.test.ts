@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { generatePlan, type Look } from '../src/world/interiors';
 import { buildBuildingGeometry } from '../src/render/buildingView';
 
-const SIZES: Record<Look, [number, number][]> = {
+// The mall is authored, not generated to a size: it has its own tests (mall.test.ts).
+const SIZES: Record<Exclude<Look, 'mall'>, [number, number][]> = {
   house: [[7, 8], [11, 9]],
   store: [[9, 16], [12, 10]],
   motel: [[9, 34]],
@@ -19,7 +20,7 @@ describe('building corners', () => {
   it('no sight line from outside reaches the corner column of a wall shell', () => {
     const reach = 3;
     const bad: string[] = [];
-    for (const look of Object.keys(SIZES) as Look[]) {
+    for (const look of Object.keys(SIZES) as (keyof typeof SIZES)[]) {
       SIZES[look].forEach(([w, d], i) => {
         for (let seed = 1; seed <= 6; seed++) {
           const floors = look === 'house' && seed % 3 === 0 ? 2 : 1;

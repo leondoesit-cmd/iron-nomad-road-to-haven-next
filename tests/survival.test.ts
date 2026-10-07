@@ -107,16 +107,23 @@ describe('bleeding rules', () => {
 });
 
 describe('weapon wear', () => {
-  it('plays like new above the line, then worsens, and jams only when nearly gone', () => {
+  it('plays like new above the line, then worsens, and jams rarely until it is nearly gone', () => {
     expect(wearSpread(undefined)).toBe(1);
     expect(wearSpread(0.8)).toBe(1);
     expect(wearSpread(0.1)).toBeGreaterThan(wearSpread(0.4));
     expect(wearDamage(0.05)).toBeLessThan(wearDamage(0.4));
     expect(wearDamage(0.05)).toBeGreaterThan(0.6);
-    expect(jamChance(0.5)).toBe(0);
-    expect(jamChance(0.3)).toBeGreaterThan(0);
+    // A dud now and then even in a sound gun, but rare: about one in a thousand pulls.
+    expect(jamChance(undefined)).toBeGreaterThan(0);
+    expect(jamChance(undefined)).toBeLessThan(0.002);
+    expect(jamChance(0.7)).toBeGreaterThan(jamChance(1));
+    expect(jamChance(0.5)).toBeGreaterThan(jamChance(0.7));
+    expect(jamChance(0.5)).toBeLessThan(0.02);
+    expect(jamChance(0.3)).toBeGreaterThan(jamChance(0.5));
     expect(jamChance(0)).toBeGreaterThan(jamChance(0.3));
     expect(jamChance(0)).toBeLessThan(0.5);
+    // It never drops as the gun gets worse.
+    for (let c = 1; c > 0; c -= 0.01) expect(jamChance(c - 0.01)).toBeGreaterThanOrEqual(jamChance(c));
   });
 
   it('repair prices scale with damage and rarity, and a mint weapon costs nothing', () => {

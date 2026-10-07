@@ -1,18 +1,22 @@
+import { MELABES } from '../world/melabes';
+import { staticTransform } from './staticTransform';
+import { FadedBatch } from './fadedBatch';
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { appendProp } from './props';
 import { appendLandmark, LANDMARK_KINDS } from './landmarks';
-import { PROP_DYNAMIC, instanceHullPoints, propCollisionMesh, propSurface } from './propCollision';
+import { PROP_DYNAMIC, instanceHullPoints, propBuilder, propCollisionMesh, propSurface } from './propCollision';
 import { C } from './palette';
 import { makePavingMaterial, makeRoadMaterial, makeTerrainMaterial, ROAD_REPEAT, type GroundTheme } from './terrainMaterial';
 import { FacadeBuilder, facadeMaterial } from './facade';
 import { crate, plate, spareTyre } from './parts';
 import { buildScatterSteps, type ScatterSet } from './scatter';
 import { kitMaterial } from './materials';
-import { SHOP_H, SHOP_W, shopFrontMaterial, type ShopId } from './shopFront';
+import { buildShopFrontDetails, buildShopFrontPanel, shopFrontMaterial, type ShopId } from './shopFront';
+import { MelabesWorker } from './shopWorker';
 import { buildSignGeometries } from './signs';
 import { CELL, CELLS, CHUNK, corridorHalf, heightAt, normalAt, roadX, surfaceAt, waterAt, type TerrainDef } from '../world/terrain';
-import { nearestRoad, type RoadPath } from '../world/openWorld';
+import { cityChunk, nearestRoad, roadLayer, type RoadPath } from '../world/openWorld';
 import type { BuildingSpec, ChunkData } from '../world/chunkgen';
 import type { Aabb } from '../world/layout';
 import { facadeStyleOf } from '../world/shopGlass';
@@ -22,8 +26,11 @@ import { GROUPS, type Collider, type PhysicsWorld } from '../physics/physics';
 import { hash2, noise2 } from '../core/rng';
 import { smoothstep } from '../core/math';
 import { forestAt, hydroCalm, lushAt } from '../world/hydro';
-import { mixWater, wetGround, type GroundMix } from './groundMix';
-import { buildTreesSteps, TREE_NEAR_SHOW, type TreeSet } from './trees';
+import { bendGround } from '../world/millBend';
+import { dryGround, mixDry, mixWater, wetGround, type GroundMix } from './groundMix';
+import { buildTreesSteps, charTreeInstance, TREE_NEAR_SHOW, type TreeSet } from './trees';
+import { Vegetation } from './vegetation';
+import type { VegetationMemory } from '../sim/vegetation';
 
 export interface ChunkMaterials {
   terrain: THREE.Material;
@@ -32,6 +39,11 @@ export interface ChunkMaterials {
   roofs: THREE.Material;
   road: THREE.Material;
 }
+
+/** How far out from a road's drawn edge its collider ramps down into the ground, metres. */
+const ROAD_RAMP = 0.6;
+/** How much higher an open-world road is drawn for each road it crosses under it (`roadLayer`), so the two do not fight. */
+const ROAD_STACK = 0.012;
 
 export function makeChunkMaterials(biome: 'wasteland' | 'city', theme?: GroundTheme): ChunkMaterials {
   return {
@@ -63,6 +75,8 @@ const pavingMaterial = () => {
 };
 
 export interface ChunkOpts {
+  vegetationMemory?: VegetationMemory;
+  onTreeBreak?: (index: number) => void;
   /** Ground cover density, 0..1 (quality setting). */
   scatter: number;
   /**
@@ -93,21 +107,27 @@ export function cliffDetail(def: TerrainDef, x: number, z: number): number {
 
 /** Big ridges and peaks on the slopes beyond the canyon rim: the far scenery, never reachable. */
 /**
- * How far the drawn road sits above the ground under it (the collider's surface) at a point, 0 off the road. The road is a
- * crowned strip laid a few centimetres up, so anything meant to lie on the road (blood, brass, a thrown limb) rests on this.
+ * How far the drawn road sits above the terrain heightfield under it at a point, 0 off the road. The road is a crowned strip
+ * laid a few centimetres up, so anything meant to lie on the road (blood, brass, a thrown limb) rests on this. Wheels and
+ * feet need no help: the road has its own collider (`G.ROAD`), which rays for marks and rounds do not see.
  */
 export function roadLift(def: TerrainDef, x: number, z: number): number {
-  const city = def.biome === 'city';
-  const crown = city ? 0.07 : 0.05;
   if (def.open) {
+    // As `buildOpenRoads` lays it: each later road a little higher, a crown over the carriageway, a level shoulder past it.
     const h = nearestRoad(def.open, x, z);
-    if (!h.road || h.road.kind === 'track' || h.edge > 0) return 0;
+    const urban = cityChunk(def.open, Math.floor(x / CHUNK), Math.floor(z / CHUNK));
+    if (!h.road || h.road.kind === 'track' || h.edge > (urban ? 0.04 : 0.7)) return 0;
+    const base = 0.035 + roadLayer(def.open, def.open.roads.indexOf(h.road)) * ROAD_STACK;
+    if (h.edge > 0) return base;
     const t = h.d / h.road.half;
-    return 0.035 + crown * (1 - t * t);
+    return base + (urban ? 0.07 : 0.05) * (1 - t * t);
   }
+  const city = def.biome === 'city';
   const half = city ? BOULEVARD_HALF : def.roadHalf;
-  const t = Math.abs(x - roadX(def, z)) / half;
-  return t > 1 ? 0 : 0.035 + crown * (1 - t * t);
+  const d = Math.abs(x - roadX(def, z));
+  if (d > half + (city ? 0.04 : 0.7)) return 0;
+  const t = Math.min(1, d / half);
+  return 0.035 + (city ? 0.07 : 0.05) * (1 - t * t);
 }
 
 export function mountainRelief(def: TerrainDef, x: number, z: number, d = Math.abs(x - roadX(def, z)), ch = corridorHalf(def, z)): number {
@@ -136,7 +156,8 @@ function cliffPush(def: TerrainDef, x: number, z: number, h: number): [number, n
 
 /** Meshes plus colliders for one 128 m chunk. Created and disposed by the streaming system. */
 export class ChunkView {
-  group = new THREE.Group();
+  group = staticTransform(new THREE.Group());
+  readonly vegetation: Vegetation;
   /** Glass over the shopfronts of this chunk, one pane to each of the glass boxes in its data. */
   panes = new PaneSet();
   colliders: Collider[] = [];
@@ -144,6 +165,8 @@ export class ChunkView {
   barricadeMeshes = new Map<number, THREE.Mesh>();
   private geos: THREE.BufferGeometry[] = [];
   private instanced: THREE.InstancedMesh[] = [];
+  private fadedBatches: FadedBatch[] = [];
+  private shopWorkers: MelabesWorker[] = [];
   /** This chunk is city: city ground, boulevard, facades. In a city leg that is every chunk; in the open world, the district's. */
   private city = false;
   /** Visual work still to do on a staged chunk. */
@@ -161,6 +184,8 @@ export class ChunkView {
     const x0 = data.cx * CHUNK;
     const z0 = data.cz * CHUNK;
     this.city = data.city;
+    this.vegetation = new Vegetation(phys, opts.vegetationMemory, opts.onTreeBreak);
+    this.vegetation.addTrees(data.trees);
     this.buildColliders(def, x0, z0);
     const ground = this.buildTerrain(def, mats, x0, z0);
     this.stages.push(
@@ -192,8 +217,15 @@ export class ChunkView {
   /** Run the next stage of a staged chunk. Returns whether there is more to do. */
   buildNext(): boolean {
     const stage = this.stages[0];
+    const firstNew = this.group.children.length;
     if (stage && !stage()) this.stages.shift();
+    // New scenery has received its final placement by the end of this slice. Worker/hinge descendants stay animated.
+    for (let i = firstNew; i < this.group.children.length; i++) staticTransform(this.group.children[i]);
     return this.stages.length > 0;
+  }
+
+  updateShopWorkers(time: number, remaining = 2) {
+    for (const worker of this.shopWorkers) worker.update(time, remaining);
   }
 
   private addMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cast: boolean, receive: boolean) {
@@ -249,6 +281,7 @@ export class ChunkView {
     const tdat = new Float32Array(total * 4);
     const ao = new Float32Array(vcount).fill(1);
     const green = !city && !!def.hydro?.lush;
+    const bendHere = !city && !!def.bends?.some((b) => Math.abs(b.loop.x - (x0 + CHUNK / 2)) < b.loop.r + CHUNK && Math.abs(b.loop.z - (z0 + CHUNK / 2)) < b.loop.r + CHUNK);
     const gm: GroundMix = { sand: 0, earth: 0, rock: 0, gravel: 0, wet: 0, tr: 1, tg: 1, tb: 1 };
     // Contact darkening around props and obstacles.
     const shade = (cx: number, cz: number, rad: number, amount: number) => {
@@ -310,6 +343,7 @@ export class ChunkView {
         let earth = 0;
         let gravel = 0;
         let wet = 0;
+        let clay = 0;
         let track = false;
         // How green and how wooded (packed into tdata for the shader; the far landscape packs the same).
         const L = green ? lushAt(def, x, z) : 0;
@@ -333,8 +367,12 @@ export class ChunkView {
           sand = surf === 'sand' ? 1 - L * 0.75 : smoothstep(0.5, 0.78, noise2(x / 36 + 3, z / 36, seed + 72)) * 0.85 * (1 - L * 0.8);
           earth = track ? 0.1 : 0.55 + noise2(x / 23, z / 23, seed + 73) * 0.6 + L * 0.3;
           if (surf === 'mud') {
-            wet = 0.75;
-            sand *= 0.2;
+            // A clay patch in a hollow of the desert: dry, pale and crazed, never a wet stain. Rain stands on it as puddles
+            // (the terrain shader's), and by water `mixWater` below makes it the bank or the bed it really is.
+            earth = Math.max(earth, 1.0);
+            sand *= 0.15;
+            gravel *= 0.35;
+            clay = 1;
           }
         }
         // By water (a lake's beach and floor, river banks and beds, a spring's bowl, a swamp): see `mixWater`.
@@ -351,6 +389,59 @@ export class ChunkView {
           gm.tr = gm.tg = gm.tb = 1;
           mixWater(gm, wg);
           ({ sand, earth, rock, gravel, wet, tr, tg, tb } = gm);
+        } else if (clay) {
+          tr = 1.1;
+          tg = 1.07;
+          tb = 1.0;
+        }
+        // A dry wash's gravel bed and cut banks, a clay pan's pale floor.
+        const dg = city ? null : dryGround(def, x, z);
+        if (dg) {
+          gm.sand = sand;
+          gm.earth = earth;
+          gm.rock = rock;
+          gm.gravel = gravel;
+          gm.wet = wet;
+          gm.tr = tr;
+          gm.tg = tg;
+          gm.tb = tb;
+          mixDry(gm, dg);
+          ({ sand, earth, rock, gravel, wet, tr, tg, tb } = gm);
+        }
+        // A river bend's ground: the woods' own floor of fallen leaves under each old gum (the shader draws it where the land
+        // reads as wooded), and the landing's mud, dark and wet with puddles in it.
+        let Lg = L;
+        let Fg = F;
+        const bg = bendHere ? bendGround(def, x, z) : null;
+        if (bg && bg.bare > 0) {
+          Fg = Math.max(F, bg.bare * 0.9);
+          Lg = Math.max(L, 0.62 * bg.bare);
+          earth = earth + (1.1 - earth) * bg.bare;
+          sand *= 1 - bg.bare;
+          gravel *= 1 - 0.8 * bg.bare;
+        }
+        if (bg && bg.path > 0) {
+          // The footpath over the crossing: trodden earth, a little darker, no grass.
+          const k = bg.path;
+          earth += (0.9 - earth) * k;
+          sand *= 1 - 0.9 * k;
+          gravel += (0.8 - gravel) * k;
+          Lg *= 1 - 0.9 * k;
+          wet = Math.max(wet, 0.35 * k);
+          tr *= 1 - 0.42 * k;
+          tg *= 1 - 0.48 * k;
+          tb *= 1 - 0.54 * k;
+        }
+        if (bg && bg.mud > 0) {
+          const m = bg.mud;
+          earth += (1.0 - earth) * m;
+          sand += (0.15 - sand) * m;
+          gravel += (0.35 - gravel) * m;
+          Lg = L * (1 - m);
+          wet = Math.max(wet, 0.95 * m);
+          tr *= 1 - 0.34 * m;
+          tg *= 1 - 0.4 * m;
+          tb *= 1 - 0.46 * m;
         }
         const keep = 1 - rock;
         sand *= keep;
@@ -366,8 +457,8 @@ export class ChunkView {
         const a = Math.min(1, Math.max(0.45, 1 - Math.max(0, concave) * 0.22)) * ao[i];
         tdat[i * 4] = a;
         tdat[i * 4 + 1] = wet;
-        tdat[i * 4 + 2] = L;
-        tdat[i * 4 + 3] = F;
+        tdat[i * 4 + 2] = Lg;
+        tdat[i * 4 + 3] = Fg;
         const k = 0.93 + hash2(Math.round(x / CELL), Math.round(z / CELL), 5) * 0.14;
         const kk = k * (0.82 + 0.18 * a);
         col[i * 3] = kk * tr;
@@ -447,6 +538,7 @@ export class ChunkView {
     const nSeg = CHUNK / step;
     const tmp: [number, number, number] = [0, 1, 0];
     const x0 = this.data.cx * CHUNK;
+    const drawn: number[] = [];
     let rows = 0;
     let lastIn = false;
     for (let i = 0; i <= nSeg; i++) {
@@ -472,6 +564,7 @@ export class ChunkView {
       if (i < nSeg && inCol) {
         const a = rows * cols;
         for (let k = 0; k < cols - 1; k++) idx.push(a + k, a + cols + k, a + k + 1, a + k + 1, a + cols + k, a + cols + k + 1);
+        drawn.push(rows);
       }
       lastIn = inCol;
       rows++;
@@ -486,6 +579,56 @@ export class ChunkView {
     g.computeBoundingSphere();
     const m = this.addMesh(g, mats.road, false, true);
     m.position.set(x0, 0, z0);
+    this.roadCollider(def, verts, cols, drawn, x0, z0);
+  }
+
+  /**
+   * The road as the wheels feel it: the drawn ribbon itself (chunk-local `verts`, `cols` across, row by row), as a collider
+   * on top of the heightfield, so a car, a moped or a person stands on the asphalt that is drawn and not on the ground a
+   * hand's breadth under it. `drawn` lists the rows that start a drawn strip. Each side gets a short ramp down into the
+   * ground, under the terrain mesh where it is buried, so tyres and feet roll up onto the road instead of meeting a ledge.
+   */
+  private roadCollider(def: TerrainDef, verts: number[], cols: number, drawn: number[], x0: number, z0: number) {
+    if (!drawn.length) return;
+    const rows = verts.length / 3 / cols;
+    const n = rows * cols;
+    const pos = new Float32Array((n + rows * 2) * 3);
+    for (let i = 0; i < n; i++) {
+      pos[i * 3] = verts[i * 3] + x0;
+      pos[i * 3 + 1] = verts[i * 3 + 1];
+      pos[i * 3 + 2] = verts[i * 3 + 2] + z0;
+    }
+    // The foot of each ramp: carried on out across the road, into the ground.
+    const foot = (r: number, edge: number, inner: number, at: number) => {
+      const ex = pos[(r * cols + edge) * 3];
+      const ez = pos[(r * cols + edge) * 3 + 2];
+      let dx = ex - pos[(r * cols + inner) * 3];
+      let dz = ez - pos[(r * cols + inner) * 3 + 2];
+      const l = Math.hypot(dx, dz) || 1;
+      dx /= l;
+      dz /= l;
+      const x = ex + dx * ROAD_RAMP;
+      const z = ez + dz * ROAD_RAMP;
+      pos[at * 3] = x;
+      pos[at * 3 + 1] = heightAt(def, x, z) - 0.08;
+      pos[at * 3 + 2] = z;
+    };
+    for (let r = 0; r < rows; r++) {
+      foot(r, 0, 1, n + r);
+      foot(r, cols - 1, cols - 2, n + rows + r);
+    }
+    const idx: number[] = [];
+    for (const r of drawn) {
+      const a = r * cols;
+      const b = a + cols;
+      for (let k = 0; k < cols - 1; k++) idx.push(a + k, b + k, a + k + 1, a + k + 1, b + k, b + k + 1);
+      const l0 = n + r;
+      const r0 = n + rows + r;
+      idx.push(l0, l0 + 1, a, a, l0 + 1, b);
+      idx.push(a + cols - 1, b + cols - 1, r0, r0, b + cols - 1, r0 + 1);
+    }
+    const c = this.phys.addStaticTrimesh(pos, Uint32Array.from(idx), GROUPS.road);
+    this.colliders.push(this.phys.tag(c, 'concrete'));
   }
 
   /**
@@ -530,11 +673,13 @@ export class ChunkView {
   private roadRibbon(def: TerrainDef, mats: ChunkMaterials, road: RoadPath, ri: number, run: number[], x0: number, z0: number, us: number[], cols: number, half: number, crown: number, tmp: [number, number, number]) {
     const p = road.pts;
     const n = p.length / 2;
+    const lift = roadLayer(def.open!, ri) * ROAD_STACK;
     const verts: number[] = [];
     const nors: number[] = [];
     const uvs: number[] = [];
     const tans: number[] = [];
     const idx: number[] = [];
+    const drawn: number[] = [];
     let arc = 0;
     let rows = 0;
     // Arc length from the road's start, so the lane texture lines up across chunks.
@@ -557,7 +702,7 @@ export class ChunkView {
         const x = p[i * 2] + off * px;
         const z = p[i * 2 + 1] + off * pz;
         const uc = Math.min(1, Math.max(0, u));
-        verts.push(x - x0, heightAt(def, x, z) + 0.035 + ri * 0.012 + crown * (1 - (uc * 2 - 1) ** 2), z - z0);
+        verts.push(x - x0, heightAt(def, x, z) + 0.035 + lift + crown * (1 - (uc * 2 - 1) ** 2), z - z0);
         normalAt(def, x, z, tmp);
         nors.push(tmp[0], tmp[1], tmp[2]);
         uvs.push(u, arc / ROAD_REPEAT);
@@ -566,6 +711,7 @@ export class ChunkView {
       if (k < run.length - 1) {
         const r0 = rows * cols;
         for (let c = 0; c < cols - 1; c++) idx.push(r0 + c, r0 + cols + c, r0 + c + 1, r0 + c + 1, r0 + cols + c, r0 + cols + c + 1);
+        drawn.push(rows);
       }
       rows++;
     }
@@ -578,6 +724,7 @@ export class ChunkView {
     g.computeBoundingSphere();
     const m = this.addMesh(g, mats.road, false, true);
     m.position.set(x0, 0, z0);
+    this.roadCollider(def, verts, cols, drawn, x0, z0);
   }
 
   private *buildScatter(def: TerrainDef, density: number): Generator<void> {
@@ -585,12 +732,15 @@ export class ChunkView {
     // Nothing grows on the lake bed.
     const submerged = def.lakes.length ? (x: number, z: number) => waterAt(def, x, z) !== null : undefined;
     const set = yield* buildScatterSteps(def, this.data.cx, this.data.cz, this.data.aabbs, this.data.props, density, submerged, this.data.heights);
-    for (const im of [set.grass, set.shrubs, ...set.pebbles, ...set.boulders, set.flowers, set.ferns, set.reeds, set.pads]) {
+    for (const im of [set.grass, set.shrubs, ...set.pebbles, ...set.boulders, set.flowers, set.ferns, set.reeds, set.cane, set.pads, set.papyrus, set.iris, set.oleander, set.weed, set.blooms, ...set.bedRocks, set.silt, set.snags, set.shells, set.tape, set.pondweed, set.hornwort, set.snails]) {
       if (!im) continue;
       this.group.add(im);
       this.instanced.push(im);
+      const fadeEnd = (im.material as THREE.Material).userData.scatterFadeEnd;
+      if (typeof fadeEnd === 'number' && !im.castShadow) this.fadedBatches.push(new FadedBatch(im, fadeEnd));
     }
     this.scatterSet = set;
+    this.vegetation.addScatter(set);
     // Stones and boulders are solid: each is a convex hull of its own drawn shape.
     let n = 0;
     for (const im of [...set.pebbles, ...set.boulders]) {
@@ -614,9 +764,18 @@ export class ChunkView {
       this.instanced.push(im);
     }
     this.treeSet = set;
+    this.vegetation.bindTrees(set);
   }
 
   private treeSet: TreeSet | null = null;
+  /** Set once the fires' char has been laid on this chunk's trees (see `LegScene`). */
+  charred = false;
+
+  /** Darken one of this chunk's trees (by its index in `data.trees`) to how far fire has charred it, 0..1. */
+  charTree(idx: number, char: number) {
+    if (this.treeSet) charTreeInstance(this.treeSet, this.data.trees, idx, char);
+    this.vegetation.charTree(idx, char);
+  }
 
   /**
    * Distance from the nearest player to this chunk's edge: small ground cover switches off beyond its fade range, and the 3D
@@ -632,7 +791,31 @@ export class ChunkView {
     if (s.ferns) s.ferns.visible = d < 145;
     if (s.shrubs) s.shrubs.visible = d < 190;
     if (s.reeds) s.reeds.visible = d < 190;
+    if (s.cane) s.cane.visible = d < 235;
     if (s.pads) s.pads.visible = d < 195;
+    if (s.papyrus) s.papyrus.visible = d < 190;
+    if (s.iris) s.iris.visible = d < 110;
+    if (s.oleander) s.oleander.visible = d < 180;
+    if (s.weed) s.weed.visible = d < 68;
+    if (s.blooms) s.blooms.visible = d < 120;
+    // Under the water: only near enough to be seen through it.
+    for (const r of s.bedRocks) r.visible = d < 75;
+    if (s.silt) s.silt.visible = d < 85;
+    if (s.snags) s.snags.visible = d < 120;
+    if (s.shells) s.shells.visible = d < 30;
+    if (s.tape) s.tape.visible = d < 80;
+    if (s.pondweed) s.pondweed.visible = d < 80;
+    if (s.hornwort) s.hornwort.visible = d < 60;
+    if (s.snails) s.snails.visible = d < 25;
+    for (const batch of this.fadedBatches) batch.enabled = batch.mesh.visible;
+  }
+
+  /** Per-camera culling only removes batches whose colour shader already draws zero-area triangles. */
+  setViewDetail(camera: THREE.Vector3) {
+    if (!this.fadedBatches.some(batch => batch.enabled)) return;
+    // Every batch shares these ancestors; refresh them once rather than once per material.
+    this.group.updateWorldMatrix(true, false);
+    for (const batch of this.fadedBatches) batch.updateView(camera, false);
   }
 
   private *buildBuildings(data: ChunkData, mats: ChunkMaterials): Generator<void> {
@@ -663,9 +846,9 @@ export class ChunkView {
       // A shopfront with its own sign takes the place of the awnings.
       const face = !bs.shop && BOULEVARD_HALF + 4 > Math.min(Math.abs(a.minX), Math.abs(a.maxX)) ? (a.minX > 0 ? 'w' : 'e') : null;
       // A pitched roof replaces the flat slab and parapet; a landmark has no shopfront band.
-      this.buildingShell(fb, det, a.minX, a.maxX, a.minZ, a.maxZ, 0, a.y1, tint, style, seed, true, face, { pitched: bs.role === 'synagogue', noShops: !!bs.role });
+      this.buildingShell(fb, det, a.minX, a.maxX, a.minZ, a.maxZ, 0, a.y1, tint, style, seed, true, face, { pitched: bs.role === 'synagogue', noShops: !!bs.role, recess: bs.shop === 'malabes' ? (a.minX > 0 ? 'w' : 'e') : undefined });
       if (bs.role) this.landmarkExtras(det, bs, tint);
-      if (bs.shop) this.shopFront(bs, bs.shop as ShopId);
+      if (bs.shop) this.shopFront(bs, bs.shop as ShopId, mats.roofs);
       if (bs.stepped) {
         const inset = 3;
         if (a.maxX - a.minX > inset * 3 && a.maxZ - a.minZ > inset * 3) {
@@ -684,7 +867,7 @@ export class ChunkView {
   }
 
   /** Walls, ledges, cornice, parapet and (on the boulevard side) shopfront awnings for one block. */
-  private buildingShell(fb: FacadeBuilder, det: MeshBuilder, x0: number, x1: number, z0: number, z1: number, y0: number, y1: number, tint: THREE.Color, style: number, seed: number, ground: boolean, shopFace: 'w' | 'e' | null, civic: { pitched?: boolean; noShops?: boolean } = {}) {
+  private buildingShell(fb: FacadeBuilder, det: MeshBuilder, x0: number, x1: number, z0: number, z1: number, y0: number, y1: number, tint: THREE.Color, style: number, seed: number, ground: boolean, shopFace: 'w' | 'e' | null, civic: { pitched?: boolean; noShops?: boolean; recess?: 'w' | 'e' } = {}) {
     const floorH = 3.3;
     const target = style === 3 ? 1.6 : 2.6 + seed * 0.7;
     const cell = (len: number) => len / Math.max(1, Math.round(len / target));
@@ -697,7 +880,15 @@ export class ChunkView {
       const [bx, bz] = corners[i + 1];
       const len = Math.hypot(bx - ax, bz - az);
       // A landmark has no shopfront band: shifting the wall's v coordinate makes its ground floor an ordinary storey.
+      if (ground && ((civic.recess === 'w' && i === 3) || (civic.recess === 'e' && i === 1))) {
+        const cz = (z0 + z1) / 2, sign = Math.sign(bz - az);
+        const near = cz - sign * MELABES.halfWidth, far = cz + sign * MELABES.halfWidth;
+        fb.wall(ax, az, bx, near, y0, y1, 0, tint, style, seed * 97 + i * 0.37, floorH, cell(len));
+        fb.wall(ax, far, bx, bz, y0, y1, Math.abs(far - az), tint, style, seed * 97 + i * 0.37, floorH, cell(len));
+        fb.wall(ax, near, bx, far, MELABES.height, y1, Math.abs(near - az), tint, style, seed * 97 + i * 0.37, floorH, cell(len));
+      } else {
       fb.wall(ax, az, bx, bz, y0, y1, 0, tint, style, seed * 97 + i * 0.37, floorH, cell(len), civic.noShops ? -floorH * 1.3 : 0);
+      }
       u += len;
     }
     void yb;
@@ -1280,14 +1471,27 @@ export class ChunkView {
     if (!det.empty) this.addMesh(det.build(), mats.roofs, false, true);
   }
 
-  /** A shopfront's drawn sign: one flat panel standing just off the wall that faces the boulevard. */
-  private shopFront(bs: BuildingSpec, id: ShopId) {
+  /** Signage around a recessed shop room, with equipment and a moving worker. */
+  private shopFront(bs: BuildingSpec, id: ShopId, detailMaterial: THREE.Material) {
     const a = bs.aabb;
     const onPositiveSide = a.minX > 0;
-    const geo = new THREE.PlaneGeometry(SHOP_W, SHOP_H);
+    const geo = buildShopFrontPanel();
     geo.rotateY(onPositiveSide ? -Math.PI / 2 : Math.PI / 2);
-    geo.translate(onPositiveSide ? a.minX - 0.14 : a.maxX + 0.14, SHOP_H / 2, (a.minZ + a.maxZ) / 2);
+    geo.translate(onPositiveSide ? a.minX - 0.14 : a.maxX + 0.14, 0, (a.minZ + a.maxZ) / 2);
     this.addMesh(geo, shopFrontMaterial(id), false, false);
+    const details = buildShopFrontDetails(id);
+    details.rotateY(onPositiveSide ? -Math.PI / 2 : Math.PI / 2);
+    details.translate(onPositiveSide ? a.minX - 0.14 : a.maxX + 0.14, 0, (a.minZ + a.maxZ) / 2);
+    this.addMesh(details, detailMaterial, true, true);
+    if (id === 'malabes') {
+      const worker = new MelabesWorker();
+      const frontage = new THREE.Group();
+      frontage.rotation.y = onPositiveSide ? -Math.PI / 2 : Math.PI / 2;
+      frontage.position.set(onPositiveSide ? a.minX - 0.14 : a.maxX + 0.14, 0, (a.minZ + a.maxZ) / 2);
+      frontage.add(worker.root);
+      this.group.add(frontage);
+      this.shopWorkers.push(worker);
+    }
   }
 
   /**
@@ -1427,6 +1631,21 @@ export class ChunkView {
     // Wasteland landmarks are drawn by the far landscape; a city has no such pass, so its few (the metro headhouse) are drawn here.
     const lm = city ? new MeshBuilder() : null;
     for (const p of data.props) {
+      if (p.kind === 'deadTree') {
+        const proto = propBuilder(p);
+        if (proto && !proto.empty) {
+          const mesh = new THREE.InstancedMesh(proto.build(), kitMaterial(), 1);
+          const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.yaw);
+          mesh.setMatrixAt(0, new THREE.Matrix4().compose(new THREE.Vector3(p.x, p.y, p.z), q, new THREE.Vector3(p.scale, p.scale, p.scale)));
+          mesh.computeBoundingSphere();
+          mesh.castShadow = mesh.receiveShadow = true;
+          this.group.add(mesh);
+          this.instanced.push(mesh);
+          this.geos.push(mesh.geometry);
+          this.vegetation.addDeadTree(mesh);
+        }
+        continue;
+      }
       if (!LANDMARK_KINDS.has(p.kind)) {
         // Loose props (tyres, drums) are their own bodies and meshes: see game/looseProps.ts.
         if (!PROP_DYNAMIC[p.kind]) appendProp(b, p);
@@ -1544,9 +1763,10 @@ export class ChunkView {
     // Heightfield for the ground.
     this.colliders.push(this.phys.addHeightfield(x0, z0, CHUNK, CELLS, this.data.heights));
     // Rocks are solid through their mesh below, not a box.
-    for (const a of this.data.aabbs) if (a.kind !== 'rock') this.addAabb(a);
+    for (const a of this.data.aabbs) if (a.kind !== 'rock' && a.kind !== 'tree') this.addAabb(a);
     // Every solid prop collides as its own drawn geometry (furniture group: solid to people and cars, invisible to the camera).
     for (const p of this.data.props) {
+      if (p.kind === 'deadTree') continue;
       const m = propCollisionMesh(p);
       const c = m && this.phys.addPropCollider(m, GROUPS.furn);
       if (c) this.colliders.push(this.phys.tag(c, propSurface(p.kind)));
@@ -1602,6 +1822,9 @@ export class ChunkView {
   }
 
   dispose() {
+    for (const worker of this.shopWorkers) worker.dispose();
+    this.shopWorkers.length = 0;
+    this.vegetation.dispose();
     for (const c of this.colliders) this.phys.removeCollider(c);
     this.colliders = [];
     this.panes.dispose();

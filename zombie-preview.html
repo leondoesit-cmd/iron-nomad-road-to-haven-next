@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Infected model preview</title>
+  <style>
+    body { margin: 0; background: #1b2021; color: #ede5d7; font: 14px system-ui; }
+    header { position: absolute; top: 22px; left: 28px; }
+    h1 { margin: 0 0 6px; font-size: 22px; }
+    p { margin: 0 0 14px; color: #b2b8af; }
+    button, select { background: #303a38; color: #ede5d7; border: 1px solid #697269; padding: 7px 12px; border-radius: 5px; margin-right: 8px; }
+    .label { position: absolute; transform: translateX(-50%); pointer-events: none; text-shadow: 0 1px 4px #000; white-space: nowrap; font-size: 13px; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <header><h1>Infected model preview</h1><p>Drag to orbit · scroll to inspect · all six enemy types</p>
+    <button id="pause">Pause animation</button><button id="looks">Change appearances</button>
+    <select id="pose"><option value="idle">Idle</option><option value="walk">Walk</option><option value="chase">Chase</option><option value="scream">Scream</option><option value="damage">Dismemberment</option><option value="ghost">Phantoms</option></select>
+    <select id="cast" aria-label="Model lineup"><option value="types">All enemy types</option><option value="walkers">Six walker outfits</option></select>
+    <select id="bodies" aria-label="Body variants"><option value="mixed">Mixed bodies</option><option value="female">Female infected</option><option value="male">Male infected</option></select>
+  </header>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+    import { ZombieRenderer } from '/src/render/zombieRender.ts';
+    import { zombieAppearance, ZOMBIE_OUTFITS } from '/src/render/zombieAppearance.ts';
+    import { ZOMBIE_ACTION } from '/src/sim/zombieAnimation.ts';
+    import { ENEMIES } from '/src/data/index.ts';
+    const scene = new THREE.Scene(); scene.background = new THREE.Color(0x1b2021);
+    const renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; document.body.append(renderer.domElement);
+    const camera = new THREE.PerspectiveCamera(36, innerWidth / innerHeight, .03, 100);
+    camera.position.set(2.5, 3.2, 13);
+    const controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0, 1.1, 0); controls.update();
+    scene.add(new THREE.HemisphereLight(0xe0edee, 0x594c38, 2.2));
+    const key = new THREE.DirectionalLight(0xffe6c5, 3.5); key.position.set(-3, 7, 5); key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048); Object.assign(key.shadow.camera, { left: -9, right: 9, top: 5, bottom: -5 }); scene.add(key);
+    const rim = new THREE.DirectionalLight(0xa0c2d3, 2); rim.position.set(4, 4, -5); scene.add(rim);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: 0x333a36, roughness: 1 }));
+    floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+    const infected = new ZombieRenderer({ max: 6 }); const ghosts = new ZombieRenderer({ max: 6, ghost: true }); scene.add(infected.mesh, ghosts.mesh);
+    const kinds = ['walker', 'runner', 'screamer', 'bloater', 'brute', 'stalker'];
+    const labels = kinds.map((kind, i) => { const el = document.createElement('div'); el.className = 'label'; el.textContent = kind[0].toUpperCase() + kind.slice(1); document.body.append(el); return { el, p: new THREE.Vector3((i - 2.5) * 1.5, -.12, .38) }; });
+    let paused = false, time = 0, look = 0; const timer = new THREE.Timer(); timer.connect(document);
+    document.querySelector('#pause').onclick = e => { paused = !paused; e.target.textContent = paused ? 'Resume animation' : 'Pause animation'; };
+    document.querySelector('#looks').onclick = () => { look = (look + 7) % 32; };
+    function frame() {
+      timer.update(); const dt = timer.getDelta(); if (!paused) time += dt;
+      const pose = document.querySelector('#pose').value;
+      const active = pose === 'ghost' ? ghosts : infected;
+      const walkers = document.querySelector('#cast').value === 'walkers';
+      const bodies = document.querySelector('#bodies').value;
+      infected.begin(); ghosts.begin();
+      kinds.forEach((enemyKind, i) => {
+        const kind = walkers ? 'walker' : enemyKind;
+        let variant = (look + i) % 32;
+        if (bodies !== 'mixed') {
+          const outfit = zombieAppearance(variant).outfit;
+          variant = Array.from({ length: 32 }, (_, j) => (look + j) % 32).find(v => {
+            const appearance = zombieAppearance(v);
+            return appearance.outfit === outfit && appearance.female === (bodies === 'female');
+          }) ?? variant;
+        }
+        const appearance = zombieAppearance(variant);
+        labels[i].el.textContent = (walkers ? (appearance.female ? 'Female' : 'Male') : kind[0].toUpperCase() + kind.slice(1)) + ' · ' + ZOMBIE_OUTFITS[appearance.outfit];
+        const move = pose === 'walk' || pose === 'chase' ? 1 : 0;
+        active.push(kind, ENEMIES.zombies[kind].scale, (i - 2.5) * 1.5, 0, 0, 0, time * 3 + i, 0, pose === 'chase' ? 1 : 0, 0, variant, 1, pose === 'damage' ? (i % 2 ? 512 : 160) : 0, 0, 0, { move, action: pose === 'scream' ? ZOMBIE_ACTION.scream : 0, weight: pose === 'scream' ? 1 : 0 });
+      });
+      infected.end(time); ghosts.end(time);
+      for (const { el, p } of labels) { const v = p.clone().project(camera); el.style.left = (v.x * .5 + .5) * innerWidth + 'px'; el.style.top = (-v.y * .5 + .5) * innerHeight + 'px'; }
+      controls.update(); renderer.render(scene, camera); requestAnimationFrame(frame);
+    }
+    addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+    frame();
+  </script>
+</body>
+</html>

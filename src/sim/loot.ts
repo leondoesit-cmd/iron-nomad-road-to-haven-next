@@ -126,6 +126,11 @@ export function specFoot(s: LootSpec): { w: number; d: number; turn?: boolean } 
         case 'doorL':
         case 'doorR':
           return { w: 0.8, d: 0.12, turn: true };
+        case 'glassF':
+        case 'glassB':
+        case 'glassL':
+        case 'glassR':
+          return { w: 0.8, d: 0.12, turn: true };
         default:
           return { w: 0.64, d: 0.44 };
       }
@@ -172,6 +177,10 @@ export function specTag(s: LootSpec): LootTag {
         case 'hood':
         case 'doorL':
         case 'doorR':
+        case 'glassF':
+        case 'glassB':
+        case 'glassL':
+        case 'glassR':
           return 'panel';
         case 'seatD':
         case 'seatP':
@@ -261,19 +270,21 @@ const SPRING: PartSlot[] = ['suspension'];
 const BRAKE: PartSlot[] = ['brakes'];
 const EXHAUST: PartSlot[] = ['exhaust'];
 const PANEL: PartSlot[] = ['hood', 'doorL', 'doorR'];
+/** Panes of glass lean against a wall with the panels. */
+const GLASS: PartSlot[] = ['glassF', 'glassB', 'glassL', 'glassR'];
 /** The cabin: seats, the wheel, the dash. */
 const CABIN: PartSlot[] = ['seatD', 'seatP', 'seatR', 'steer', 'dash'];
 const MOUNT: PartSlot[] = ['armor', 'weapon', 'utility', 'front', 'roof', 'rear', 'side'];
 
 /** Every context's table: what it holds, by weight. */
 const TABLES: Record<LootContext, Entry[]> = {
-  garage: [part(ENGINE, 'engine', 3), part(RADIATOR, 'radiator', 2.2), part(GEARBOX, 'gearbox', 2.2), part(TYRE, 'tyre', 2), part(SPRING, 'spring', 1.5), part(BRAKE, 'brake', 2), part(EXHAUST, 'exhaust', 1.6), part(PANEL, 'panel', 1.2), part(MOUNT, 'mount', 0.6), part(CABIN, 'cabin', 1.3), oil(2), fuel(0.8), water(0.8), paint(0.7)],
+  garage: [part(ENGINE, 'engine', 3), part(RADIATOR, 'radiator', 2.2), part(GEARBOX, 'gearbox', 2.2), part(TYRE, 'tyre', 2), part(SPRING, 'spring', 1.5), part(BRAKE, 'brake', 2), part(EXHAUST, 'exhaust', 1.6), part(PANEL, 'panel', 1.2), part(GLASS, 'panel', 1), part(MOUNT, 'mount', 0.6), part(CABIN, 'cabin', 1.3), oil(2), fuel(0.8), water(0.8), paint(0.7)],
   tyreshop: [part(TYRE, 'tyre', 12), oil(1), part(BRAKE, 'brake', 0.8), paint(0.3)],
-  dealership: [part(TYRE, 'tyre', 2), part(BRAKE, 'brake', 1.5), part(EXHAUST, 'exhaust', 1), part(PANEL, 'panel', 1.5), part(CABIN, 'cabin', 1.6), paint(2), oil(1.5), part(RADIATOR, 'radiator', 1), part(GEARBOX, 'gearbox', 0.8), part(ENGINE, 'engine', 0.5)],
-  warehouse: [part(ENGINE, 'engine', 1.5), part(RADIATOR, 'radiator', 1.5), part(GEARBOX, 'gearbox', 1.5), part(TYRE, 'tyre', 1.5), part(SPRING, 'spring', 1.5), part(BRAKE, 'brake', 1.5), part(EXHAUST, 'exhaust', 1.2), part(PANEL, 'panel', 1), part(MOUNT, 'mount', 2), part(CABIN, 'cabin', 1.2), fuel(1.5), oil(1.5), water(1), food(1)],
+  dealership: [part(TYRE, 'tyre', 2), part(BRAKE, 'brake', 1.5), part(EXHAUST, 'exhaust', 1), part(PANEL, 'panel', 1.5), part(GLASS, 'panel', 1.4), part(CABIN, 'cabin', 1.6), paint(2), oil(1.5), part(RADIATOR, 'radiator', 1), part(GEARBOX, 'gearbox', 0.8), part(ENGINE, 'engine', 0.5)],
+  warehouse: [part(ENGINE, 'engine', 1.5), part(RADIATOR, 'radiator', 1.5), part(GEARBOX, 'gearbox', 1.5), part(TYRE, 'tyre', 1.5), part(SPRING, 'spring', 1.5), part(BRAKE, 'brake', 1.5), part(EXHAUST, 'exhaust', 1.2), part(PANEL, 'panel', 1), part(GLASS, 'panel', 0.7), part(MOUNT, 'mount', 2), part(CABIN, 'cabin', 1.2), fuel(1.5), oil(1.5), water(1), food(1)],
   depot: [part(ENGINE, 'engine', 1.2), part(RADIATOR, 'radiator', 1.5), part(GEARBOX, 'gearbox', 1.5), part(TYRE, 'tyre', 2), part(SPRING, 'spring', 1.5), part(BRAKE, 'brake', 1.5), part(EXHAUST, 'exhaust', 1.2), part(MOUNT, 'mount', 1.5), fuel(2), oil(1.5), water(0.8)],
   gas_station: [fuel(6), oil(4), water(1.5), paint(0.5), food(1.5), part(TYRE, 'tyre', 0.6), part(BRAKE, 'brake', 0.25)],
-  wreck: [part(CABIN, 'cabin', 1.1), part(PANEL, 'panel', 1.2), part(TYRE, 'tyre', 1.4), part(RADIATOR, 'radiator', 1), part(GEARBOX, 'gearbox', 0.8), part(BRAKE, 'brake', 1), part(EXHAUST, 'exhaust', 1), part(SPRING, 'spring', 0.8), part(MOUNT, 'mount', 0.5), fuel(1), oil(1), water(0.5), food(0.6), pills(0.2)],
+  wreck: [part(CABIN, 'cabin', 1.1), part(PANEL, 'panel', 1.2), part(GLASS, 'panel', 1.6), part(TYRE, 'tyre', 1.4), part(RADIATOR, 'radiator', 1), part(GEARBOX, 'gearbox', 0.8), part(BRAKE, 'brake', 1), part(EXHAUST, 'exhaust', 1), part(SPRING, 'spring', 0.8), part(MOUNT, 'mount', 0.5), fuel(1), oil(1), water(0.5), food(0.6), pills(0.2)],
   trunk: [food(2), water(1), oil(1.2), fuel(0.8), pills(0.5), bandage(0.6), ammo(0.8), paint(0.8), part(BRAKE, 'brake', 0.5), part(TYRE, 'tyre', 0.5), part(CABIN, 'cabin', 0.3)],
   farm: [part(ENGINE, 'engine', 2, { diesel: true }), part(GEARBOX, 'gearbox', 1.2), part(RADIATOR, 'radiator', 1.5), part(TYRE, 'tyre', 1.5), part(SPRING, 'spring', 1), fuel(3, 0.8), oil(2), water(2), food(1.5)],
   kitchen: [food(8), water(1.5)],
@@ -287,7 +298,7 @@ const TABLES: Record<LootContext, Entry[]> = {
   police: [ammo(5), medkit(1.5), bandage(1.5), fuel(1)],
   military: [ammo(6), medkit(2), bandage(2), fuel(1.5), part(MOUNT, 'mount', 1)],
   gun_shop: [ammo(6)],
-  container: [part(ENGINE, 'engine', 0.6), part(RADIATOR, 'radiator', 1), part(GEARBOX, 'gearbox', 1), part(TYRE, 'tyre', 1), part(SPRING, 'spring', 1), part(BRAKE, 'brake', 1), part(EXHAUST, 'exhaust', 1), part(PANEL, 'panel', 0.8), part(MOUNT, 'mount', 0.8), fuel(1.5), oil(1), food(1), pills(0.5)],
+  container: [part(ENGINE, 'engine', 0.6), part(RADIATOR, 'radiator', 1), part(GEARBOX, 'gearbox', 1), part(TYRE, 'tyre', 1), part(SPRING, 'spring', 1), part(BRAKE, 'brake', 1), part(EXHAUST, 'exhaust', 1), part(PANEL, 'panel', 0.8), part(GLASS, 'panel', 0.5), part(MOUNT, 'mount', 0.8), fuel(1.5), oil(1), food(1), pills(0.5)],
   bunker: [ammo(3), medkit(2), bandage(2), pills(2), food(2), part(MOUNT, 'mount', 1)],
   cache: [fuel(3), oil(2), part(RADIATOR, 'radiator', 1), part(GEARBOX, 'gearbox', 1), part(TYRE, 'tyre', 1), part(BRAKE, 'brake', 1), part(MOUNT, 'mount', 0.8), food(1)],
   raider: [ammo(4), fuel(2), part(MOUNT, 'mount', 1.5), part(BRAKE, 'brake', 0.8), part(TYRE, 'tyre', 0.8), food(1), bandage(0.8)],

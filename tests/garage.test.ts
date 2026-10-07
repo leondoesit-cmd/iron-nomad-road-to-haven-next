@@ -56,7 +56,8 @@ describe('catalogue', () => {
   });
   it('has four found-car chassis and they are distinct from the tiers', () => {
     expect(VEHICLES.cars.map((c) => c.id).sort()).toEqual(['hatch', 'pickup', 'sedan', 'van']);
-    expect(Object.keys(CHASSIS)).toHaveLength(VEHICLES.tiers.length + VEHICLES.cars.length);
+    // Plus the one-offs (the story's rickshaw trike).
+    expect(Object.keys(CHASSIS)).toHaveLength(VEHICLES.tiers.length + VEHICLES.cars.length + (VEHICLES.special?.length ?? 0));
   });
 });
 

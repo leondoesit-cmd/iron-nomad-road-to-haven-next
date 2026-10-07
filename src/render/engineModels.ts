@@ -33,6 +33,8 @@ const FAMILY: Record<string, Family> = {
   eng_50cc: { block: 0xb4b8bc, cover: 0x232526, accent: 0xe0701a },
   eng_250: { block: 0x2a2c2e, cover: 0x7a2018, accent: 0xc4c8cc },
   eng_650: { block: 0x35383b, cover: 0xc8902a, accent: 0xc4c8cc },
+  // The rickshaw trike's old air-cooled twin: weathered grey alloy gone dark, black covers, rusty brown bits.
+  eng_594: { block: 0x4a4744, cover: 0x1e1d1c, accent: 0x7a5a40 },
   eng_i3: { block: 0xa8acb0, cover: 0x2a5a9a, accent: 0x15171a },
   eng_i4_18: { block: 0x7a7e82, cover: 0x232526, accent: 0xd0c8a8 },
   eng_buggy: { block: 0x2e3032, cover: 0xb0301e, accent: 0xc4c8cc },

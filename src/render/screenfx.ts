@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
+import { FIRE_PARS, fireUniforms } from './fireLight';
 
 /**
  * Screen-space lighting for the HDR scene target. Each player view runs these right after it has been drawn, while that view's
@@ -88,6 +89,7 @@ vec3 normalAt( vec2 l, float z, vec3 P ) {
 
 const LIGHT_FRAG = /* glsl */ `
 ${COMMON}
+${FIRE_PARS}
 uniform mat3 uCamRot;
 uniform vec3 uCamPos;
 uniform vec3 uSunDir;
@@ -231,6 +233,12 @@ void main() {
   vec3 light = vec3( 0.0 );
   if ( uVol.x > 0.0 ) light += shafts( l, d, z, jit );
   if ( uRad.x > 0.0 && uRad.z > 0.5 ) light += radial( l, jit );
+  // Firelight caught in the haze, the rain and the smoke between the eye and the surface: a glow round every fire.
+  if ( fireLightInfo.x > 0.5 && fireLightInfo.y > 0.0 ) {
+    vec3 dirV = vec3( ( l * 2.0 - 1.0 ) * uProjXY, -1.0 );
+    float len = d >= 1.0 ? 600.0 : - z * length( dirV );
+    light += fireScatter( uCamPos, normalize( uCamRot * dirV ), len );
+  }
   gl_FragColor = vec4( min( light, vec3( 16.0 ) ), ao );
 }`;
 
@@ -443,6 +451,7 @@ export class ScreenFX {
         uShadowBias: { value: 0.002 },
         uTime: { value: 0 },
         uAspect: { value: 1 },
+        ...fireUniforms(),
       },
       { AO_SLICES: t.ao[0], AO_STEPS: t.ao[1], VOL_STEPS: t.vol, RAD_STEPS: t.rad },
     );

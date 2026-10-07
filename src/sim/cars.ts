@@ -1,9 +1,10 @@
-import { INTERIOR_NONE, INTERIOR_SLOTS, PARTS, VEHICLES, chassisDef, partDef, type PartSlot } from '../data';
+import { GLASS_NONE, GLASS_SLOTS, INTERIOR_NONE, INTERIOR_SLOTS, PARTS, VEHICLES, chassisDef, partDef, type PartSlot } from '../data';
 import { Rng } from '../core/rng';
 import { clamp } from '../core/math';
 import { EMPTY_ID, installPart, newBuild, type VehicleBuild } from './garage';
 import { newPart, rollPart, slotsOf } from './parts';
 import { emptyBody } from './bodywork';
+import { GLASS_KEYS, clearPanes } from './glassfit';
 
 /**
  * A world car is a burnt-out hulk (strip it for parts), a rough runner (fix it up), or sound enough to drive away. That is
@@ -105,6 +106,35 @@ function cabin(b: VehicleBuild, rng: Rng, o: { miss: number; torn: number; nice:
     else if (r < m + o.torn + o.nice) {
       const ids = NICE[slot].filter((id) => partDef(id).mk <= (o.reach > 0.5 ? 3 : 2));
       b.fit[slot] = newPart(rng.pick(ids), 1);
+    }
+  }
+}
+
+/** Chance each window frame has been emptied (the glass lifted out by whoever came before), by grade. */
+const GLASS_GONE: Record<CarGrade, number> = { complete: 0, showroom: 0, rough: 0.07, incomplete: 0.22, workshop: 0.3, donor: 0.4, hulk: 0.5 };
+
+/**
+ * Not every car still has its glass. Whoever came before took windscreens and door windows for their own cars, so a good share
+ * of the wrecks have bare frames, a burnt-out one has none at all, and a showroom car now and then has a better pane in.
+ * Rolled from a stream of its own, so no other roll of the car moves.
+ */
+function glassFit(b: VehicleBuild, seed: number, grade: CarGrade) {
+  const rng = new Rng((Math.imul(seed | 0, 2654435761) ^ 0x5bd1e995) >>> 0);
+  const have = slotsOf(chassisDef(b.chassis));
+  for (const slot of GLASS_SLOTS) {
+    if (!have.includes(slot)) continue;
+    const r = rng.next();
+    const q = rng.next();
+    if (r < GLASS_GONE[grade]) {
+      b.fit[slot] = newPart(GLASS_NONE[slot], 1);
+      clearPanes(b, slot);
+    } else if (grade === 'hulk') {
+      // Burnt out: whatever glass is left in the frame is long gone, but the frame itself is there.
+      const glass = (b.body ??= emptyBody()).glass ?? (b.body.glass = {});
+      for (const k of GLASS_KEYS[slot]) glass[k] = 3;
+    } else if (q < (grade === 'complete' || grade === 'showroom' ? 0.1 : 0.03)) {
+      const id = slot === 'glassF' ? 'gls_ws_lam' : slot === 'glassB' ? 'gls_rw_lam' : 'gls_side_lam';
+      b.fit[slot] = newPart(id, 1);
     }
   }
 }
@@ -347,6 +377,7 @@ export function rollCar(seed: number, o: { biome: 'wasteland' | 'city'; chassis?
     hulk: { miss: 0.55, torn: 0.3, nice: 0.1, core: 0.9 },
   };
   cabin(b, rng, { ...cab[grade], reach });
+  glassFit(b, b.seed, grade);
   // Whoever swapped the engine ran it, so the tank holds what the engine in there burns.
   if (b.fit.engine && !partDef(b.fit.engine.id).empty) b.tank = partDef(b.fit.engine.id).engine!.fuel;
   return { status, grade, build: b };

@@ -33,9 +33,10 @@ export const NEEDS = {
   dirtyBowel: 0.3,
   /**
    * How likely raw water is to sit badly, by where it came from. A spring comes up out of the rock clean; running water
-   * mostly is; a lake is as it always was; a swamp is standing rot and usually turns the stomach.
+   * mostly is; a lake is as it always was; a swamp is standing rot and usually turns the stomach. Flood water is thick with
+   * silt, and the sheet it leaves on a pan little better.
    */
-  dirtyBy: { lake: 0.3, river: 0.12, stream: 0.08, spring: 0, swamp: 0.65 },
+  dirtyBy: { lake: 0.3, river: 0.12, stream: 0.08, spring: 0, swamp: 0.65, flood: 0.55, pool: 0.45 },
   /** Below this it is time to eat or drink, and below `critical` it is hurting. */
   low: 0.3,
   critical: 0.1,

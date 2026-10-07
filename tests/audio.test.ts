@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { SampleLibrary } from '../src/audio/samples';
 import { SpatialAudioEngine } from '../src/audio/spatial';
 import { RadioAudioEngine } from '../src/audio/radio';
@@ -186,45 +186,14 @@ describe('Hybrid Sample-Based Foley & Directional HRTF Audio Engine', () => {
   });
 
   describe('SampleLibrary', () => {
-    it('synthesizes multi-layer gunshot sample banks', () => {
+    it('stays silent until recordings are decoded and never generates fallback samples', async () => {
       const lib = new SampleLibrary(mockCtx);
-      lib.init();
-
-      // Mechanical clicks
-      expect(lib.mechanicalClicks.length).toBe(4);
-      expect(lib.mechanicalClicks[0].length).toBeGreaterThan(0);
-      expect(lib.mechanicalClicks[0].getChannelData(0).some((v) => v !== 0)).toBe(true);
-
-      // Sub-bass body
-      expect(lib.subBassBody.length).toBe(4);
-      expect(lib.subBassBody[0].getChannelData(0).some((v) => v !== 0)).toBe(true);
-
-      // Shell casing bounces
-      expect(lib.shellCasingBounces.length).toBe(4);
-      expect(lib.shellCasingBounces[0].getChannelData(0).some((v) => v !== 0)).toBe(true);
-
-      // Impulse responses
-      expect(lib.indoorImpulse).not.toBeNull();
-      expect(lib.indoorImpulse!.numberOfChannels).toBe(2);
-      expect(lib.canyonImpulse).not.toBeNull();
-      expect(lib.canyonImpulse!.numberOfChannels).toBe(2);
-    });
-
-    it('synthesizes vehicle engine multi-track loops, turbo, and backfire samples', () => {
-      const lib = new SampleLibrary(mockCtx);
-      lib.init();
-
-      expect(lib.engineIdle).not.toBeNull();
-      expect(lib.engineMid).not.toBeNull();
-      expect(lib.engineHigh).not.toBeNull();
-      expect(lib.turboSpool).not.toBeNull();
-      expect(lib.turboBov).not.toBeNull();
-
-      expect(lib.backfirePops.length).toBe(4);
-      expect(lib.chassisCreaks.length).toBe(4);
-      expect(lib.micClickIn).not.toBeNull();
-      expect(lib.micClickOut).not.toBeNull();
-      expect(lib.fleshCrunch.length).toBe(2);
+      await lib.init();
+      expect(lib.get('pistol')).toBeNull();
+      expect(lib.engineIdle).toBeNull();
+      expect(lib.play('pistol', mockCtx.createGain())).toBeNull();
+      expect(lib.subBassBody).toEqual([]);
+      expect(lib.indoorImpulse).toBeNull();
     });
   });
 
@@ -309,20 +278,23 @@ describe('Hybrid Sample-Based Foley & Directional HRTF Audio Engine', () => {
       expect(chain.carrierStatic).toBeDefined();
     });
 
-    it('plays procedural radio chatter with voice syllables, mic clicks, and compression', () => {
+    it('keeps caption-only radio cues free of generated voice syllables', () => {
       const lib = new SampleLibrary(mockCtx);
       lib.init();
       const radio = new RadioAudioEngine(mockCtx, lib);
       const dest = mockCtx.createGain();
 
       const duration = radio.playRadioChatter("Dust wall rolling in from the south!", dest);
-      expect(duration).toBeGreaterThan(0.5);
+      expect(duration).toBeGreaterThan(0);
+      expect(radio.speechActive).toBe(false);
 
       const duration2 = radio.playRadioChatter("Engine sumps dry, we're seizing up!", dest);
-      expect(duration2).toBeGreaterThan(0.5);
+      expect(duration2).toBeGreaterThan(0);
+      radio.cancelActiveTransmission();
+      expect(radio.speechActive).toBe(false);
     });
 
-    it('falls back to procedural synthesis when TTS is disabled via settings', () => {
+    it('does not synthesize a voice when TTS is disabled', () => {
       const lib = new SampleLibrary(mockCtx);
       lib.init();
       const radio = new RadioAudioEngine(mockCtx, lib);
@@ -331,12 +303,12 @@ describe('Hybrid Sample-Based Foley & Directional HRTF Audio Engine', () => {
 
       const dest = mockCtx.createGain();
       const duration = radio.playRadioChatter("They're inside the wire!", dest);
-      expect(duration).toBeGreaterThan(0.5);
+      expect(duration).toBeGreaterThan(0);
     });
   });
 
-  describe('Granular Multi-Layer Foley Architecture', () => {
-    it('fires all 5 gunshot layers: clicks, sub-bass, blast, shell casing, and tail reverb', () => {
+  describe('Recorded Foley', () => {
+    it('accepts recorded gun cues and acoustic options without a synthetic fallback', () => {
       const lib = new SampleLibrary(mockCtx);
       lib.init();
       const foley = new FoleyEngine(mockCtx, lib);
@@ -349,7 +321,7 @@ describe('Hybrid Sample-Based Foley & Directional HRTF Audio Engine', () => {
       foley.playGunshot('sniper', dest, 0);
     });
 
-    it('plays multi-layer explosions, Dusk Bell, and visceral zombie death foley', () => {
+    it('accepts recorded explosion, bell and vocal cues', () => {
       const lib = new SampleLibrary(mockCtx);
       lib.init();
       const foley = new FoleyEngine(mockCtx, lib);
@@ -361,11 +333,54 @@ describe('Hybrid Sample-Based Foley & Directional HRTF Audio Engine', () => {
     });
   });
 
-  describe('Multi-Track RPM Vehicle Audio Engine', () => {
-    it('crossfades multi-track RPM loops and triggers turbo, backfire, and chassis creaks', () => {
+  describe('Recorded Vehicle Audio Engine', () => {
+    it('keeps a quiet moped audible at idle, responds to throttle and silences combustion on shutdown', () => {
+      const lib = new SampleLibrary(mockCtx);
+      vi.spyOn(lib, 'get').mockReturnValue({ duration: 2 } as AudioBuffer);
+      const veh = new VehicleAudioEngine(mockCtx, lib, new SpatialAudioEngine(mockCtx));
+      const listeners = [{ x: 0, z: 0 }], buses = [mockCtx.createGain()];
+      const params = { id: 5, x: 0, z: 0, rpm: 0, throttle: 0, tier: 1, signature: 15,
+        litres: .05, layout: 'I1', speed: 0, topSpeed: 12, running: true };
+      veh.updateEngines([params], .1, listeners, buses, false);
+      const v = (veh as any).voices.get(5);
+      const route = v.routes.get(0);
+      // Combined motor/spatial gain at the rider, before the user's master setting.
+      expect(v.idleGain.gain.value * route.gain.gain.value).toBeGreaterThan(.1);
+      const idleRate = v.idleSrc.playbackRate.value, idleLoad = v.loadGain.gain.value;
+      veh.updateEngines([{ ...params, throttle: 1, speed: 8, rpm: .7 }], .1, listeners, buses, false);
+      expect(v.idleSrc.playbackRate.value).toBeGreaterThan(idleRate);
+      expect(v.loadGain.gain.value).toBeGreaterThan(idleLoad);
+      veh.updateEngines([{ ...params, running: false, throttle: 1 }], .1, listeners, buses, false);
+      expect(v.idleGain.gain.value).toBe(0);
+      expect(v.loadGain.gain.value).toBe(0);
+      expect(v.layers.get('exhaustOpen')?.gain.gain.value ?? 0).toBe(0);
+      veh.silenceEngines();
+    });
+
+    it('routes a real engine to both players and updates distance without double panner attenuation', () => {
+      const lib = new SampleLibrary(mockCtx);
+      lib.engineIdle = lib.engineMid = {duration:2} as AudioBuffer;
+      const spatial = new SpatialAudioEngine(mockCtx);
+      const vehicle = new VehicleAudioEngine(mockCtx, lib, spatial);
+      const engine = {id:5,x:4,z:0,rpm:.4,throttle:.5,tier:1,model:'moped',signature:30};
+      vehicle.updateEngines([engine],.05,[{x:0,z:0},{x:50,z:0}],[mockCtx.createGain(),mockCtx.createGain()],false);
+      const voice = (vehicle as any).voices.get(5);
+      expect(voice.routes.size).toBe(2);
+      const a = voice.routes.get(0), b = voice.routes.get(1);
+      expect(a.attenuation).toBeGreaterThan(b.attenuation);
+      expect(a.panner.positionX.value).toBeGreaterThan(0);
+      expect(b.panner.positionX.value).toBeLessThan(0);
+      expect(a.panner.rolloffFactor).toBe(0);
+      vehicle.updateEngines([{...engine,x:12}],.1,[{x:0,z:0},{x:50,z:0}],[mockCtx.createGain(),mockCtx.createGain()],false);
+      expect(a.panner.positionX.value).toBe(12);
+      vehicle.silenceEngines();
+    });
+
+    it('changes recorded loop rate and load continuously with RPM and throttle', () => {
       const lib = new SampleLibrary(mockCtx);
       lib.init();
       const spatial = new SpatialAudioEngine(mockCtx);
+      lib.engineIdle = lib.engineMid = lib.engineHigh = mockCtx.createBuffer(1, 100, 44100);
       const veh = new VehicleAudioEngine(mockCtx, lib, spatial);
       const bus = mockCtx.createGain();
 
@@ -434,7 +449,12 @@ describe('Hybrid Sample-Based Foley & Directional HRTF Audio Engine', () => {
         false,
       );
 
+      const active = (veh as any).voices.get(1);
+      expect(active.idleSrc.playbackRate.value).toBeGreaterThan(1);
+      expect(active.loadGain.gain.value).toBeGreaterThan(0);
+      expect(active.routes.size).toBe(1);
       veh.silenceEngines();
+      expect(active.idleSrc.stopped).toBe(true);
     });
 
     it('smooths engine occlusion continuously over time to prevent on/off switches', () => {
@@ -443,6 +463,7 @@ describe('Hybrid Sample-Based Foley & Directional HRTF Audio Engine', () => {
       const spatial = new SpatialAudioEngine(mockCtx);
       let isBlocked = false;
       spatial.setOcclusionTester(() => (isBlocked ? 1.0 : 0.0));
+      lib.engineIdle = lib.engineMid = lib.engineHigh = mockCtx.createBuffer(1, 100, 44100);
       const veh = new VehicleAudioEngine(mockCtx, lib, spatial);
       const bus = mockCtx.createGain();
       const listeners = [{ x: 0, z: 0, yaw: 0 }];
@@ -483,7 +504,85 @@ describe('Hybrid Sample-Based Foley & Directional HRTF Audio Engine', () => {
     });
   });
 
+  describe('component recording lifecycle', () => {
+    it('crossfades running motors and component beds into fresh takes and releases retirees', () => {
+      const lib=new SampleLibrary(mockCtx), spatial=new SpatialAudioEngine(mockCtx);
+      const takes=[{duration:3},{duration:4}] as AudioBuffer[];
+      vi.spyOn(lib,'all').mockReturnValue(takes);
+      let n=0;vi.spyOn(lib,'get').mockImplementation(()=>takes[n++%2]);
+      const veh=new VehicleAudioEngine(mockCtx,lib,spatial);
+      const params={id:8,x:0,z:5,rpm:.6,throttle:.7,tier:3,signature:50,temperature:1.2};
+      const listeners=[{x:0,z:0,yaw:0}],buses=[mockCtx.createGain()];
+      veh.updateEngines([params],.1,listeners,buses,false);
+      const v=(veh as any).voices.get(8), old=v.idleSrc, fan=v.layers.get('radiatorFan').source;
+      v.nextTake=0;v.layers.get('radiatorFan').nextTake=0;
+      veh.updateEngines([params],.1,listeners,buses,false);
+      expect(v.idleSrc).not.toBe(old);expect(old.stopped).toBe(true);
+      expect(v.layers.get('radiatorFan').source).not.toBe(fan);expect(fan.stopped).toBe(true);
+      expect(v.retiring.length).toBeGreaterThan(0);
+      (mockCtx as any).currentTime=2;
+      veh.updateEngines([params],.1,listeners,buses,false);
+      expect(v.retiring).toHaveLength(0);
+      veh.silenceEngines();expect(v.idleSrc.stopped).toBe(true);
+    });
+
+    it('rebuilds on motor swaps and releases hot component loops on shutdown and cleanup', () => {
+      const lib = new SampleLibrary(mockCtx), spatial = new SpatialAudioEngine(mockCtx);
+      vi.spyOn(lib, 'get').mockReturnValue({duration:3} as AudioBuffer);
+      const veh = new VehicleAudioEngine(mockCtx, lib, spatial);
+      const params = {id:7,x:0,z:5,rpm:.6,throttle:.7,tier:3,signature:50,litres:1.2,layout:'I4',temperature:1.2,exhaustNoise:2};
+      const listeners=[{x:0,z:0,yaw:0}], buses=[mockCtx.createGain()];
+      veh.updateEngines([params],.1,listeners,buses,false);
+      const original=(veh as any).voices.get(7);
+      const fan=original.layers.get('radiatorFan');
+      expect(fan.gain.gain.value).toBeGreaterThan(0);
+      veh.updateEngines([{...params,litres:6,layout:'V8'}],.1,listeners,buses,false);
+      const swapped=(veh as any).voices.get(7);
+      expect(swapped).not.toBe(original);expect(original.idleSrc.stopped).toBe(true);expect(fan.source.stopped).toBe(true);
+      veh.updateEngines([{...params,litres:6,layout:'V8',running:false}],1.2,listeners,buses,false);
+      expect(swapped.idleGain.gain.value).toBe(0);expect(swapped.loadGain.gain.value).toBe(0);
+      expect(swapped.layers.has('exhaustOpen')).toBe(false);
+      expect(swapped.layers.get('radiatorSteam').gain.gain.value).toBeGreaterThan(0);
+      const steam=swapped.layers.get('radiatorSteam');
+      veh.silenceEngines();expect(steam.source.stopped).toBe(true);expect((veh as any).voices.size).toBe(0);
+    });
+  });
+
   describe('AudioEngine Full Integration', () => {
+    it('shares one take and pitch across listeners, updates live routes, and releases finished voices', () => {
+      (globalThis as any).AudioContext = MockAudioContext;
+      const engine = new AudioEngine(); engine.init();
+      const take = { duration: 2 } as AudioBuffer;
+      vi.spyOn(engine.samples!, 'all').mockReturnValue([take]);
+      const select = vi.spyOn(engine.samples!, 'get').mockReturnValue(take);
+      engine.setListeners([{x:0,z:0},{x:20,z:0}]);
+      engine.play('pistol', 10, 0, 1, {intensity:1});
+      const voices = [...(engine as any).active];
+      expect(voices).toHaveLength(2); expect(select).toHaveBeenCalledTimes(1);
+      expect(voices[0].source.buffer).toBe(voices[1].source.buffer);
+      expect(voices[0].source.playbackRate.value).toBe(voices[1].source.playbackRate.value);
+      engine.setListeners([{x:0,z:0,yaw:Math.PI},{x:20,z:0}]);
+      expect(voices[0].route.panner.positionX.value).toBeLessThan(0);
+      voices.forEach(v => v.source.onended({}));
+      expect((engine as any).active.size).toBe(0);
+    });
+    it('crossfades ambience into another take and stops both layers when the scene ends', () => {
+      (globalThis as any).AudioContext = MockAudioContext;
+      const engine = new AudioEngine(); engine.init();
+      const take = { duration: 12 } as AudioBuffer;
+      vi.spyOn(engine.samples!, 'all').mockReturnValue([take]);
+      vi.spyOn(engine.samples!, 'get').mockReturnValue(take);
+      engine.setRecordedAmbience('rain',.5);
+      const bed = (engine as any).ambience.get('rain');
+      const oldLayer = [...bed.layers][0] as any;
+      (engine.ctx as any).currentTime = 11;
+      engine.setRecordedAmbience('rain',.6);
+      expect(bed.layers.size).toBe(2); expect(oldLayer.retiring).toBe(true);
+      expect(oldLayer.source.stopped).toBe(true);
+      engine.silenceEngines();
+      expect([...bed.layers].every((l:any)=>l.source.stopped)).toBe(true);
+    });
+
     it('initializes and plays positional HRTF sounds with wall occlusion', () => {
       (globalThis as any).AudioContext = MockAudioContext;
       const engine = new AudioEngine();

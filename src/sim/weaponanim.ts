@@ -12,7 +12,7 @@ export type BaseGun = 'pistol' | 'revolver' | 'smg' | 'sawn' | 'pump' | 'rifle';
 export const GUN_BASE: Record<GunModel, BaseGun> = {
   pistol: 'pistol', revolver: 'revolver', smg: 'smg', sawn: 'sawn', pump: 'pump', rifle: 'rifle',
   compact: 'pistol', cannon: 'revolver', mp: 'smg', smg2: 'smg', carbine: 'rifle', ar: 'rifle', br: 'rifle', dmr: 'rifle',
-  sniper: 'rifle', lever: 'rifle', crossbow: 'pistol', combat: 'pump', coach: 'sawn', lmg: 'smg',
+  sniper: 'rifle', lever: 'rifle', crossbow: 'pistol', bow: 'pistol', combat: 'pump', coach: 'sawn', lmg: 'smg',
 };
 /** A table written for the base guns, read for every model. */
 export function forGuns<T>(base: Record<BaseGun, T>): Record<GunModel, T> {
@@ -157,7 +157,15 @@ const POINTS_BASE: Record<BaseGun, GunPoints> = {
   rifle: { rear: [0, 0.1, 0.11], front: [0, 0.1, 0.29], muzzle: [0, 0.035, 0.78], port: [0.03, 0.03, 0.2], well: [0, -0.06, 0.2] },
 };
 export const GUN_POINTS = forGuns(POINTS_BASE);
+/**
+ * A bow's frame has its origin in the bow hand's grip, the limbs up and down y, and the arrow along +z on the shelf to the
+ * left of the grip: it leaves from the shelf ("muzzle") and is sighted along its shaft back to the nock at full draw ("rear").
+ */
+GUN_POINTS.bow = { rear: [0.016, 0.035, -0.62], front: [0.016, 0.035, 0.04], muzzle: [0.016, 0.035, 0.06], port: [0.016, 0.035, -0.18], well: [0, -0.1, 0] };
 
 /** Which guns drop an empty magazine when reloaded (a revolver's empties are brass, a pump has none, a bolt rifle's rounds go in loose). */
 const DROPS_BASE: Record<BaseGun, 'pistol' | 'smg' | null> = { pistol: 'pistol', smg: 'smg', revolver: null, sawn: null, pump: null, rifle: null };
 export const DROPS_MAG = forGuns(DROPS_BASE);
+// Nothing falls out of a crossbow or a bow when it is loaded.
+DROPS_MAG.crossbow = null;
+DROPS_MAG.bow = null;

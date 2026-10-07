@@ -1,5 +1,7 @@
+import { smoothstep } from '../core/math';
 import { shoreShade } from '../world/lakes';
 import { courseAt, hydroShade } from '../world/hydro';
+import { panQ, washAt } from '../world/washes';
 import type { TerrainDef } from '../world/terrain';
 
 /**
@@ -68,14 +70,18 @@ export interface GroundMix {
  */
 export function mixWater(m: GroundMix, w: WetGround) {
   const dk = Math.min(1, w.depth / 3);
+  // Under water nothing dries out and cracks: a submerged bed is silt, sand and stones, never the hardpan's crazed plates.
+  const under = w.depth > 0.02;
   switch (w.kind) {
     case 'lake':
       m.rock *= 1 - w.damp;
       m.sand = Math.max(m.sand, w.damp * 0.9);
       m.earth *= 1 - w.damp * 0.8;
-      m.wet = Math.max(m.wet, 0.35 + w.damp * 0.5);
+      // Sand is wet only where the water laps it: the beach above that line drains as dry as the desert.
+      m.wet = Math.max(m.wet, w.depth > 0 ? 0.6 : smoothstep(0.8, 0.97, w.damp) * 0.55);
       if (w.depth > 0) {
         m.gravel = 0.5 + w.depth * 0.1;
+        if (under) m.earth = 0;
         m.tr = 0.62 - 0.3 * dk;
         m.tg = 0.82 - 0.24 * dk;
         m.tb = 0.78 - 0.18 * dk;
@@ -86,7 +92,7 @@ export function mixWater(m: GroundMix, w: WetGround) {
       if (w.bed) {
         m.gravel = Math.max(m.gravel, 0.8);
         m.sand = 0.3 * (1 - dk);
-        m.earth *= 0.25;
+        m.earth = under ? 0 : m.earth * 0.25;
         m.wet = Math.max(m.wet, 0.82);
         m.tr = 0.74 - 0.32 * dk;
         m.tg = 0.74 - 0.26 * dk;
@@ -95,7 +101,8 @@ export function mixWater(m: GroundMix, w: WetGround) {
         m.earth = Math.max(m.earth, 0.7);
         m.sand *= 1 - w.damp * 0.75;
         m.gravel *= 1 - w.damp * 0.5;
-        m.wet = Math.max(m.wet, 0.2 + w.damp * 0.58);
+        // Damp earth just above the waterline; the bank above it is as dry as the land round it.
+        m.wet = Math.max(m.wet, smoothstep(0.7, 0.97, w.damp) * 0.6);
         const k = 1 - 0.18 * w.damp;
         m.tr = k * 0.97;
         m.tg = k;
@@ -107,7 +114,7 @@ export function mixWater(m: GroundMix, w: WetGround) {
       if (w.bed) {
         m.gravel = 0.55;
         m.sand = 0.7;
-        m.earth *= 0.15;
+        m.earth = under ? 0 : m.earth * 0.15;
         m.wet = Math.max(m.wet, 0.42);
         m.tr = 1.12 - 0.22 * dk;
         m.tg = 1.12 - 0.1 * dk;
@@ -115,7 +122,7 @@ export function mixWater(m: GroundMix, w: WetGround) {
       } else {
         m.earth = Math.max(m.earth, 0.6);
         m.sand *= 1 - w.damp * 0.5;
-        m.wet = Math.max(m.wet, 0.2 + w.damp * 0.4);
+        m.wet = Math.max(m.wet, smoothstep(0.7, 0.97, w.damp) * 0.5);
       }
       return;
     case 'swamp':
@@ -124,6 +131,11 @@ export function mixWater(m: GroundMix, w: WetGround) {
       m.earth = 1;
       if (w.depth > 0) {
         m.gravel = 0.1;
+        // Soft black peat on the bed, not cracked mud.
+        if (under) {
+          m.earth = 0;
+          m.sand = 0.8;
+        }
         m.wet = Math.max(m.wet, 0.86);
         m.tr = 0.52 - 0.18 * dk;
         m.tg = 0.47 - 0.14 * dk;
@@ -138,4 +150,61 @@ export function mixWater(m: GroundMix, w: WetGround) {
       }
       return;
   }
+}
+
+/** A dry wash's bed and banks, or a clay pan, as `dryGround` finds them. */
+export interface DryGround {
+  kind: 'wash' | 'pan';
+  /** 0..1: 1 on the bed (or the pan's flat floor), falling off up the bank (or the pan's rise). */
+  k: number;
+}
+
+const DRY: DryGround = { kind: 'wash', k: 0 };
+
+/** The dry wash or clay pan a ground point belongs to, or null. The object is reused: read it before the next call. */
+export function dryGround(def: TerrainDef, x: number, z: number): DryGround | null {
+  const net = def.washes;
+  if (!net?.ready) return null;
+  for (const p of net.pans) {
+    const q = panQ(p, x, z);
+    if (q < 1.15) {
+      DRY.kind = 'pan';
+      DRY.k = 1 - smoothstep(0.8, 1.15, q);
+      return DRY;
+    }
+  }
+  const c = washAt(net, x, z);
+  if (!c) return null;
+  DRY.kind = 'wash';
+  DRY.k = c.d < c.half ? 1 : 1 - smoothstep(0, 1, (c.d - c.half) / Math.max(1, c.bank));
+  return DRY;
+}
+
+/**
+ * Colour the ground of a wash or a pan. A wash bed is sun-bleached gravel and coarse sand the floods sort into bars; its
+ * banks are the land's own earth, cut raw. A pan is a floor of pale clay crazed into plates: dry, it is the palest ground
+ * in the desert; the sheet of water a flood leaves on it is real water (`render/floodWater.ts`), not a stain.
+ */
+export function mixDry(m: GroundMix, g: DryGround) {
+  const k = g.k;
+  if (g.kind === 'wash') {
+    m.gravel = Math.max(m.gravel, 0.85 * k);
+    m.sand = m.sand * (1 - k * 0.5) + 0.45 * k;
+    m.earth = m.earth * (1 - k * 0.6) + (1 - k) * 0.5;
+    m.rock *= 1 - k * 0.7;
+    m.wet = 0;
+    const b = 1 + 0.12 * k;
+    m.tr *= b;
+    m.tg *= b * 0.99;
+    m.tb *= b * 0.95;
+    return;
+  }
+  m.earth = Math.max(m.earth, 1.1 * k + m.earth * (1 - k));
+  m.sand *= 1 - k * 0.9;
+  m.gravel *= 1 - k * 0.85;
+  m.rock *= 1 - k;
+  m.wet = 0;
+  m.tr *= 1 + 0.22 * k;
+  m.tg *= 1 + 0.2 * k;
+  m.tb *= 1 + 0.14 * k;
 }

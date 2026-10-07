@@ -57,6 +57,8 @@ const SLOT_PARTS: Record<string, { joint: JointKind; mass: number; tol: number; 
   rf_basket2: { joint: 'bolt', mass: 30, tol: 11 },
   rf_basket3: { joint: 'weld', mass: 42, tol: 13 },
   rr_cage: { joint: 'bolt', mass: 16, tol: 9.5 },
+  // The rickshaw's whole cab, with someone riding in it: it takes a real crash to tear it off its subframe.
+  rr_rickshaw: { joint: 'bolt', mass: 70, tol: 16 },
   rr_cage2: { joint: 'weld', mass: 34, tol: 12 },
   utl_tie: { joint: 'strap', mass: 4, tol: 6 },
   utl_net: { joint: 'strap', mass: 7, tol: 6.5 },

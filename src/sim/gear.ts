@@ -104,6 +104,12 @@ export const isWeapon = (d: GearDef) => d.kind === 'gun' || d.kind === 'melee';
 
 // ------------------------------------------------------------------ capacity and stats
 
+/** Bag slots everyone gets on top of the base: room for the whole armoury while god mode is on (`setExtraBagSlots`). */
+let extraBag = 0;
+export function setExtraBagSlots(n: number) {
+  extraBag = Math.max(0, n);
+}
+
 function wornBag(worn: Loadout['worn']): number {
   let n = 0;
   for (const slot of WEAR_SLOTS) {
@@ -115,7 +121,7 @@ function wornBag(worn: Loadout['worn']): number {
 
 /** Bag slots: the base, plus whatever the pack, pockets and vest add. */
 export function bagCap(l: Loadout): number {
-  return GEAR.bagBase + wornBag(l.worn);
+  return GEAR.bagBase + wornBag(l.worn) + extraBag;
 }
 
 export function bagRoom(l: Loadout): number {
@@ -144,7 +150,7 @@ export function statsOf(l: Loadout): Resolved {
   return r;
 }
 
-export type HurtKind = 'bullet' | 'melee' | 'blast' | 'fall' | 'fire' | 'bite' | 'spore' | 'ram';
+export type HurtKind = 'bullet' | 'melee' | 'blast' | 'fall' | 'fire' | 'bite' | 'spore' | 'ram' | 'drown';
 
 /** The share of a hit that gets through. Armour stops blows and blasts; boots and knees take falls; masks take spores. */
 export function damageTaken(r: Pick<Resolved, 'armor' | 'spore' | 'fall'>, kind: HurtKind): number {
@@ -154,6 +160,7 @@ export function damageTaken(r: Pick<Resolved, 'armor' | 'spore' | 'fall'>, kind:
     case 'fall':
       return 1 - r.fall;
     case 'fire':
+    case 'drown':
       return 1;
     default:
       return 1 - r.armor;
@@ -195,7 +202,7 @@ function capIf(l: Loadout, slot: WearSlot, next: GearItem | null): number {
   const worn = { ...l.worn };
   if (next) worn[slot] = next;
   else delete worn[slot];
-  return GEAR.bagBase + wornBag(worn);
+  return GEAR.bagBase + wornBag(worn) + extraBag;
 }
 
 /** True when the belt would still have something to fight with after taking `skip` off it. */
@@ -508,6 +515,7 @@ export function compareStats(from: GearDef | null, to: GearDef | null): StatLine
 
 /** A weapon's headline numbers, with whatever is fitted to this one counted in. */
 export function describeWeapon(d: GearDef, it?: GearItem | null): string[] {
+  if (d.gun?.draw) return [`${d.gun.dmg} damage at full draw`, `${d.gun.draw.toFixed(1)}s to full draw`, `Shoots arrows · ${d.gun.reload.toFixed(1)}s to nock`, `${d.gun.range} m range, dropping`];
   if (d.gun) {
     const g = it?.att ? kitOf(it).gun : d.gun;
     const per = g.pellets && g.pellets > 1 ? `${g.dmg} × ${g.pellets}` : `${g.dmg}`;
