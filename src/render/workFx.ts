@@ -41,6 +41,10 @@ export const SLOT_SITE: Record<string, Site> = {
   seatR: 'cabin',
   steer: 'cabin',
   dash: 'cabin',
+  glassF: 'front',
+  glassB: 'rear',
+  glassL: 'flank',
+  glassR: 'flank',
 };
 
 /** Sparks and glow by part quality: common, uncommon, rare. */

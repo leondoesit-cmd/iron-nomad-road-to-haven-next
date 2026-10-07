@@ -148,9 +148,10 @@ export function lakeAdjust(l: Lake, x: number, z: number, h: number): number {
 }
 
 /** What kind of water a point is in: a lake, a river or stream (flowing), a spring pool or a swamp. */
-export type WaterKind = 'lake' | 'river' | 'stream' | 'spring' | 'swamp';
+/** `flood` is a flash flood running down a dry wash; `pool` is the sheet it leaves on a clay pan (`world/washes.ts`). */
+export type WaterKind = 'lake' | 'river' | 'stream' | 'spring' | 'swamp' | 'flood' | 'pool';
 /** How the water looks (and how clean it is to drink). */
-export type WaterStyle = LakeStyle | 'river' | 'spring' | 'swamp';
+export type WaterStyle = LakeStyle | 'river' | 'spring' | 'swamp' | 'flood';
 
 export interface WaterHit {
   kind: WaterKind;
@@ -230,6 +231,9 @@ export function lakeColors(style: WaterStyle): { shallow: number; deep: number; 
       return { shallow: 0x7fe0d0, deep: 0x1a8a98, foam: 0xf6f8f2 };
     case 'swamp':
       return { shallow: 0x6e7a46, deep: 0x26301c, foam: 0xa8a87c };
+    case 'flood':
+      // Flood water carries the desert with it: thick with silt, the colour of milky coffee.
+      return { shallow: 0xa48a64, deep: 0x6a5134, foam: 0xd9ccb2 };
     default:
       return { shallow: 0x58c4b0, deep: 0x0f5a74, foam: 0xf2f4ee };
   }

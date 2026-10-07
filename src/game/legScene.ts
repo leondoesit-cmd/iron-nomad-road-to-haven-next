@@ -1,9 +1,15 @@
+import { MelabesService } from './melabesService';
+import { FrameBudget } from '../core/frameBudget';
 import { bind } from '../sim/vitals';
 import * as THREE from 'three';
-import { ENEMIES, TRAVELLERS, VEHICLES, boatDef, partDef, t, type LegDef } from '../data';
+import { ENEMIES, TRAVELLERS, VEHICLES, boatDef, partDef, t, type HeritageSpec, type LegDef } from '../data';
 import { ChunkSource, type ChunkData } from '../world/chunkgen';
-import { CHUNK, groundHeight, heightAt, normalAt, roadX, surfaceAt, waterAt as terrainWater, type Surface } from '../world/terrain';
+import { CELL, CELLS, CHUNK, clayAt, groundHeight, heightAt, normalAt, roadX, surfaceAt, waterAt as terrainWater, type Surface } from '../world/terrain';
+import { treeKey } from './wildfire';
+import { groundFuel } from '../world/fuel';
+import type { TreeSpot } from '../world/flora';
 import type { Aabb, PickupSpawn, ScavContainer, ScavZone } from '../world/layout';
+import { heritageRoofAt } from '../world/heritage';
 import { chunkKey } from '../world/layout';
 import { ChunkView, disposeChunkMaterials, makeChunkMaterials, type ChunkMaterials } from '../render/chunkview';
 import { makeBeam, makePickup } from '../render/props';
@@ -17,6 +23,8 @@ import { Scene, type CompassPin, type SceneServices } from './scene';
 import { QUALITY } from '../render/renderer';
 import { Vehicle } from './vehicle';
 import type { Player } from './player';
+import { StoryDirector, storyTrike, storyWake } from './story';
+import { PartyMission } from './partyMission';
 import { DUSK_BELL_AT, DayClock } from '../sim/dayclock';
 import { Rng, hashString } from '../core/rng';
 import { gearDrop } from '../sim/gear';
@@ -33,8 +41,12 @@ import { districtMask } from '../world/openWorld';
 import { GangCamps } from './gangCamps';
 import type { WorldMemory, WorldPose } from './worldMemory';
 import { LegMapBaker, SITE_LABEL, minefieldOutline, newFrame, openRoadLines, roadLine, waterLines, type MapFrame } from '../ui/mapdata';
-import { courseAt, lushAt, swampQ, type Waterfall } from '../world/hydro';
-import type { WaterAmbience } from '../audio/audio';
+import { courseAt, forestAt, lushAt, swampQ, type Waterfall } from '../world/hydro';
+import type { NatureAmbience, WaterAmbience } from '../audio/audio';
+import { AmbientLife } from './ambientLife';
+import { Foraging } from './foraging';
+import { FaceGums } from '../render/faceGums';
+import type { VegetationMemory } from '../sim/vegetation';
 
 /**
  * A loose thing lying in the world. It lies: a fixed place, a fixed heading and a natural tilt, set when it appears and never
@@ -105,6 +117,14 @@ const FALLS_PULL = 10;
 /** Waterfalls throw up mist for anyone this close; the roar carries further. */
 const MIST_R = 150;
 const QUIET_WATER: WaterAmbience = { roar: 0, tall: 0, babble: 0, marsh: 0, night: 0 };
+const QUIET_NATURE: NatureAmbience = { birds: 0, cicadas: 0, crickets: 0, owls: 0 };
+
+/** The banner's line under a hand-set building's name (`world/heritage.ts`). */
+const HERITAGE_SUB: Record<HeritageSpec['id'], string> = {
+  concreteHouse: 'Pumping station · 1912',
+  mudHut: 'Mud hut',
+  oldMill: 'Water mill on the Yarkon',
+};
 
 export class LegScene extends Scene {
   biome: 'wasteland' | 'city';
@@ -114,7 +134,17 @@ export class LegScene extends Scene {
   /** City ground and roads for a district chunk of the open world (made on first use). */
   private cityMats: ChunkMaterials | null = null;
   chunks = new Map<number, ChunkView>();
+  private streamBudget = new FrameBudget();
+
+  override beginFrame() {
+    super.beginFrame();
+    this.streamBudget.reset();
+  }
   landscape: Landscape;
+  /** The old gums' feet in the rivers' bends, with their faces (`render/faceGums.ts`). */
+  faceGums: FaceGums | null = null;
+  /** Wild food and herbs to gather (`game/foraging.ts`): open world only. */
+  forage: Foraging | null = null;
   pickups = new Map<string, PickupEntity>();
   takenPickups = new Set<string>();
   /** Gang camp sentries killed, by key; the world memory keeps them dead. */
@@ -132,11 +162,16 @@ export class LegScene extends Scene {
   /** Planned city legs: the places and streets already announced, and when the last announcement was. */
   private placesShown = new Set<string>();
   private placeAt = -99;
+  private melabesService: MelabesService | null = null;
   bellBanner = 0;
   /** Training mode: a quiet, forgiving copy of the open world, driven by a TutorialDirector. */
   readonly training: boolean;
   /** Markers the training director wants on the compass and the map. */
   trainingPins: CompassPin[] = [];
+  /** Story mode: Nar, the first mission's beats and lines (`game/story.ts`). */
+  story: StoryDirector | null = null;
+  /** Udud and Nuhat's house and the barbecue there, and mission two (`game/partyMission.ts`). */
+  party: PartyMission | null = null;
   pendingResult = false;
   endReached = false;
   gap = 0;
@@ -161,13 +196,14 @@ export class LegScene extends Scene {
 
   /** The world's memory, when this leg is the open world: adopted at start, filled in by `capture` at dusk. */
   memory: WorldMemory | null = null;
+  private vegetationMemory: VegetationMemory = new Map();
   /** Where the convoy decided to camp (the Dusk Bell's answer), once it has. */
   campPose: WorldPose | null = null;
 
   constructor(
     svc: SceneServices,
     public leg: LegDef,
-    opts: { memory?: WorldMemory; start?: WorldPose; training?: boolean } = {},
+    opts: { memory?: WorldMemory; start?: WorldPose; training?: boolean; story?: boolean } = {},
   ) {
     super(svc);
     this.training = !!opts.training;
@@ -209,14 +245,35 @@ export class LegScene extends Scene {
       },
     });
     this.root.add(this.landscape.group);
+    if (this.terrain.bends?.length) {
+      const T = this.terrain;
+      this.faceGums = new FaceGums(T.bends!, (x, z) => heightAt(T, x, z));
+      this.root.add(this.faceGums.group);
+    }
+    // The weather: flood water for the washes and the rivers, and the trees for lightning and fire to find. What burned on
+    // an earlier day stays burned.
+    this.weather.attachTerrain(this.terrain);
+    if (this.memory) this.weather.fire.burnt = this.memory.burnt;
+    this.weather.setFireHooks({ treesNear: (x, z, r) => this.loadedTreesNear(x, z, r), charTree: (t, c) => this.charTree(t, c) });
+    // Fire on the ground: what there is to burn where, the grass it takes, the trees standing in it. Ground that burned on
+    // an earlier day is still black. The fire ring at a river bend's landing is kept going.
+    const fuelDef = this.terrain;
+    this.fires.fuelAt = (x, z) => groundFuel(fuelDef, x, z);
+    this.fires.treesNear = (x, z, r) => this.loadedTreesNear(x, z, r);
+    this.fires.onBurnt = (x, z, r) => this.burnGrass(x, z, r);
+    if (this.memory?.scorched.length) this.fires.restoreScorched(this.memory.scorched);
+    for (const b of fuelDef.bends ?? []) if (b.fire) this.fires.start({ x: b.fire.x, y: b.fire.y + 0.05, z: b.fire.z, r: 0.26, fuel: 'wood', burn: Infinity, heat: 0.6, bed: false, hurts: false });
     // Cut a building away for each viewer standing inside it (roof and upper floors), per view.
     this.R.onBeforeView[1] = (i, cam) => {
       const p = this.players[i];
       const v = p?.vehicle;
       const focus = p ? (v && p.state !== 'foot' ? { x: v.position.x, y: v.position.y, z: v.position.z } : { x: p.pos.x, y: p.pos.y, z: p.pos.z }) : null;
       this.landscape.updateView(focus, cam.position.x, cam.position.y, cam.position.z);
+      for (const chunk of this.chunks.values()) chunk.setViewDetail(cam.position);
     };
     this.wildlife.canStand = (x, z) => !this.src.layout.blockedAt(x, z, 1.2);
+    this.life = new AmbientLife(this);
+    if (leg.open) this.forage = new Foraging(this, this.memory?.forage, this.vegetationMemory);
     this.zombies.onObstacleHit = (a, dmg, z) => {
       if (a.kind !== 'barricade' || a.breakable !== 'flimsy') return;
       a.hp -= dmg;
@@ -228,6 +285,8 @@ export class LegScene extends Scene {
       nearestGoods: (x, z, r, prefer) => this.goodsNearest(x, z, r, prefer),
       takeGoods: (id, by) => this.goodsTake(id, by),
       drop: (x, z, c) => this.looseDrop(x, z, c),
+      place: (c, x, z, y, yaw) => this.placeLoose(c, x, z, y, yaw),
+      around: (x, z, r) => this.looseAround(x, z, r),
     };
     this.src.layout.ambushes.forEach((spec) => this.ambushes.push({ spec, state: this.memory?.ambushDone.has(spec.id) ? 'done' : 'idle', tries: 0, waiting: [], t: 0 }));
     this.gangCamps = new GangCamps(this, this.src.layout.gangCamps, this.gangKilled, this.mapSeen);
@@ -248,13 +307,22 @@ export class LegScene extends Scene {
     this.spawnBoats();
     for (const car of this.src.layout.cars) this.cars.add(car);
     // Preload the start so the world exists before anyone drives.
-    const st = opts.start ? this.freeSpot(opts.start) : this.src.layout.start;
+    const yard = opts.story ? this.terrain.yard : undefined;
+    const st = yard ? storyWake(yard, 0) : opts.start ? this.freeSpot(opts.start) : this.src.layout.start;
     this.loadAround([{ x: st.x, z: st.z }], 1, 99);
     this.P.step();
+    if (yard) {
+      // The story's first morning: on foot in Nar's yard, the trike's bare frame up on its stand.
+      const tp = storyTrike(yard);
+      const trike = this.spawnVehicle({ build: this.campaign.buildOf(0), x: tp.x, z: tp.z, yaw: tp.yaw, ownerIndex: 0 });
+      this.spawnOnFoot([storyWake(yard, 0), storyWake(yard, 1)], trike);
+    }
     // Training starts on foot beside the mopeds: getting in is the first lesson.
-    this.spawnConvoy(st.x, st.z, st.yaw, 3.6, !this.training);
+    else this.spawnConvoy(st.x, st.z, st.yaw, 3.6, !this.training);
     for (const m of this.campaign.crewLive) this.crew.spawn(m, st.x, st.z - 9, st.yaw);
     this.crew.mode = 'follow';
+    const shop = this.src.cityBuildings().find((b) => b.shop === 'malabes');
+    if (shop) this.melabesService = new MelabesService(this.interact, shop.aabb, () => this.time, () => this.players, leg.seed);
     this.lastLead = st.z;
     this.lastX = st.x;
     this.R.setLight(this.clockLight(), this.biome);
@@ -266,7 +334,10 @@ export class LegScene extends Scene {
       // What the last day left on the road: tyre marks, and parts that were torn off and not picked up.
       if (this.memory?.tracks) this.marks.restore(this.memory.tracks);
       for (const d of this.memory?.drops ?? []) this.looseDrop(d.x, d.z, d.carried);
-      if (!this.training) this.radio(opts.start ? t('radio.open.again', { day: this.campaign.day }) : t('radio.open.start'));
+      // A story run has its director: Nar, the yard's parts on the first morning, the objective and the lines.
+      if (this.campaign.flags.story && !this.training) this.story = new StoryDirector(this, !!yard);
+      if (!this.training) this.party = new PartyMission(this);
+      if (!this.training && !yard) this.radio(opts.start ? t('radio.open.again', { day: this.campaign.day }) : t('radio.open.start'));
       return;
     }
     this.radio(leg.index === 1 ? t('radio.intro1') : leg.index === 2 ? t('radio.l2.start') : t('radio.l3.start'));
@@ -307,6 +378,7 @@ export class LegScene extends Scene {
     this.shownTips = m.shownTips;
     this.placesShown = m.placesShown;
     this.brokenAabbs = m.brokenAabbs;
+    this.vegetationMemory = m.vegetation;
     this.spawnedChunks = m.spawnedChunks;
     this.mapSeen = m.mapSeen;
     this.gangKilled = m.gangKilled;
@@ -318,6 +390,7 @@ export class LegScene extends Scene {
 
   /** Writes what the world should remember into its memory, just before this scene is torn down for the night. */
   capture(m: WorldMemory) {
+    m.vegetation = this.vegetationMemory;
     this.cars.clear();
     m.cars = this.cars.states;
     m.zombies = this.zombies.list.filter((z) => !z.dead && !z.raid).slice(0, 700).map((z) => ({ kind: z.kind, x: z.x, z: z.z, dormant: z.state === 'dormant', cluster: z.cluster }));
@@ -326,6 +399,10 @@ export class LegScene extends Scene {
     m.camp = this.campPose;
     for (const z of this.zones) for (const c of z.zone.containers) if (c.taken) m.searched.add(c.id);
     m.tracks = this.marks.snapshot();
+    // Trees still burning at dusk burn out in the night, and so does the grass.
+    for (const f of this.weather.fire.fires) m.burnt.set(f.key, 1);
+    this.fires.burnOutGround();
+    m.scorched = this.fires.scorchedCells();
     // Pieces still lying in the road with a part in them are kept as pickups; so is anything set down on the ground.
     const drops: WorldMemory['drops'] = [];
     for (const p of this.debris.pieces) {
@@ -409,15 +486,81 @@ export class LegScene extends Scene {
     return groundHeight(this.terrain!, x, z);
   }
 
+  /** The trees standing within `r` of (x, z), from the chunks that are loaded (where birds can perch). */
+  treesNear(x: number, z: number, r: number): TreeSpot[] {
+    const out: TreeSpot[] = [];
+    const c0 = Math.floor((x - r) / CHUNK);
+    const c1 = Math.floor((x + r) / CHUNK);
+    const r0 = Math.floor((z - r) / CHUNK);
+    const r1 = Math.floor((z + r) / CHUNK);
+    for (let cx = c0; cx <= c1; cx++) {
+      for (let cz = r0; cz <= r1; cz++) {
+        const view = this.chunks.get(chunkKey(cx, cz));
+        if (!view) continue;
+        view.data.trees.forEach((t, i) => {
+          if (!view.vegetation.treeBroken(i) && (t.x - x) ** 2 + (t.z - z) ** 2 < r * r) out.push(t);
+        });
+      }
+    }
+    return out;
+  }
+
+  /** How much the leaves in the loaded chunks (and the wild thickets) take out of a sight line: 0 clear to 1 hidden. */
+  leavesAlong(ax: number, ay: number, az: number, bx: number, by: number, bz: number): number {
+    let clear = 1;
+    const c0 = Math.floor((Math.min(ax, bx) - 3) / CHUNK);
+    const c1 = Math.floor((Math.max(ax, bx) + 3) / CHUNK);
+    const r0 = Math.floor((Math.min(az, bz) - 3) / CHUNK);
+    const r1 = Math.floor((Math.max(az, bz) + 3) / CHUNK);
+    for (let cx = c0; cx <= c1; cx++) {
+      for (let cz = r0; cz <= r1; cz++) {
+        const view = this.chunks.get(chunkKey(cx, cz));
+        if (view) clear *= view.vegetation.seeThrough(ax, ay, az, bx, by, bz);
+      }
+    }
+    if (this.forage) clear *= this.forage.render.seeThrough(ax, ay, az, bx, by, bz);
+    return 1 - clear;
+  }
+
+  /**
+   * The ground as it is drawn: the loaded chunk's heightfield split into triangles the way the mesh is, which in a hollow
+   * (a spring's bowl, a river bed) lies a few centimetres over `groundAt`. Small things set on the ground use it so they are
+   * not buried in the mesh. Falls back to `groundAt` where no chunk is loaded.
+   */
+  drawnGroundAt(x: number, z: number): number {
+    const cx = Math.floor(x / CHUNK);
+    const cz = Math.floor(z / CHUNK);
+    const h = this.chunks.get(chunkKey(cx, cz))?.data.heights;
+    if (!h) return this.groundAt(x, z);
+    const N1 = CELLS + 1;
+    const fc = Math.min(CELLS - 1e-4, Math.max(0, (x - cx * CHUNK) / CELL));
+    const fr = Math.min(CELLS - 1e-4, Math.max(0, (z - cz * CHUNK) / CELL));
+    const c = Math.floor(fc);
+    const r = Math.floor(fr);
+    const tx = fc - c;
+    const tz = fr - r;
+    const a = h[c * N1 + r];
+    const b = h[(c + 1) * N1 + r];
+    const d = h[c * N1 + r + 1];
+    const e = h[(c + 1) * N1 + r + 1];
+    return tx > tz ? a + (b - a) * tx + (e - b) * tz : a + (e - d) * tx + (d - a) * tz;
+  }
+
   interiorAt(x: number, z: number, y: number) {
     for (const b of this.landscape.buildings) {
       const p = b.plan;
       if (b.contains(x, z, 0.1) && y > p.floorY - 1.5 && y < p.floorY + p.levels * p.levelH + 0.5) return true;
     }
-    return false;
+    return heritageRoofAt(this.terrain?.heritage, x, z, y);
   }
 
   waterAt(x: number, z: number): { level: number; depth: number; flow?: [number, number]; kind?: WaterKind; name?: string } | null {
+    // Floods on top of what the ground holds: rivers over their banks, the washes running, the pans holding a sheet.
+    return this.weather.water(x, z, this.groundWater(x, z));
+  }
+
+  /** The water the land holds whatever the weather: lakes, rivers, springs and swamps. */
+  private groundWater(x: number, z: number): { level: number; depth: number; flow?: [number, number]; kind?: WaterKind; name?: string } | null {
     const T = this.terrain!;
     const w = terrainWater(T, x, z);
     if (!w) return null;
@@ -468,6 +611,42 @@ export class LegScene extends Scene {
     const out: { x: number; z: number }[] = [];
     for (const p of this.players) if (p.state !== 'dead') out.push({ x: p.vehicle?.position.x ?? p.pos.x, z: p.vehicle?.position.z ?? p.pos.z });
     return out;
+  }
+
+  private natureT = 0;
+
+  /**
+   * What the land sounds like round the players, for the audio mix, a couple of times a second: birds by day (a few over the
+   * dust, many in the woods and meadows, more in the morning, hardly any in the city), cicadas in the heat of the day among
+   * trees and scrub, crickets in the grass after dark and owls in the woods at night. A storm quietens all of it.
+   */
+  private updateNature(dt: number) {
+    this.natureT -= dt;
+    if (this.natureT > 0) return;
+    this.natureT = 0.4;
+    const T = this.terrain;
+    let lush = 0;
+    let wood = 0;
+    if (T?.hydro?.lush) {
+      for (const p of this.here()) {
+        lush = Math.max(lush, lushAt(T, p.x, p.z));
+        wood = Math.max(wood, forestAt(T, p.x, p.z));
+      }
+    }
+    const city = this.cityMix;
+    const day = 1 - smoothstep(0.15, 0.6, this.night);
+    const dark = smoothstep(0.45, 0.85, this.night);
+    const calm = 1 - smoothstep(0.2, 0.7, this.storm);
+    const wild = 1 - city * 0.85;
+    const t = this.clock.t;
+    const morning = 1 + 0.6 * (1 - smoothstep(0.05, 0.3, t));
+    this.audio.setVegetationAmbience?.(wood, lush, this.storm);
+    this.audio.setNatureAmbience?.({
+      birds: day * calm * wild * (0.18 + 0.82 * Math.max(lush, wood)) * morning,
+      cicadas: day * calm * wild * smoothstep(0.25, 0.45, t) * (1 - smoothstep(0.7, 0.85, t)) * (0.25 + this.heat * 0.75) * (0.3 + wood * 0.7 + lush * 0.3),
+      crickets: dark * calm * (1 - city * 0.7) * (0.25 + lush * 0.75),
+      owls: dark * calm * wild * wood,
+    });
   }
 
   /** The water of the open world, each tick: the falls' mist, and a few times a second its sound and its news. */
@@ -583,9 +762,10 @@ export class LegScene extends Scene {
   }
 
   /**
-   * The first time the convoy comes near a river or stream, a waterfall, a spring, a swamp or one of the big lakes, it is
-   * named: a banner, and a word on the radio where there is something worth knowing (a waterfall always, the rest when the
-   * radio has been quiet a while). Once named it is on the map for good: the keys live in `mapSeen`, which the world keeps.
+   * The first time the convoy comes near a river or stream, a waterfall, a spring, a swamp, one of the big lakes or a building
+   * by the water (the Concrete House, the mud hut), it is named: a banner, and a word on the radio where there is something
+   * worth knowing (a waterfall always, the rest when the radio has been quiet a while). Once named it is on the map for good:
+   * the keys live in `mapSeen`, which the world keeps.
    */
   private waterNews(pts: { x: number; z: number }[]) {
     const T = this.terrain!;
@@ -623,6 +803,16 @@ export class LegScene extends Scene {
       if (!l.name || this.mapSeen.has(key) || !near(l.x, l.z, l.r + 140)) continue;
       return say(key, l.name, 'Lake', 'radio.water.lake');
     }
+    for (const b of T.bends ?? []) {
+      const key = `wb:${b.key}`;
+      if (this.mapSeen.has(key) || !near(b.loop.x, b.loop.z, b.meadow + 25)) continue;
+      return say(key, b.name, 'Old gums on a half island', 'radio.bend');
+    }
+    for (const h of T.heritage ?? []) {
+      const key = `wh:${h.id}`;
+      if (this.mapSeen.has(key) || !near(h.x, h.z, 130)) continue;
+      return say(key, h.name, HERITAGE_SUB[h.id], `radio.heritage.${h.id}`);
+    }
     for (const p of pts) {
       const c = courseAt(hy, p.x, p.z, 50);
       if (!c || this.mapSeen.has(`wr${c.river.id}`)) continue;
@@ -635,6 +825,8 @@ export class LegScene extends Scene {
   suspend() {
     super.suspend();
     this.audio.setWaterAmbience?.(QUIET_WATER);
+    this.audio.setNatureAmbience?.(QUIET_NATURE);
+    this.audio.setVegetationAmbience?.(0, 0, 0);
   }
 
   // ------------------------------------------------------------------ ways underground
@@ -659,6 +851,16 @@ export class LegScene extends Scene {
         v.fuel = v.tankMax * (0.55 + 0.25 * ((l.seed + i) % 3) / 2);
         this.vehicles.push(v);
       });
+    }
+    // The pedal boat tied up at each river bend's landing, stern to the mud.
+    for (const bend of this.terrain!.bends ?? []) {
+      const at = bend.boat;
+      const L = bend.loop.landing;
+      if (!at || !L) continue;
+      const def = boatDef('pedalo');
+      const bp = def.physics.boat!;
+      const v = new Vehicle(this, { def, x: at.x, z: at.z, yaw: at.yaw, y: L.level + def.physics.halfExtents[1] - bp.draft + 0.06, faction: 'convoy', kind: 'boat', color: 0x2f6fb0 });
+      this.vehicles.push(v);
     }
   }
 
@@ -740,14 +942,69 @@ export class LegScene extends Scene {
   }
 
   surfaceAt(x: number, z: number) {
-    const name: Surface = surfaceAt(this.terrain!, x, z);
+    const T = this.terrain!;
+    const name: Surface = surfaceAt(T, x, z);
     const s = VEHICLES.surfaces[name];
-    return { grip: s.grip, drag: s.drag, name };
+    // The weather has its say: clay is hard dry and grease wet, asphalt slick in the rain, wet sand a little firmer.
+    const clay = (name === 'mud' || name === 'hardpan') && clayAt(T, x, z);
+    const out = this.weather.surface({ grip: s.grip, drag: s.drag, name: name as string }, clay);
+    return { grip: out.grip, drag: out.drag, name: out.name as Surface };
   }
 
-  /** Grass holds the dust down: on a meadow or in a wood a vehicle raises about half the dust it would on bare ground. */
+  /**
+   * Grass holds the dust down: on a meadow or in a wood a vehicle raises about half the dust it would on bare ground. Rain
+   * lays it, and wet hard ground raises none until it has dried.
+   */
   groundDust(x: number, z: number): number {
-    return 1 - 0.55 * lushAt(this.terrain!, x, z);
+    const w = this.weather;
+    return (1 - 0.55 * lushAt(this.terrain!, x, z)) * (1 - 0.85 * Math.max(w.rain, w.wet * 0.7));
+  }
+
+  // ------------------------------------------------------------------ fire in the trees
+
+  /** Trees standing within `r` of a point, in the chunks that are loaded (lightning never builds new ground to find one). */
+  private loadedTreesNear(x: number, z: number, r: number): TreeSpot[] {
+    const out: TreeSpot[] = [];
+    if (!this.terrain?.hydro) return out;
+    for (let cx = Math.floor((x - r) / CHUNK); cx <= Math.floor((x + r) / CHUNK); cx++) {
+      for (let cz = Math.floor((z - r) / CHUNK); cz <= Math.floor((z + r) / CHUNK); cz++) {
+        const view = this.chunks.get(chunkKey(cx, cz));
+        if (!view) continue;
+        view.data.trees.forEach((t, i) => {
+          if (!view.vegetation.treeBroken(i) && (t.x - x) ** 2 + (t.z - z) ** 2 < r * r) out.push(t);
+        });
+      }
+    }
+    return out;
+  }
+
+  /** Darken a tree to its char, in whichever loaded chunk it stands. */
+  private charTree(t: TreeSpot, char: number) {
+    const view = this.chunks.get(chunkKey(Math.floor(t.x / CHUNK), Math.floor(t.z / CHUNK)));
+    if (!view) return;
+    const i = view.data.trees.indexOf(t);
+    if (i >= 0) view.charTree(i, char);
+  }
+
+  /** Grass fire has been over a patch of ground: its grass and low plants burn to stubble, in whichever chunks are loaded. */
+  private burnGrass(x: number, z: number, r: number) {
+    for (let cx = Math.floor((x - r) / CHUNK); cx <= Math.floor((x + r) / CHUNK); cx++) {
+      for (let cz = Math.floor((z - r) / CHUNK); cz <= Math.floor((z + r) / CHUNK); cz++) this.chunks.get(chunkKey(cx, cz))?.vegetation.burnArea(x, z, r);
+    }
+  }
+
+  /** Once a chunk's trees are drawn, lay on them whatever fire did to them earlier. */
+  private charChunk(view: ChunkView) {
+    view.charred = true;
+    const x0 = view.data.cx * CHUNK;
+    const z0 = view.data.cz * CHUNK;
+    this.fires.forBurntIn(x0, z0, x0 + CHUNK, z0 + CHUNK, (x, z, r) => view.vegetation.burnArea(x, z, r));
+    const burnt = this.weather.fire.burnt;
+    if (!burnt.size) return;
+    view.data.trees.forEach((t, i) => {
+      const c = burnt.get(treeKey(t));
+      if (c) view.charTree(i, c);
+    });
   }
 
   // ------------------------------------------------------------------ chunk streaming
@@ -783,11 +1040,20 @@ export class LegScene extends Scene {
     // Barricades already broken stay broken.
     const data: ChunkData = this.brokenAabbs.size ? { ...data0, aabbs: data0.aabbs.filter((a) => !this.brokenAabbs.has(a.id)) } : data0;
     const mats = data.city && this.leg.biome !== 'city' ? (this.cityMats ??= makeChunkMaterials('city', this.leg.theme)) : this.mats;
-    const view = new ChunkView(data, this.terrain!, mats, this.P, { scatter: QUALITY[this.R.quality].scatter, staged, onGround: () => this.landscape.setLoaded(cx, cz, true) });
+    const view = new ChunkView(data, this.terrain!, mats, this.P, {
+      scatter: QUALITY[this.R.quality].scatter, staged, vegetationMemory: this.vegetationMemory,
+      onTreeBreak: (index) => {
+        const t = data.trees[index];
+        const a = data.aabbs.find((a) => a.kind === 'tree' && Math.abs((a.minX + a.maxX) / 2 - t.x) < 0.01 && Math.abs((a.minZ + a.maxZ) / 2 - t.z) < 0.01);
+        if (a) { a.physOnly = true; this.obs.remove(a); }
+      },
+      onGround: () => this.landscape.setLoaded(cx, cz, true),
+    });
     this.root.add(view.group);
     view.group.updateMatrixWorld(true);
     this.chunks.set(key, view);
     this.looseProps.add(String(key), data.props);
+    this.forage?.addChunk(key, data0);
     for (const a of data.aabbs) if (!a.physOnly) this.obs.add(a);
     // Pickups
     for (const p of data.pickups) {
@@ -829,6 +1095,7 @@ export class LegScene extends Scene {
     }
     view.dispose();
     this.looseProps.release(String(key));
+    this.forage?.removeChunk(key);
     this.chunks.delete(key);
     this.landscape.setLoaded(view.data.cx, view.data.cz, false);
   }
@@ -840,6 +1107,9 @@ export class LegScene extends Scene {
    * to someone is missing. A slow machine does fewer steps a tick, never a whole chunk at once.
    */
   private streamWork(points: { x: number; z: number }[], here: { x: number; z: number }[]) {
+    // Standalone/headless ticks are their own frame; browser catch-up ticks share the allowance.
+    if (!this.inFrame) this.streamBudget.reset();
+    if (!this.streamBudget.available(STREAM_URGENT_MS)) return;
     const dist = (list: { x: number; z: number }[], cx: number, cz: number) => {
       let best = Infinity;
       for (const p of list) {
@@ -850,8 +1120,8 @@ export class LegScene extends Scene {
       return best;
     };
     const R = QUALITY[this.R.quality].stream;
-    const t0 = performance.now();
     for (let unit = 0; unit < 6; unit++) {
+      const t0 = performance.now();
       // Finish the nearest staged chunk, if there is one.
       let pendView: ChunkView | null = null;
       let pendD = Infinity;
@@ -886,6 +1156,11 @@ export class LegScene extends Scene {
       // A staged chunk is finished before the next one is started, unless the next one is much closer.
       let cx: number;
       let cz: number;
+      const finishing = pendView && pendD <= wantD + 2;
+      cx = finishing ? pendView!.data.cx : wx;
+      cz = finishing ? pendView!.data.cz : wz;
+      const limit = dist(here, cx, cz) > 2 ? STREAM_CALM_MS : STREAM_URGENT_MS;
+      if (!this.streamBudget.available(limit)) return;
       if (pendView && pendD <= wantD + 2) {
         pendView.buildNext();
         cx = pendView.data.cx;
@@ -896,7 +1171,8 @@ export class LegScene extends Scene {
         if (this.src.step(wx, wz)) this.loadChunk(wx, wz, true);
       }
       // Only a chunk next to someone is worth hurrying; the look-ahead has all the time it needs.
-      if (performance.now() - t0 >= (dist(here, cx, cz) > 2 ? STREAM_CALM_MS : STREAM_URGENT_MS)) return;
+      this.streamBudget.charge(performance.now() - t0);
+      if (!this.streamBudget.available(limit)) return;
     }
   }
 
@@ -1238,14 +1514,17 @@ export class LegScene extends Scene {
   private spawnPickup(p: PickupSpawn) {
     if (p.kind === 'gear') return this.spawnDisplayGun(p);
     const fuelKind = p.kind === 'fuel' ? (p.fuel ?? pickupFuel(p.id)) : undefined;
-    const m = makePickup(p.kind === 'part' ? (p.part ? groundModelKey(p.part.id) : `part${p.amount}`) : p.kind === 'paint' ? `paint:${(p.color ?? 0xffffff).toString(16)}` : fuelKind === 'diesel' ? 'diesel' : p.kind);
+    const m = makePickup(p.kind === 'part' ? (p.part ? groundModelKey(p.part.id) : `part${p.amount}`) : p.kind === 'paint' ? `paint:${(p.color ?? 0xffffff).toString(16)}` : p.kind === 'food' ? `food:${p.food ?? 'dogfood'}` : fuelKind === 'diesel' ? 'diesel' : p.kind);
     this.settlePickup(m.group, p);
     // The outer group is where it lies; the model inside has the lean, and the beam stands straight up beside it.
     const outer = new THREE.Group();
     outer.position.set(p.x, p.y, p.z);
     outer.add(m.group);
-    // Good finds show from a distance, in their rarity colour: a tall beam, but the thing itself is lying there too.
-    if (p.kind === 'part') {
+    // Good finds show from a distance, in their rarity colour: a tall beam, but the thing itself is lying there too. What a
+    // person put down (or the story laid out in a yard) is just lying there.
+    if (p.host?.kind === 'story' || p.id.startsWith('drop')) {
+      // no beam
+    } else if (p.kind === 'part') {
       if (p.amount >= 2) outer.add(makeBeam(p.amount >= 3 ? 0xffb454 : 0x7ddc7a, p.amount >= 3 ? 14 : 8));
     } else if (p.kind === 'fragment' || p.kind === 'chassis') {
       const col = p.kind === 'fragment' ? 0x3ad0ff : 0x3aa0ff;
@@ -1258,6 +1537,7 @@ export class LegScene extends Scene {
     else if (p.kind === 'oil') loose = { kind: 'oil', amount: p.amount };
     else if (p.kind === 'water') loose = { kind: 'water', amount: p.amount };
     else if (p.kind === 'paint') loose = { kind: 'paint', color: p.color ?? 0xffffff, charges: p.amount };
+    else if (p.kind === 'food') loose = { kind: 'food', food: p.food ?? 'dogfood' };
     this.pickups.set(p.id, { spawn: p, group: outer, loose });
   }
 
@@ -1314,6 +1594,21 @@ export class LegScene extends Scene {
     }
     // A part that tore off a vehicle and has settled in the road can be lifted like any other.
     return this.debris.nearestLoose(x, z, bd, prefer) ?? best;
+  }
+
+  /** Every liftable thing within `r` of a point: what lies about, and settled pieces with something in them. */
+  private looseAround(x: number, z: number, r: number): Loose[] {
+    const out: Loose[] = [];
+    for (const [id, e] of this.pickups) {
+      if (!e.loose || !e.group.visible) continue;
+      if (Math.hypot(e.spawn.x - x, e.spawn.z - z) < r) out.push({ id, carried: e.loose, x: e.spawn.x, y: e.spawn.y, z: e.spawn.z });
+    }
+    for (let n = 0; n < 6; n++) {
+      const d = this.debris.nearestLoose(x, z, r, undefined, out.map((o) => o.id));
+      if (!d) break;
+      out.push(d);
+    }
+    return out;
   }
 
   private looseTake(id: string): Carried | null {
@@ -1388,11 +1683,19 @@ export class LegScene extends Scene {
   }
 
   private looseDrop(x: number, z: number, c: Carried) {
+    this.placeLoose(c, x, z);
+  }
+
+  /**
+   * Set a carried thing down to be lifted again: on the ground at (x, z), or resting at height `y` (a bench top, the lip of
+   * something), turned to `yaw`. Returns its pickup id. Set-down things are remembered from one day to the next.
+   */
+  placeLoose(c: Carried, x: number, z: number, y?: number, yaw?: number): string {
     const id = `drop${this.dropSeq++}`;
-    const y = this.groundAt(x, z);
+    const gy = y ?? this.groundAt(x, z);
     const kind = c.kind === 'part' ? 'part' : c.kind;
-    const amount = c.kind === 'part' ? (c.item.id ? partMk(c.item.id) : 1) : c.kind === 'paint' ? c.charges : c.amount;
-    const spawn: PickupSpawn = { id, kind, amount, x, y, z, part: c.kind === 'part' ? { id: c.item.id, cond: c.item.cond } : undefined, fuel: c.kind === 'fuel' ? (c.fuel ?? 'petrol') : undefined, color: c.kind === 'paint' ? c.color : undefined };
+    const amount = c.kind === 'part' ? (c.item.id ? partMk(c.item.id) : 1) : c.kind === 'paint' ? c.charges : c.kind === 'food' ? 1 : c.amount;
+    const spawn: PickupSpawn = { id, kind, amount, x, y: gy, z, yaw, part: c.kind === 'part' ? { id: c.item.id, cond: c.item.cond } : undefined, fuel: c.kind === 'fuel' ? (c.fuel ?? 'petrol') : undefined, color: c.kind === 'paint' ? c.color : undefined, food: c.kind === 'food' ? c.food : undefined, ...(y !== undefined ? { host: { kind: 'story', mode: 'on' as const } } : {}) };
     this.spawnPickup(spawn);
     // Keep the very item that was dropped, so its wear survives being put down.
     const e = this.pickups.get(id);
@@ -1400,6 +1703,7 @@ export class LegScene extends Scene {
     // Tidy the oldest set-down item once too many lie about.
     const dropped = [...this.pickups.keys()].filter((k) => k.startsWith('drop'));
     while (dropped.length > MAX_DROPPED) this.removePickup(dropped.shift()!);
+    return id;
   }
 
   private pickupCullT = 0;
@@ -1900,6 +2204,8 @@ export class LegScene extends Scene {
 
   protected modeTick(dt: number) {
     if (this.paused) return;
+    this.story?.tick(dt);
+    this.party?.tick(dt);
     this.stream(dt);
     this.updateBiome(dt);
     this.moveCampPrompts();
@@ -1907,6 +2213,8 @@ export class LegScene extends Scene {
     this.updateMines(dt);
     this.updateRamming();
     this.updateWater(dt);
+    this.updateNature(dt);
+    this.forage?.update(dt);
     // Training is quiet: no hordes, raiders, wildlife, encounters, tips from the road, nor an end to the day.
     if (!this.training) {
       this.updateZones(dt);
@@ -1985,6 +2293,8 @@ export class LegScene extends Scene {
   }
 
   protected syncExtra(alpha: number, dt: number) {
+    this.story?.frame(dt);
+    this.party?.frame(dt);
     // The marker over a searchable container stays where it is: it does not spin or bob.
     // Ground cover only exists near a player: hide it on chunks too far away for anyone to see it.
     const pts = this.players.map((p) => (p.vehicle ? p.vehicle.position : p.pos));
@@ -1994,8 +2304,10 @@ export class LegScene extends Scene {
       let d = Infinity;
       for (const p of pts) d = Math.min(d, Math.hypot(p.x - cx, p.z - cz));
       view.setDetailDistance(Math.max(0, d - CHUNK * 0.71));
+      view.updateShopWorkers(this.time, this.melabesService?.remaining ?? 2);
       // Once its roads and props are in, the far stand-ins over this chunk step aside.
       if (!view.pending) this.landscape.setBuilt(view.data.cx, view.data.cz);
+      if (!view.pending && !view.charred) this.charChunk(view);
     }
     void alpha;
   }
@@ -2046,7 +2358,7 @@ export class LegScene extends Scene {
     for (const p of this.players) {
       const x = p.vehicle ? p.vehicle.position.x : p.pos.x;
       const z = p.vehicle ? p.vehicle.position.z : p.pos.z;
-      for (const v of this.vehicles) if (v.faction === 'raider' && !v.wreck && Math.hypot(v.position.x - x, v.position.z - z) < 140) combat = true;
+      for (const v of this.vehicles) if (v.hostile && Math.hypot(v.position.x - x, v.position.z - z) < 140) combat = true;
       for (const u of this.raiders.units) if (!u.dead && Math.hypot(u.x - x, u.z - z) < 90) combat = true;
       this.zombies.forEachNear(x, z, 45, (zb) => {
         if (zb.chasing) combat = true;
@@ -2077,11 +2389,13 @@ export class LegScene extends Scene {
       const z = (m.z0 + m.z1) / 2;
       pins.push({ x: roadX(this.terrain!, z), z, kind: 'threat', label: 'MINES' });
     }
-    for (const v of this.vehicles) if (v.faction === 'raider' && !v.wreck) pins.push({ x: v.position.x, z: v.position.z, kind: 'ambush', label: '' });
+    for (const v of this.vehicles) if (v.hostile) pins.push({ x: v.position.x, z: v.position.z, kind: 'ambush', label: '' });
     for (const g of this.gangCamps.pins()) pins.push({ x: g.x, z: g.z, kind: 'threat', label: g.label });
     for (const h of this.travellers.helpPins()) pins.push({ x: h.x, z: h.z, kind: 'encounter', label: h.label });
     for (const p of this.pings) pins.push({ x: p.x, z: p.z, kind: 'ping', label: '' });
     if (this.training) pins.push(...this.trainingPins);
+    if (this.story) pins.push(...this.story.pins());
+    pins.push(...this.missionPins);
     // Lakes and ways down only show once you are within a few hundred metres.
     const nearAny = (x: number, z: number, r: number) => this.players.some((p) => Math.hypot((p.vehicle?.position.x ?? p.pos.x) - x, (p.vehicle?.position.z ?? p.pos.z) - z) < r);
     for (const l of this.terrain!.lakes) if (l.dock && nearAny(l.dock.shoreX, l.dock.shoreZ, 420)) pins.push({ x: l.dock.shoreX, z: l.dock.shoreZ, kind: 'dock', label: 'DOCK' });
@@ -2151,6 +2465,11 @@ export class LegScene extends Scene {
       }
     }
     for (const l of T.lakes) if (l.name && this.mapSeen.has(`wl${l.id}`)) f.pins.push({ x: l.x, z: l.z, kind: 'lake', label: l.name.toUpperCase() });
+    for (const h of T.heritage ?? []) if (this.mapSeen.has(`wh:${h.id}`)) f.pins.push({ x: h.x, z: h.z, kind: 'heritage', label: h.name.replace(/^the /i, '').toUpperCase() });
+    // Udud and Nuhat's house, once seen (or while mission two is heading there).
+    if (T.house && this.party?.onMap) f.pins.push({ x: T.house.x, z: T.house.z, kind: 'heritage', label: 'UDUD & NUHAT' });
+    // A river's bend, once named: just its name, over the meadow.
+    for (const b of T.bends ?? []) if (this.mapSeen.has(`wb:${b.key}`)) f.pins.push({ x: b.loop.x, z: b.loop.z, kind: 'river', label: b.name.replace(/^the /i, '').toUpperCase() });
     return f;
   }
 
@@ -2163,6 +2482,10 @@ export class LegScene extends Scene {
   }
 
   dispose() {
+    this.story?.dispose();
+    this.party?.dispose();
+    this.party = null;
+    this.story = null;
     for (const [k] of this.chunks) this.unloadChunk(k);
     for (const e of this.pickups.values()) {
       disposeTree(e.group);
@@ -2180,7 +2503,11 @@ export class LegScene extends Scene {
     if (this.cityMats) disposeChunkMaterials(this.cityMats);
     this.R.onBeforeView[1] = () => {};
     this.landscape.dispose();
+    this.faceGums?.dispose();
+    this.forage?.dispose();
     this.audio.setWaterAmbience?.(QUIET_WATER);
+    this.audio.setNatureAmbience?.(QUIET_NATURE);
+    this.audio.setVegetationAmbience?.(0, 0, 0);
     super.dispose();
   }
 }

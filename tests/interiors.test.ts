@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { fitsSlot, furnRect, furnSlots, generatePlan, planAabbs, reachable, slotWorld, wallPieces, type Look, type PlanInput } from '../src/world/interiors';
 
-const SIZES: Record<Look, [number, number][]> = {
+// The mall is authored, not generated to a size: it has its own tests (mall.test.ts).
+const SIZES: Record<Exclude<Look, 'mall'>, [number, number][]> = {
   house: [[7, 8], [9, 10], [11, 9], [8, 11], [10, 7]],
   store: [[9, 16], [11, 22], [12, 10]],
   motel: [[9, 34], [9, 24], [8, 14]],
@@ -15,7 +16,7 @@ const SIZES: Record<Look, [number, number][]> = {
 
 function plans(): { look: Look; plan: ReturnType<typeof generatePlan>; label: string }[] {
   const out: { look: Look; plan: ReturnType<typeof generatePlan>; label: string }[] = [];
-  for (const look of Object.keys(SIZES) as Look[]) {
+  for (const look of Object.keys(SIZES) as (keyof typeof SIZES)[]) {
     SIZES[look].forEach(([w, d], i) => {
       for (let seed = 1; seed <= 40; seed++) {
         const inp: PlanInput = { x0: 100, x1: 100 + w, z0: 200, z1: 200 + d, look, door: seed % 2 ? 1 : -1, seed: seed * 31 + i, floors: look === 'house' && seed % 3 === 0 ? 2 : 1, floorY: 3, wear: (seed % 10) / 10, roof: seed % 7 === 0 ? 'none' : 'gable' };

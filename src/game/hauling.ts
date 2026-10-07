@@ -6,13 +6,14 @@ import { panelAnchor, socketDistance, socketFor, type Anchor, type Socket } from
 import { accessPointsOf } from '../render/accessPoints';
 import { PANEL_NAME, colorName, panelColor, paintPanel, panelsOf, type PanelId } from '../sim/paint';
 import { OIL_RESERVE_MAX } from './campaign';
-import { carriedName, carryModelKey, inspectLines, liftSecs, partInspect, planFit, planStow, pourFuel, type Carried, type FitPlan, type FitTarget } from '../sim/carry';
+import { FOODS, carriedName, carryModelKey, inspectLines, liftSecs, partInspect, planFit, planStow, pourFuel, type Carried, type FitPlan, type FitTarget } from '../sim/carry';
 import { idInSlot, installPart, removePart, removeTyre } from '../sim/garage';
 import { planPour } from '../sim/fuel';
 import { pourOil } from '../sim/oil';
 import { WATER_RESERVE_MAX, pourWater } from '../sim/fluids';
 import { needText, spotName, workFor, type Panel, type Spot } from '../sim/access';
 import { partName } from '../sim/parts';
+import { lizardCandidate, lookedAt } from './grab';
 import { PER_WHEEL, anchorWorld, carryTarget, fittedAt, ghostAnchors, isOwnRide, panelCand, placeFor, pointPos, reached, toLocal, toolHit, type Place, type Reach, type SocketHit } from './access';
 import type { Cand, Player } from './player';
 import type { Vehicle } from './vehicle';
@@ -278,6 +279,7 @@ function thenOf(c: Carried): string {
     case 'water':
       return 'then top up the radiator';
     case 'paint':
+    case 'food':
       return '';
   }
 }
@@ -351,8 +353,8 @@ export function guide(p: Player) {
     return;
   }
   if (p.carry) return;
-  // Looking at something on the ground.
-  const near = ctx.loose?.nearest(p.pos.x, p.pos.z, LIFT_REACH + 2.4);
+  // Looking at something on the ground: the label under the crosshair names it (`grab.ts`), so no tag hangs over it.
+  const near = p.lookInfo || lookedAt(p) ? null : ctx.loose?.nearest(p.pos.x, p.pos.z, LIFT_REACH + 2.4);
   if (near) {
     ctx.work.tag(`i${p.index}`, inspectLines(near.carried), new THREE.Vector3(near.x, near.y + 1.15, near.z));
     return;
@@ -377,11 +379,14 @@ export function haulCandidate(p: Player, deck?: () => Cand | null): Cand | null 
   const ctx = p.ctx;
   if (!p.carry) {
     const lifting = p.action?.kind === 'lift' ? String(p.action.target) : undefined;
-    const near = ctx.loose?.nearest(p.pos.x, p.pos.z, LIFT_REACH, lifting);
+    // What you are looking at, if it is in reach, is what you lift; otherwise whatever is nearest your feet.
+    const look = lookedAt(p);
+    const aimed = look && Math.hypot(look.x - p.pos.x, look.z - p.pos.z) <= LIFT_REACH + 0.8 && (!lifting || look.id === lifting) ? look : null;
+    const near = aimed ?? ctx.loose?.nearest(p.pos.x, p.pos.z, LIFT_REACH, lifting);
     const goods = ctx.loose?.nearestGoods(p.pos.x, p.pos.z, LIFT_REACH, lifting);
     // Whichever lies closer; the one already being lifted keeps the hold.
     const dist = (o: { id: string; x: number; z: number }) => Math.hypot(o.x - p.pos.x, o.z - p.pos.z) - (o.id === lifting ? 0.3 : 0);
-    if (goods && (!near || dist(goods) < dist(near))) {
+    if (goods && (!near || (!aimed && dist(goods) < dist(near)))) {
       return {
         kind: 'lift',
         prompt: `Pick up ${goods.label}`,
@@ -395,7 +400,7 @@ export function haulCandidate(p: Player, deck?: () => Cand | null): Cand | null 
         },
       };
     }
-    if (!near) return deck?.() ?? null;
+    if (!near) return deck?.() ?? lizardCandidate(p);
     const label = carriedName(near.carried);
     return {
       kind: 'lift',
@@ -698,6 +703,7 @@ export function returnCarry(p: Player) {
   else if (c.kind === 'oil') {
     if (camp.stowOil(c.amount) < c.amount - 0.02) camp.stocks.scrap += 1;
   } else if (c.kind === 'water') camp.stowWater(c.amount);
+  else if (c.kind === 'food') camp.stocks.rations += FOODS[c.food].rations;
   // A spray can has no place in the trucks: it is simply left behind.
 }
 

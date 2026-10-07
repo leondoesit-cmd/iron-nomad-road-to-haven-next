@@ -1,4 +1,4 @@
-import { FIT_SLOTS, INTERIOR_SLOTS, chassisDef, hasChassis, type PartSlot } from '../data';
+import { FIT_SLOTS, GLASS_SLOTS, INTERIOR_SLOTS, chassisDef, hasChassis, type PartSlot } from '../data';
 import { Rng } from '../core/rng';
 import { EMPTY_ID, newBuild, partInSlot, tyreAt, type BuildComp, type VehicleBuild } from './garage';
 import { newPart, rollPart, type Fit, type PartItem, type Tyres } from './parts';
@@ -154,6 +154,8 @@ export function salvageLoot(stage: number, c: SalvageCtx): SalvageLoot {
       break;
     case 2:
       for (const slot of BODY_FIT) take(slot);
+      // The glass is cut out of its frames with the rest of the bodywork: a pane that has gone is nothing to take.
+      for (const slot of GLASS_SLOTS) take(slot);
       take('cooling');
       // And the water in the radiator runs out onto the road, for anyone with a can.
       if (!c.burnt) out.water = Math.round(Math.max(0, b.comp.coolant ?? 0) * 6 * 10) / 10;
@@ -215,6 +217,9 @@ export function stripBuild(stage: number, b: VehicleBuild) {
       break;
     case 2:
       for (const slot of BODY_FIT) if (partInSlot(b, slot)) empty(slot);
+      // Every window frame is left bare, a shattered pane included.
+      for (const slot of GLASS_SLOTS) if (have.has(slot)) empty(slot);
+      for (const k of ['ws', 'rw', 'sL0', 'sL1', 'sR0', 'sR1']) if (b.body?.glass) delete b.body.glass[k];
       empty('cooling');
       b.comp.radiator = 0;
       b.comp.coolant = 0;

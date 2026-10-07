@@ -1,0 +1,72 @@
+<!doctype html><meta charset="utf-8"><title>Ground-cover rendering fidelity</title>
+<style>body{background:#182026;color:#e7ebe5;font:15px system-ui;margin:24px}button{padding:10px}pre{white-space:pre-wrap}canvas{max-width:100%}</style>
+<h1>Ground-cover rendering fidelity</h1><button id="run">Run comparison</button><pre id="result">Ready</pre><canvas id="canvas"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { grassMaterial, WIND } from '../src/render/scatter.ts';
+import { FadedBatch } from '../src/render/fadedBatch.ts';
+import { GLOBALS } from '../src/render/materials.ts';
+const output=document.querySelector('#result');
+const renderer=new THREE.WebGLRenderer({canvas:document.querySelector('#canvas'),antialias:false});
+renderer.setSize(512,512);renderer.info.autoReset=false;
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x607c91);
+scene.add(new THREE.HemisphereLight(0xffffff,0x776644,3));
+const sun=new THREE.DirectionalLight(0xffffff,2);sun.position.set(20,40,30);scene.add(sun);
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(1200,1200),new THREE.MeshStandardMaterial({color:0x79744e}));ground.rotation.x=-Math.PI/2;scene.add(ground);
+const geometry=new THREE.BufferGeometry(),pos=[],norm=[],uv=[],idx=[];
+for(let k=0;k<3;k++){
+  const a=k*Math.PI/3,x=Math.cos(a)*.5,z=Math.sin(a)*.5,o=pos.length/3;
+  pos.push(-x,0,-z,x,0,z,x,.62,z,-x,.62,-z);for(let j=0;j<4;j++)norm.push(0,1,0);
+  uv.push(0,1,1,1,1,0,0,0);idx.push(o,o+1,o+2,o,o+2,o+3);
+}
+geometry.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));geometry.setAttribute('normal',new THREE.Float32BufferAttribute(norm,3));geometry.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));geometry.setIndex(idx);
+const before=new THREE.Group(),after=new THREE.Group(),batches=[],matrix=new THREE.Matrix4(),color=new THREE.Color(0x789344);
+// Same roots, geometry, material, instance order, wind and fade on both paths. Most distant roots already draw no pixels.
+for(let z=-3;z<=3;z++)for(let x=-3;x<=3;x++){
+  const a=new THREE.InstancedMesh(geometry,grassMaterial(),400),b=new THREE.InstancedMesh(geometry,grassMaterial(),400);
+  for(let i=0;i<400;i++){
+    const px=x*72+(i%20-9.5)*2.8,pz=z*72+(Math.floor(i/20)-9.5)*2.8;
+    matrix.makeRotationY(i*.7);matrix.setPosition(px,0,pz);a.setMatrixAt(i,matrix);b.setMatrixAt(i,matrix);a.setColorAt(i,color);b.setColorAt(i,color);
+  }
+  a.computeBoundingSphere();b.computeBoundingSphere();before.add(a);after.add(b);batches.push(new FadedBatch(b,85));
+}
+scene.add(before,after);WIND.uWind.value.set(.8,0,.2,.7);
+const cameras=[new THREE.PerspectiveCamera(66,1,.1,900),new THREE.PerspectiveCamera(66,1,.1,900)];
+cameras[0].position.set(0,7,20);cameras[0].lookAt(0,0,-25);cameras[1].position.set(150,8,160);cameras[1].lookAt(120,0,115);
+const target=new THREE.WebGLRenderTarget(512,512),context=renderer.getContext(),timer=context.getExtension('EXT_disjoint_timer_query_webgl2');
+const frame=()=>new Promise(resolve=>requestAnimationFrame(resolve));
+function draw(optimized,time,mode){
+  before.visible=!optimized;after.visible=optimized;GLOBALS.uTime.value=time;renderer.setRenderTarget(target);renderer.info.reset();
+  const rects=mode==='single'?[[0,0,512,512]]:mode==='horizontal'?[[0,256,512,256],[0,0,512,256]]:[[0,0,256,512],[256,0,256,512]];
+  target.scissorTest=true;
+  for(let i=0;i<rects.length;i++){
+    const r=rects[i],cam=cameras[i];cam.aspect=r[2]/r[3];cam.updateProjectionMatrix();
+    if(optimized){after.updateWorldMatrix(true,false);for(const batch of batches)batch.updateView(cam.position,false);}
+    target.viewport.set(...r);target.scissor.set(...r);renderer.setRenderTarget(target);renderer.render(scene,cam);
+  }
+  target.scissorTest=false;return {calls:renderer.info.render.calls,triangles:renderer.info.render.triangles};
+}
+document.querySelector('#run').onclick=async()=>{
+  try{
+    output.textContent='Comparing unchanged shaders at three wind times and three view layouts';await frame();
+    for(const mode of ['single','horizontal','vertical'])for(let i=0;i<2;i++){draw(false,0,mode);draw(true,0,mode);}
+    const comparisons=[];
+    for(const mode of ['single','horizontal','vertical'])for(const time of [0,3,19]){
+      const old=draw(false,time,mode),a=new Uint8Array(512*512*4);renderer.readRenderTargetPixels(target,0,0,512,512,a);
+      const now=draw(true,time,mode),b=new Uint8Array(a.length);renderer.readRenderTargetPixels(target,0,0,512,512,b);
+      let changed=0,max=0;for(let i=0;i<a.length;i++){const delta=Math.abs(a[i]-b[i]);if(delta)changed++;max=Math.max(max,delta);}
+      comparisons.push({mode,time,changedChannels:changed,maxChannelDelta:max,before:old,after:now});
+    }
+    const gpu={before:[],after:[]},cpu={before:[],after:[]};
+    for(let i=0;i<30;i++)for(const optimized of i%2?[true,false]:[false,true]){
+      await frame();const name=optimized?'after':'before',query=timer?context.createQuery():null;
+      if(query)context.beginQuery(timer.TIME_ELAPSED_EXT,query);
+      const start=performance.now();draw(optimized,3,'horizontal');cpu[name].push(performance.now()-start);
+      if(query){context.endQuery(timer.TIME_ELAPSED_EXT);let tries=0;while(!context.getQueryParameter(query,context.QUERY_RESULT_AVAILABLE)&&tries++<120)await frame();if(context.getQueryParameter(query,context.QUERY_RESULT_AVAILABLE)&&!context.getParameter(timer.GPU_DISJOINT_EXT))gpu[name].push(context.getQueryParameter(query,context.QUERY_RESULT)/1e6);context.deleteQuery(query);}
+    }
+    const median=values=>{values=values.slice(4).sort((a,b)=>a-b);return values.length?values[Math.floor(values.length/2)]:null;};
+    output.textContent=JSON.stringify({comparisons,gpuTimer:!!timer,gpuMs:{before:median(gpu.before),after:median(gpu.after)},cpuSubmissionMs:{before:median(cpu.before),after:median(cpu.after)}},null,2);
+    draw(true,3,'horizontal');renderer.setRenderTarget(null);target.viewport.set(0,0,512,512);renderer.render(scene,cameras[0]);
+  }catch(error){output.textContent=error.stack;}
+};
+</script>

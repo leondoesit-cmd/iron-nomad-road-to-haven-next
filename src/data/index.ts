@@ -47,13 +47,18 @@ export type PartSlot =
   | 'seatP'
   | 'seatR'
   | 'steer'
-  | 'dash';
+  | 'dash'
+  // Glass: the windscreen, the rear window and a window in each door are real parts that can be missing, cracked or swapped.
+  | 'glassF'
+  | 'glassB'
+  | 'glassL'
+  | 'glassR';
 /**
  * Every part category. `wheels` is the category of a tyre: tyres are fitted one per wheel (see `VehicleBuild.tyres`), never
  * as a slot of their own, `doorL` is the category of a door, which fits either side, and `seatD` is the category of a front
  * seat, which fits the driver's or the passenger's mount.
  */
-export const PART_SLOTS: PartSlot[] = ['engine', 'cooling', 'gearbox', 'exhaust', 'wheels', 'suspension', 'brakes', 'hood', 'doorL', 'doorR', 'armor', 'weapon', 'utility', 'front', 'roof', 'rear', 'side', 'seatD', 'seatP', 'seatR', 'steer', 'dash'];
+export const PART_SLOTS: PartSlot[] = ['engine', 'cooling', 'gearbox', 'exhaust', 'wheels', 'suspension', 'brakes', 'hood', 'doorL', 'doorR', 'armor', 'weapon', 'utility', 'front', 'roof', 'rear', 'side', 'seatD', 'seatP', 'seatR', 'steer', 'dash', 'glassF', 'glassB', 'glassL', 'glassR'];
 /** Slots that hold one part directly in `Fit`. Everything but the tyres, which are one per wheel. */
 export const FIT_SLOTS: PartSlot[] = PART_SLOTS.filter((s) => s !== 'wheels');
 /**
@@ -63,6 +68,15 @@ export const FIT_SLOTS: PartSlot[] = PART_SLOTS.filter((s) => s !== 'wheels');
  */
 export const INTERIOR_SLOTS: PartSlot[] = ['seatD', 'seatP', 'seatR', 'steer', 'dash'];
 export const isInteriorSlot = (s: PartSlot): boolean => INTERIOR_SLOTS.includes(s);
+/**
+ * The glass mounts: the windscreen, the rear window and a window in each door (`glassL` is the category of a door window,
+ * which fits either side, like a door). A chassis lists the ones it has in `slots`; its factory panes are `gls_*_std` and each
+ * empty frame holds a `gls_*_none` part.
+ */
+export const GLASS_SLOTS: PartSlot[] = ['glassF', 'glassB', 'glassL', 'glassR'];
+export const isGlassSlot = (s: PartSlot): boolean => GLASS_SLOTS.includes(s);
+export const GLASS_STOCK: Record<string, string> = { glassF: 'gls_ws_std', glassB: 'gls_rw_std', glassL: 'gls_side_std', glassR: 'gls_side_std' };
+export const GLASS_NONE: Record<string, string> = { glassF: 'gls_ws_none', glassB: 'gls_rw_none', glassL: 'gls_side_none', glassR: 'gls_side_none' };
 /** The factory part of each cabin mount, and the placeholder that stands for a mount with nothing in it. */
 export const INTERIOR_STOCK: Record<string, string> = { seatD: 'seat_std', seatP: 'seat_std', seatR: 'bench_std', steer: 'steer_std', dash: 'dash_std' };
 export const INTERIOR_NONE: Record<string, string> = { seatD: 'seat_none', seatP: 'seat_none', seatR: 'bench_none', steer: 'steer_none', dash: 'dash_none' };
@@ -70,6 +84,7 @@ export const INTERIOR_NONE: Record<string, string> = { seatD: 'seat_none', seatP
 export function mountsFor(category: PartSlot): PartSlot[] {
   if (category === 'doorL' || category === 'doorR') return ['doorL', 'doorR'];
   if (category === 'seatD' || category === 'seatP') return ['seatD', 'seatP'];
+  if (category === 'glassL' || category === 'glassR') return ['glassL', 'glassR'];
   return [category];
 }
 export const MOUNT_SLOTS: PartSlot[] = ['front', 'roof', 'rear', 'side'];
@@ -89,11 +104,75 @@ export interface VehiclePhysicsDef {
   hardY: number;
   wheelsZ: number[];
   wheelsX: number[];
+  /**
+   * An axle-by-axle wheel layout, for chassis that are not two wheels per axle (a trike: one wheel in front, two behind).
+   * Each axle has its own track, wheel radius, and whether it steers and is driven. Missing: `wheelsZ` x `wheelsX`.
+   */
+  axles?: AxleDef[];
+  /**
+   * The wheels are whole parts (rim and tyre): a wheel taken off leaves nothing on the hub, so that corner rests on its
+   * stand and the vehicle cannot roll until every wheel is back on.
+   */
+  wholeWheels?: boolean;
   uprightGain: number;
   lean: boolean;
   /** 'boat': a hull that floats (see physics/boat.ts). The wheel fields are ignored. */
   kind?: 'boat';
   boat?: BoatPhysics;
+}
+
+export interface AxleDef {
+  z: number;
+  /** One x per wheel on this axle; [0] is a single wheel on the centre line. */
+  x: number[];
+  /** Wheel radius on this axle. Missing: `wheelRadius`. */
+  r?: number;
+  /** Steers. Missing: only the first axle does. */
+  steer?: boolean;
+  /** Driven. Missing on every axle: all of them are. */
+  drive?: boolean;
+}
+
+/** One wheel of a chassis: where it is (connection point, chassis frame), its radius, and what it does. */
+export interface WheelPlace {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+  steer: boolean;
+  drive: boolean;
+  rear: boolean;
+}
+
+/**
+ * Every wheel of a chassis, in the order the physics, the model and the build's tyre list use. A smaller wheel is hung
+ * lower from the frame so every tyre meets the ground at the same height.
+ */
+export function wheelLayout(p: VehiclePhysicsDef): WheelPlace[] {
+  const out: WheelPlace[] = [];
+  if (p.axles?.length) {
+    const rMax = Math.max(...p.axles.map((a) => a.r ?? p.wheelRadius));
+    const anyDrive = p.axles.some((a) => a.drive !== undefined);
+    p.axles.forEach((a, i) => {
+      const r = a.r ?? p.wheelRadius;
+      for (const x of a.x) {
+        if (out.length >= p.wheelCount) break;
+        out.push({ x, y: p.hardY - (rMax - r), z: a.z, r, steer: a.steer ?? i === 0, drive: anyDrive ? !!a.drive : true, rear: i === p.axles!.length - 1 });
+      }
+    });
+    return out;
+  }
+  // One axle per entry of wheelsZ; two wheels per axle unless wheelsX is [0].
+  const axles = p.wheelsZ.length;
+  const xs = p.wheelsX[0] === 0 ? [0] : p.wheelsX;
+  for (let a = 0; a < axles; a++) {
+    for (const x of xs) {
+      if (out.length >= p.wheelCount) break;
+      // The front axle steers (the rig steers its two forward axles); the moped drives its rear wheel, the rest all wheels.
+      out.push({ x, y: p.hardY, z: p.wheelsZ[a], r: p.wheelRadius, steer: a < (p.wheelCount >= 12 ? 2 : 1), drive: p.wheelCount === 2 ? a === axles - 1 : true, rear: a === axles - 1 });
+    }
+  }
+  return out;
 }
 
 /** How a hull sits and moves in the water. */
@@ -108,6 +187,8 @@ export interface BoatPhysics {
   yawRate: number;
   /** Driven by a fan above the water: needs no propeller depth. */
   air: boolean;
+  /** Driven by the riders' legs (a pedal boat): no fuel, no engine, a paddle wheel at the stern. */
+  pedal?: boolean;
 }
 
 export interface VehicleDef {
@@ -147,6 +228,11 @@ export interface VehicleDef {
   stockRadiator?: string;
   /** Size class of the engine bay, 1 (scooter frame) to 5 (truck). A bigger engine still goes in, but is forced. */
   bay?: number;
+  /**
+   * The factory tyre on each wheel, when they differ (a trike's motorcycle wheel in front and two small wheels behind).
+   * A wheel then only takes tyres of the same `wheel` kind as its factory one. Missing: `tyre_<id>` on every wheel.
+   */
+  tyres?: string[];
 }
 
 export type FuelType = 'petrol' | 'diesel';
@@ -262,6 +348,15 @@ export interface PartDef {
   stock?: boolean;
   /** The "nothing there" placeholder for a bay that has been stripped. Not a real part. */
   empty?: boolean;
+  /** Glass: how many times the stock pane's strength it has (it cracks and goes later, or sooner). */
+  glass?: { hp: number };
+  /** Doors: false for one with no window to put glass in (a canvas flap, an armoured slit). */
+  window?: boolean;
+  /**
+   * Tyres only: a wheel of a kind that only goes on a hub made for it (`moto`, a motorcycle front wheel; `small`, a
+   * rickshaw's small rear wheel). Missing: an ordinary tyre, for any chassis whose wheels take ordinary tyres.
+   */
+  wheel?: 'moto' | 'small';
 }
 
 export type ZombieKind = 'walker' | 'runner' | 'screamer' | 'bloater' | 'brute' | 'stalker';
@@ -295,6 +390,9 @@ export interface RaiderDef {
   mass?: number;
   ramDamage?: number;
   rearTireHp?: number;
+  /** A raider car's crew: their hit points together, and the share of a round the car's own plating takes off before it reaches them. */
+  crewHp?: number;
+  crewCover?: number;
 }
 
 export type MercRole = 'mechanic' | 'scout' | 'scavenger' | 'vanguard';
@@ -373,6 +471,12 @@ export interface OpenWorldSpec {
   haven: { x: number; z: number; radius: number };
   /** The water of the country: big lakes, springs, swamps, rivers and streams, and the green land around them. */
   water?: OpenWaterSpec;
+  /** Real buildings set by hand by the water (the Concrete House on the Yarkon). */
+  heritage?: HeritageSpec[];
+  /** Nar's yard, where the story begins (`world/narYard.ts`): its middle and the way its open front faces. */
+  yard?: { x: number; z: number; yaw: number };
+  /** Udud and Nuhat's house north of Petah Tikva, where mission two ends (`world/ududHouse.ts`): its patio's middle and facing. */
+  house?: { x: number; z: number; yaw: number };
 }
 
 /** A point in world metres. */
@@ -394,6 +498,30 @@ export interface OpenWaterSpec {
   rivers: WaterCourseSpec[];
   /** Green country beyond what the water greens by itself, and the kind of wood that grows there. */
   greens: { id: string; x: number; z: number; r: number; lush: number; woods: 'broadleaf' | 'pine' | 'fen' }[];
+  /** Clay pans (playas): dead-flat beds of dry clay that hold a sheet of water for a day after a flood. */
+  pans?: { id: string; name: string; x: number; z: number; r: number; ax?: number; rot?: number; seed?: number; dry?: boolean }[];
+  /** Dry washes (wadis): gravel beds cut into the desert that run only in a flash flood. See `world/washes.ts`. */
+  washes?: WashSpec[];
+}
+
+/**
+ * A dry wash: it comes out of the mountains at the edge of the map through a gorge, winds between its `via` points and ends in
+ * a clay pan or a river. Its bed always falls; it is cut into the land, never built up on it.
+ */
+export interface WashSpec {
+  id: string;
+  name: string;
+  /** Where it leaves the mountains: `at` is z on the east or west rim, x on the north or south rim. */
+  from: { rim: 'west' | 'east' | 'north' | 'south'; at: number };
+  via: XZ[];
+  to: { pan: string } | { river: string };
+  /** Half the width of the flat bed, at the gorge and at the mouth. */
+  half: [number, number];
+  /** How far the bed lies under the land beside it, at the gorge and at the mouth. */
+  cut: [number, number];
+  /** How deep a big flood runs over the bed, in metres. */
+  flood: number;
+  meander?: number;
 }
 
 export interface WaterCourseSpec {
@@ -411,6 +539,55 @@ export interface WaterCourseSpec {
   falls?: { at: number; h: number; name?: string }[];
   /** Sideways wander of the course between its anchors, in metres. */
   meander?: number;
+  /** The woods along it were planted: a eucalyptus grove lines its banks (the Yarkon), whatever the region grows. */
+  grove?: 'eucalyptus';
+  /** How cloudy its water always is, 0..1: a lowland river carries silt and algae and runs an opaque olive (the Yarkon). */
+  silt?: number;
+  /** Giant cane (Arundo) stands in thickets along its banks. */
+  cane?: boolean;
+  /** Stony riffles where it runs shallow and white: where each lies (0 source, 1 mouth). */
+  riffles?: number[];
+  /** Omega bends (`world/hydro.ts` `Loop`): the course swings out round a near-island and back. */
+  loops?: LoopSpec[];
+}
+
+/**
+ * An omega bend (as at Abu Rabah mill on the Yarkon): the course leaves its line, swings round a near-circle of centre-line
+ * radius `r` hung `stem` metres off it on the side `at` lies, and comes back, the two legs leaving a strip of land `neck`
+ * metres wide between their waters where the right-hand one opens out round a little island `island` metres in from the
+ * line. At the top of the left-hand leg the river comes round square and the mill stands in it, the crossing onto the island
+ * beside it. `closed`: the legs' waters meet across the neck's mouth, so that crossing is the only way in. The ground inside
+ * rises to a low hill `hill` metres high in the middle (so from one side the water on the other is out of sight), bushes and
+ * cane line both banks, and a dirt road follows the outer bank round behind them and out to the nearest road. `landing` (0
+ * entry, 1 exit of the bulb) is a muddy landing on the inner bank.
+ */
+export interface LoopSpec {
+  id: string;
+  name: string;
+  at: XZ;
+  r: number;
+  neck: number;
+  stem?: number;
+  hill?: number;
+  island?: number;
+  landing?: number;
+  closed?: boolean;
+}
+
+/**
+ * A building set by hand beside a river (`world/heritage.ts`): on the bank toward the district `facing`, its front wall `gap`
+ * metres from the water's edge. It stands where the river comes nearest that district, or, given `open` (a stretch of the
+ * river, 0 source to 1 mouth), on the most open, level meadow along that stretch.
+ */
+export interface HeritageSpec {
+  id: 'concreteHouse' | 'mudHut' | 'oldMill';
+  name: string;
+  river: string;
+  gap: number;
+  facing: string;
+  open?: [number, number];
+  /** Built across the river where an omega bend (`WaterCourseSpec.loops`, by id) runs furthest from its neck. */
+  loop?: string;
 }
 
 export interface HubDef {
@@ -450,6 +627,8 @@ export const VEHICLES = vehiclesJson as unknown as {
   tiers: VehicleDef[];
   /** Abandoned-car chassis that can turn up in the world. */
   cars: VehicleDef[];
+  /** One-off chassis (see `SPECIAL_CHASSIS`). */
+  special?: VehicleDef[];
   surfaces: Record<string, { grip: number; drag: number }>;
 };
 export const PARTS = partsJson as unknown as {
@@ -481,8 +660,10 @@ export function boatDef(id: string): VehicleDef {
   return d;
 }
 
-/** Every chassis by id: the five signature tiers plus the abandoned cars. */
-export const CHASSIS: Record<string, VehicleDef> = Object.fromEntries([...VEHICLES.tiers, ...VEHICLES.cars].map((d) => [d.id, d]));
+/** One-off chassis that are neither a tier nor a found car: the story's rickshaw trike. */
+export const SPECIAL_CHASSIS: VehicleDef[] = VEHICLES.special ?? [];
+/** Every chassis by id: the five signature tiers, the abandoned cars and the one-offs. */
+export const CHASSIS: Record<string, VehicleDef> = Object.fromEntries([...VEHICLES.tiers, ...VEHICLES.cars, ...SPECIAL_CHASSIS].map((d) => [d.id, d]));
 export function chassisDef(id: string): VehicleDef {
   const d = CHASSIS[id];
   if (!d) throw new Error(`Unknown chassis ${id}`);
@@ -491,9 +672,30 @@ export function chassisDef(id: string): VehicleDef {
 export function hasChassis(id: string) {
   return id in CHASSIS;
 }
-export type AnimalKind = 'hare' | 'deer' | 'vulture' | 'dog' | 'wolf' | 'boar' | 'bear';
-/** prey: bolts from danger. bird: wheels overhead. pack: hunts people on foot. charger: bolts, then rams what upset it. brute: leaves you be until provoked. */
-export type AnimalTemper = 'prey' | 'bird' | 'pack' | 'charger' | 'brute';
+export type AnimalKind =
+  | 'hare'
+  | 'deer'
+  | 'vulture'
+  | 'dog'
+  | 'wolf'
+  | 'boar'
+  | 'bear'
+  | 'ibex'
+  | 'camel'
+  | 'fox'
+  | 'jackal'
+  | 'buffalo'
+  | 'heron'
+  | 'stork'
+  | 'duck'
+  | 'crow'
+  | 'egret';
+/**
+ * prey: bolts from danger. bird: wheels overhead. pack: hunts people on foot. charger: bolts, then rams what upset it. brute:
+ * leaves you be until provoked. scavenger: skulks, eats what others kill and runs from people. wader: stalks the shallows on
+ * long legs and flies off along the water when flushed. swimmer: floats on open water and takes off from it.
+ */
+export type AnimalTemper = 'prey' | 'bird' | 'pack' | 'charger' | 'brute' | 'scavenger' | 'wader' | 'swimmer';
 export interface AnimalDef {
   name: string;
   temper: AnimalTemper;
@@ -517,6 +719,19 @@ export interface AnimalDef {
   themes: ('dust' | 'salt' | 'cinder')[];
   weight: number;
   altitude?: number;
+  /** Deepest water (m) it walks into: a buffalo wallows, a heron wades, the rest stop at the edge (0.6). */
+  wade?: number;
+  /** Out mostly by night: more of them about after dark instead of fewer. */
+  nocturnal?: boolean;
+  /** A bird that comes down to walk and peck about the open ground between flights. */
+  forage?: boolean;
+  /**
+   * How easily it is put to flight, as a multiplier on the distances it runs at (1 a deer; a camel, used to people and
+   * their engines, 0.45). A vehicle passing at a distance is watched, not run from, whatever the nerve.
+   */
+  nerve?: number;
+  /** Its call, played now and then while it goes about its business. */
+  call?: 'quack' | 'howl' | 'bellow' | 'caw' | 'chirp';
 }
 export const WILDLIFE = wildlifeJson as unknown as {
   rules: { activeRadius: number; spawnMin: number; spawnMax: number; despawnRadius: number; maxAlive: number; spawnEvery: number; corpseSeconds: number };
@@ -728,6 +943,10 @@ export function validateData(): string[] {
     need(p.mk >= 1 && p.mk <= 3, `part ${p.id}: mk range`);
     // Factory fittings are never random loot, so they carry no weight.
     need(p.stock ? p.weight === 0 : p.weight > 0, `part ${p.id}: weight`);
+    if (GLASS_SLOTS.includes(p.slot)) {
+      need(!p.empty || Object.values(GLASS_NONE).includes(p.id), `part ${p.id}: an empty glass part must be ${[...new Set(Object.values(GLASS_NONE))].join(' or ')}`);
+      need(p.empty ? p.glass === undefined : !!p.glass && p.glass.hp > 0, `part ${p.id}: glass strength`);
+    } else need(p.glass === undefined, `part ${p.id}: only glass has a glass strength`);
     if (INTERIOR_SLOTS.includes(p.slot)) need(!p.empty || Object.values(INTERIOR_NONE).includes(p.id), `part ${p.id}: an empty cabin part must be ${Object.values(INTERIOR_NONE).join(' or ')}`);
     if (p.slot === 'engine') {
       const e = p.engine;
@@ -750,7 +969,13 @@ export function validateData(): string[] {
     if (p.slot === 'cooling') need(typeof p.cooling === 'number' && p.cooling >= 0 && (p.empty ? p.cooling === 0 : p.cooling > 0), `part ${p.id}: radiator needs a cooling rating`);
     else need(p.cooling === undefined, `part ${p.id}: only radiators have a cooling rating`);
   }
-  for (const v of [...VEHICLES.tiers, ...VEHICLES.cars]) {
+  for (const v of SPECIAL_CHASSIS) {
+    need(wheelLayout(v.physics).length === v.physics.wheelCount, `vehicle ${v.id}: wheel layout does not match wheelCount`);
+    need(!v.tyres || v.tyres.length === v.physics.wheelCount, `vehicle ${v.id}: one factory tyre per wheel`);
+    for (const id of v.tyres ?? []) need(!!PART_BY_ID.get(id)?.stock && PART_BY_ID.get(id)?.slot === 'wheels', `vehicle ${v.id}: factory tyre ${id}`);
+    need(!CHASSIS[v.id] || CHASSIS[v.id] === v, `vehicle ${v.id}: id clashes`);
+  }
+  for (const v of [...VEHICLES.tiers, ...VEHICLES.cars, ...SPECIAL_CHASSIS]) {
     need(!!v.stockEngine && PART_BY_ID.get(v.stockEngine)?.slot === 'engine' && !!PART_BY_ID.get(v.stockEngine)?.stock, `vehicle ${v.id}: needs a stock engine`);
     need(!!v.stockRadiator && PART_BY_ID.get(v.stockRadiator)?.slot === 'cooling' && !!PART_BY_ID.get(v.stockRadiator)?.stock, `vehicle ${v.id}: needs a stock radiator`);
     need((v.bay ?? 0) >= 1 && (v.bay ?? 9) <= 5, `vehicle ${v.id}: bay size class`);
@@ -758,6 +983,11 @@ export function validateData(): string[] {
     for (const pre of ['tyre', 'gbx', 'sus', 'brk', 'exh']) {
       const f = PART_BY_ID.get(`${pre}_${v.id}`);
       need(!!f?.stock, `vehicle ${v.id}: needs a factory ${pre} part (${pre}_${v.id})`);
+    }
+    for (const slot of GLASS_SLOTS) {
+      if (!(v.slots ?? []).includes(slot)) continue;
+      need(!!PART_BY_ID.get(GLASS_STOCK[slot])?.stock && !PART_BY_ID.get(GLASS_STOCK[slot])?.empty, `vehicle ${v.id}: ${slot} needs the factory pane ${GLASS_STOCK[slot]}`);
+      need(!!PART_BY_ID.get(GLASS_NONE[slot])?.empty, `vehicle ${v.id}: ${slot} needs the placeholder ${GLASS_NONE[slot]}`);
     }
     for (const slot of INTERIOR_SLOTS) {
       if (!(v.slots ?? []).includes(slot)) continue;

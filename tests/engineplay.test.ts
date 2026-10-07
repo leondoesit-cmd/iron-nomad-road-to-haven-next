@@ -156,6 +156,51 @@ describe('every chassis has a socket for every slot it accepts', () => {
 });
 
 describe('petrol and diesel on the road', () => {
+  it('entering an empty car and holding throttle cannot stack failed starts or create a running motor', () => {
+    const { h, sc } = leg();
+    const v = ownCar(sc, 'hatch', { fuel: 0 });
+    h.sounds.length = 0;
+    expect(sc.players[0].tryEnter()).toBe(true);
+    run(sc, 1.5);
+    expect(sc.players[0].vehicle).toBe(v);
+    expect(v.startFail).toBe('Out of fuel');
+    expect(h.sounds.filter(id => id === 'starterFail')).toHaveLength(1);
+    h.intents[0].device = 'keyboard';
+    h.intents[0].move[1] = 1;
+    run(sc, 3);
+    expect(v.engineOn).toBe(false);
+    expect(v.env.engineOn).toBe(false);
+    expect(h.sounds.filter(id => id === 'engineStart')).toHaveLength(0);
+    expect(h.sounds.filter(id => id === 'starterFail').length).toBeLessThanOrEqual(2);
+    const mix = vi.spyOn(sc.audio, 'updateEngines');
+    sc.updateAudio(DT);
+    expect(mix.mock.calls.at(-1)![0].some(e => e.id === v.id && e.running)).toBe(false);
+    // Fuel added during the retry delay can start the engine on the next tick.
+    v.setEngine(true);
+    v.fuel = 5;
+    sc.tick(DT);
+    expect(v.engineOn).toBe(true);
+    expect(h.sounds.filter(id => id === 'engineStart')).toHaveLength(1);
+    sc.tick(DT);
+    expect(h.sounds.filter(id => id === 'engineStart')).toHaveLength(1);
+  });
+
+  it('a hot empty car keeps cooling audio but never revs even before its running flag is cleared', () => {
+    const { sc } = leg();
+    const v = ownCar(sc, 'hatch', { fuel: 0 });
+    v.engineOn = true;
+    v.temp = 1.1;
+    v.lastIntent = { steer: 0, throttle: 1, brake: 0, handbrake: false };
+    const mix = vi.spyOn(sc.audio, 'updateEngines');
+    sc.updateAudio(DT);
+    const engine = mix.mock.calls.at(-1)![0].find(e => e.id === v.id)!;
+    expect(engine.running).toBe(false);
+    expect(engine.throttle).toBe(0);
+    expect(engine.boost).toBe(0);
+    sc.tick(DT);
+    expect(v.engineOn).toBe(false);
+  });
+
   it('a wrong-fuel tank will not start; the jerrycan drains it into the right reserve; then the right fuel runs it', () => {
     const { h, sc, c } = leg();
     const v = ownCar(sc, 'van', { fuel: 0.6 });

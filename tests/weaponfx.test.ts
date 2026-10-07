@@ -42,14 +42,18 @@ const GUNS = ['pistol', 'revolver', 'smg', 'sawn', 'pump', 'rifle'] as const;
 // ------------------------------------------------------------------ the rules
 
 describe('muzzle, tracer and bloom tables', () => {
-  it('every gun has a flash, a bloom and a melee-free feel; every round has a tracer', () => {
+  it('every gun has a flash and bloom; bullets have tracers while arrows and bolts are drawn as shafts', () => {
     for (const m of GUNS) {
       expect(MUZZLE[m].flash).toBeGreaterThan(0);
       expect(MUZZLE[m].cone).toBeGreaterThan(0);
       expect(BLOOM[m].shot).toBeGreaterThan(0);
       expect(BLOOM[m].max).toBeGreaterThanOrEqual(BLOOM[m].shot);
     }
+    // Arrows and crossbow bolts are drawn as themselves in flight, never as a streak.
+    expect(TRACER.arrow.chance).toBe(0);
+    expect(TRACER.bolt.chance).toBe(0);
     for (const k of Object.keys(AMMO) as AmmoKind[]) {
+      if (k === 'arrow' || k === 'bolt') continue;
       expect(TRACER[k].life).toBeGreaterThan(0);
       expect(TRACER[k].chance).toBeGreaterThan(0);
       expect(TRACER[k].chance).toBeLessThanOrEqual(1);

@@ -4,6 +4,8 @@ import type { DelveRecord } from './delveScene';
 import type { CarField } from './cars';
 import type { TrackSnapshot } from '../render/trackMarks';
 import type { Carried } from '../sim/carry';
+import type { Picked } from './foraging';
+import type { VegetationMemory, VegetationRecord } from '../sim/vegetation';
 
 /** Where the convoy stands, for rolling out again from the same spot. */
 export interface WorldPose {
@@ -51,6 +53,14 @@ export class WorldMemory {
   drops: { x: number; z: number; carried: Carried }[] = [];
   zombies: SavedZombie[] = [];
   camp: WorldPose | null = null;
+  /** Trees fire has burned, by key (`wildfire.treeKey`): how charred each is, 0..1. */
+  burnt = new Map<string, number>();
+  /** Ground a grass fire went over, by its cell on the burning grid (`game/fires.ts`): it stays black. */
+  scorched: number[] = [];
+  /** Crushed plants, weakened wood and fallen poses, by deterministic vegetation position. */
+  vegetation: VegetationMemory = new Map();
+  /** Wild plants picked, by spot id (`world/forage.ts`): handfuls taken and the day of the last. They grow back over the days. */
+  forage = new Map<string, Picked>();
 
   /** The part that goes in a save file. Cars and live zombies are not kept across a reload. */
   serialize(): WorldSave {
@@ -66,6 +76,10 @@ export class WorldMemory {
       ambush: [...this.ambushDone],
       gang: [...this.gangKilled],
       camp: this.camp,
+      burnt: [...this.burnt],
+      scorched: this.scorched,
+      vegetation: [...this.vegetation],
+      forage: [...this.forage].map(([id, p]) => [id, p.n, p.day]),
     };
   }
 
@@ -78,6 +92,10 @@ export class WorldMemory {
     m.placesShown = new Set(s.places ?? []);
     m.mapSeen = new Set(s.seen ?? []);
     m.searched = new Set(s.searched ?? []);
+    m.burnt = new Map(s.burnt ?? []);
+    m.scorched = s.scorched ?? [];
+    m.vegetation = new Map(s.vegetation ?? []);
+    m.forage = new Map((s.forage ?? []).map(([id, n, day]) => [id, { n, day }]));
     m.ambushDone = new Set(s.ambush ?? []);
     m.gangKilled = new Set(s.gang ?? []);
     m.camp = s.camp ?? null;
@@ -96,4 +114,11 @@ export interface WorldSave {
   /** Absent in saves from before gang camps. */
   gang?: string[];
   camp: WorldPose | null;
+  /** Trees burned by fire: key and char. Absent in saves from before the weather. */
+  burnt?: [string, number][];
+  /** Burnt ground, by grid cell. Absent in saves from before grass fires. */
+  scorched?: number[];
+  vegetation?: [string, VegetationRecord][];
+  /** Wild plants picked: id, handfuls taken, day. Absent in saves from before foraging. */
+  forage?: [string, number, number][];
 }

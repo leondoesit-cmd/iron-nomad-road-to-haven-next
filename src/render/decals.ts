@@ -8,7 +8,7 @@ import { GLOBALS } from './materials';
  * the newest. Blood is wet and bright when it lands and dries to a dark brown over the next minute.
  */
 
-/** Cells of the atlas, 4 across and 2 down. */
+/** Cells of the atlas, 4 across and 3 down. */
 export const CELL = { splat0: 0, splat1: 1, splat2: 2, splat3: 3, spray: 4, drops: 5, pool: 7, hole: 8, splinter: 9, scuff: 10, crack: 11 } as const;
 
 const ATLAS_W = 4;
@@ -16,7 +16,8 @@ const ATLAS_H = 3;
 const PX = 64;
 
 const vert = /* glsl */ `
-attribute vec4 aParam; // atlas cell, opacity, born (scene seconds), spare
+attribute vec4 aParam; // atlas cell, opacity, born (scene seconds), negative spread seconds / 1 for permanent marks
+uniform float uSceneTime;
 attribute vec3 aTint;
 varying vec2 vUv;
 varying vec4 vParam;
@@ -27,7 +28,8 @@ void main() {
   vUv = uv;
   vParam = aParam;
   vTint = aTint;
-  vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4( position, 1.0 );
+  float spread = aParam.w < 0.0 ? mix( 0.22, 1.0, smoothstep( 0.0, -aParam.w, max( 0.0, uSceneTime - aParam.z ) ) ) : 1.0;
+  vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4( position.xy * spread, position.z, 1.0 );
   vDepth = -mvPosition.z;
   gl_Position = projectionMatrix * mvPosition;
   #include <fog_vertex>
@@ -51,7 +53,9 @@ void main() {
   // Fresh blood is bright red and glossy; over a minute it goes dark and dull. Holes do not dry.
   float dry = vParam.w > 0.5 ? 0.0 : smoothstep( 1.0, 70.0, age );
   vec3 col = mix( vTint, vTint * vec3( 0.34, 0.5, 0.52 ), dry );
-  float gloss = ( 1.0 - dry ) * t.g * 0.35;
+  vec2 glintUv = vUv - vec2( 0.38, 0.61 );
+  float sheen = exp( -dot( glintUv * vec2( 1.0, 2.8 ), glintUv * vec2( 1.0, 2.8 ) ) * 55.0 );
+  float gloss = vParam.w > 0.5 ? 0.0 : ( 1.0 - dry ) * t.g * ( 0.025 + sheen * 0.14 );
   float a = t.a * vParam.y * ( 1.0 - smoothstep( 110.0, 170.0, vDepth ) );
   if ( a < 0.01 ) discard;
   // The blue channel is the dark of a pit: a bullet hole's core, the black of a crack.
@@ -218,6 +222,7 @@ function atlas(): THREE.DataTexture {
   for (let s = 0; s < 4; s++) {
     const rnd = lcg(900 + s * 31);
     blob(cell, 32, 32, 11 + rnd() * 5, rnd);
+    for (let i = 0; i < 7; i++) streak(cell, 32, 32, rnd() * Math.PI * 2, 7, 11 + rnd() * 12, 0.7 + rnd() * 0.8, 165, 0, rnd);
     const n = 9 + Math.floor(rnd() * 8);
     for (let i = 0; i < n; i++) {
       const a = rnd() * 6.28;
@@ -302,6 +307,8 @@ export interface DecalOpts {
   opacity?: number;
   /** Holes stay as they are; blood dries. */
   hole?: boolean;
+  /** Seconds to spread from a small puddle to full width. Zero keeps an immediate mark. */
+  grow?: number;
 }
 
 export class Decals {
@@ -366,7 +373,10 @@ export class Decals {
     if (o.dx !== undefined && o.dy !== undefined && o.dz !== undefined) x3.set(o.dx, o.dy, o.dz);
     else x3.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
     x3.addScaledVector(z3, -x3.dot(z3));
-    if (x3.lengthSq() < 1e-8) x3.set(Math.abs(z3.y) < 0.9 ? 0 : 1, Math.abs(z3.y) < 0.9 ? 1 : 0, 0).addScaledVector(z3, -z3.y);
+    if (x3.lengthSq() < 1e-8) {
+      x3.set(Math.abs(z3.y) < 0.9 ? 0 : 1, Math.abs(z3.y) < 0.9 ? 1 : 0, 0);
+      x3.addScaledVector(z3, -x3.dot(z3));
+    }
     x3.normalize();
     const y3 = _y.crossVectors(z3, x3);
     _m.makeBasis(x3.multiplyScalar(o.w), y3.multiplyScalar(o.h), z3);
@@ -379,7 +389,8 @@ export class Decals {
     this.param[i * 4] = o.cell;
     this.param[i * 4 + 1] = o.opacity ?? 0.85;
     this.param[i * 4 + 2] = this.time;
-    this.param[i * 4 + 3] = o.hole ? 1 : 0;
+    const grow = o.grow ?? (o.cell === CELL.pool ? 3.5 : 0);
+    this.param[i * 4 + 3] = o.hole ? 1 : -Math.max(0, grow);
     this.tint[i * 3] = o.r ?? 0.5;
     this.tint[i * 3 + 1] = o.g ?? 0.03;
     this.tint[i * 3 + 2] = o.b ?? 0.03;

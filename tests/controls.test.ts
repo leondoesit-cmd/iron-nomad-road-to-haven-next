@@ -11,7 +11,7 @@ import {
   keyLabel,
   padLabel,
   padPhysical,
-  viewSharesVehicle,
+  viewSharesSheet,
 } from '../src/input/bindings';
 import { Btn } from '../src/input/intents';
 import { initPhysics } from '../src/physics/physics';
@@ -69,9 +69,10 @@ describe('binding tables', () => {
     expect(b.kb[1].interact).toBe('Slash');
     expect(b.kb[0].view).toBe('KeyB');
     expect(b.pad.vehicle).toBe(Btn.Y);
+    expect(b.pad.sheet).toBe(Btn.Back);
     expect(b.pad.view).toBe(SHARED);
-    expect(viewSharesVehicle(b.pad)).toBe(true);
-    expect(padPhysical(b.pad, 'view')).toBe(Btn.Y);
+    expect(viewSharesSheet(b.pad)).toBe(true);
+    expect(padPhysical(b.pad, 'view')).toBe(Btn.Back);
     expect(b.mouse).toEqual({ fire: 0, aim: 2, view: 1 });
   });
 
@@ -93,17 +94,23 @@ describe('binding tables', () => {
     expect(b.kb[0].vehicle).toBe('KeyE');
   });
 
-  it('on a pad, binding view to the vehicle button is the tap / hold share; elsewhere it unshares', () => {
+  it('on a pad, binding view to the sheet button is the tap / hold share; elsewhere it unshares', () => {
     const b = defaultBindings();
     assignBinding('pad', b.pad, 'view', Btn.R3); // R3 is camera; view leaves the share, camera gets a free button
     expect(b.pad.view).toBe(Btn.R3);
     // Every pad button already has a job, so camera has nowhere to go and is left unbound (it is optional).
     expect(b.pad.camera).not.toBe(Btn.R3);
-    expect(b.pad.camera).not.toBe(b.pad.vehicle);
-    expect(viewSharesVehicle(b.pad)).toBe(false);
-    assignBinding('pad', b.pad, 'view', Btn.Y);
+    expect(b.pad.camera).not.toBe(b.pad.sheet);
+    expect(viewSharesSheet(b.pad)).toBe(false);
+    assignBinding('pad', b.pad, 'view', Btn.Back);
     expect(b.pad.view).toBe(SHARED);
-    expect(viewSharesVehicle(b.pad)).toBe(true);
+    expect(viewSharesSheet(b.pad)).toBe(true);
+  });
+
+  it('the vehicle button is never shared by default, so getting in or out is not delayed', () => {
+    const b = defaultBindings();
+    expect(padPhysical(b.pad, 'vehicle')).toBe(Btn.Y);
+    expect(padPhysical(b.pad, 'view')).not.toBe(Btn.Y);
   });
 
   it('a pad swap keeps every pad button bound at most once', () => {
@@ -121,7 +128,7 @@ describe('binding tables', () => {
     expect(b.pad.swap).toBe(Btn.RT);
     expect(b.pad.vehicle).toBe(Btn.A);
     expect(b.pad.crouch).toBe(Btn.Y);
-    expect(padPhysical(b.pad, 'view')).toBe(Btn.A);
+    expect(padPhysical(b.pad, 'view')).toBe(Btn.Back); // the shared view rides on the sheet, which none of that touched
   });
 
   it('only optional keyboard and mouse actions can be unbound', () => {
@@ -165,53 +172,74 @@ describe('binding tables', () => {
   });
 });
 
-describe('gamepad: Y taps the view and holds the vehicle', () => {
-  it('a quick tap pulses View once and never Y', () => {
+describe('gamepad: Back taps the view and holds the convoy sheet', () => {
+  it('a quick tap pulses View once and never the sheet', () => {
     const { im, down } = padInput();
-    down.add(Btn.Y);
+    down.add(Btn.Back);
     sampleFor(im, 0.1);
-    down.delete(Btn.Y);
+    down.delete(Btn.Back);
     const seen = sampleFor(im, 0.2);
     expect(seen.pressed & (1 << Btn.View)).not.toBe(0);
-    expect((seen.pressed | seen.held) & (1 << Btn.Y)).toBe(0);
+    expect((seen.pressed | seen.held) & (1 << Btn.Back)).toBe(0);
   });
 
-  it('holding past the tap time presses Y (once) and never switches the view', () => {
+  it('holding past the tap time shows the sheet (once) and never switches the view', () => {
     const { im, down } = padInput();
-    down.add(Btn.Y);
+    down.add(Btn.Back);
     const held = sampleFor(im, TAP_SECONDS + 0.2);
-    expect(held.pressed & (1 << Btn.Y)).not.toBe(0);
-    down.delete(Btn.Y);
+    expect(held.pressed & (1 << Btn.Back)).not.toBe(0);
+    down.delete(Btn.Back);
     const after = sampleFor(im, 0.2);
     expect((held.pressed | after.pressed) & (1 << Btn.View)).toBe(0);
   });
 
-  it('a held Y asserts the hold from the moment it crosses the threshold', () => {
+  it('a held Back asserts the sheet from the moment it crosses the threshold', () => {
     const { im, down } = padInput();
-    down.add(Btn.Y);
+    down.add(Btn.Back);
     sampleFor(im, TAP_SECONDS - 0.1);
-    expect(im.intents[0].held & (1 << Btn.Y)).toBe(0);
+    expect(im.intents[0].held & (1 << Btn.Back)).toBe(0);
     sampleFor(im, 0.2);
-    expect(im.intents[0].held & (1 << Btn.Y)).not.toBe(0);
+    expect(im.intents[0].held & (1 << Btn.Back)).not.toBe(0);
   });
 
-  it('unshared, Y is an immediate vehicle press and the view goes to its own button', () => {
+  it('Y is an immediate vehicle press: no tap time to wait out, no view pulse', () => {
     const { im, down } = padInput();
-    assignBinding('pad', im.settings.bindings.pad, 'view', Btn.R3);
-    im.bindingsChanged();
-    expect(im.vehicleIsHold(0)).toBe(false);
+    expect(im.sheetIsHold(0)).toBe(true);
     down.add(Btn.Y);
     im.sample(DT);
     expect(im.intents[0].pressed & (1 << Btn.Y)).not.toBe(0);
+    expect(im.intents[0].pressed & (1 << Btn.View)).toBe(0);
     down.delete(Btn.Y);
+    const after = sampleFor(im, 0.4);
+    expect(after.pressed & (1 << Btn.View)).toBe(0);
+  });
+
+  it('unshared, the sheet is a plain hold on its button and the view goes to its own button', () => {
+    const { im, down } = padInput();
+    assignBinding('pad', im.settings.bindings.pad, 'view', Btn.R3);
+    im.bindingsChanged();
+    expect(im.sheetIsHold(0)).toBe(false);
+    down.add(Btn.Back);
+    im.sample(DT);
+    expect(im.intents[0].pressed & (1 << Btn.Back)).not.toBe(0);
+    down.delete(Btn.Back);
     down.add(Btn.R3);
     im.sample(DT);
     expect(im.intents[0].pressed & (1 << Btn.View)).not.toBe(0);
   });
 
-  it('prompts say hold while shared, and name the button the player actually bound', () => {
+  it('a save made when view shared the vehicle button loads with the view on the sheet', () => {
+    const old = JSON.parse(JSON.stringify(exportBindings(defaultBindings()))) as { pad: Record<string, unknown> };
+    old.pad.view = SHARED;
+    old.pad.vehicle = Btn.Y;
+    const b = importBindings(old);
+    expect(viewSharesSheet(b.pad)).toBe(true);
+    expect(padPhysical(b.pad, 'vehicle')).toBe(Btn.Y);
+    expect(padPhysical(b.pad, 'view')).toBe(Btn.Back);
+  });
+
+  it('prompts name the button the player actually bound', () => {
     const { im } = padInput();
-    expect(im.vehicleIsHold(0)).toBe(true);
     assignBinding('pad', im.settings.bindings.pad, 'interact', Btn.X); // interact takes X, reload takes A
     im.bindingsChanged();
     expect(promptLabel({ kind: 'pad', index: 0 }, 'A')).toBe('X');
@@ -409,6 +437,7 @@ describe('saved control settings', () => {
     expect(c.settings.fpFov).toBe(70);
     expect(c.settings.deadzone).toBe(defaultSettings().deadzone);
     expect(c.settings.toggleCrouch).toEqual([true, true]);
+    expect(c.settings.toggleSprint).toEqual([true, true]);
   });
 });
 
@@ -542,6 +571,48 @@ describe('first and third person', () => {
     for (let i = 0; i < 40; i++) h.sc.renderFrame(1, DT); // the camera filters toward the heading over a few frames
     cam.getWorldDirection(d);
     expect(d.dot(heading)).toBeGreaterThan(0.97);
+    h.sc.dispose();
+  }, 60000);
+
+  it('a pad sprint click keeps sprinting until the stick lets go; holding is the other setting', () => {
+    const h = leg();
+    const p = h.sc.players[0];
+    h.intents[0].device = 'pad';
+    h.intents[0].move[1] = 1;
+    // One short click of the stick, then let go of it.
+    h.intents[0].sprint = true;
+    run(h.sc, 0.1);
+    h.intents[0].sprint = false;
+    run(h.sc, 1.5);
+    expect(p.moveSpeed).toBeGreaterThan(5);
+    // Stop, then walk again: the sprint ended with the stop.
+    h.intents[0].move[1] = 0;
+    run(h.sc, 0.6);
+    h.intents[0].move[1] = 1;
+    run(h.sc, 1.5);
+    expect(p.moveSpeed).toBeLessThan(4.5);
+    // Hold mode: sprints only while the stick is down.
+    h.input.settings.toggleSprint[0] = false;
+    h.intents[0].sprint = true;
+    run(h.sc, 1.5);
+    expect(p.moveSpeed).toBeGreaterThan(5);
+    h.intents[0].sprint = false;
+    run(h.sc, 1.5);
+    expect(p.moveSpeed).toBeLessThan(4.5);
+    h.sc.dispose();
+  }, 60000);
+
+  it('a keyboard seat still sprints only while the key is held', () => {
+    const h = leg();
+    const p = h.sc.players[0];
+    h.intents[0].device = 'keyboard';
+    h.intents[0].move[1] = 1;
+    h.intents[0].sprint = true;
+    run(h.sc, 1.5);
+    expect(p.moveSpeed).toBeGreaterThan(5);
+    h.intents[0].sprint = false;
+    run(h.sc, 1.5);
+    expect(p.moveSpeed).toBeLessThan(4.5);
     h.sc.dispose();
   }, 60000);
 

@@ -13,7 +13,8 @@ import type { Vehicle } from './vehicle';
 const G = 9.81;
 
 type Water = NonNullable<ReturnType<Vehicle['ctx']['waterAt']>>;
-const running = (w: Water) => w.kind === 'river' || w.kind === 'stream';
+/** Water that runs and carries things off: a river, a stream, or a flash flood down a wash. */
+const running = (w: Water) => w.kind === 'river' || w.kind === 'stream' || w.kind === 'flood';
 
 /** Per vehicle: the highest running water under it of the last few seconds, and when the last splash-down was. */
 const falls = new WeakMap<Vehicle, { top: number; t: number; plunged: number }>();
@@ -88,6 +89,7 @@ export function waterTick(v: Vehicle, dt: number) {
   v.splashT -= dt;
   if (v.splashT <= 0 && horizontal > 1.2) {
     v.splashT = 0.07;
+    ctx.audio.play('splash', p.x, p.z, clamp(horizontal / 22, 0.08, 0.55));
     const [fx, , fz] = v.body.forward();
     ctx.fx.puff(p.x + fx * 0.6 + (Math.random() - 0.5), w.level + 0.05, p.z + fz * 0.6 + (Math.random() - 0.5), 0.9, 0.95, 1.0, 0.8 + horizontal * 0.1, 0.8);
   }
@@ -144,5 +146,5 @@ export function boatFx(v: Vehicle, dt: number) {
     }
   }
   // The fan or the outboard is loud: that is in the vehicle's Signature already, the splash is for the ear.
-  if (sp > 8 && Math.random() < 0.05) ctx.audio.play('splash', p.x, p.z, 0.4);
+  if (sp > 2 && Math.random() < 0.08) ctx.audio.play('splash', p.x, p.z, clamp(sp / 25, 0.08, 0.6));
 }

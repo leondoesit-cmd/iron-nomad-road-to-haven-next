@@ -166,7 +166,7 @@ export class CrewSystem {
     if (u.vehicle.sinceHit < 2.5) return true;
     const p = u.vehicle.position;
     for (const v of ctx.vehicles) {
-      if (v.faction === 'raider' && !v.wreck && Math.hypot(v.position.x - p.x, v.position.z - p.z) < 70) return true;
+      if (v.hostile && Math.hypot(v.position.x - p.x, v.position.z - p.z) < 70) return true;
     }
     for (const r of ctx.raiders.units) if (!r.dead && Math.hypot(r.x - p.x, r.z - p.z) < 60) return true;
     return false;

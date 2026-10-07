@@ -1,4 +1,4 @@
-import { FIT_SLOTS, PARTS, PART_SLOTS, isInteriorSlot, mountsFor, partDef, type FuelType, type ModuleSlot, type PartDef, type PartSlot, type PartStats, type VehicleDef } from '../data';
+import { FIT_SLOTS, PARTS, PART_SLOTS, isGlassSlot, isInteriorSlot, mountsFor, partDef, type FuelType, type ModuleSlot, type PartDef, type PartSlot, type PartStats, type VehicleDef } from '../data';
 import { clamp } from '../core/math';
 import type { Rng } from '../core/rng';
 import { coolingKw, engineEffects, engineLine, type BayLabel } from './engines';
@@ -313,7 +313,8 @@ export function rollPartSpec(rng: Rng, o: RollOpts = {}): PartSpec {
       break;
     }
   }
-  const cond = isWorn(pick.slot) ? rng.range(o.condLo ?? 0.5, o.condHi ?? 0.95) : 1;
+  // Glass comes out of wrecks as cracked as the road left it, so it is rolled like a worn part.
+  const cond = isWorn(pick.slot) || isGlassSlot(pick.slot) ? rng.range(o.condLo ?? 0.5, o.condHi ?? 0.95) : 1;
   return { id: pick.id, cond };
 }
 
@@ -362,6 +363,8 @@ export function describePart(d: PartDef): string[] {
   if (d.empty && (d.slot === 'hood' || d.slot === 'doorL' || d.slot === 'doorR')) return [`no ${d.slot === 'hood' ? 'bonnet' : 'door'}: the mount is bare`];
   if (d.empty && d.slot === 'wheels') return ['no tyre: a bare rim'];
   if (d.empty && isInteriorSlot(d.slot)) return [EMPTY_CABIN_TEXT[d.id] ?? 'an empty mount'];
+  if (d.empty && isGlassSlot(d.slot)) return [EMPTY_GLASS_TEXT[d.id] ?? 'an empty frame'];
+  if (d.glass) return [d.glass.hp >= 4 ? 'ballistic: stops rifle rounds for a long while' : d.glass.hp > 1.5 ? `laminated: ${d.glass.hp.toFixed(1)}x as tough as plain glass` : 'plain glass: a pistol round or a hard knock cracks it', ...describeStats(d.stats)];
   if (d.hold) {
     const size = d.hold.max >= 4 ? 'large' : d.hold.max === 2 ? 'medium' : 'small';
     const what = d.hold.only === 'cans' ? 'cans' : d.hold.only === 'tyres' ? 'a spare tyre' : `${size} loads`;
@@ -369,6 +372,13 @@ export function describePart(d: PartDef): string[] {
   }
   return describeStats(d.stats);
 }
+
+/** What a frame with no glass in it costs you, in plain words. */
+export const EMPTY_GLASS_TEXT: Record<string, string> = {
+  gls_ws_none: 'no windscreen: wind, dust and rain come straight in, and a stone hits the driver',
+  gls_rw_none: 'no rear window: an open frame at the back of the cab',
+  gls_side_none: 'no side window: an open frame, and the door has nothing to wind up',
+};
 
 /** What a stripped cabin mount costs you, in plain words. */
 export const EMPTY_CABIN_TEXT: Record<string, string> = {

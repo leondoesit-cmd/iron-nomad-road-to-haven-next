@@ -136,6 +136,11 @@
       "look": { "style": "work", "c": "#3d3f3a" }
     },
     {
+      "id": "l_iati", "name": "Iati's Brown Trousers", "kind": "wear", "slot": "legs", "rarity": 1, "weight": 3, "scrap": 2,
+      "blurb": "Loose brown trousers worn under an open tropical shirt.",
+      "look": { "style": "trousers", "c": "#806346" }
+    },
+    {
       "id": "l_cargo", "name": "Cargo Trousers", "kind": "wear", "slot": "legs", "rarity": 1, "weight": 8, "scrap": 3, "tags": ["city"],
       "blurb": "Pockets on pockets. Room for three more things.",
       "stats": { "bag": 3 },
@@ -288,6 +293,11 @@
       "id": "w_crossbow", "name": "Crossbow", "kind": "gun", "short": "XBOW", "rarity": 2, "weight": 3, "scrap": 12, "tags": ["waste"],
       "blurb": "A bolt, a crank and almost no sound. Slow to reload and the bolt drops, but nothing hears it coming.",
       "gun": {"dmg": 70, "cd": 1.1, "mag": 1, "reload": 2.3, "spread": 0.012, "adsSpread": 0.002, "range": 70, "noise": 6, "pierce": 0.3, "model": "crossbow", "sound": "bolt", "slots": {"optic": ["dot", "scope"], "barrel": ["bar_x"], "mag": ["mag_x"], "under": ["grip"], "rail": ["rail"]}}
+    },
+    {
+      "id": "w_bow", "name": "Recurve Bow", "kind": "gun", "short": "BOW", "rarity": 2, "weight": 3, "scrap": 7, "tags": ["waste", "city"],
+      "blurb": "Laminated limbs and a waxed string. Hold to draw, let go to loose: the harder the draw, the harder it hits. Silent, and the arrows can be pulled out and shot again.",
+      "gun": {"dmg": 58, "cd": 0.12, "mag": 1, "reload": 0.5, "draw": 0.7, "spread": 0.022, "adsSpread": 0.003, "range": 160, "noise": 3, "pierce": 0.15, "model": "bow", "sound": "bow"}
     },
     {
       "id": "w_combat", "name": "Combat Shotgun", "kind": "gun", "short": "CMBT", "rarity": 3, "weight": 2, "scrap": 20, "tags": ["vault", "city"],

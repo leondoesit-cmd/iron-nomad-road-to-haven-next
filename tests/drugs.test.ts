@@ -5,6 +5,7 @@ import {
   DRUGS,
   DRUG_IDS,
   DrugState,
+  MORPH_KEYS,
   NEUTRAL,
   NO_LOOK,
   TOX_OVERDOSE,
@@ -116,6 +117,71 @@ describe('the basics', () => {
     expect(d.cycle((id) => stock[id], -1)).toBe('weed');
     expect(d.step(1)).toBe('haze');
     expect(d.step(-1)).toBe('weed');
+  });
+});
+
+describe('painkillers easing morphing', () => {
+  it('cuts peak spatial distortion by 20% while preserving other trip effects', () => {
+    const d = dull();
+    d.dose('lsd');
+    run(d, 40);
+    const look = { ...d.look() };
+    for (const key of MORPH_KEYS) expect(look[key]).toBeCloseTo(DRUGS.lsd.look[key]! * 0.8, 6);
+    const mods = { ...d.mods() };
+    const left = d.active[0].left;
+    d.dose('painkiller');
+    for (const key of MORPH_KEYS) expect(d.look()[key]).toBeCloseTo(look[key] * 0.8, 6);
+    for (const key of ['hue', 'sat', 'chroma', 'trail', 'sky', 'glow'] as const) expect(d.look()[key]).toBe(look[key]);
+    expect(d.mods()).toEqual(mods); // The painkiller itself is still at the start of its onset.
+    expect(d.active[0].left).toBe(left);
+    expect(d.active[0].morphLeft).toBeCloseTo(left * 0.7, 6);
+  });
+
+  it('ends morphing 30% sooner, with a smooth taper, while the drug continues', () => {
+    const d = dull();
+    d.dose('lsd');
+    run(d, 40);
+    d.dose('painkiller');
+    run(d, 65);
+    const before = d.look().warp;
+    run(d, 10);
+    expect(d.look().warp).toBeGreaterThan(0);
+    expect(d.look().warp).toBeLessThan(before);
+    run(d, 2.1);
+    for (const key of MORPH_KEYS) expect(d.look()[key]).toBe(0);
+    expect(d.phase('lsd')).toBe('peak');
+    expect(d.look().hue).toBeGreaterThan(0);
+    expect(d.mods().phantoms).toBeGreaterThan(0);
+  });
+
+  it('also eases a saturated blend and ends its morphing before the other blend effects', () => {
+    const d = dull();
+    d.dose('lsd');
+    d.dose('mushrooms');
+    run(d, 40);
+    expect(d.look().warp).toBeCloseTo(0.8, 6);
+    const hue = d.look().hue;
+    d.dose('painkiller');
+    expect(d.look().warp).toBeCloseTo(0.64, 6);
+    expect(d.look().hue).toBe(hue);
+    run(d, 49.1);
+    expect(d.blends().some((b) => b.id === 'deep')).toBe(true);
+    // Mushrooms' shortened morphing has ended, so Deep Trip contributes no extra warp.
+    expect(d.look().warp).toBeCloseTo(DRUGS.lsd.look.warp! * 0.8 * 0.8, 6);
+  });
+
+  it('preserves the shorter morphing clock across saves and clears it with a fresh dose', () => {
+    const d = dull();
+    d.dose('lsd');
+    run(d, 40);
+    d.dose('painkiller');
+    run(d, 10);
+    const back = DrugState.restore(JSON.parse(JSON.stringify(d.serialize())), () => 0.999);
+    expect(back.look()).toEqual(d.look());
+    expect(back.active[0].morphLeft).toBe(d.active[0].morphLeft);
+    back.dose('lsd');
+    expect(back.active[0].morphLeft).toBeUndefined();
+    expect(back.active[0].left).toBe(DRUGS.lsd.duration);
   });
 });
 

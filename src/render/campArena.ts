@@ -9,7 +9,7 @@ import { crate, drum, jerryCan, plate, spareTyre } from './parts';
 import { hash2, noise2 } from '../core/rng';
 import { smoothstep } from '../core/math';
 import { buildTreesSteps } from './trees';
-import { TREE_SPECIES, type TreeSpecies, type TreeSpot } from '../world/flora';
+import { TREE_SPECIES, woodSpecies, type TreeSpecies, type TreeSpot } from '../world/flora';
 import type { Woods } from '../world/hydro';
 
 /**
@@ -392,18 +392,7 @@ export class CampArena {
   private trees() {
     const land = this.land;
     if (!land || land.lush < 0.3) return;
-    const pick = (k: number): TreeSpecies => {
-      switch (land.woods) {
-        case 'pine':
-          return k < 0.85 ? 'pine' : 'oak';
-        case 'fen':
-          return k < 0.7 ? 'cypress' : 'snag';
-        case 'riparian':
-          return k < 0.55 ? 'willow' : 'poplar';
-        default:
-          return k < 0.8 ? 'oak' : k < 0.9 ? 'pine' : 'poplar';
-      }
-    };
+    const pick = (k: number): TreeSpecies => (land.woods === 'broadleaf' ? (k < 0.8 ? 'oak' : k < 0.9 ? 'pine' : 'poplar') : woodSpecies(land.woods, k, land.lush, land.wood));
     const spots: TreeSpot[] = [];
     const p = Math.min(0.75, land.wood * 0.85 + 0.06);
     for (let r = FLAT_R + 8; r < FLAT_R + 120; r += 6.5) {

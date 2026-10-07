@@ -4,7 +4,7 @@ import { mirrorWaterMaterial, waterNoiseTexture, waterNormalTexture } from './wa
 import { lakeColors } from '../world/lakes';
 import { heightAt, type TerrainDef } from '../world/terrain';
 import { nearestRoad } from '../world/openWorld';
-import type { Hydro, River, Waterfall } from '../world/hydro';
+import { RIFFLE_HALF, type Hydro, type River, type Waterfall } from '../world/hydro';
 import { clamp, lerp, smoothstep } from '../core/math';
 
 /**
@@ -26,8 +26,37 @@ import { clamp, lerp, smoothstep } from '../core/math';
 const PAST_END = 4;
 /** How far the ribbon reaches out over each bank. */
 const BANK_PAD = 1.5;
+/** And further out over the floodplain, hidden under the ground until the river rises over it. */
+const FLOOD_PAD = 8;
 /** Vertices across a ribbon cross-section. */
-const NX = 7;
+export const RIBBON_NX = 9;
+const NX = RIBBON_NX;
+/** Rivers whose rise the shader knows (`RIVER_RISE.uRise`). */
+export const MAX_RIVERS = 8;
+
+/**
+ * How high each river runs over its normal level (metres, by river id) and how much flood silt it carries (0..1). The leg
+ * scene sets these every frame from the day's hydrograph; the ribbon's vertex shader lifts the water by them.
+ */
+export const RIVER_RISE = {
+  uRise: { value: new Float32Array(MAX_RIVERS) },
+  uMurk: { value: 0 },
+};
+
+/**
+ * How much of a river's rise reaches a sample: none where it runs into a lake or swamp (whose level stays put), out of a
+ * spring pool or near a fall (whose sheet stands still), all of it everywhere else. The physics asks the same.
+ */
+export function riseTaper(hy: Hydro, r: River, i: number): number {
+  let k = 1 - smoothstep(r.end - 14, r.end - 2, i);
+  if (r.spring >= 0) k *= smoothstep(4, 18, i);
+  for (const f of hy.falls) {
+    if (f.river !== r.id) continue;
+    const d = i < f.i0 ? f.i0 - i : i > f.i1 ? i - f.i1 : 0;
+    k *= smoothstep(1, 10, d);
+  }
+  return k;
+}
 /** How far the ribbon sinks where it meets standing water at the same level, so that water's sheet wins the depth test. */
 const SINK = 0.06;
 /** Every scrolling coordinate repeats a whole number of texture tiles in this many seconds, so time can wrap. */
@@ -50,7 +79,7 @@ export interface RibbonData {
 
 /** Across offsets of a cross-section, metres from the centre-line, for a half-width `h`. */
 function acrossOffsets(h: number): number[] {
-  return [-(h + BANK_PAD), -h, -0.55 * h, 0, 0.55 * h, h, h + BANK_PAD];
+  return [-(h + FLOOD_PAD), -(h + BANK_PAD), -h, -0.55 * h, 0, 0.55 * h, h, h + BANK_PAD, h + FLOOD_PAD];
 }
 
 /**
@@ -73,6 +102,22 @@ export function plungeChurn(hy: Hydro, r: River): Float32Array {
   return out;
 }
 
+/** How white the water runs over each sample's riffle stones (0..1). */
+export function riffleChurn(hy: Hydro, r: River): Float32Array {
+  const out = new Float32Array(r.n);
+  for (const q of hy.riffles) {
+    if (q.river !== r.id) continue;
+    const L = RIFFLE_HALF + 3;
+    for (let k = -L; k <= L; k++) {
+      const j = q.i + k;
+      if (j < 0 || j >= r.n) continue;
+      // White just over and below the stones, where the run tumbles off them, and calm again a few metres on.
+      out[j] = Math.max(out[j], 0.5 * Math.exp(-(((k - 1.5) / (L * 0.28)) ** 2)));
+    }
+  }
+  return out;
+}
+
 /** Segments of a course (by their first sample) that belong to a fall and are drawn by the falls mesh. */
 function steepSegments(hy: Hydro, r: River): Uint8Array {
   const out = new Uint8Array(r.n);
@@ -90,7 +135,7 @@ export function riverRibbonGeometry(def: TerrainDef): RibbonData | null {
   const hy = def.hydro;
   if (!hy?.ready || !hy.rivers.length) return null;
   const hit = ribbonCache.get(hy);
-  if (hit) return { geometry: geometryFrom(hit, 1), courses: hit.courses! };
+  if (hit) return { geometry: geometryFrom(hit, 2.6), courses: hit.courses! };
   const o = def.open;
   let rowsTotal = 0;
   for (const r of hy.rivers) rowsTotal += Math.min(r.n - 1, r.end + PAST_END) + 1;
@@ -100,12 +145,15 @@ export function riverRibbonGeometry(def: TerrainDef): RibbonData | null {
   const flow = new Float32Array(V * 4);
   const dir = new Float32Array(V * 4);
   const fade = new Float32Array(V * 2);
+  const rise = new Float32Array(V * 2);
   const idx: number[] = [];
   const courses: RibbonCourse[] = [];
   let v = 0;
   for (const r of hy.rivers) {
     const last = Math.min(r.n - 1, r.end + PAST_END);
     const churn = plungeChurn(hy, r);
+    const rif = riffleChurn(hy, r);
+    for (let i = 0; i < r.n; i++) churn[i] = Math.max(churn[i], rif[i]);
     const steep = steepSegments(hy, r);
     const sp = r.spring >= 0 ? hy.springs[r.spring] : null;
     const first = v;
@@ -132,6 +180,7 @@ export function riverRibbonGeometry(def: TerrainDef): RibbonData | null {
       const nx = -r.dz[i];
       const nz = r.dx[i];
       const us = acrossOffsets(h);
+      const taper = riseTaper(hy, r, i);
       for (let k = 0; k < NX; k++) {
         const u = us[k];
         const x = r.x[i] + nx * u;
@@ -157,7 +206,10 @@ export function riverRibbonGeometry(def: TerrainDef): RibbonData | null {
         dir[v * 4 + 2] = drop;
         dir[v * 4 + 3] = churn[i];
         fade[v * 2] = alpha;
-        fade[v * 2 + 1] = lift;
+        // The floodplain edge never lifts for the far view: it would stand up out of the banks.
+        fade[v * 2 + 1] = k === 0 || k === NX - 1 ? 0 : lift;
+        rise[v * 2] = r.id;
+        rise[v * 2 + 1] = taper;
         v++;
       }
     }
@@ -171,12 +223,12 @@ export function riverRibbonGeometry(def: TerrainDef): RibbonData | null {
     courses.push({ river: r.id, first, rows: last + 1 });
   }
   const data: MeshArrays = {
-    attrs: { position: [pos, 3], normal: [nrm, 3], aFlow: [flow, 4], aDir: [dir, 4], aFade: [fade, 2] },
+    attrs: { position: [pos, 3], normal: [nrm, 3], aFlow: [flow, 4], aDir: [dir, 4], aFade: [fade, 2], aRise: [rise, 2] },
     index: Uint32Array.from(idx),
     courses,
   };
   ribbonCache.set(hy, data);
-  return { geometry: geometryFrom(data, 1), courses };
+  return { geometry: geometryFrom(data, 2.6), courses };
 }
 
 /**
@@ -382,16 +434,28 @@ const RIVER_VERT_PARS = /* glsl */ `
 attribute vec4 aFlow;
 attribute vec4 aDir;
 attribute vec2 aFade;
+attribute vec2 aRise;
+uniform float uRise[ ${MAX_RIVERS} ];
+uniform float uSilt[ ${MAX_RIVERS} ];
 varying vec3 vWWorld;
 varying vec4 vFlow;
 varying vec4 vDir;
 varying float vFade;
+varying float vSilt;
 `;
 
 const RIVER_VERT_MAIN = /* glsl */ `
 vFlow = aFlow;
 vDir = aDir;
 vFade = aFade.x;
+vSilt = uSilt[ int( aRise.x + 0.5 ) ];
+{
+  // A river in flood: the whole surface stands higher (and out over the floodplain), deeper and quicker.
+  float rRise = uRise[ int( aRise.x + 0.5 ) ] * aRise.y;
+  transformed.y += rRise;
+  vFlow.z += rRise;
+  vFlow.w *= 1.0 + rRise * 0.9;
+}
 vWWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
 // Beyond the streamed chunks the coarse far terrain lies a little proud of the water along the banks: lift the water
 // clear of it there. The edges stay where they were, since the waterline comes from the depth, not the mesh.
@@ -399,10 +463,12 @@ transformed.y += smoothstep( 240.0, 420.0, distance( vWWorld.xz, cameraPosition.
 `;
 
 const RIVER_FRAG_PARS = /* glsl */ `
+uniform float uMurk;
 varying vec3 vWWorld;
 varying vec4 vFlow;
 varying vec4 vDir;
 varying float vFade;
+varying float vSilt;
 ${COMMON_PARS}
 `;
 
@@ -427,6 +493,11 @@ vec2 rn = rAc * rnF.x + rF * rnF.y + rn3 * ( 0.07 + rChurn * 0.25 );
 vec3 wNw = normalize( vec3( rn.x, 1.0, rn.y ) );
 float rDeep = smoothstep( 0.1, 2.6, rD );
 vec3 wCol = mix( cWShallow, cWDeep, rDeep );
+// A lowland river's own silt and algae: an opaque olive-grey, greener in the deep, whatever the weather.
+wCol = mix( wCol, mix( vec3( 0.2, 0.18, 0.115 ), vec3( 0.085, 0.085, 0.052 ), smoothstep( 0.05, 1.2, rD ) ), vSilt );
+// Flood silt: the river runs the colour of the desert it has washed off, and the foam goes dirty.
+wCol = mix( wCol, mix( vec3( 0.42, 0.32, 0.2 ), vec3( 0.26, 0.19, 0.12 ), rDeep ), uMurk * 0.85 );
+rRapid = clamp( rRapid + uMurk * 0.35, 0.0, 1.0 );
 // Foam: a lace along the banks and over the shallows, streaks in fast water, and the boil under a fall.
 vec4 rN = texture2D( tWNoise, rp * vec2( 0.07, 0.04 ) );
 vec4 rN2 = texture2D( tWNoise, rp * vec2( 0.19, 0.12 ) + 0.27 );
@@ -437,8 +508,10 @@ float rBoil = rChurn * smoothstep( 0.62 - 0.4 * rChurn, 0.78 - 0.2 * rChurn, rN2
 float wFoam = clamp( max( max( rBank, rStreak ), rBoil ), 0.0, 1.0 );
 // Sunlight glinting through the shallows.
 wCol *= 1.0 + ( rN3.r * rN2.b ) * 0.55 * ( 1.0 - rDeep );
-wCol = mix( wCol, cWFoam, wFoam * 0.92 );
-float wA = mix( 0.4, 0.96, smoothstep( 0.05, 2.2, rD ) ) * smoothstep( 0.015, 0.14, rD );
+wCol = mix( wCol, mix( mix( cWFoam, vec3( 0.78, 0.76, 0.66 ), vSilt * 0.6 ), vec3( 0.7, 0.6, 0.46 ), uMurk ), wFoam * 0.92 );
+// Clear enough to see the cobbles, the weed and the fish down to a metre or two; a flood's silt makes it opaque.
+float wA = mix( 0.26, 0.95, smoothstep( 0.05, 3.4, rD ) ) * smoothstep( 0.015, 0.14, rD );
+wA = mix( wA, max( wA, 0.94 * smoothstep( 0.015, 0.2, rD ) ), max( uMurk, vSilt ) );
 wA = max( wA, wFoam * 0.9 * smoothstep( 0.015, 0.06, rD ) ) * vFade;
 diffuseColor = vec4( wCol, wA );
 float wRough = mix( 0.05, 0.5, wFoam ) + rRapid * 0.05;
@@ -526,9 +599,16 @@ function colourUniforms() {
   };
 }
 
-function riverMaterial(): THREE.MeshStandardMaterial {
+/** Each river's own cloudiness (`WaterCourseSpec.silt`), by river id. */
+function siltOf(hy: Hydro): Float32Array {
+  const out = new Float32Array(MAX_RIVERS);
+  for (const r of hy.rivers) if (r.id < MAX_RIVERS) out[r.id] = clamp(hy.spec.rivers.find((c) => c.id === r.key)?.silt ?? 0, 0, 1);
+  return out;
+}
+
+function riverMaterial(hy: Hydro): THREE.MeshStandardMaterial {
   const mat = mirrorWaterMaterial();
-  const uniforms = colourUniforms();
+  const uniforms = { ...colourUniforms(), ...RIVER_RISE, uSilt: { value: siltOf(hy) } };
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
@@ -602,7 +682,7 @@ export function buildRiverWater(def: TerrainDef): RiverWater | null {
   let river: THREE.Mesh | null = null;
   let falls: THREE.Mesh | null = null;
   if (ribbon) {
-    const m = riverMaterial();
+    const m = riverMaterial(def.hydro!);
     mats.push(m);
     river = new THREE.Mesh(ribbon.geometry, m);
     river.receiveShadow = true;

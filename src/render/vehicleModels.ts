@@ -17,6 +17,7 @@ import type { PanelPaint } from '../sim/paint';
 import { addWheels, addWheelSet, blank, bodyMat, finish, headlamp, liveRig, rider, taillight, wheelSpec, wheelSpecs, type VehicleVisual } from './vehicleKit';
 import { buildCar, carMounts, prepareCarShell } from './carModels';
 import { attachCabin } from './interior';
+import { TRIKE_MOUNTS, buildTrike } from './trikeModel';
 
 export type { VehicleVisual, WheelVisual } from './vehicleKit';
 
@@ -652,6 +653,8 @@ export function mountsOfChassis(def: VehicleDef): { m: Mounts; g0: number } | nu
   switch (def.id) {
     case 'moped':
       return { m: MOPED_MOUNTS, g0: 0 };
+    case 'trike':
+      return { m: TRIKE_MOUNTS, g0: 0 };
     case 'quad':
       return { m: QUAD_MOUNTS, g0: 0 };
     case 'buggy':
@@ -670,6 +673,8 @@ export function buildVehicleVisual(def: VehicleDef, wheelLocal: [number, number,
   switch (def.id) {
     case 'moped':
       return buildMoped(def, wheelLocal, steered, look);
+    case 'trike':
+      return buildTrike(def, wheelLocal, steered, look);
     case 'quad':
       return buildQuad(def, wheelLocal, steered, look);
     case 'hatch':

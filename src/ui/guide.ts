@@ -39,7 +39,7 @@ const FOOT_KEYS: [string, (m: KeyMap) => string][] = [
   ['fire', (m) => caps(m.fire)],
   ['interact: hold to loot, fix, fuel', (m) => caps(m.interact)],
   ['jump · crouch · sprint', (m) => caps(m.jump, m.crouch, m.sprint)],
-  ['vehicle: hold to get in', (m) => caps(m.vehicle)],
+  ['get in or out of a vehicle', (m) => caps(m.vehicle)],
   ['reload · swap tool', (m) => caps(m.reload, m.swap)],
   ['map · pack', (m) => caps(m.map, m.inventory)],
 ];
@@ -49,7 +49,7 @@ const DRIVE_KEYS: [string, (m: KeyMap) => string][] = [
   ['handbrake', (m) => caps(m.sprint)],
   ['horn', (m) => caps(m.horn)],
   ['lights · engine off (hold)', (m) => caps(m.crouch)],
-  ['exit: hold', (m) => caps(m.vehicle)],
+  ['exit (hold at speed: bail)', (m) => caps(m.vehicle)],
   ['map', (m) => caps(m.map)],
 ];
 
@@ -105,7 +105,7 @@ const PAGES: Page[] = [
     kicker: 'Controls: driving',
     art: () => artPad(PAD_DRIVE, 'DRIVING · DEFAULT GAMEPAD LAYOUT'),
     points: () => [
-      `<b>Hold</b> ${lab('vehicle')} beside any vehicle to climb in. Abandoned cars become yours the moment you do.`,
+      `<b>Press</b> ${lab('vehicle')} beside any vehicle to climb in. Abandoned cars become yours the moment you do.`,
       `Tap ${lab('view')} to switch between chase view and the eyes of the driver. Each player has their own view.`,
       `Hold ${lab('vehicle')} at speed to <b>bail out</b>. It costs health, so it is for emergencies.`,
       'Engines are loud, and the dust they throw is visible. Park and walk when quiet matters.',
@@ -143,6 +143,18 @@ const PAGES: Page[] = [
       '<b>2 Tank.</b> Low on fuel: get out, equip the jerrycan, pick up a can, then hold A at the vehicle to pour.',
       '<b>3 Tyres</b> and <b>4 bodywork</b> wear and tear. Take hits, lose panels, repair them with the wrench.',
       'Parts fit any vehicle. Equip the wrench and press X to open the field workbench, or use the Garage at camp.',
+    ],
+  },
+  {
+    title: 'Hands on',
+    kicker: 'Building with what you find',
+    art: artCar,
+    points: () => [
+      `<b>Look</b> at a part to read it under the crosshair: an engine's size, power and fuel, a wheel's grip, how worn it is. Hold ${lab('interact')} to grab it.`,
+      `<b>Held</b> out in front of you: the mouse wheel moves it nearer or further, ${lab('swap')} turns it, ${lab('fire')} sets it down right where it is, ${lab('aim')} throws it.`,
+      `<b>Attach</b>: hold it to its place on the frame (the outline lights up) and hold ${lab('interact')}. Unbolt with the wrench the same way.`,
+      '<b>Store</b> by putting things down inside: a tin in the rickshaw\'s cab, a can in a pickup\'s bed. They stay where you put them, and ride along.',
+      `<b>Food</b> in hand (a tin of dog food, a lizard snatched off the hot ground, crouch to creep up on one) is eaten with ${kb(keyLabel(live.bindings.kb[0].eat))}.`,
     ],
   },
   {

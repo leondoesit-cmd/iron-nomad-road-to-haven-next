@@ -10,6 +10,29 @@
       ],
       "port": 5174,
       "autoPort": true
+    },
+    {
+      "name": "iron-nomad-3333",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "3333",
+        "--strictPort"
+      ],
+      "port": 3333
+    },
+    {
+      "name": "party-mirror",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/be59256e-3fba-48c7-a0b5-2be5f3375818/scratchpad/mirror && exec npx vite --config vite.mirror.config.ts"
+      ],
+      "port": 5207,
+      "autoPort": true
     }
   ]
 }

@@ -1,10 +1,12 @@
 import * as THREE from 'three';
+import { staticTransform } from './staticTransform';
 import { MeshBuilder, S } from './builder';
 import { FacadeBuilder, facadeMaterial } from './facade';
 import { appendFurn } from './furniture';
 import { kitMaterial } from './materials';
 import { hash2 } from '../core/rng';
-import { PaneSet, type PaneSpec } from './glass';
+import { PaneSet, paneMaterials, type PaneSpec } from './glass';
+import { mallCut, mallLevel, mallRoof } from './mallView';
 import { levelBase, paneKey, paneKind, subtractRects, wallPieces, wellRails, type BuildingPlan, type FloorMat, type Opening, type Rect, type Stair, type Wall, T_EXT } from '../world/interiors';
 import type { RuralBuilding } from '../world/settlements';
 
@@ -30,7 +32,8 @@ const TRIM = [0xd8d4c8, 0xc8c0a8, 0x5a4630, 0x8a8a84];
 const DOOR_COL = [0x6a5238, 0xa89a80, 0x4a5a58, 0x7a3a2c, 0x8a8478];
 
 export interface BuildingGeometry {
-  levels: { shell: THREE.BufferGeometry | null; trim: THREE.BufferGeometry | null; inside: THREE.BufferGeometry | null; panes: PaneSpec[] }[];
+  /** `glass`: clear glass that is scenery, not a pane that breaks (a mall's balustrades). */
+  levels: { shell: THREE.BufferGeometry | null; trim: THREE.BufferGeometry | null; inside: THREE.BufferGeometry | null; panes: PaneSpec[]; glass?: THREE.BufferGeometry | null }[];
   roof: THREE.BufferGeometry | null;
 }
 
@@ -52,19 +55,25 @@ export function buildBuildingGeometry(rb: RuralBuilding): BuildingGeometry {
       return r ? r.tint : 0xc8c4b8;
     };
     const panes: PaneSpec[] = [];
+    const glass = new MeshBuilder();
+    glass.jitter = 0;
     walls(rb, plan, L, base, fb, trim, roomTint, rnd, panes);
     floors(plan, L, base, fb, inside, rnd);
     ceiling(plan, L, base, fb);
     if (L > 0) slab(plan, L, base, inside);
-    for (const s of plan.stairs) if (s.level === L) stairs(plan, s, base, inside);
+    for (const s of plan.stairs) if (s.level === L && s.kind !== 'escalator') stairs(plan, s, base, inside);
     for (const f of plan.furn) if (f.level === L) appendFurn(inside, f, base + (L === 0 ? 0.012 : 0.004));
     for (const d of plan.debris) if (d.level === L) appendFurn(inside, { kind: 'rubble', level: L, x: d.x, z: d.z, yaw: 0, w: d.r * 2, d: d.r * 2, h: 0.4, seed: Math.floor(d.x * 13 + d.z * 7), solid: false }, base);
-    levels.push({ shell: fb.empty ? null : fb.build(), trim: trim.empty ? null : trim.build(), inside: inside.empty ? null : inside.build(), panes });
+    if (plan.look === 'mall') mallLevel(rb, plan, L, inside, glass);
+    levels.push({ shell: fb.empty ? null : fb.build(), trim: trim.empty ? null : trim.build(), inside: inside.empty ? null : inside.build(), panes, glass: glass.empty ? null : glass.build() });
   }
   const roof = new MeshBuilder();
   roof.jitter = 0.04;
-  roofGeometry(rb, plan, roof, rnd);
-  exterior(rb, plan, roof, rnd);
+  if (plan.look === 'mall') mallRoof(rb, plan, roof);
+  else {
+    roofGeometry(rb, plan, roof, rnd);
+    exterior(rb, plan, roof, rnd);
+  }
   return { levels, roof: roof.empty ? null : roof.build() };
 }
 
@@ -299,7 +308,7 @@ function opening(rb: RuralBuilding, plan: BuildingPlan, w: Wall, op: Opening, ba
 // ------------------------------------------------------------------------------------------ floors, slabs, stairs
 
 function floors(plan: BuildingPlan, L: number, base: number, fb: FacadeBuilder, inside: MeshBuilder, rnd: (k: number) => number) {
-  const wells = plan.wells.filter((q) => q.level === L);
+  const wells: Rect[] = [...plan.wells.filter((q) => q.level === L), ...mallCut(plan, L)];
   const y = base + (L === 0 ? 0.012 : 0.004);
   for (const room of plan.rooms) {
     if (room.level !== L) continue;
@@ -326,7 +335,8 @@ function floors(plan: BuildingPlan, L: number, base: number, fb: FacadeBuilder, 
 function ceiling(plan: BuildingPlan, L: number, base: number, fb: FacadeBuilder) {
   const top = L === plan.levels - 1;
   const y = base + plan.levelH - (top ? 0.02 : 0.31);
-  const wells = plan.wells.filter((q) => q.level === L + 1);
+  // A mall's court has its own ceiling: the slab above it, and under the top floor's roof the skylight's.
+  const wells: Rect[] = [...plan.wells.filter((q) => q.level === L + 1), ...mallCut(plan, Math.min(L + 1, plan.levels - 1))];
   const tint = new THREE.Color(0xc8c4b8);
   for (const room of plan.rooms) {
     if (room.level !== L) continue;
@@ -339,7 +349,7 @@ function ceiling(plan: BuildingPlan, L: number, base: number, fb: FacadeBuilder)
 
 /** Floor slab of an upper storey: its underside is the ceiling below. */
 function slab(plan: BuildingPlan, L: number, base: number, inside: MeshBuilder) {
-  const pieces = subtractRects(rect(plan), plan.wells.filter((q) => q.level === L));
+  const pieces = subtractRects(rect(plan), [...plan.wells.filter((q) => q.level === L), ...mallCut(plan, L)]);
   // Banister round the stairwell: posts, a top rail and a mid rail.
   const wood = S.wood(0x6a4a30, 0.5);
   for (const w of plan.wells.filter((q) => q.level === L)) {
@@ -530,7 +540,7 @@ function exterior(rb: RuralBuilding, plan: BuildingPlan, out: MeshBuilder, rnd: 
 // ------------------------------------------------------------------------------------------ the scene object
 
 export class BuildingView {
-  group = new THREE.Group();
+  group = staticTransform(new THREE.Group());
   levels: THREE.Group[] = [];
   insides: THREE.Mesh[] = [];
   /** The glass of each storey. */
@@ -559,17 +569,24 @@ export class BuildingView {
     const add = (parent: THREE.Group, geo: THREE.BufferGeometry | null, mat: THREE.Material, inside = false) => {
       if (!geo) return;
       this.geos.push(geo);
-      const m = new THREE.Mesh(geo, mat);
+      const m = staticTransform(new THREE.Mesh(geo, mat));
       m.castShadow = true;
       m.receiveShadow = true;
       parent.add(m);
       if (inside) this.insides.push(m);
     };
     g.levels.forEach((lv) => {
-      const lg = new THREE.Group();
+      const lg = staticTransform(new THREE.Group());
       add(lg, lv.shell, facade);
       add(lg, lv.trim, kit);
       add(lg, lv.inside, kit, true);
+      if (lv.glass) {
+        this.geos.push(lv.glass);
+        const m = staticTransform(new THREE.Mesh(lv.glass, paneMaterials().clear));
+        m.renderOrder = 2;
+        lg.add(m);
+        this.insides.push(m);
+      }
       const ps = new PaneSet();
       for (const sp of lv.panes) ps.add(sp);
       lg.add(ps.group);
@@ -578,7 +595,7 @@ export class BuildingView {
       this.levels.push(lg);
     });
     if (g.roof) {
-      this.roof = new THREE.Group();
+      this.roof = staticTransform(new THREE.Group());
       add(this.roof, g.roof, kit);
       this.group.add(this.roof);
     }
@@ -632,7 +649,8 @@ export class BuildingView {
       inside = true;
       level = Math.max(0, Math.min(p.levels - 1, Math.floor((focus.y - p.floorY + 0.4) / p.levelH)));
     }
-    const camIn = this.contains(camX, camZ, 0.3);
+    // A mall's storeys are tall and open to each other round the court: a storey goes only when the camera is up in it.
+    const camIn = this.contains(camX, camZ, 0.3) && p.look !== 'mall';
     const blocks = (baseY: number) => camIn || camY > baseY - 0.3;
     if (this.roof) this.roof.visible = !inside || !blocks(p.floorY + p.levels * p.levelH);
     this.levels.forEach((g, i) => (g.visible = !inside || i <= level || !blocks(p.floorY + i * p.levelH)));

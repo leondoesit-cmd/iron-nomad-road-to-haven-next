@@ -5,17 +5,19 @@ import { LEAF_ATLAS, LEAF_CELL, leafAtlas, spriteAtlasTexture } from './proctex'
 import { WIND } from './scatter';
 import { hash2 } from '../core/rng';
 import { smoothstep } from '../core/math';
-import { TREE_DIMS, TREE_SPECIES, type TreeSpecies, type TreeSpot } from '../world/flora';
+import { TREE_DIMS, TREE_SPECIES, woodSpecies, type TreeSpecies, type TreeSpot } from '../world/flora';
 import { courseAt, forestAt, lushAt, swampQ, woodsAt } from '../world/hydro';
 import { lakeQ } from '../world/lakes';
+import { heritageClear } from '../world/heritage';
+import { bendClear, bendStems } from '../world/millBend';
 import { nearestRoad } from '../world/openWorld';
 import type { TerrainDef } from '../world/terrain';
 
 /**
  * The trees of the green country, drawn. Each species is built in code as three variants (trunk and branches as tapered
  * tubes, foliage as alpha-tested leaf-cluster cards from one atlas, so a whole tree is one draw), and the three variants
- * share one geometry: each instance carries its variant and the vertex shader drops the other two. A chunk's trees are then
- * one InstancedMesh per species, and they sway in the same wind as the grass.
+ * share vertex buffers, with a separate index buffer for each variant. A chunk batches each species/variant, submitting
+ * only the selected model's triangles; they sway in the same wind as the grass.
  *
  * Further out every tree is an impostor: three crossed cards showing a picture of the species baked on the CPU from its own
  * model, lit with a domed normal so a wood still reads round. Near and far cross-fade per tree on a dither between
@@ -87,6 +89,8 @@ class TreeKit {
   tree: number[] = [];
   idx: number[] = [];
   variant = 0;
+  /** Convex pieces of the actual wood rings, for a fallen tree's compound rigid body. */
+  woodHulls: { variant: number; vertices: Float32Array }[] = [];
 
   private rgb(hex: number, k: number): V3 {
     _col.setHex(hex);
@@ -94,12 +98,13 @@ class TreeKit {
   }
 
   /**
-   * A tapered tube through `pts` with radius `rad[i]` at each point and `seg` sides, wrapped in bark. `flute` ripples the
-   * radius round the ring (a buttressed foot), `ring` shades a ring (a palm's leaf scars). Darker at the foot.
+   * A tapered tube through `pts` with radius `rad[i]` at each point and `seg` sides, wrapped in bark (`cell`, the plain
+   * fissured bark unless told otherwise). `flute` ripples the radius round the ring (a buttressed foot), `ring` shades a ring
+   * (a palm's leaf scars). Darker at the foot.
    */
-  tube(pts: V3[], rad: number[], seg: number, hex: number, o: { flute?: (i: number, a: number) => number; ring?: (i: number) => number } = {}) {
+  tube(pts: V3[], rad: number[], seg: number, hex: number, o: { flute?: (i: number, a: number) => number; ring?: (i: number) => number; cell?: number } = {}) {
     const n = pts.length;
-    const { u0, u1, v0, v1 } = cellUv(LEAF_CELL.bark);
+    const { u0, u1, v0, v1 } = cellUv(o.cell ?? LEAF_CELL.bark);
     const L = [0];
     for (let i = 1; i < n; i++) L.push(L[i - 1] + Math.hypot(...sub(pts[i], pts[i - 1])));
     const t0 = norm(sub(pts[1], pts[0]));
@@ -126,6 +131,7 @@ class TreeKit {
       }
     }
     for (let i = 0; i < n - 1; i++) {
+      this.woodHulls.push({ variant: this.variant, vertices: Float32Array.from(this.pos.slice((base + i * (seg + 1)) * 3, (base + (i + 2) * (seg + 1)) * 3)) });
       for (let j = 0; j < seg; j++) {
         const a = base + i * (seg + 1) + j;
         const b = a + 1;
@@ -187,6 +193,7 @@ class TreeKit {
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
     g.setAttribute('tree', new THREE.Float32BufferAttribute(this.tree, 3));
     g.setIndex(this.pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(this.idx, 1) : new THREE.Uint16BufferAttribute(this.idx, 1));
+    g.userData.woodHulls = this.woodHulls;
     g.computeBoundingSphere();
     g.computeBoundingBox();
     return shared(g);
@@ -204,6 +211,22 @@ function limb(k: TreeKit, r: () => number, a: V3, dir: V3, len: number, r0: numb
   end[1] -= droop * len * 0.35;
   k.tube([a, mid, end], [r0, (r0 + r1) / 2, r1], seg, hex);
   return end;
+}
+
+/**
+ * Surface roots: `n` of them flaring off the foot of a trunk `rb` thick, humped over the ground for `reach` metres and diving
+ * into it, so a tree on a river bank stands on a tangle of them where the water has washed the soil from under it.
+ */
+function roots(k: TreeKit, r: () => number, n: number, rb: number, reach: number, hex: number, cell?: number) {
+  const a0 = r() * Math.PI * 2;
+  for (let i = 0; i < n; i++) {
+    const a = a0 + (i / n) * Math.PI * 2 + (r() - 0.5) * 0.7;
+    const L = reach * (0.65 + r() * 0.55);
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    const at = (d: number, y: number): V3 => [c * d, y, s * d];
+    k.tube([at(rb * 0.45, 0.55), at(rb + L * 0.22, 0.2 + r() * 0.12), at(rb + L * 0.6, 0.04 + r() * 0.06), at(rb + L, -0.6)], [rb * 0.42, rb * 0.3, rb * 0.17, 0.03], 4, hex, { cell });
+  }
 }
 
 /** A clump of leaf cards round `centre`, pushed toward the outside of the crown, mostly facing out of it. */
@@ -317,6 +340,7 @@ const willow: Grow = (k, r, v) => {
   const bole = D.bole * (0.9 + r() * 0.25);
   const top: V3 = [lx, bole, lz];
   k.tube([[0, -0.3, 0], [lx * 0.3, bole * 0.5, lz * 0.3], top], [D.trunk * 1.4, D.trunk * 1.05, D.trunk * 0.9], 8, bark);
+  roots(k, r, 5, D.trunk * 1.25, 2.0, bark);
   const C: V3 = [lx, 5.6 + v * 0.3, lz];
   const R: V3 = [D.crown * (v === 2 ? 1.1 : 1), 3.2, D.crown * (v === 2 ? 1.1 : 1)];
   const n = 4 + (v === 1 ? 1 : 0);
@@ -575,7 +599,116 @@ const snag: Grow = (k, r, v) => {
   }
 };
 
-const GROW: Record<TreeSpecies, Grow> = { oak, pine, willow, poplar, palm, acacia, cypress, snag };
+/** A eucalyptus's leaves: a few sprays hanging off a twig end like curtains, and two cards across them so they read from any side. */
+function gumSpray(k: TreeKit, r: () => number, p: V3, C: V3, R: V3, hex: number) {
+  const n = 3 + (r() < 0.45 ? 1 : 0);
+  const a0 = r() * Math.PI * 2;
+  for (let i = 0; i < n; i++) {
+    const a = a0 + (i / n) * Math.PI * 2 + (r() - 0.5) * 0.7;
+    const out: V3 = [Math.cos(a), 0, Math.sin(a)];
+    const side: V3 = [-Math.sin(a), 0, Math.cos(a)];
+    const reach = 0.3 + r() * 0.5;
+    const t0 = add(p, [out[0] * reach, 0.35 + r() * 0.5, out[2] * reach]);
+    const len = 1.9 + r() * 1.5;
+    const w = 0.55 + r() * 0.3;
+    k.strip([t0, add(t0, [out[0] * 0.35, -len * 0.5, out[2] * 0.35]), add(t0, [out[0] * 0.5, -len, out[2] * 0.5])], [side, side, side], [w, w * 1.05, w * 0.85], LEAF_CELL.gum, 'v', hex, 0.85 + r() * 0.25, [0.3, 1.1, 2.0], C, R, r());
+  }
+  for (let i = 0; i < 2; i++) {
+    const d = sub(p, C);
+    const a = Math.atan2(d[2], d[0]) + (r() - 0.5) * 1.2 + (i ? Math.PI / 2 : 0);
+    const right: V3 = [-Math.sin(a), 0, Math.cos(a)];
+    const up = norm([Math.cos(a) * 0.15, 1, Math.sin(a) * 0.15]);
+    const s = 2.0 + r() * 0.7;
+    k.card(add(p, [0, -0.45 - r() * 0.4, 0]), right, up, s, s * 1.15, LEAF_CELL.gum, hex, 0.8 + r() * 0.25, 1, C, R, r());
+  }
+}
+
+/**
+ * River red gum (eucalyptus), as the Yarkon is lined with, in three shapes that do not look alike. Variant 0 is the old red gum:
+ * a massive short bole, rough and brownish to a few metres up, parting low into four great sinuous pale limbs that sweep out
+ * into a broad, open, weeping crown. Variant 1 is the many-stemmed clump. Variant 2 is the V: a short bole forking at head
+ * height into two tall stems leaning apart, smooth-barked and shedding. The leaves hang in loose drooping sprays at the twig
+ * ends, an open crown with the sky through it. Each tree's bark takes its own colour in the shader (white, cream, salmon,
+ * grey-brown), so the same shape never looks twice the same.
+ */
+const eucalyptus: Grow = (k, r, v) => {
+  const D = TREE_DIMS.eucalyptus;
+  const bark = 0xcfcac0;
+  const rough = 0x9a8a78;
+  const leaf = 0x5f7350;
+  const cell = LEAF_CELL.gumBark;
+  const h = D.h * (v === 0 ? 0.9 : v === 1 ? 0.94 : 1.04);
+  const crown = D.crown * (v === 0 ? 1.4 : v === 1 ? 1.12 : 0.92);
+  const C: V3 = [0, h * (v === 0 ? 0.64 : 0.7), 0];
+  const R: V3 = [crown, h * 0.28, crown];
+  const sprays: V3[] = [];
+  const a0 = r() * Math.PI * 2;
+  /** One stem from `foot` leaning `lean` toward `a`, forking at `fork` into `nL` limbs spread `spread` wide. */
+  const stem = (foot: V3, a: number, lean: number, hs: number, rs: number, fork: number, nL: number, spread: [number, number], seg: number, roughTo = 0) => {
+    const ph = r() * Math.PI * 2;
+    const lx = Math.cos(a) * Math.tan(lean);
+    const lz = Math.sin(a) * Math.tan(lean);
+    const at = (y: number): V3 => [foot[0] + lx * y + Math.sin(y * 0.33 + ph) * 0.22 * Math.min(1, y / 3), foot[1] + y, foot[2] + lz * y + Math.cos(y * 0.27 + ph) * 0.18 * Math.min(1, y / 3)];
+    const nS = 5;
+    const tp: V3[] = [];
+    const tr: number[] = [];
+    for (let i = 0; i <= nS; i++) {
+      tp.push(i === 0 ? [foot[0] - lx * 0.4, foot[1] - 0.3, foot[2] - lz * 0.4] : at((i / nS) * fork));
+      tr.push(rs * (i === 0 ? 1.45 : i === 1 ? 1.12 : 1 - (i / nS) * 0.3));
+    }
+    if (roughTo > 0) {
+      // The old bark of the foot: rough, brownish, a separate sleeve up to `roughTo`, the smooth pale stem rising out of it.
+      const m = Math.max(2, Math.round((roughTo / fork) * nS));
+      k.tube(tp.slice(0, m + 1), tr.slice(0, m + 1).map((q) => q * 1.04), seg, rough, { cell: LEAF_CELL.bark });
+      k.tube(tp.slice(m - 1), tr.slice(m - 1), seg, bark, { cell });
+    } else k.tube(tp, tr, seg, bark, { cell });
+    const T = at(fork);
+    for (let l = 0; l < nL; l++) {
+      const b = a + (l / nL) * Math.PI * 2 + (r() - 0.5) * 0.8;
+      const sp = spread[0] + r() * (spread[1] - spread[0]);
+      const dir = norm([Math.cos(b) * sp + lx, 1, Math.sin(b) * sp + lz]);
+      const len = ((hs - fork) * (0.82 + r() * 0.16)) / dir[1];
+      const mid = add(T, mul(dir, len * 0.5));
+      mid[0] += (r() - 0.5) * len * 0.22;
+      mid[2] += (r() - 0.5) * len * 0.22;
+      const end = add(T, mul(dir, len));
+      k.tube([T, mid, end], [rs * 0.62, rs * 0.42, rs * 0.15], Math.max(4, seg - 2), bark, { cell });
+      const sb = b + (r() < 0.5 ? -1 : 1) * (0.6 + r() * 0.5);
+      const sdir = norm([Math.cos(sb), 0.45 + r() * 0.35, Math.sin(sb)]);
+      const slen = crown * (0.5 + r() * 0.3);
+      const send = add(mid, mul(sdir, slen));
+      send[1] -= slen * 0.12;
+      k.tube([mid, add(mix3(mid, send, 0.5), [0, slen * 0.06, 0]), send], [rs * 0.28, rs * 0.17, 0.04], 4, bark, { cell });
+      const tw = add(end, [Math.cos(b) * crown * 0.3, -0.3 + r() * 0.8, Math.sin(b) * crown * 0.3]);
+      k.tube([end, tw], [rs * 0.13, 0.03], 3, bark, { cell });
+      sprays.push(end, send, tw);
+    }
+  };
+  if (v === 0) {
+    // The old red gum: thick, low-forked, broad.
+    roots(k, r, 5, D.trunk * 1.55, 2.8, rough, LEAF_CELL.bark);
+    stem([0, 0, 0], a0, 0.03 + r() * 0.04, h, D.trunk * 1.3, h * (0.3 + r() * 0.05), 4, [0.65, 1.0], 8, 2.6 + r() * 1.4);
+  } else if (v === 1) {
+    roots(k, r, 4, D.trunk * 1.1, 2.4, bark, cell);
+    for (let s = 0; s < 3; s++) {
+      const a = a0 + (s / 3) * Math.PI * 2 + (r() - 0.5) * 0.5;
+      stem([0, 0, 0], a, 0.15 + r() * 0.1, h * (0.86 + r() * 0.12), D.trunk * 0.6, h * (0.42 + r() * 0.08), 2, [0.38, 0.68], 6);
+    }
+  } else {
+    // The V: a short common bole, then two stems leaning apart.
+    roots(k, r, 5, D.trunk * 1.25, 2.4, bark, cell);
+    const forkY = 1.3 + r() * 0.8;
+    k.tube([[0, -0.3, 0], [0, forkY * 0.5, 0], [0, forkY + 0.3, 0]], [D.trunk * 1.5, D.trunk * 1.2, D.trunk * 1.05], 8, bark, { cell });
+    for (const sgn of [0, Math.PI]) {
+      const a = a0 + sgn + (r() - 0.5) * 0.3;
+      const off: V3 = [Math.cos(a) * D.trunk * 0.35, forkY, Math.sin(a) * D.trunk * 0.35];
+      stem(off, a, 0.17 + r() * 0.09, h - forkY, D.trunk * 0.72, (h - forkY) * (0.5 + r() * 0.08), 2, [0.3, 0.6], 6);
+    }
+  }
+  for (const p of sprays) gumSpray(k, r, p, C, R, leaf);
+};
+
+const GROW: Record<TreeSpecies, Grow> = { oak, pine, willow, poplar, palm, acacia, cypress, snag, eucalyptus };
 
 const speciesGeos: THREE.BufferGeometry[] = [];
 
@@ -589,6 +722,27 @@ export function treeGeometry(sp: number): THREE.BufferGeometry {
     GROW[TREE_SPECIES[sp]](k, rng(sp * 31 + v * 7 + 1), v);
   }
   return (speciesGeos[sp] = k.build());
+}
+
+const variantGeos = new Map<number, THREE.BufferGeometry>();
+/** Same vertex data and triangle order as the original model, without the other variants' rejected triangles. */
+export function treeVariantGeometry(sp: number, variant: number): THREE.BufferGeometry {
+  const key = sp * 3 + variant;
+  const cached = variantGeos.get(key);
+  if (cached) return cached;
+  const source = treeGeometry(sp), index = source.index!, tree = source.getAttribute('tree');
+  const indices: number[] = [];
+  for (let i = 0; i < index.count; i += 3) {
+    if (tree.getY(index.getX(i)) === variant) indices.push(index.getX(i), index.getX(i + 1), index.getX(i + 2));
+  }
+  const geo = shared(new THREE.BufferGeometry());
+  for (const [name, attribute] of Object.entries(source.attributes)) geo.setAttribute(name, attribute);
+  geo.setIndex(indices);
+  // Retain the existing conservative bounds, including the original model's wind margin.
+  geo.boundingBox = source.boundingBox?.clone() ?? null;
+  geo.boundingSphere = source.boundingSphere?.clone() ?? null;
+  variantGeos.set(key, geo);
+  return geo;
 }
 
 // ---------------------------------------------------------------------------------------- impostors
@@ -717,7 +871,7 @@ export function impostorTexture(): THREE.DataTexture {
   const atlas = leafAtlas().data;
   const data = new Uint8Array(w * h * 4);
   for (let sp = 0; sp < TREE_SPECIES.length; sp++) bakeImpostor(sp, atlas, data, (sp % cols) * cell, Math.floor(sp / cols) * cell, w);
-  return (impTex = spriteAtlasTexture(data, w, h, cols, 2, 0.5));
+  return (impTex = spriteAtlasTexture(data, w, h, cols, LEAF_ATLAS.rows, 0.5));
 }
 
 /** Size of a species' impostor card at scale 1. */
@@ -773,14 +927,30 @@ const DITHER = /* glsl */ `
 float treeDither( vec2 p ) { return fract( 52.9829189 * fract( dot( p, vec2( 0.06711056, 0.00583715 ) ) ) ); }
 `;
 
+/**
+ * Pale smooth bark (the eucalyptus's) takes a colour of its own per tree: white, cream, salmon-orange, pinkish, grey-brown,
+ * from a hash of where the tree stands. Darker barks are left as they are.
+ */
+const BARK_FN = /* glsl */ `
+#ifdef USE_INSTANCING
+vec3 barkTint( vec3 c ) {
+  vec3 bO = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
+  float bh = fract( sin( dot( floor( bO.xz * 2.0 ), vec2( 12.9898, 78.233 ) ) ) * 43758.5453 );
+  vec3 bt = bh < 0.24 ? vec3( 1.06, 1.06, 1.08 ) : bh < 0.44 ? vec3( 1.02, 0.94, 0.8 ) : bh < 0.64 ? vec3( 1.04, 0.66, 0.46 ) : bh < 0.8 ? vec3( 1.0, 0.8, 0.72 ) : vec3( 0.74, 0.68, 0.62 );
+  float pale = smoothstep( 0.22, 0.42, dot( c, vec3( 0.3333 ) ) );
+  return mix( vec3( 1.0 ), bt, pale );
+}
+#endif
+`;
+
 function encode(tint: V3, slot: number, out: THREE.Color) {
   return out.setRGB(tint[0] + slot * 4, tint[1], tint[2], THREE.LinearSRGBColorSpace);
 }
 
 /**
  * The 3D trees' vertex work: keep only this instance's variant (and, for the colour pass, only near the camera), then sway.
- * The colour pass decides at the very top of the shader, before any lighting work, so the dropped two thirds of each tree and
- * the trees beyond the cross-fade cost next to nothing. The shadow pass (a short shader anyway) decides just before projecting.
+ * Variant indices remove unused models before submission; the guard remains for callers using the complete species geometry.
+ * The colour pass also skips trees beyond the cross-fade before lighting. Shadows keep the existing wind and alpha test.
  */
 function treeVertex(shader: THREE.WebGLProgramParametersWithUniforms, colour: boolean) {
   shader.uniforms.uTime = GLOBALS.uTime;
@@ -829,9 +999,10 @@ export function treeMaterial(): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({ map: leafAtlas().tex, alphaTest: 0.5, side: THREE.DoubleSide, vertexColors: true, roughness: 0.82, metalness: 0 });
   m.onBeforeCompile = (shader) => {
     treeVertex(shader, true);
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\n${BARK_FN}`);
     shader.vertexShader = shader.vertexShader.replace(
       '#include <color_vertex>',
-      `#include <color_vertex>\n#ifdef USE_INSTANCING_COLOR\n{\n${DECODE}\nvColor = vec4( color * ( tree.x > 0.0 ? treeTint : vec3( 1.0 ) ), 1.0 );\n}\n#endif`,
+      `#include <color_vertex>\n#ifdef USE_INSTANCING_COLOR\n{\n${DECODE}\nvColor = vec4( color * ( tree.x > 0.0 ? treeTint : barkTint( color ) ), 1.0 );\n}\n#endif`,
     );
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\nvarying float vTreeKeep;\n${DITHER}`)
@@ -887,7 +1058,7 @@ function impostorShader(shader: THREE.WebGLProgramParametersWithUniforms, far: L
   vImpKeep = iKeep;
   vImpUv = uv;
   #ifdef USE_MAP
-    vMapUv = ( vec2( mod( treeSlot, 4.0 ), floor( treeSlot * 0.25 ) ) + uv ) * vec2( 0.25, 0.5 );
+    vMapUv = ( vec2( mod( treeSlot, ${LEAF_ATLAS.cols.toFixed(1)} ), floor( treeSlot / ${LEAF_ATLAS.cols.toFixed(1)} + 0.001 ) ) + uv ) * vec2( ${(1 / LEAF_ATLAS.cols).toFixed(6)}, ${(1 / LEAF_ATLAS.rows).toFixed(6)} );
   #endif
   vImpT = normalize( mat3( modelViewMatrix ) * ( mat3( instanceMatrix ) * tang ) );
 }
@@ -959,53 +1130,71 @@ function tintOf(x: number, z: number): V3 {
   return [l * (0.94 + k1 * 0.14), l, l * (1.02 - k1 * 0.12)];
 }
 
+/**
+ * A tree's own proportions: its crown a little wider or narrower, the tree a little taller or squatter than the model, so
+ * neighbours of one variant do not look stamped out. Eucalyptus vary most.
+ */
+export function treeAspect(t: TreeSpot): [number, number] {
+  if (t.aspect) return t.aspect;
+  const k1 = hash2(Math.round(t.x * 10), Math.round(t.z * 10), 913);
+  const k2 = hash2(Math.round(t.x * 10), Math.round(t.z * 10), 914);
+  const gum = TREE_SPECIES[t.sp] === 'eucalyptus';
+  return [1 + (k1 - 0.5) * (gum ? 0.42 : 0.2), 1 + (k2 - 0.5) * (gum ? 0.26 : 0.16)];
+}
+
 /** How a chunk's trees are drawn: pure and deterministic, one entry per `TreeSpot`. */
 export function treeInstances(trees: TreeSpot[]): TreeInstance[] {
   return trees.map((t) => {
     _p.set(t.x, t.y, t.z);
     _e.set(t.lean[0], t.yaw, t.lean[1], 'YXZ');
     _q.setFromEuler(_e);
-    _s.set(t.s, t.s, t.s);
+    const [ax, ay] = treeAspect(t);
+    _s.set(t.s * ax, t.s * ay, t.s * ax);
     _m.compose(_p, _q, _s);
     return { sp: t.sp, v: t.v, m: _m.toArray(), tint: tintOf(t.x, t.z) };
   });
 }
 
 export interface TreeSet {
-  /** The 3D trees, one mesh per species present. */
+  /** The 3D trees, one mesh per species/variant present; vertex buffers remain shared. */
   near: THREE.InstancedMesh[];
   /** Every tree of the chunk as an impostor, for whoever is further away. */
   far: THREE.InstancedMesh | null;
 }
 
-/** A chunk's trees in slices: a species a slice. */
+/** A chunk's trees in slices: a species/variant a slice. */
 export function* buildTreesSteps(trees: TreeSpot[]): Generator<void, TreeSet> {
   const set: TreeSet = { near: [], far: null };
   if (!trees.length) return set;
   const inst = treeInstances(trees);
   for (let sp = 0; sp < TREE_SPECIES.length; sp++) {
-    const mine = inst.filter((t) => t.sp === sp);
-    if (!mine.length) continue;
-    const im = new THREE.InstancedMesh(treeGeometry(sp), treeMaterial(), mine.length);
-    mine.forEach((t, i) => {
-      im.setMatrixAt(i, _m.fromArray(t.m));
-      im.setColorAt(i, encode(t.tint, t.v, _c));
-    });
-    im.instanceMatrix.needsUpdate = true;
-    im.instanceColor!.needsUpdate = true;
-    im.computeBoundingSphere();
-    im.castShadow = true;
-    im.receiveShadow = true;
-    im.customDepthMaterial = treeDepthMaterial();
-    set.near.push(im);
-    yield;
+    for (let variant = 0; variant < 3; variant++) {
+      const mine = inst.filter((t) => t.sp === sp && t.v === variant);
+      if (!mine.length) continue;
+      const im = new THREE.InstancedMesh(treeVariantGeometry(sp, variant), treeMaterial(), mine.length);
+      im.userData.sp = sp;
+      im.userData.variant = variant;
+      mine.forEach((t, i) => {
+        im.setMatrixAt(i, _m.fromArray(t.m));
+        im.setColorAt(i, encode(t.tint, t.v, _c));
+      });
+      im.instanceMatrix.needsUpdate = true;
+      im.instanceColor!.needsUpdate = true;
+      im.computeBoundingSphere();
+      im.castShadow = true;
+      im.receiveShadow = true;
+      im.customDepthMaterial = treeDepthMaterial();
+      set.near.push(im);
+      yield;
+    }
   }
   const im = new THREE.InstancedMesh(impostorGeometry(), impostorMaterial(), trees.length);
   trees.forEach((t, i) => {
     const d = impostorDims(t.sp);
+    const [ax, ay] = treeAspect(t);
     _p.set(t.x, t.y + 0.1, t.z);
     _q.setFromAxisAngle(UP, t.yaw);
-    _s.set(d.w * t.s, d.h * t.s, d.w * t.s);
+    _s.set(d.w * t.s * ax, d.h * t.s * ay, d.w * t.s * ax);
     im.setMatrixAt(i, _m.compose(_p, _q, _s));
     im.setColorAt(i, encode(inst[i].tint, t.sp, _c));
   });
@@ -1104,20 +1293,28 @@ export function planFarForest(def: TerrainDef, ground: (x: number, z: number) =>
       if (spring) continue;
       if (bucket.get(bkey(Math.floor(x / B), Math.floor(z / B)))?.some((s) => Math.hypot(x - s.x, z - s.z) < s.r)) continue;
       if (hy.crossings.some((q) => Math.hypot(x - q.x, z - q.z) < q.span * 0.5 + q.roadHalf + 16)) continue;
+      if (heritageClear(def.heritage, x, z, 3)) continue;
+      if (bendClear(def, x, z)) continue;
       const k = hash2(ix, iz, seed + 3);
       const woods = woodsAt(def, x, z);
       let sp: TreeSpecies;
       if (oasis) sp = 'palm';
-      else if (swamp || woods === 'fen') sp = k < 0.7 ? 'cypress' : 'snag';
-      else if (woods === 'riparian') sp = k < 0.55 ? 'willow' : 'poplar';
+      else if (swamp) sp = woodSpecies('fen', k, L, F);
+      else if (woods === 'fen' || woods === 'riparian' || woods === 'gum') sp = woodSpecies(woods, k, L, F);
       else if (roll > pWood + pLone) sp = 'acacia';
-      else if (woods === 'pine') sp = k < 0.85 ? 'pine' : 'oak';
-      else sp = F < 0.05 && L < 0.5 ? (k < 0.6 ? 'acacia' : 'oak') : k < 0.82 ? 'oak' : k < 0.92 ? 'pine' : 'poplar';
+      else sp = woodSpecies(woods, k, L, F);
       const key = Math.floor((x - o.x0) / FAR_REGION) * 1000 + Math.floor((z - o.z0) / FAR_REGION);
       let list = regions.get(key);
       if (!list) regions.set(key, (list = []));
       list.push({ x, y, z, sp: TREE_SPECIES.indexOf(sp), s: (0.72 + hash2(ix, iz, seed + 5) * 0.55) * 1.2, yaw: hash2(ix, iz, seed + 4) * Math.PI * 2 });
     }
+  }
+  // The old gums of the rivers' bends, set by hand: seen from afar like any other gum.
+  for (const t of bendStems(def, o.x0, o.z0, o.x1, o.z1)) {
+    const key = Math.floor((t.x - o.x0) / FAR_REGION) * 1000 + Math.floor((t.z - o.z0) / FAR_REGION);
+    let list = regions.get(key);
+    if (!list) regions.set(key, (list = []));
+    list.push({ x: t.x, y: ground(t.x, t.z), z: t.z, sp: t.sp, s: t.s * 1.2, yaw: t.yaw });
   }
   return [...regions.values()];
 }
@@ -1161,4 +1358,33 @@ export function treeWarmup(): THREE.InstancedMesh[] {
     out.push(im);
   }
   return out;
+}
+
+/** Scorched leaves go brown first, then the whole tree black. */
+const SCORCH: V3 = [0.32, 0.2, 0.09];
+const CHAR: V3 = [0.06, 0.05, 0.045];
+
+/**
+ * Darken one tree of a chunk's set to how far fire has charred it (0 green, 1 a black snag), in both its 3D mesh and its
+ * impostor. `idx` is its index in the chunk's tree list (the order `buildTreesSteps` was given).
+ */
+export function charTreeInstance(set: TreeSet, trees: TreeSpot[], idx: number, char: number) {
+  const t = trees[idx];
+  if (!t) return;
+  const base = tintOf(t.x, t.z);
+  const k = Math.min(1, Math.max(0, char));
+  const tint = k < 0.4 ? mix3(base, SCORCH, k / 0.4) : mix3(SCORCH, CHAR, (k - 0.4) / 0.6);
+  let n = 0;
+  for (let i = 0; i < idx; i++) if (trees[i].sp === t.sp && trees[i].v === t.v) n++;
+  const im = set.near.find((m) => m.userData.sp === t.sp && m.userData.variant === t.v);
+  if (im?.instanceColor) {
+    im.setColorAt(n, encode(tint, t.v, _c));
+    im.instanceColor.addUpdateRange(n * 3, 3);
+    im.instanceColor.needsUpdate = true;
+  }
+  if (set.far?.instanceColor) {
+    set.far.setColorAt(idx, encode(tint, t.sp, _c));
+    set.far.instanceColor.addUpdateRange(idx * 3, 3);
+    set.far.instanceColor.needsUpdate = true;
+  }
 }

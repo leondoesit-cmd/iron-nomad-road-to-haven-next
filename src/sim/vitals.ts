@@ -161,10 +161,16 @@ export function wearDamage(cond: number | undefined): number {
   return c >= WEAR.fine ? 1 : 0.65 + 0.35 * (c / WEAR.fine);
 }
 
-/** Chance that one shot jams the gun. Zero until the gun is worn out, then it climbs. */
+/**
+ * Chance that one trigger pull fails: a dud now and then even in a sound gun (one in a thousand-odd), a few in a hundred
+ * once it is worn, and climbing fast when it is worn out.
+ */
 export function jamChance(cond: number | undefined): number {
   const c = wearOf(cond);
-  return c > WEAR.worn ? 0 : 0.03 + (1 - c / WEAR.worn) * 0.12;
+  if (c >= 0.9) return 0.0008;
+  if (c >= WEAR.fine) return 0.0008 + ((0.9 - c) / (0.9 - WEAR.fine)) * 0.0032;
+  if (c > WEAR.worn) return 0.004 + ((WEAR.fine - c) / (WEAR.fine - WEAR.worn)) * 0.016;
+  return 0.03 + (1 - c / WEAR.worn) * 0.12;
 }
 
 /** What one use costs, a little more for the hard-hitting end of the rack. */

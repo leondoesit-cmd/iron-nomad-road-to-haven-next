@@ -1,0 +1,350 @@
+{
+  "waterfall": [
+    "waterfall-take2.wav",
+    "waterfall-take3.wav"
+  ],
+  "stream": [
+    "stream-take2.wav",
+    "stream-take3.wav"
+  ],
+  "splash": [
+    "splash-take2.wav",
+    "splash-take3.wav"
+  ],
+  "plunge": [
+    "plunge-take2.wav",
+    "plunge-take3.wav"
+  ],
+  "drip": [
+    "drip-take2.wav",
+    "drip-take3.wav"
+  ],
+  "leaves": [
+    "leaves-take2.wav",
+    "leaves-take3.wav"
+  ],
+  "vegetation": [
+    "vegetation-take2.wav",
+    "vegetation-take3.wav"
+  ],
+  "grassWind": [
+    "grassWind-take2.wav",
+    "grassWind-take3.wav"
+  ],
+  "birds": [
+    "birds-take2.wav",
+    "birds-take3.wav"
+  ],
+  "owl": [
+    "owl-take2.wav",
+    "owl-take3.wav"
+  ],
+  "crickets": [
+    "crickets-take2.wav",
+    "crickets-take3.wav"
+  ],
+  "frogs": [
+    "frogs-take2.wav",
+    "frogs-take3.wav"
+  ],
+  "caw": [
+    "caw-take2.wav",
+    "caw-take3.wav"
+  ],
+  "flutter": [
+    "flutter-take2.wav",
+    "flutter-take3.wav"
+  ],
+  "rain": [
+    "rain-take2.wav",
+    "rain-take3.wav"
+  ],
+  "thunder": [
+    "thunder-take2.wav",
+    "thunder-take3.wav"
+  ],
+  "fire": [
+    "fire-take2.wav",
+    "fire-take3.wav"
+  ],
+  "horn": [
+    "horn-take2.wav",
+    "horn-take3.wav"
+  ],
+  "bell": [
+    "bell-take2.wav",
+    "bell-take3.wav"
+  ],
+  "gasp": [
+    "gasp-take2.wav",
+    "gasp-take3.wav"
+  ],
+  "gulp": [
+    "gulp-take2.wav",
+    "gulp-take3.wav"
+  ],
+  "munch": [
+    "munch-take2.wav",
+    "munch-take3.wav"
+  ],
+  "laugh": [
+    "laugh-take2.wav",
+    "laugh-take3.wav"
+  ],
+  "retch": [
+    "retch-take2.wav",
+    "retch-take3.wav"
+  ],
+  "boom": [
+    "boom-take2.wav",
+    "boom-take3.wav"
+  ],
+  "radio": [
+    "radio-take2.wav",
+    "radio-take3.wav"
+  ],
+  "whisper": [
+    "whisper-take2.wav",
+    "whisper-take3.wav"
+  ],
+  "slash": [
+    "slash-take2.wav",
+    "slash-take3.wav"
+  ],
+  "swing": [
+    "swing-take2.wav",
+    "swing-take3.wav"
+  ],
+  "hit": [
+    "hit-take2.wav",
+    "hit-take3.wav"
+  ],
+  "trickle": [
+    "trickle-take2.wav",
+    "trickle-take3.wav"
+  ],
+  "alarm": [
+    "alarm-take2.wav",
+    "alarm-take3.wav"
+  ],
+  "beep": [
+    "beep-take2.wav",
+    "beep-take3.wav"
+  ],
+  "siren": [
+    "siren-take2.wav",
+    "siren-take3.wav"
+  ],
+  "growl": [
+    "growl-take2.wav",
+    "growl-take3.wav"
+  ],
+  "branchBreak": [
+    "branchBreak-take2.wav",
+    "branchBreak-take3.wav"
+  ],
+  "chirp": [
+    "chirp-take2.wav",
+    "chirp-take3.wav"
+  ],
+  "wind": [
+    "wind-take2.wav",
+    "wind-take3.wav"
+  ],
+  "pistol": [
+    "pistol-take2.wav",
+    "pistol-take3.wav",
+    "pistol-take4.wav",
+    "pistol-take5.wav"
+  ],
+  "shotgun": [
+    "shotgun-take2.wav",
+    "shotgun-take3.wav"
+  ],
+  "mg": [
+    "mg-take2.wav",
+    "mg-take3.wav",
+    "mg-take4.wav",
+    "mg-take5.wav"
+  ],
+  "sniper": [
+    "sniper-take2.wav",
+    "sniper-take3.wav",
+    "sniper-take4.wav",
+    "sniper-take5.wav"
+  ],
+  "click": [
+    "lock_open_01.ogg",
+    "keys_01.ogg",
+    "keys_02.ogg"
+  ],
+  "pickup": [
+    "keys_01.ogg",
+    "keys_02.ogg",
+    "keys_03.ogg",
+    "keys_04.ogg",
+    "keys_05.ogg",
+    "keys_06.ogg",
+    "keys_07.ogg"
+  ],
+  "loot": [
+    "keys_01.ogg",
+    "keys_02.ogg",
+    "keys_03.ogg",
+    "keys_04.ogg",
+    "keys_05.ogg",
+    "keys_06.ogg",
+    "keys_07.ogg"
+  ],
+  "confirm": [
+    "keys_01.ogg",
+    "keys_02.ogg",
+    "keys_03.ogg",
+    "keys_04.ogg",
+    "keys_05.ogg",
+    "keys_06.ogg",
+    "keys_07.ogg"
+  ],
+  "deny": [
+    "lock_open_01.ogg",
+    "keys_01.ogg",
+    "keys_02.ogg"
+  ],
+  "pill": [
+    "keys_01.ogg",
+    "keys_02.ogg",
+    "keys_03.ogg",
+    "keys_04.ogg",
+    "keys_05.ogg",
+    "keys_06.ogg",
+    "keys_07.ogg"
+  ],
+  "treeHit": [
+    "wood_hit_01.ogg",
+    "wood_hit_02.ogg",
+    "wood_hit_03.ogg",
+    "wood_hit_04.ogg",
+    "wood_hit_05.ogg",
+    "wood_hit_06.ogg",
+    "wood_hit_07.ogg",
+    "wood_hit_08.ogg",
+    "wood_hit_09.ogg"
+  ],
+  "treeCreak": [
+    "wood_squeak_01.ogg",
+    "wood_squeak_02.ogg",
+    "wood_cracking_01.ogg",
+    "wood_cracking_02.ogg"
+  ],
+  "creak": [
+    "wood_squeak_01.ogg",
+    "wood_squeak_02.ogg"
+  ],
+  "build": [
+    "tools_01.ogg",
+    "tools_02.ogg",
+    "tools_03.ogg",
+    "tools_04.ogg",
+    "tools_05.ogg",
+    "tools_06.ogg",
+    "tools_07.ogg",
+    "tools_08.ogg",
+    "tools_09.ogg",
+    "tools_10.ogg",
+    "tools_11.ogg",
+    "tools_12.ogg"
+  ],
+  "wrench": [
+    "tools_01.ogg",
+    "tools_02.ogg",
+    "tools_03.ogg",
+    "tools_04.ogg",
+    "tools_05.ogg",
+    "tools_06.ogg",
+    "tools_07.ogg",
+    "tools_08.ogg",
+    "tools_09.ogg",
+    "tools_10.ogg",
+    "tools_11.ogg",
+    "tools_12.ogg"
+  ],
+  "chassis": [
+    "metal_spring_01.ogg",
+    "metal_spring_02.ogg"
+  ],
+  "twang": [
+    "metal_spring_01.ogg",
+    "metal_spring_02.ogg"
+  ],
+  "howl": [
+    "howl-performance1.wav",
+    "howl-performance2.wav",
+    "howl-performance3.wav"
+  ],
+  "hiss": [
+    "hiss-performance1.wav",
+    "hiss-performance2.wav",
+    "hiss-performance3.wav"
+  ],
+  "hiccup": [
+    "hiccup-performance1.wav",
+    "hiccup-performance2.wav",
+    "hiccup-performance3.wav"
+  ],
+  "quack": [
+    "quack-performance1.wav",
+    "quack-performance2.wav",
+    "quack-performance3.wav"
+  ],
+  "sing": [
+    "sing-performance1.wav",
+    "sing-performance2.wav",
+    "sing-performance3.wav"
+  ],
+  "scream": [
+    "pain-performance0.wav",
+    "pain-performance1.wav",
+    "pain-performance2.wav"
+  ],
+  "zdie": [
+    "pain-performance0.wav",
+    "pain-performance1.wav",
+    "pain-performance2.wav"
+  ],
+  "engine-bike-idle": [
+    "engine-bike-idle.wav"
+  ],
+  "engine-bike-load": [
+    "engine-bike-load.wav"
+  ],
+  "engine-car-idle": [
+    "engine-car-idle.wav"
+  ],
+  "engine-car-load": [
+    "engine-car-load.wav"
+  ],
+  "engine-diesel-idle": [
+    "engine-diesel-idle.wav"
+  ],
+  "engine-diesel-load": [
+    "engine-diesel-load.wav"
+  ],
+  "reload": [
+    "reload-assaultriflereload1_0.wav",
+    "reload-shotguncock_0.wav"
+  ],
+  "yelp": [
+    "pain-performance0.wav",
+    "pain-performance1.wav",
+    "pain-performance2.wav"
+  ],
+  "engine": [
+    "engine-bike-idle.wav",
+    "engine-car-idle.wav",
+    "engine-diesel-idle.wav"
+  ],
+  "bellow": [
+    "bellow-excerpt0.wav",
+    "bellow-excerpt1.wav"
+  ]
+}

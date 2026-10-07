@@ -3,7 +3,7 @@ import { legById } from '../src/data';
 import { buttes, heightAt, makeTerrainDef, surfaceAt, waterAt } from '../src/world/terrain';
 import { nearestRoad } from '../src/world/openWorld';
 import { lakeQ } from '../src/world/lakes';
-import { courseAt, forestAt, lushAt, readBridgeTag, bridgeTag, swampQ, woodsAt } from '../src/world/hydro';
+import { bridgeTag, courseAt, forestAt, lushAt, onCauseway, readBridgeTag, swampQ, woodsAt } from '../src/world/hydro';
 import { ChunkSource } from '../src/world/chunkgen';
 import { CHUNK } from '../src/world/terrain';
 import { TREE_SPECIES } from '../src/world/flora';
@@ -45,13 +45,19 @@ describe('the water of the open world', () => {
     }
   });
 
-  it('holds water all along every course, except under a causeway', () => {
+  it('holds water all along every course, except under a causeway and on the island in a bend', () => {
     for (const r of hy.rivers) {
       let wet = 0;
       for (let i = 2; i < r.end; i++) {
         const x = r.x[i];
         const z = r.z[i];
         if (hy.crossings.some((q) => Math.hypot(q.x - x, q.z - z) < q.roadHalf + 6)) continue;
+        // A slanting crossing's causeway runs further along the course: anywhere the paved road's edge is that close.
+        const rd = nearestRoad(def.open!, x, z);
+        if (rd.road && rd.road.kind !== 'track' && rd.edge < 4.5) continue;
+        if (hy.loops.some((q) => q.island && Math.hypot(q.island.x - x, q.island.z - z) < q.island.r + 2.5)) continue;
+        // The Half Island's crossing over the top of its leg: earth over culverts.
+        if (onCauseway(hy, x, z)) continue;
         const w = waterAt(def, x, z);
         expect(w, `${r.key} sample ${i}`).not.toBeNull();
         expect(w!.depth).toBeGreaterThan(0.05);

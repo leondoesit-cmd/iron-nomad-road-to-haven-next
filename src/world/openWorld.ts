@@ -210,6 +210,53 @@ export function nearestRoad(w: OpenWorld, x: number, z: number): RoadHit {
   return HIT;
 }
 
+/**
+ * How many steps up a paved road is drawn, so that where two cross or meet the later one lies on top of the earlier without
+ * the two fighting: 0 for a road that touches no earlier one, else one more than the highest earlier road it touches. A road
+ * that crosses nothing lies flat on the ground instead of standing a step up for every road planned before it. Tracks have no
+ * mesh and stay 0. Worked out once per network (again only if a road is added).
+ */
+export function roadLayer(w: OpenWorld, ri: number): number {
+  let c = LAYERS.get(w);
+  if (!c || c.n !== w.roads.length) LAYERS.set(w, (c = { n: w.roads.length, layer: planLayers(w) }));
+  return c.layer[ri] ?? 0;
+}
+const LAYERS = new WeakMap<OpenWorld, { n: number; layer: number[] }>();
+
+function planLayers(w: OpenWorld): number[] {
+  const layer = w.roads.map(() => 0);
+  w.roads.forEach((r, i) => {
+    if (r.kind === 'track') return;
+    const p = r.pts;
+    const n = p.length / 2;
+    const under = new Set<number>();
+    // Every point of this road and every midpoint between, against the earlier paved roads' segments near it. Two ribbons
+    // overlap when their centre-lines come within both half widths and both shoulders (plus a little).
+    for (let q = 0; q < n * 2 - 1; q++) {
+      const a = (q >> 1) * 2;
+      const x = q & 1 ? (p[a] + p[a + 2]) / 2 : p[a];
+      const z = q & 1 ? (p[a + 1] + p[a + 3]) / 2 : p[a + 1];
+      const cell = w.grid.get(cellKey(Math.floor(x / CELL), Math.floor(z / CELL)));
+      if (!cell) continue;
+      for (let k = 0; k < cell.length; k += 2) {
+        const j = cell[k];
+        const o = w.roads[j];
+        if (j >= i || under.has(j) || o.kind === 'track') continue;
+        const s = cell[k + 1];
+        const ax = o.pts[s];
+        const az = o.pts[s + 1];
+        const dx = o.pts[s + 2] - ax;
+        const dz = o.pts[s + 3] - az;
+        const l2 = dx * dx + dz * dz;
+        const t = l2 > 0 ? clamp(((x - ax) * dx + (z - az) * dz) / l2, 0, 1) : 0;
+        if (Math.hypot(x - (ax + dx * t), z - (az + dz * t)) < r.half + o.half + 2) under.add(j);
+      }
+    }
+    for (const j of under) layer[i] = Math.max(layer[i], layer[j] + 1);
+  });
+  return layer;
+}
+
 /** The district a point is inside (its chunk-aligned rectangle), or null in the open country. */
 export function districtAt(w: OpenWorld | undefined, x: number, z: number): District | null {
   if (!w) return null;

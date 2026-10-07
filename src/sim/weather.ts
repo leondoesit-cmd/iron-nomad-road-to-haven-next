@@ -20,7 +20,7 @@ export interface StormWindow {
 }
 
 /** A small deterministic hash to a number in [0, 1). */
-function hash01(a: number, b: number, salt: number): number {
+export function hash01(a: number, b: number, salt: number): number {
   let h = Math.imul(a | 0, 0x9e3779b1) ^ Math.imul((b | 0) + salt * 7919, 0x85ebca6b);
   h ^= h >>> 15;
   h = Math.imul(h, 0x2c1b3c6d);

@@ -515,8 +515,8 @@ export class DelveView {
               b.rod(l.x + Math.cos(a) * 0.4, 0, l.z + Math.sin(a) * 0.4, l.x + Math.cos(a) * 0.15, 0.7, l.z + Math.sin(a) * 0.15, 0.03, S.steel(0x2a2a2a, 0.7), 4);
             }
             b.cyl(l.x, 0.78, l.z, 0.7, 0.2, 0.7, S.steel(0x2a2a2a, 0.7), 0, 0, 0, 10);
-            b.add('cone6', l.x, 1.1, l.z, 0.5, 0.7, 0.5, S.glow(0xff8a2a, 6));
-            b.add('cone6', l.x + 0.1, 1.2, l.z - 0.05, 0.28, 0.6, 0.28, S.glow(0xffd27a, 7));
+            // A bed of coals in the bowl; the flames over it are the fire engine's (`game/fires.ts`).
+            if (lit) b.cyl(l.x, 0.885, l.z, 0.58, 0.03, 0.58, S.glow(0xff5a14, 2.6), 0, 0, 0, 10);
           } else {
             // Glowing crystals growing out of the floor.
             const rr = rng(Math.floor(l.x * 7 + l.z * 13));

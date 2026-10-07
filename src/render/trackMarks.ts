@@ -23,8 +23,11 @@ const AX = [1.14, 0.98, 0, -0.98, -1.14];
 const GROOVE_H = [0, 0.35, -0.6, 0.35, 0];
 const GROOVE_A = [0, 0.5, 1, 0.5, 0];
 const SKID_A = [0, 0.95, 1, 0.95, 0];
-/** Height of the ribbon above the ground so it never sinks into a coarse terrain triangle. */
-const LIFT = 0.045;
+/**
+ * Height of the groove's floor above the surface it is laid on. The caller gives the surface as drawn (the terrain mesh, or
+ * the road the tyre is on), so the floor lies right where the tyre touches and the berms stand up either side of it.
+ */
+const LIFT = 0.008;
 
 export interface TrackSnapshot {
   pos: Float32Array;
@@ -48,6 +51,7 @@ interface Trail {
   v: number;
   /** The last end edge written, so the next segment starts exactly where this one stopped. */
   edge: Float32Array | null;
+  next: Float32Array | null;
 }
 
 const VERT_PARS = `attribute vec4 aMark;\nvarying vec4 vMark;\nvarying vec3 vMarkW;\n#include <common>`;
@@ -114,8 +118,8 @@ export class TrackMarks {
   private geo = new THREE.BufferGeometry();
   private trails = new Map<number, Trail>();
   private head = 0;
-  private lo = Infinity;
-  private hi = -1;
+  private dirtyStart = 0;
+  private dirtyCount = 0;
   private time = 0;
   private uTime = { value: 0 };
   /** Segments laid since the scene began, wrapping or not. */
@@ -174,13 +178,13 @@ export class TrackMarks {
 
   /**
    * One wheel is on the ground at (x, z). Once it has moved a step from where it last marked, a segment joins the
-   * ribbon. `ground` gives the terrain height for each corner; `halfW` is half the tyre's width.
+   * ribbon. `ground` gives the height of the drawn surface under each corner; `halfW` is half the tyre's width.
    */
   lay(key: number, x: number, z: number, halfW: number, style: MarkStyle, ground: (x: number, z: number) => number) {
     const kind = style.kind === 'skid' ? KIND_SKID : style.depth > 0.03 ? KIND_MUD : KIND_GROOVE;
     const t = this.trails.get(key);
     if (!t || t.kind !== kind) {
-      this.trails.set(key, { x, z, kind, v: 0, edge: null });
+      this.trails.set(key, { x, z, kind, v: 0, edge: null, next: null });
       return;
     }
     const dx = x - t.x;
@@ -199,12 +203,8 @@ export class TrackMarks {
     const seg = this.head;
     this.head = (this.head + 1) % SEGMENTS;
     this.laid++;
-    if (seg < this.lo) this.lo = seg;
-    if (seg > this.hi) this.hi = seg;
-    if (this.head === 0) {
-      this.lo = 0;
-      this.hi = SEGMENTS - 1;
-    }
+    if (!this.dirtyCount) this.dirtyStart = seg;
+    this.dirtyCount = Math.min(SEGMENTS, this.dirtyCount + 1);
     const v0 = seg * PER_SEG;
     const lx = nz;
     const lz = -nx;
@@ -213,7 +213,7 @@ export class TrackMarks {
     const depth = style.kind === 'skid' ? 0 : style.depth;
     // Start edge: the previous end edge if there is one, else the same ribbon laid out along this direction.
     const start = t.edge ?? this.edge(t.x, t.z, lx, lz, hw, depth, ground);
-    const end = this.edge(x, z, lx, lz, hw, depth, ground);
+    const end = this.edge(x, z, lx, lz, hw, depth, ground, t.next);
     const age = this.time;
     const u = [0, 0.25, 0.5, 0.75, 1];
     const vA = t.v;
@@ -230,15 +230,16 @@ export class TrackMarks {
     t.x = x;
     t.z = z;
     t.edge = end;
+    t.next = start;
   }
 
-  private edge(cx: number, cz: number, lx: number, lz: number, hw: number, depth: number, ground: (x: number, z: number) => number): Float32Array {
-    const e = new Float32Array(ACROSS * 3);
+  private edge(cx: number, cz: number, lx: number, lz: number, hw: number, depth: number, ground: (x: number, z: number) => number, target: Float32Array | null = null): Float32Array {
+    const e = target ?? new Float32Array(ACROSS * 3);
     for (let q = 0; q < ACROSS; q++) {
       const px = cx + lx * AX[q] * hw;
       const pz = cz + lz * AX[q] * hw;
       e[q * 3] = px;
-      e[q * 3 + 1] = ground(px, pz) + LIFT + GROOVE_H[q] * depth;
+      e[q * 3 + 1] = ground(px, pz) + LIFT + (GROOVE_H[q] - GROOVE_H[2]) * depth;
       e[q * 3 + 2] = pz;
     }
     return e;
@@ -286,10 +287,11 @@ export class TrackMarks {
   update(dt: number) {
     this.time += dt;
     this.uTime.value = this.time;
-    if (this.hi < 0) return;
+    if (!this.dirtyCount) return;
     const a = this.geo.attributes;
-    const first = this.lo * PER_SEG;
-    const n = (this.hi - this.lo + 1) * PER_SEG;
+    const first = this.dirtyStart * PER_SEG;
+    const n = Math.min(this.dirtyCount, SEGMENTS - this.dirtyStart) * PER_SEG;
+    const wrapped = this.dirtyCount * PER_SEG - n;
     for (const [attr, size] of [
       [a.position, 3],
       [a.normal, 3],
@@ -297,13 +299,12 @@ export class TrackMarks {
       [a.aMark, 4],
     ] as const) {
       const at = attr as THREE.BufferAttribute;
-      at.clearUpdateRanges();
       at.addUpdateRange(first * size, n * size);
+      if (wrapped) at.addUpdateRange(0, wrapped * size);
       at.needsUpdate = true;
     }
     this.geo.setDrawRange(0, this.laid >= SEGMENTS ? SEGMENTS * 24 : this.head * 24);
-    this.lo = Infinity;
-    this.hi = -1;
+    this.dirtyCount = 0;
   }
 
   /** The clock marks are stamped with, for tests. */
@@ -327,16 +328,15 @@ export class TrackMarks {
     this.time = s.time;
     this.uTime.value = s.time;
     this.trails.clear();
-    this.lo = 0;
-    this.hi = SEGMENTS - 1;
+    this.dirtyStart = 0;
+    this.dirtyCount = SEGMENTS;
   }
 
   clear() {
     this.trails.clear();
     this.head = 0;
     this.laid = 0;
-    this.lo = Infinity;
-    this.hi = -1;
+    this.dirtyCount = 0;
     this.pos.fill(0);
     this.geo.setDrawRange(0, 0);
   }

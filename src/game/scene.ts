@@ -1,14 +1,20 @@
 import * as THREE from 'three';
+import { staticTransform } from '../render/staticTransform';
 import { PhysicsWorld, G, groups } from '../physics/physics';
 import { Particles, Tracers } from '../render/particles';
 import { WorkFx } from '../render/workFx';
 import { ZombieRenderer } from '../render/zombieRender';
 import { AnimalRenderer } from '../render/animalRender';
+import { LifeRenderer } from '../render/lifeRender';
+import type { AmbientLife } from './ambientLife';
 import { QUALITY, type GameRenderer } from '../render/renderer';
 import { SignatureGrid } from '../sim/signature';
 import { splitLoot, whole } from '../sim/resources';
 import { DayClock, lightMix } from '../sim/dayclock';
-import { groundDamp, heatLevel, stormImminent, stormLevel, stormWindow, STORM_WIND, type StormWindow } from '../sim/weather';
+import { heatLevel, stormImminent, stormLevel, stormWindow, STORM_WIND, type StormWindow } from '../sim/weather';
+import { engineSpec } from '../sim/engines';
+import { exhaustSpec, gearboxSpec } from '../sim/drivetrain';
+import type { AudioTire } from '../audio/vehicleAcoustics';
 import { TANK_DREGS, takeReserve } from '../sim/fuel';
 import { Rng } from '../core/rng';
 import { clamp, clamp01, smoothstep } from '../core/math';
@@ -21,6 +27,8 @@ import type { AudioEngine, EngineState } from '../audio/audio';
 import { Campaign } from './campaign';
 import { Combat } from './combat';
 import { Gore } from './gore';
+import { Arrows } from './arrows';
+import { ARCHERY } from '../sim/archery';
 import type { Ctx, NoteKind } from './ctx';
 import { CrewSystem } from './crew';
 import { CarField } from './cars';
@@ -47,6 +55,8 @@ import { disposeTree } from '../render/dispose';
 import type { DelveSite } from '../world/delveSites';
 import { PLAYER_CSS } from '../render/palette';
 import type { MapFrame } from '../ui/mapdata';
+import { WeatherSystem } from './weatherSystem';
+import { FireEngine } from './fires';
 
 const _flashDir = new THREE.Vector3();
 
@@ -56,7 +66,9 @@ export interface SceneServices {
   input: InputManager;
   campaign: Campaign;
   /** Called with radio subtitles (shown on both halves). */
-  onRadio: (text: string) => void;
+  onRadio: (text: string, secs?: number) => void;
+  /** Called with spoken lines (a story's dialogue), shown as subtitles. Missing: `onRadio`. */
+  onSubtitle?: (text: string, secs?: number) => void;
   onTip: (id: string) => void;
   onBanner?: (title: string, sub: string) => void;
 }
@@ -65,7 +77,7 @@ export interface SceneServices {
 export abstract class Scene implements Ctx {
   P = new PhysicsWorld();
   R: GameRenderer;
-  root = new THREE.Group();
+  root = staticTransform(new THREE.Group());
   fx = new Particles();
   work = new WorkFx(this.fx);
   tracers = new Tracers();
@@ -90,6 +102,7 @@ export abstract class Scene implements Ctx {
   combat: Combat;
   /** Blood, limbs, brass and bullet holes: what a fight leaves behind. */
   gore: Gore;
+  arrows: Arrows;
   world?: Ctx['world'];
   time = 0;
   night = 0;
@@ -99,6 +112,14 @@ export abstract class Scene implements Ctx {
   stormRising = true;
   /** Heat wave strength, 0 mild to 1 the full swelter. Smoothed, and always 0 away from a leg. */
   heat = 0;
+  /** Rain, cloud, lightning, fire and flood: the rest of the day's weather (`game/weatherSystem.ts`). */
+  weather: WeatherSystem;
+  /** Every fire burning: its flames, its light, its smoke and what it does to the world (`game/fires.ts`). */
+  fires: FireEngine;
+  /** Rain falling, 0..1. */
+  get rain(): number {
+    return this.weather.rain;
+  }
   private heatTold = 0;
   private stormWin: StormWindow | null | undefined;
   private stormTold = 0;
@@ -134,8 +155,15 @@ export abstract class Scene implements Ctx {
   /** Per-player world effects of a trip: spores, sense marks, giant mushrooms. */
   protected playerFx: PlayerFx;
   protected ar = new AnimalRenderer();
+  /** The small life of the country, where a scene has it (`LegScene` sets it up). */
+  life?: AmbientLife;
+  lookables: NonNullable<Ctx['lookables']> = [];
+  protected lr = new LifeRenderer();
   protected spots: THREE.SpotLight[] = [];
   protected frustums = [new THREE.Frustum(), new THREE.Frustum()];
+  private visibilityPoint = new THREE.Vector3();
+  private renderFrustums: THREE.Frustum[] = [];
+  private renderCameraPositions: THREE.Vector3[] = [];
   private pm = new THREE.Matrix4();
   protected services: SceneServices;
   private sigDecayT = 0;
@@ -149,6 +177,11 @@ export abstract class Scene implements Ctx {
   /** Whole-scene fixed tick count. */
   ticks = 0;
   protected disposed = false;
+  protected inFrame = false;
+
+  /** Share optional-work budgets between the catch-up ticks belonging to one browser frame. */
+  beginFrame() { this.inFrame = true; }
+  endFrame() { this.inFrame = false; }
 
   constructor(svc: SceneServices) {
     this.services = svc;
@@ -159,6 +192,7 @@ export abstract class Scene implements Ctx {
     this.rng = new Rng(svc.campaign.seed * 977 + svc.campaign.day * 131);
     this.combat = new Combat(this);
     this.gore = new Gore(this);
+    this.arrows = new Arrows(this);
     this.zombies = new ZombieSystem(this);
     this.phantoms = new PhantomSystem(this);
     this.playerFx = new PlayerFx(this.R);
@@ -168,10 +202,13 @@ export abstract class Scene implements Ctx {
     this.crew = new CrewSystem(this);
     this.cars = new CarField(this);
     this.projectiles = new Projectiles(this);
+    this.weather = new WeatherSystem(this);
+    this.fires = new FireEngine(this);
     this.R.scene.add(this.root);
     this.root.add(this.work.root);
     this.root.add(this.marks.mesh);
     this.gore.attach(this.root);
+    this.root.add(this.arrows.mesh);
     this.R.scene.add(this.fx.smoke.points);
     this.R.scene.add(this.fx.glow.points);
     this.R.scene.add(this.tracers.mesh);
@@ -180,6 +217,7 @@ export abstract class Scene implements Ctx {
     this.root.add(this.ghosts.mesh);
     this.root.add(this.playerFx.group);
     this.root.add(this.ar.group);
+    this.root.add(this.lr.group);
     this.installViewHooks();
     // Constant light count: two headlight spots always exist, off by default.
     for (let i = 0; i < 2; i++) {
@@ -342,6 +380,8 @@ export abstract class Scene implements Ctx {
   protected installViewHooks() {
     this.R.onBeforeView[2] = this.beforeViewHook;
     this.R.onAfterView[0] = this.afterViewHook;
+    this.R.onBeforeView[3] = this.weather.beforeView;
+    this.R.onBeforeView[4] = this.fires.beforeView;
   }
 
   // ------------------------------------------------------------------ Ctx
@@ -365,6 +405,7 @@ export abstract class Scene implements Ctx {
     this.fx.smoke.points.visible = false;
     this.fx.glow.points.visible = false;
     this.tracers.mesh.visible = false;
+    this.weather.setVisible(false);
     this.audio.silenceEngines();
   }
 
@@ -375,6 +416,7 @@ export abstract class Scene implements Ctx {
     this.fx.smoke.points.visible = true;
     this.fx.glow.points.visible = true;
     this.tracers.mesh.visible = true;
+    this.weather.setVisible(true);
   }
 
   notify(player: number, text: string, kind: NoteKind = 'info') {
@@ -384,6 +426,27 @@ export abstract class Scene implements Ctx {
     }
     this.players[player]?.note(text, kind);
   }
+
+  /** A line of speech shown as a subtitle on both halves: someone here talking, not the radio. */
+  subtitle(text: string, secs?: number) {
+    (this.services.onSubtitle ?? this.services.onRadio)(text, secs);
+  }
+
+  /** A short line in the corner ("NEW CONTENT UNLOCKED..."), read by the HUD. */
+  toastLine: { text: string; t: number } | null = null;
+  toast(text: string, secs = 5) {
+    this.toastLine = { text, t: secs };
+  }
+
+  /** A big title across the middle of the screen. */
+  banner(title: string, sub = '') {
+    this.services.onBanner?.(title, sub);
+  }
+
+  /** The story's objective for the HUD: a heading, a checklist and a line of advice (`game/story.ts`). Null: none. */
+  objective: import('./story').Objective | null = null;
+  /** Compass and map markers a mission wants shown (missions set and clear their own). */
+  missionPins: CompassPin[] = [];
 
   radio(text: string) {
     this.services.onRadio(text);
@@ -442,6 +505,11 @@ export abstract class Scene implements Ctx {
       by.note(`Found: ${d.name} ${tag} (your bag is full, ${other?.name ?? 'your partner'} took it)`, 'info');
       other?.note(`${by.name} found a ${d.name} ${tag} for you`, 'good');
     } else by.note(`Found: ${d.name}, but there is no room: +${r.scrap} Scrap`, 'warn');
+    // A bow is found with its quiver: those arrows go in the convoy's stock whoever ends up carrying the bow.
+    if (d.gun?.draw) {
+      this.campaign.items.arrow += ARCHERY.quiver;
+      by.note(`A quiver came with it: +${ARCHERY.quiver} arrows (${this.campaign.items.arrow})`, 'good');
+    }
     this.audio.play('pickup', by.pos.x, by.pos.z, 0.7);
     // The first find of a run says where to wear it.
     if (!this.campaign.flags.gearTip) {
@@ -483,15 +551,13 @@ export abstract class Scene implements Ctx {
   }
 
   visibleToAnyView(x: number, y: number, z: number, margin = 6): boolean {
-    const p = new THREE.Vector3(x, y, z);
+    const p = this.visibilityPoint.set(x, y, z);
     for (let i = 0; i < this.players.length; i++) {
       const f = this.frustums[i];
       if (f.containsPoint(p)) return true;
       // Margin: test points around.
-      for (const [dx, dz] of [[margin, 0], [-margin, 0], [0, margin], [0, -margin]]) {
-        p.set(x + dx, y, z + dz);
-        if (f.containsPoint(p)) return true;
-      }
+      if (f.containsPoint(p.set(x + margin, y, z)) || f.containsPoint(p.set(x - margin, y, z))
+        || f.containsPoint(p.set(x, y, z + margin)) || f.containsPoint(p.set(x, y, z - margin))) return true;
       p.set(x, y, z);
     }
     return false;
@@ -547,6 +613,18 @@ export abstract class Scene implements Ctx {
     }
     // Pull each vehicle's tank from the convoy reserve (up to its capacity) so the HUD gauge reflects supplies.
     this.fillTanksFromReserve();
+  }
+
+  /** Everyone on foot at the given spots, sharing one vehicle that stays where it was put (the story's first morning). */
+  spawnOnFoot(spots: { x: number; z: number; yaw: number }[], own: Vehicle | null) {
+    const names = this.campaign.players.map((p) => p.name);
+    for (let i = 0; i < this.campaign.count; i++) {
+      const p = new Player(this, i as 0 | 1, names[i]);
+      this.players.push(p);
+      const s = spots[i] ?? spots[0];
+      p.placeAt(s.x, s.z, s.yaw);
+      p.ownVehicle = own;
+    }
   }
 
   /**
@@ -608,10 +686,13 @@ export abstract class Scene implements Ctx {
     this.travellers.update(dt);
     this.zombies.update(dt);
     this.wildlife.update(dt);
+    // Snakes are the one part of the small life that can hurt you: they run on the fixed tick.
+    this.life?.tick(dt);
     this.crew.update(dt);
     this.projectiles.update(dt);
     this.combat.update(dt);
     this.gore.update(dt);
+    this.arrows.update(dt);
     this.groundGear?.update(dt);
     this.debris.update(dt);
     this.looseProps.update();
@@ -629,6 +710,7 @@ export abstract class Scene implements Ctx {
     const tick = this.clock.tick(dt);
     if (tick.warn && this.mode === 'leg') this.radio(t('radio.duskWarn'));
     this.tickWeather(dt);
+    this.fires.tick(dt);
     // Loot popups
     if (this.lootAccT > 0) {
       this.lootAccT -= dt;
@@ -683,6 +765,7 @@ export abstract class Scene implements Ctx {
       this.heatTold = 2;
       this.radio(t('radio.heatEasing'));
     }
+    this.weather.tick(dt);
   }
 
   private stirDust(dt: number) {
@@ -742,6 +825,7 @@ export abstract class Scene implements Ctx {
     for (const p of this.players) p.syncVisual(alpha, dt);
     this.syncExtra(alpha, dt);
     this.debris.sync(alpha);
+    this.arrows.sync(this.combat.bullets, alpha);
     this.looseProps.sync(alpha);
     this.marks.update(dt);
     if (!this.idleCam) for (const p of this.players) p.renderCamera(alpha, dt);
@@ -767,12 +851,23 @@ export abstract class Scene implements Ctx {
       this.pm.multiplyMatrices(v.camera.projectionMatrix, v.camera.matrixWorldInverse);
       this.frustums[i].setFromProjectionMatrix(this.pm);
     }
-    // Light and headlights
+    // Light and headlights, after the weather has had its say. The fires lay out their flames for cameras now placed.
+    this.weather.frame(dt);
+    this.fires.frame(dt);
     this.applyLighting();
+    // Light set afresh, the eye stops down for any big fire in front of it.
+    if (this.R.post) this.R.post.params.exposure *= this.fires.exposure;
     // Only the views that are drawn count: an unused view's frustum is still the default one.
     const n = this.players.length;
-    this.wildlife.render(this.ar, this.frustums.slice(0, n), QUALITY[R.quality].zombies / 2, R.views.slice(0, n).map((v) => v.camera.position));
-    this.zombies.render(this.zr, this.time, this.frustums.slice(0, n), QUALITY[R.quality].zombies, R.views.slice(0, n).map((v) => v.camera.position));
+    this.renderFrustums.length = this.renderCameraPositions.length = n;
+    for (let i = 0; i < n; i++) { this.renderFrustums[i] = this.frustums[i]; this.renderCameraPositions[i] = R.views[i].camera.position; }
+    this.wildlife.render(this.ar, this.renderFrustums, QUALITY[R.quality].zombies / 2, this.renderCameraPositions);
+    if (this.life) {
+      if (!this.paused) this.life.update(dt);
+      this.lr.setViewScale(R.views[0].rect.h * R.renderPixelRatio(), R.views[0].camera.fov);
+      this.life.render(this.lr);
+    }
+    this.zombies.render(this.zr, this.time, this.renderFrustums, QUALITY[R.quality].zombies, this.renderCameraPositions);
   }
 
   /**
@@ -884,9 +979,9 @@ export abstract class Scene implements Ctx {
 
   protected applyLighting() {
     const light = lightMix(this.clock.t, this.lightCity);
-    // A dust storm dries the ground out; otherwise some mornings start wet from rain in the night.
-    const wet = this.mode === 'leg' ? groundDamp(this.campaign.seed, this.campaign.day, this.clock.t) * (1 - this.storm) : 0;
-    this.R.setLight(light, this.biome, this.lightCity, this.storm, wet);
+    // Hard ground is wet while it rains and dries in the sun after (a dust storm dries it faster); sand never shows it.
+    const wx = this.weather.active;
+    this.R.setLight(light, this.biome, this.lightCity, this.storm, wx ? this.weather.wet : 0, wx ? this.weather.puddle : 0);
     // Window glow at night comes from the facade shader (it follows KIT.uGlow, set in setLight).
     // Headlights: one spot per player vehicle with lights on.
     for (let i = 0; i < 2; i++) {
@@ -921,10 +1016,21 @@ export abstract class Scene implements Ctx {
   updateAudio(dt: number) {
     const list: EngineState[] = [];
     for (const v of this.vehicles) {
-      if (v.wreck || !v.engineOn) continue;
+      // A pedal boat has no engine to hear: its wake and splashing are the water's.
+      if (v.pedal) continue;
+      const running = v.engineOn && v.fuel > .001 && !v.stats.noEngine;
+      if (v.wreck || (!running && Math.abs(v.speed) < .3 && v.temp < .73)) continue;
       const rpm = clamp(Math.abs(v.speed) / Math.max(6, v.topSpeed), 0, 1);
-      const throttle = clamp(v.lastIntent.throttle, 0, 1);
+      const throttle = running ? clamp(v.lastIntent.throttle, 0, 1) : 0;
       const lateralG = clamp((v.body.steerAngle * v.speed) / 5, -1.5, 1.5);
+      const fit = v.build?.fit ?? {};
+      const motor = engineSpec(v.def, fit);
+      const gearbox = gearboxSpec(v.def, fit);
+      const exhaust = exhaustSpec(v.def, fit);
+      const tires: AudioTire[] = v.health.comp.tires.map((condition, i) => {
+        const id = v.build?.tyres?.[i]?.id ?? fit.wheels?.id ?? '';
+        return { condition, tread: id === 'tyre_none' ? 'rim' : id === 'whl_bl' ? 'crawler' : id === 'whl_mt' ? 'mud' : 'road' };
+      });
       list.push({
         id: v.id,
         x: v.position.x,
@@ -932,8 +1038,22 @@ export abstract class Scene implements Ctx {
         rpm,
         throttle,
         tier: v.def.tier,
+        model: v.def.id,
+        fuel: motor.fuel, litres: motor.litres, layout: motor.layout, boosted: motor.blown,
+        running, engineCondition: v.health.comp.engine, oil: v.health.comp.oil,
+        temperature: v.temp, radiatorCondition: v.health.comp.radiator, coolant: v.health.comp.coolant,
+        coolingCapacity: v.stats.coolKw, gearboxCondition: v.health.comp.gearbox,
+        gearing: gearbox.gearing, strain: v.stats.strain, exhaustNoise: exhaust.noise,
+        topSpeed: v.topSpeed, wheelRadius: v.def.physics.wheelRadius, tires,
+        surface: this.surfaceAt(v.position.x,v.position.z).name, grounded: v.onGround,
+        slip: Math.abs(lateralG) + (v.lastIntent.handbrake && Math.abs(v.speed)>3 ? .7 : 0),
         signature: Math.max(15, v.signature()),
         speed: v.speed,
+        boat: v.def.physics.kind === 'boat',
+        water: v.def.physics.kind === 'boat' ? clamp((v.body as unknown as { submerged?: number }).submerged ?? 0, 0, 1) : (() => {
+          const w = this.waterAt(v.position.x, v.position.z);
+          return w ? clamp((w.level - (v.position.y - v.def.physics.halfExtents[1])) / Math.max(.2, v.def.physics.wheelRadius), 0, 1) : 0;
+        })(),
         lateralG,
         boost: clamp(throttle * (0.35 + 0.65 * rpm), 0, 1),
       });
@@ -943,6 +1063,10 @@ export abstract class Scene implements Ctx {
         x: p.vehicle?.position.x ?? p.pos.x,
         z: p.vehicle?.position.z ?? p.pos.z,
         yaw: p.vehicle ? p.vehicle.yaw : p.aimYaw,
+        cabin: p.inVehicle && p.vehicle?.engineOn ? 1 : 0,
+        indoor: !!(this as unknown as { interiorAt?: (x: number, z: number, y: number) => boolean }).interiorAt?.(
+          p.vehicle?.position.x ?? p.pos.x, p.vehicle?.position.z ?? p.pos.z, this.groundAt(p.pos.x, p.pos.z) + 1,
+        ) || !!(this as unknown as { isInterior?: boolean }).isInterior,
       })),
     );
     // Indoor means a player is physically inside a building (or the scene is an interior), never the biome label:
@@ -1011,6 +1135,10 @@ export abstract class Scene implements Ctx {
     }
     // Only clear the hooks if a newer scene has not already taken them over.
     if (this.R.onBeforeView[2] === this.beforeViewHook) this.R.onBeforeView[2] = () => {};
+    if (this.R.onBeforeView[3] === this.weather.beforeView) this.R.onBeforeView[3] = () => {};
+    this.weather.dispose();
+    if (this.R.onBeforeView[4] === this.fires.beforeView) this.R.onBeforeView[4] = () => {};
+    this.fires.dispose();
     if (this.R.onAfterView[0] === this.afterViewHook) this.R.onAfterView[0] = () => {};
     this.cars.clear();
     this.crew.clear();
@@ -1019,6 +1147,7 @@ export abstract class Scene implements Ctx {
     this.projectiles.clear();
     this.combat.clear();
     this.gore.dispose();
+    this.arrows.dispose();
     for (const p of this.players) p.destroy();
     for (const v of this.vehicles) v.destroy();
     this.vehicles.length = 0;
@@ -1046,6 +1175,7 @@ export abstract class Scene implements Ctx {
     this.R.setTrip(1, NO_LOOK, 0);
     this.audio.setWind(0);
     this.ar.dispose();
+    this.lr.dispose();
     this.audio.silenceEngines();
   }
 }

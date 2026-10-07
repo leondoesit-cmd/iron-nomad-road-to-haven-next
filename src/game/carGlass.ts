@@ -1,4 +1,7 @@
+import { GLASS_SLOTS, partDef } from '../data';
 import { carPanes } from '../render/carModels';
+import { GLASS_KEYS, glassIdIn, glassStrength, inDoor, paneSide, slotOfPane, stageCond, stageOnBuild } from '../sim/glassfit';
+import type { VehicleBuild } from '../sim/garage';
 import { SPECS, restHeight } from '../render/carSpecs';
 import { rotateByQuat } from '../physics/vehicle';
 import { blastGlassDamage, crashGlassDamage, glassDamage, hitPane, newPane, shardCount, type CarPane, type GlassHow, type PaneStage, type PaneState } from '../sim/glass';
@@ -17,26 +20,67 @@ const NAMES: Record<CarPane['kind'], string> = { window: 'window', shop: 'window
 export class CarGlass {
   private specs: CarPane[] = [];
   private state = new Map<string, PaneState>();
+  /** Which part was fitted in each glass slot when the panes were last bound (its uid, or 'stock'): a different one is new glass. */
+  private sig: Record<string, string> = {};
+  /** Panes that are not there to be hit right now (their door has been torn off, their tailgate has). */
+  private hidden = new Set<string>();
 
   constructor(private v: Vehicle) {
+    this.sig = this.signature();
     this.bind();
+  }
+
+  private fit() {
+    return this.v.build?.fit ?? {};
+  }
+
+  private signature(): Record<string, string> {
+    const fit = this.fit();
+    const out: Record<string, string> = {};
+    for (const slot of GLASS_SLOTS) out[slot] = fit[slot]?.uid ?? 'stock';
+    return out;
+  }
+
+  /**
+   * Glass was swapped on the build (a pane fitted, taken out, a door changed): drop what the old panes had taken so a new pane
+   * starts as it was carried. Call it before the vehicle commits its body to the build.
+   */
+  reconcile() {
+    const now = this.signature();
+    for (const slot of GLASS_SLOTS) {
+      if (now[slot] === this.sig[slot]) continue;
+      for (const k of GLASS_KEYS[slot] ?? []) this.state.delete(k);
+    }
+    this.sig = now;
   }
 
   /** Bind to the vehicle's current model (after it was built or rebuilt): the panes keep the state they had. */
   bind() {
     const v = this.v;
-    this.specs = v.visual.panes ? carPanes(v.def) : [];
-    const saved = v.build?.body?.glass;
+    this.specs = v.visual.panes ? carPanes(v.def, this.fit()) : [];
     const old = this.state;
     this.state = new Map();
+    this.hidden.clear();
     for (const sp of this.specs) {
       const was = old.get(sp.key);
-      const p = was ?? newPane(sp.kind);
-      if (!was && saved && saved[sp.key] !== undefined) this.restorePane(p, saved[sp.key] as PaneStage);
+      const p = was ?? this.fresh(sp);
       this.state.set(sp.key, p);
       this.show(sp, p);
     }
     this.followPanels();
+  }
+
+  /** A pane that has never been bound: as tough as the glass fitted there, as worn as the build says. */
+  private fresh(sp: CarPane): PaneState {
+    const p = newPane(sp.kind);
+    const slot = slotOfPane(sp.key);
+    const k = glassStrength(glassIdIn(this.v.def, this.fit(), slot));
+    p.hp *= k;
+    p.max *= k;
+    const b = this.v.build;
+    const stage = b ? stageOnBuild(b, sp.key) : 0;
+    if (stage) this.restorePane(p, stage as PaneStage);
+    return p;
   }
 
   private restorePane(p: PaneState, stage: PaneStage) {
@@ -54,27 +98,52 @@ export class CarGlass {
     else set.mend(sp.key);
   }
 
-  /** A hatchback's rear glass is part of its tailgate: it swings open with the tailgate on the roof hinge. */
+  /** Write how worn each fitted pane is into its part, so a pane that was mended is whole again when the build is reloaded. */
+  syncFit(b: VehicleBuild) {
+    for (const slot of GLASS_SLOTS) {
+      const it = b.fit[slot];
+      if (!it || partDef(it.id).empty) continue;
+      const keys = this.specs.filter((sp) => slotOfPane(sp.key) === slot).map((sp) => sp.key);
+      if (!keys.length) continue;
+      it.cond = keys.reduce((a, k) => a + stageCond(this.state.get(k)?.stage ?? 0), 0) / keys.length;
+    }
+  }
+
+  /** The panes that can be hit now. */
+  private live(): CarPane[] {
+    return this.hidden.size ? this.specs.filter((s) => !this.hidden.has(s.key)) : this.specs;
+  }
+
+  /**
+   * A hatchback's rear glass is part of its tailgate: it swings open with the tailgate on the roof hinge. A door's window goes
+   * with the door when the door is torn off.
+   */
   followPanels() {
     const set = this.v.visual.panes;
-    if (!set || this.v.def.id !== 'hatch') return;
-    const torn = !!this.v.bodywork?.gonePanels().trunk;
-    if (torn) {
-      for (const sp of this.specs) if (sp.kind === 'rear') set.hide(sp.key, true);
-      return;
+    if (!set) return;
+    const gone = this.v.bodywork?.gonePanels() ?? {};
+    const hatch = this.v.def.id === 'hatch';
+    this.hidden.clear();
+    for (const sp of this.specs) {
+      const door = inDoor(sp.key) && !!gone[paneSide(sp.key) > 0 ? 'doorL' : 'doorR'];
+      const lid = hatch && sp.kind === 'rear' && !!gone.trunk;
+      if (door || lid) this.hidden.add(sp.key);
+      set.hide(sp.key, door || lid);
     }
+    if (!hatch || gone.trunk) return;
     const k = this.v.swing.trunk;
-    const angle = this.v.def.id === 'hatch' ? 1.3 : 1.15;
+    const angle = 1.3;
     const e = k * k * (3 - 2 * k) * angle;
     const sp = SPECS.hatch;
     const g0 = restHeight(this.v.def);
     const pivot: V3 = [0, sp.roof + 0.02 - g0, sp.rwTop];
-    for (const p of this.specs) {
-      if (p.kind === 'rear') {
-        set.hide(p.key, false);
-        set.pose(p.key, pivot, e);
-      }
-    }
+    for (const p of this.specs) if (p.kind === 'rear') set.pose(p.key, pivot, e);
+  }
+
+  /** Has every pane of a glass slot gone (or is there none)? Then there is no glass to lift out. */
+  slotGone(slot: string): boolean {
+    const keys = this.specs.filter((sp) => slotOfPane(sp.key) === slot).map((sp) => sp.key);
+    return !keys.length || keys.every((k) => (this.state.get(k)?.stage ?? 3) === 3);
   }
 
   get count() {
@@ -84,6 +153,8 @@ export class CarGlass {
   /** Stage of each pane that is not whole, for the save. */
   stages(): Record<string, number> | null {
     const out: Record<string, number> = {};
+    // A pane that is not on the car now (its door is off) keeps what it had taken, for when the door goes back on.
+    for (const [k, st] of Object.entries(this.v.build?.body?.glass ?? {})) if (!this.state.has(k) && st > 0) out[k] = st;
     for (const [k, p] of this.state) if (p.stage > 0) out[k] = p.stage;
     return Object.keys(out).length ? out : null;
   }
@@ -163,7 +234,7 @@ export class CarGlass {
    */
   hitRay(x: number, y: number, z: number, dx: number, dy: number, dz: number, amount: number, how: GlassHow = 'bullet'): string | null {
     let best: { sp: CarPane; t: number; at: V3 } | null = null;
-    for (const sp of this.specs) {
+    for (const sp of this.live()) {
       const p = this.state.get(sp.key)!;
       if (p.stage === 3) continue;
       const w = this.world(sp);
@@ -187,7 +258,7 @@ export class CarGlass {
   /** Something hit the car at a point (a fist, a pipe, a shoulder): the nearest pane within reach takes it. */
   hitNear(x: number, y: number, z: number, amount: number, how: GlassHow, reach = 0.8): string | null {
     let best: { sp: CarPane; d: number } | null = null;
-    for (const sp of this.specs) {
+    for (const sp of this.live()) {
       if (this.state.get(sp.key)!.stage === 3) continue;
       const w = this.world(sp);
       const d = Math.hypot(w.c[0] - x, w.c[1] - y, w.c[2] - z) - Math.max(sp.hw, sp.hh) * 0.5;
@@ -202,7 +273,7 @@ export class CarGlass {
   /** A crash. `dirX/dirZ` point from the car toward what it hit (as the physics reports it). */
   crash(impact: number, dirX: number, dirZ: number) {
     const l = Math.hypot(dirX, dirZ) || 1;
-    for (const sp of this.specs) {
+    for (const sp of this.live()) {
       const p = this.state.get(sp.key)!;
       if (p.stage === 3) continue;
       const w = this.world(sp);
@@ -214,7 +285,7 @@ export class CarGlass {
 
   /** A blast (`f` is 1 at the car, 0 at the edge of the blast). */
   blast(f: number) {
-    for (const sp of this.specs) {
+    for (const sp of this.live()) {
       const p = this.state.get(sp.key)!;
       if (p.stage === 3) continue;
       const w = this.world(sp);

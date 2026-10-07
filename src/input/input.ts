@@ -12,7 +12,7 @@ import {
   mouseShort,
   padLabel,
   padPhysical,
-  viewSharesVehicle,
+  viewSharesSheet,
   type ActionId,
   type Bindings,
 } from './bindings';
@@ -28,6 +28,8 @@ export interface Settings {
   mouseSens: number;
   /** Hold (false) or toggle (true) for crouch / headlights. */
   toggleCrouch: [boolean, boolean];
+  /** Gamepad sprint: one click of the stick keeps sprinting until you stop (true), or hold it down (false). */
+  toggleSprint: [boolean, boolean];
   deadzone: number;
   /** Right-stick look speed per seat. */
   lookSens: [number, number];
@@ -51,6 +53,7 @@ export const defaultSettings = (): Settings => ({
   invertLookY: [false, false],
   mouseSens: 1,
   toggleCrouch: [true, true],
+  toggleSprint: [true, true],
   deadzone: 0.15,
   lookSens: [1, 1],
   keyTurn: 1,
@@ -61,7 +64,7 @@ export const defaultSettings = (): Settings => ({
   bindings: defaultBindings(),
 });
 
-/** A tap on a button shared between two actions is shorter than this; holding past it picks the hold action. */
+/** A tap on a button shared between two actions (view and the convoy sheet) is shorter than this; holding past it picks the hold action. */
 export const TAP_SECONDS = 0.3;
 
 /** Keys that must not scroll or trigger browser behaviour. */
@@ -91,7 +94,7 @@ export class InputManager {
   private kbSmooth: [[number, number], [number, number]] = [[0, 0], [0, 0]];
   private prevHeld: [number, number] = [0, 0];
   private holdTime: [Float32Array, Float32Array] = [new Float32Array(BTN_COUNT), new Float32Array(BTN_COUNT)];
-  /** Seconds a pad button shared by view (tap) and vehicle (hold) has been down. */
+  /** Seconds a pad button shared by view (tap) and the convoy sheet (hold) has been down. */
   private shareT: [number, number] = [0, 0];
   /** Keys any layout currently binds, so the browser does not scroll or search on them. */
   private boundKeys = new Set<string>();
@@ -383,9 +386,9 @@ export class InputManager {
     }
   }
 
-  /** Whether this seat's vehicle button is the shared tap-for-view, hold-for-vehicle one (prompts say "hold"). */
-  vehicleIsHold(player: number): boolean {
-    return this.slots[player]?.kind === 'pad' && viewSharesVehicle(this.settings.bindings.pad);
+  /** Whether this seat's sheet button is the shared tap-for-view, hold-for-sheet one (its hold has already waited out the tap). */
+  sheetIsHold(player: number): boolean {
+    return this.slots[player]?.kind === 'pad' && viewSharesSheet(this.settings.bindings.pad);
   }
 
   // ------------------------------------------------------------------ settings storage
@@ -398,6 +401,7 @@ export class InputManager {
       invertLookY: s.invertLookY,
       mouseSens: s.mouseSens,
       toggleCrouch: s.toggleCrouch,
+      toggleSprint: s.toggleSprint,
       deadzone: s.deadzone,
       lookSens: s.lookSens,
       keyTurn: s.keyTurn,
@@ -421,6 +425,7 @@ export class InputManager {
     s.rumble = pair(r.rumble, isBool, s.rumble);
     s.invertLookY = pair(r.invertLookY, isBool, s.invertLookY);
     s.toggleCrouch = pair(r.toggleCrouch, isBool, s.toggleCrouch);
+    s.toggleSprint = pair(r.toggleSprint, isBool, s.toggleSprint);
     s.firstPerson = pair(r.firstPerson, isBool, s.firstPerson);
     const aa = pair(r.aimAssist, isNum, s.aimAssist);
     s.aimAssist = [clamp(aa[0], 0, 2), clamp(aa[1], 0, 2)];
@@ -485,9 +490,9 @@ export class InputManager {
             if (down) phys |= 1 << b;
           }
           // Then which action each button drives, per the pad bindings.
-          const shared = viewSharesVehicle(bind.pad);
+          const shared = viewSharesSheet(bind.pad);
           for (const a of actionsFor('pad')) {
-            if (shared && (a.id === 'view' || a.id === 'vehicle')) continue;
+            if (shared && (a.id === 'view' || a.id === 'sheet')) continue;
             const b = padPhysical(bind.pad, a.id);
             if (b === undefined) continue;
             if (a.id === 'fire') rt = b === Btn.LT || b === Btn.RT ? value(b) : phys & (1 << b) ? 1 : 0;
@@ -495,11 +500,11 @@ export class InputManager {
             else if (phys & (1 << b)) held |= 1 << a.pad!;
           }
           if (shared) {
-            // One button, two jobs: a quick tap switches the view, holding it is the vehicle action.
-            const b = bind.pad.vehicle!;
+            // One button, two jobs: a quick tap switches the view, holding it shows the convoy sheet.
+            const b = bind.pad.sheet!;
             if (phys & (1 << b)) {
               this.shareT[p] += dt;
-              if (this.shareT[p] >= TAP_SECONDS) held |= 1 << Btn.Y;
+              if (this.shareT[p] >= TAP_SECONDS) held |= 1 << Btn.Back;
             } else {
               if (this.shareT[p] > 0 && this.shareT[p] < TAP_SECONDS) held |= 1 << Btn.View;
               this.shareT[p] = 0;
