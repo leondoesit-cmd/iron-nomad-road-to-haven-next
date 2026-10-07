@@ -78,10 +78,13 @@ export class CargoRig {
     return this.secured.has(e.id);
   }
 
-  /** Put something on the outside. Returns the entry. */
-  add(c: Carried, zone: Zone): CargoEntry {
+  /**
+   * Put something on the outside. Returns the entry. `at` (chassis frame) and `yaw` keep it exactly where a hand set it down;
+   * without them it is dealt into the deck's grid.
+   */
+  add(c: Carried, zone: Zone, at?: [number, number, number], yaw?: number): CargoEntry {
     const id = c.kind === 'part' ? c.item.uid : newUid('c');
-    const e: CargoEntry = { id, zone, c, thr: fallThreshold(this.v.build ? hash(this.v.build.uid + id) : Math.random() * 1000) };
+    const e: CargoEntry = { id, zone, c, thr: fallThreshold(this.v.build ? hash(this.v.build.uid + id) : Math.random() * 1000), ...(at ? { at, yaw: yaw ?? 0 } : {}) };
     this.entries.push(e);
     this.changed();
     return e;
@@ -127,7 +130,7 @@ export class CargoRig {
   refresh() {
     const v = this.v;
     const fitKey = v.build ? Object.values(v.build.fit).map((p) => p?.id).join(',') : '';
-    const key = `${this.entries.map((e) => `${e.id}:${e.zone}`).join('|')}#${fitKey}`;
+    const key = `${this.entries.map((e) => `${e.id}:${e.zone}${e.at ? `@${e.at.join(',')}:${e.yaw ?? 0}` : ''}`).join('|')}#${fitKey}`;
     if (key === this.seen) return;
     this.seen = key;
     if (this.mesh) {
@@ -158,6 +161,10 @@ export class CargoRig {
   /** Where an entry is in the world: on its deck, or at its holder's point when the holder draws its own load. */
   worldOf(e: CargoEntry): THREE.Vector3 {
     const v = this.v;
+    if (e.at) {
+      v.visual.inner.updateWorldMatrix(true, false);
+      return v.visual.inner.localToWorld(new THREE.Vector3(e.at[0], e.at[1] + 0.15, e.at[2]));
+    }
     const anchor = mountsOfChassis(v.def);
     const s = this.surfaceOf(e.zone);
     if (anchor && s) {

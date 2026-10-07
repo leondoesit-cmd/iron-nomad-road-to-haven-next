@@ -158,19 +158,21 @@ if ( vTData.z > 0.003 ) {
   tLive *= ( 1.0 - tB.z ) * ( 1.0 - tB.w * 0.85 ) * ( 1.0 - tB.x * 0.55 ) * ( 1.0 - smoothstep( 0.55, 0.8, vTData.y ) );
   tCol = mix( tCol, tLiv, tLive );
 }
+// Damp ground by standing water: only the narrow band the water laps at (see groundMix), never the open sand.
 tCol *= mix( 1.0, 0.5, vTData.y );
-// Rain: the whole ground darkens, and the low spots fill with puddles. The shore stays glassy whatever the weather.
-// Grass drinks the rain: few puddles stand in a meadow.
-float tFlat = smoothstep( 0.88, 0.97, tWn.y ) * ( 1.0 - tB.z ) * ( 1.0 - tLive * 0.8 );
+// Rain: hard ground (rock, packed earth, clay, gravel) goes dark and glossy and its flat hollows fill with puddles. Sand
+// drinks the rain as it lands and stays the colour it was; grass hides the wet and drinks the puddles.
+float tWetG = uWet * ( 1.0 - tB.x * 0.92 ) * ( 1.0 - tLive * 0.6 );
+float tFlat = smoothstep( 0.88, 0.97, tWn.y ) * ( 1.0 - tB.z ) * ( 1.0 - tLive * 0.8 ) * ( 1.0 - smoothstep( 0.15, 0.5, tB.x ) );
 float tPud = max( puddleMask( tXZ, tFlat ), smoothstep( 0.45, 0.8, vTData.y ) * tFlat * 0.85 );
-tCol *= mix( 1.0, 0.62, uWet * 0.55 );
+tCol *= mix( 1.0, 0.6, tWetG * 0.6 );
 tCol *= mix( 1.0, 0.5, tPud );
 diffuseColor.rgb = tCol * vColor.rgb;
 float tCavity = mix( mix( 1.0, 0.65 + 0.35 * dot( tH, tB ), 0.8 ), 0.85, tLive ) * ( 1.0 - tWood * tLive * 0.22 );
 `;
 
 const FRAG_ROUGH = /* glsl */ `
-float roughnessFactor = mix( clamp( mix( dot( tB, vec4( 0.96, 0.9, 0.82, 0.88 ) ), 0.93, tLive ) - vTData.y * 0.45 - uWet * 0.25, 0.2, 1.0 ), 0.04, tPud );
+float roughnessFactor = mix( clamp( mix( dot( tB, vec4( 0.96, 0.9, 0.82, 0.88 ) ), 0.93, tLive ) - vTData.y * 0.45 - tWetG * 0.4, 0.2, 1.0 ), 0.04, tPud );
 `;
 
 const FRAG_METAL = /* glsl */ `
@@ -230,6 +232,7 @@ export function makeTerrainMaterial(biome: 'wasteland' | 'city', lod?: TerrainUn
     cGravel: col(look.gravel),
     uTScale: { value: new THREE.Vector4(1 / look.scale[0], 1 / look.scale[1], 1 / look.scale[2], 1 / look.scale[3]) },
     uWet: GLOBALS.uWet,
+    uPuddle: GLOBALS.uPuddle,
     tMeadow: { value: meadowTexture() },
     cGrassA: col(LIVING.grassA),
     cGrassB: col(LIVING.grassB),
@@ -299,7 +302,8 @@ vec4 rAlb = texture2D( tRoad, rUv );
 vec4 rSrf = texture2D( tRoadS, rUv );
 // Wind-blown dust: heavier at the edges and in drifts across the lanes.
 float rDust = smoothstep( 0.1, 0.0, rEdge ) * 0.9 + smoothstep( 0.62, 0.86, rMac.b + rFine.r * 0.25 ) * 0.75;
-rDust = clamp( rDust * uDust * ( 0.55 + rFine.g * 0.6 ), 0.0, 1.0 );
+// Rain lays the dust and runs it off the lanes into the verge.
+rDust = clamp( rDust * uDust * ( 0.55 + rFine.g * 0.6 ) * ( 1.0 - uWet * 0.75 ), 0.0, 1.0 );
 diffuseColor.rgb = mix( rAlb.rgb * ( 0.92 + rMac.r * 0.16 ), cDust * ( 0.8 + rFine.b * 0.35 ), rDust );
 float rCav = rSrf.a;
 float rPud = puddleMask( vRWPos.xz, 1.0 - rDust * 0.6 );
@@ -348,6 +352,7 @@ export function makeRoadMaterial(biome: 'wasteland' | 'city', lod?: TerrainUnifo
     cDust: { value: new THREE.Color(biome === 'city' ? 0x6f6a62 : 0xc4a57c) },
     uDust: { value: biome === 'city' ? 0.45 : 1 },
     uWet: GLOBALS.uWet,
+    uPuddle: GLOBALS.uPuddle,
   };
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
@@ -405,6 +410,7 @@ export function makePavingMaterial(): THREE.MeshStandardMaterial {
     cDust: { value: new THREE.Color(0x6f6a62) },
     uDust: { value: 0 },
     uWet: GLOBALS.uWet,
+    uPuddle: GLOBALS.uPuddle,
   };
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);

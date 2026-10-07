@@ -120,6 +120,8 @@ export class DelveScene extends Scene {
     this.placeDoors();
     this.placeExits();
     this.buildLamps();
+    // The cave's braziers burn for real (their light is the lamp pool's).
+    if (this.map.theme === 'cave') for (const l of this.map.lights) if (l.y > 1.1 && !l.dead) this.fires.start({ x: l.x, y: 0.88, z: l.z, r: 0.24, fuel: 'wood', burn: Infinity, heat: 0.8, bed: false, hurts: false, light: 0 });
     record.visits++;
     this.audio.setMusic('stealth');
     this.R.setInterior(this.look());

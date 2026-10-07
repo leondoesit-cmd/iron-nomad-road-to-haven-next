@@ -216,9 +216,9 @@ describe('what is in hand', () => {
     expect(hit).toHaveBeenCalled();
     const [, , , , reach, dmg] = hit.mock.calls[0];
     expect(reach).toBe(2.0);
-    // Machete 58 with the starter gloves' 5%.
-    expect(dmg).toBeCloseTo(58 * 1.05, 5);
-    expect(p.meleeDamage()).toBeCloseTo(58 * 1.05, 5);
+    // Machete 58, bare-handed.
+    expect(dmg).toBeCloseTo(58, 5);
+    expect(p.meleeDamage()).toBeCloseTo(58, 5);
   });
 
   it('a melee weapon does not fire the gun, and swings no faster than its pace', () => {
@@ -235,7 +235,7 @@ describe('what is in hand', () => {
     expect(hit.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('bare hands with a tool out still swing for the old 35 (plus gloves)', () => {
+  it('bare hands with a tool out still swing for the old 35', () => {
     const { h, sc, p } = scene();
     const hit = vi.spyOn(sc.zombies, 'meleeHit').mockImplementation(() => 0);
     p.gear.sel = 1;
@@ -254,7 +254,7 @@ describe('what is in hand', () => {
     // The blow lands as the arm comes down, not on the click.
     run(sc, 0.2);
     expect(hit).toHaveBeenCalled();
-    expect(hit.mock.calls[0][5]).toBeCloseTo(35 * 1.05, 5);
+    expect(hit.mock.calls[0][5]).toBeCloseTo(35, 5);
     expect(hit.mock.calls[0][4]).toBeCloseTo(1.9, 5);
   });
 });

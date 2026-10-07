@@ -1,5 +1,5 @@
 import { RAPIER, GROUPS, type PhysicsWorld, type RigidBody, type Collider } from './physics';
-import type { VehicleDef } from '../data';
+import { wheelLayout, type VehicleDef } from '../data';
 import { clamp, damp } from '../core/math';
 
 export interface DriveInput {
@@ -68,6 +68,8 @@ export class VehicleBody {
   driven: boolean[] = [];
   rear: boolean[] = [];
   wheelLocal: [number, number, number][] = [];
+  /** Each wheel's radius (a trike's small back wheels are smaller than its front one). */
+  radii: number[] = [];
   steerAngle = 0;
   /** Impact this step (m/s change), read once per tick by the damage system. */
   impact = 0;
@@ -75,6 +77,8 @@ export class VehicleBody {
   impactDirZ = 0;
   private prevVel = { x: 0, y: 0, z: 0 };
   private prevSpin = { x: 0, y: 0, z: 0 };
+  /** The sideways push (m/s per step) that keeps a stopped vehicle from sliding down a camber, learnt while it stands. */
+  private holdLat = 0;
   /** This step's change of velocity (world, m/s) then of spin (world, rad/s): what the bolted-on parts feel. */
   shock = [0, 0, 0, 0, 0, 0];
   /** Spin right now (world, rad/s). */
@@ -115,27 +119,21 @@ export class VehicleBody {
     this.ctl = P.world.createVehicleController(this.body);
     this.baseSlip = p.frictionSlip;
 
-    // Wheel layout: one axle per entry of wheelsZ; two wheels per axle unless wheelsX is [0].
-    const axles = p.wheelsZ.length;
-    for (let a = 0; a < axles; a++) {
-      const xs = p.wheelsX[0] === 0 ? [0] : p.wheelsX;
-      for (const wx of xs) {
-        if (this.wheelLocal.length >= p.wheelCount) break;
-        const wz = p.wheelsZ[a];
-        this.wheelLocal.push([wx, p.hardY, wz]);
-        // Front axle(s) steer. The rig steers its two forward axles.
-        this.steered.push(a < (p.wheelCount >= 12 ? 2 : 1));
-        // Drive: the moped drives its rear wheel; everything else is all-wheel.
-        this.driven.push(p.wheelCount === 2 ? a === axles - 1 : true);
-        this.rear.push(a === axles - 1);
-      }
+    // Wheel layout: one axle per entry of wheelsZ, two wheels per axle unless wheelsX is [0], or the chassis' own axles.
+    const layout = wheelLayout(p);
+    for (const w of layout) {
+      this.wheelLocal.push([w.x, w.y, w.z]);
+      this.radii.push(w.r);
+      this.steered.push(w.steer);
+      this.driven.push(w.drive);
+      this.rear.push(w.rear);
     }
     this.wheelCount = this.wheelLocal.length;
     const zs = this.wheelLocal.map((w) => w[2]);
     this.wheelbase = Math.max(1.2, Math.max(...zs) - Math.min(...zs));
     for (let i = 0; i < this.wheelCount; i++) {
       const [wx, wy, wz] = this.wheelLocal[i];
-      this.ctl.addWheel({ x: wx, y: wy, z: wz }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, p.suspension.rest, p.wheelRadius);
+      this.ctl.addWheel({ x: wx, y: wy, z: wz }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, p.suspension.rest, this.radii[i]);
       this.ctl.setWheelSuspensionStiffness(i, p.suspension.stiffness);
       this.ctl.setWheelMaxSuspensionTravel(i, p.suspension.travel);
       this.ctl.setWheelFrictionSlip(i, p.frictionSlip);
@@ -290,6 +288,29 @@ export class VehicleBody {
         this.body.setAngvel({ x: w.x + up[0] * d, y: w.y + up[1] * d, z: w.z + up[2] * d }, true);
       }
     }
+
+    // Standing still, a tyre grips sideways (static friction) on any slope it can hold: the wheel model alone lets a stopped
+    // vehicle slide slowly down the crown of a road or a gentle slope, a few millimetres a second. So the sideways way it
+    // has is taken off, plus a hold that learns, step by step, the push that keeps it from coming back. Only when it is all
+    // but stopped, not turning and barely sliding, so slow manoeuvres keep their feel and a real shove still moves it.
+    let holding = false;
+    if (g >= 2 && av < 0.5) {
+      const up = this.up();
+      const w = this.body.angvel();
+      const f = this.forward();
+      const lv0 = this.body.linvel();
+      const sx = up[1] * f[2] - up[2] * f[1];
+      const sy = up[2] * f[0] - up[0] * f[2];
+      const sz = up[0] * f[1] - up[1] * f[0];
+      const lat = lv0.x * sx + lv0.y * sy + lv0.z * sz;
+      if (Math.abs(lat) < 0.15 && Math.abs(up[1]) > 0.94 && Math.abs(w.x * up[0] + w.y * up[1] + w.z * up[2]) < 0.05) {
+        this.holdLat = clamp(this.holdLat - lat, -0.05, 0.05);
+        const dLat = -lat + this.holdLat;
+        this.body.applyImpulse({ x: sx * dLat * this.mass, y: sy * dLat * this.mass, z: sz * dLat * this.mass }, true);
+        holding = true;
+      }
+    }
+    if (!holding) this.holdLat = 0;
 
     // Braking is a controlled deceleration along the direction of travel, scaled by how many wheels are down.
     if (decel > 0 && g > 0) {

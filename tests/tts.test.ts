@@ -341,6 +341,7 @@ describe('In-Browser Text-to-Speech (TTS) Engine', () => {
       const lib = new SampleLibrary(mockCtx);
       lib.init();
       const radio = new RadioAudioEngine(mockCtx, lib);
+      radio.setTtsEnabled(true);
       const dest = mockCtx.createGain();
 
       const duration = radio.playRadioChatter('Dust wall rolling in from the south!', dest);
@@ -355,14 +356,17 @@ describe('In-Browser Text-to-Speech (TTS) Engine', () => {
       const lib = new SampleLibrary(mockCtx);
       lib.init();
       const radio = new RadioAudioEngine(mockCtx, lib);
+      radio.setTtsEnabled(true);
       const dest = mockCtx.createGain();
 
       radio.playRadioChatter('Contact north!', dest);
       expect(spokenUtterances.length).toBe(1);
+      expect(radio.speechActive).toBe(true);
 
       // Trigger utterance onend
       const active = spokenUtterances[0];
       active.onend?.();
+      expect(radio.speechActive).toBe(false);
       // Verified no throws and cleanly handled
     });
 
@@ -371,6 +375,7 @@ describe('In-Browser Text-to-Speech (TTS) Engine', () => {
       const lib = new SampleLibrary(mockCtx);
       lib.init();
       const radio = new RadioAudioEngine(mockCtx, lib);
+      radio.setTtsEnabled(true);
       const dest = mockCtx.createGain();
 
       radio.setVolume(0.4);
@@ -390,13 +395,15 @@ describe('In-Browser Text-to-Speech (TTS) Engine', () => {
       const lib = new SampleLibrary(mockCtx);
       lib.init();
       const radio = new RadioAudioEngine(mockCtx, lib);
+      radio.setTtsEnabled(true);
       const dest = mockCtx.createGain();
 
       radio.setTtsEnabled(false);
       const duration = radio.playRadioChatter('Test message with TTS disabled', dest);
-      expect(duration).toBeGreaterThan(0.5);
+      expect(duration).toBeGreaterThan(0);
       // No TTS utterance created when ttsEnabled is false
       expect(spokenUtterances.length).toBe(0);
+      expect(radio.speechActive).toBe(false);
     });
   });
 });

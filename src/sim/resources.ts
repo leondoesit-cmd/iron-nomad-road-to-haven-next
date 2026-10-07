@@ -124,11 +124,12 @@ export interface Recipe {
   id: string;
   name: string;
   cost: Cost;
-  yields: { ammo?: number; medkit?: number; bandage?: number; molotov?: number; flare?: number; charge?: number } & Partial<Record<DrugId, number>>;
+  yields: { ammo?: number; arrow?: number; medkit?: number; bandage?: number; molotov?: number; flare?: number; charge?: number } & Partial<Record<DrugId, number>>;
 }
 export const RECIPES: Recipe[] = [
   { id: 'ammo', name: 'Ammo (30 rounds)', cost: { scrap: 5 }, yields: { ammo: 30 } },
   { id: 'bandage', name: 'Bandages (3)', cost: { scrap: 3 }, yields: { bandage: 3 } },
+  { id: 'arrow', name: 'Arrows (6)', cost: { scrap: 3 }, yields: { arrow: 6 } },
   { id: 'medkit', name: 'Medkit', cost: { medicine: 2 }, yields: { medkit: 1 } },
   { id: 'molotov', name: 'Molotov', cost: { fuel: 1 }, yields: { molotov: 1 } },
   { id: 'flare', name: 'Flare', cost: { tech: 1 }, yields: { flare: 2 } },

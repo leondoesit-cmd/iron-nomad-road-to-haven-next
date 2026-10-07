@@ -164,6 +164,10 @@ export function voronoi(size: number, cells: number, seed: number, jitter = 0.9)
 }
 
 const sat = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+const smooth01 = (a: number, b: number, v: number) => {
+  const t = sat((v - a) / (b - a));
+  return t * t * (3 - 2 * t);
+};
 const sstep = (a: number, b: number, v: number) => {
   const t = sat((v - a) / (b - a));
   return t * t * (3 - 2 * t);
@@ -1007,9 +1011,9 @@ export function spriteAtlasTexture(data: Uint8Array, w: number, h: number, cols:
   return shared(t);
 }
 
-/** Cells of the leaf atlas (4 x 2 cells of 256 px). Each foliage card of a tree maps one whole cell. */
-export const LEAF_CELL = { broad: 0, needle: 1, acacia: 2, feather: 3, strands: 4, poplar: 5, frond: 6, bark: 7 } as const;
-export const LEAF_ATLAS = { w: 1024, h: 512, cols: 4, rows: 2, cell: 256 };
+/** Cells of the leaf atlas (4 x 3 cells of 256 px). Each foliage card of a tree maps one whole cell. */
+export const LEAF_CELL = { broad: 0, needle: 1, acacia: 2, feather: 3, strands: 4, poplar: 5, frond: 6, bark: 7, gum: 8, gumBark: 9 } as const;
+export const LEAF_ATLAS = { w: 1024, h: 768, cols: 4, rows: 3, cell: 256 };
 
 export interface LeafAtlas {
   tex: THREE.DataTexture;
@@ -1022,8 +1026,9 @@ let leafAtlasHit: LeafAtlas | null = null;
 /**
  * The trees' leaves and bark in one atlas, so a whole tree (trunk, branches and foliage) is one draw: broadleaf clusters,
  * a pine's needle spray, acacia's fine leaflets, the feathery sprays of a swamp cypress, a willow's hanging strands, poplar
- * leaves, a date palm's frond (laid along the cell, base at the left) and a strip of bark. RGB is near white, so each
- * species' vertex colour sets its green; the leaves vary a little in tone and hue among themselves.
+ * leaves, a date palm's frond (laid along the cell, base at the left), a strip of bark, a eucalyptus's hanging sprays of
+ * long sickle leaves and its smooth pale bark. RGB is near white, so each species' vertex colour sets its green; the leaves
+ * vary a little in tone and hue among themselves.
  */
 export function leafAtlas(): LeafAtlas {
   if (leafAtlasHit) return leafAtlasHit;
@@ -1215,7 +1220,84 @@ export function leafAtlas(): LeafAtlas {
     }
     blit(LEAF_CELL.bark, bytes);
   }
-  leafAtlasHit = { tex: spriteAtlasTexture(data, W, H, 4, 2, 0.5), data };
+  // Eucalyptus (river red gum) spray: thin twigs hanging from the top edge, long narrow sickle leaves dangling off them on
+  // both sides, sparse enough that the sky shows through. Grey-green, some older leaves yellower.
+  {
+    const p = new Paint(C, C);
+    const r = lcg(909);
+    for (let k = 0; k < 9; k++) {
+      let x = 14 + (k / 8) * 228 + (r() - 0.5) * 16;
+      let y = 2 + r() * 10;
+      let a = Math.PI + (r() - 0.5) * 0.9;
+      const len = 140 + r() * 105;
+      let side = r() < 0.5 ? -1 : 1;
+      for (let s = 0; s < len; s += 4) {
+        // Twigs droop more the further they hang, with a gentle sway.
+        a += (Math.PI - a) * 0.03 + (r() - 0.5) * 0.06;
+        const nx = x + Math.sin(a) * 4;
+        const ny = y - Math.cos(a) * 4;
+        p.stroke(x, y, nx, ny, 1.9 - (s / len) * 0.9, 1.9 - ((s + 4) / len) * 0.9, 0.56, 0.44, 0.36);
+        x = nx;
+        y = ny;
+        if (s > 10 && (s / 4) % 3 === 0) {
+          side = -side;
+          const old = r() < 0.12 ? 0.12 : 0;
+          const tone = 0.72 + r() * 0.3;
+          const ll = 26 + r() * 22;
+          p.leaf(x, y, ll, 4.5 + r() * 2.5, a + side * (0.28 + r() * 0.4), tone * (0.9 + old), tone * (0.98 + old * 0.3), tone * (0.86 - old), 0.86);
+        }
+        if (x < 4 || x > 252 || y > 252) break;
+      }
+    }
+    blit(LEAF_CELL.gum, p.bytes([0.82, 0.88, 0.78]));
+  }
+  // Eucalyptus bark: smooth and pale, cream to grey-white, with patches where the old bark has shed (tan, ochre, grey), long
+  // strips of it hanging, and small dark scars dotted over it.
+  {
+    const patch = fbm(C, 0, { px: 3, py: 6, octaves: 4, seed: 911 });
+    const tone = fbm(C, 0, { px: 8, py: 2, octaves: 3, seed: 912 });
+    const strip = fbm(C, 0, { px: 16, py: 2, octaves: 3, ridged: true, seed: 913 });
+    const bytes = new Uint8Array(C * C * 4);
+    for (let i = 0; i < C * C; i++) {
+      let rr = 0.86 + (tone[i] - 0.5) * 0.08;
+      let gg = rr * 0.985;
+      let bb = rr * 0.94;
+      // Patches where the bark has come away: warmer and darker, with a soft rim.
+      const pt = smooth01(0.55, 0.62, patch[i]);
+      rr = rr + (0.7 - rr) * pt;
+      gg = gg + (0.6 - gg) * pt;
+      bb = bb + (0.48 - bb) * pt;
+      // Long strips of shed bark, grey.
+      const st = smooth01(0.82, 0.9, strip[i]) * smooth01(0.4, 0.55, tone[i]);
+      rr = rr + (0.6 - rr) * st;
+      gg = gg + (0.6 - gg) * st;
+      bb = bb + (0.58 - bb) * st;
+      bytes[i * 4] = b8(rr);
+      bytes[i * 4 + 1] = b8(gg);
+      bytes[i * 4 + 2] = b8(bb);
+      bytes[i * 4 + 3] = 255;
+    }
+    // Dark scars: small spots, a little longer than wide (the trunk stretches the cell along its length).
+    const r = lcg(914);
+    for (let k = 0; k < 70; k++) {
+      const cx = r() * C;
+      const cy = r() * C;
+      const rx = 0.8 + r() * 1.5;
+      const ry = rx * (1.3 + r() * 0.8);
+      const d = 0.5 + r() * 0.25;
+      for (let y = Math.floor(cy - ry - 1); y <= Math.ceil(cy + ry + 1); y++) {
+        for (let x = Math.floor(cx - rx - 1); x <= Math.ceil(cx + rx + 1); x++) {
+          const q = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2;
+          if (q > 1.4) continue;
+          const j = (((y + C) % C) * C + ((x + C) % C)) * 4;
+          const c = q < 1 ? 1 : (1.4 - q) / 0.4;
+          for (let ch = 0; ch < 3; ch++) bytes[j + ch] = Math.round(bytes[j + ch] * (1 - c * (1 - d)));
+        }
+      }
+    }
+    blit(LEAF_CELL.gumBark, bytes);
+  }
+  leafAtlasHit = { tex: spriteAtlasTexture(data, W, H, LEAF_ATLAS.cols, LEAF_ATLAS.rows, 0.5), data };
   return leafAtlasHit;
 }
 
@@ -1364,6 +1446,74 @@ export function reedTexture(): THREE.Texture {
   });
 }
 
+/**
+ * Giant cane (Arundo donax), as it walls the Yarkon's banks: tall jointed culms, pale at the foot, with long broad strap
+ * leaves arching off them on alternate sides and drooping at the tips, grey-green to blue-green, a few dead and straw-coloured;
+ * the odd silvery plume at the top. The card is about 1.9 m by 4.4 m. Coloured.
+ */
+export function caneTexture(): THREE.Texture {
+  return cached('cane', () => {
+    const S = 256;
+    const p = new Paint(S, S);
+    const r = lcg(1451);
+    // Culms back to front, so the front ones and their leaves lie over the others.
+    for (let k = 0; k < 16; k++) {
+      const x0 = 18 + r() * 220;
+      const top = 4 + r() * 70;
+      const lean = (r() - 0.5) * 34;
+      const tone = 0.78 + r() * 0.22;
+      const at = (t: number): [number, number] => [x0 + lean * t * t, 254 - (254 - top) * t];
+      let [px, py] = at(0);
+      for (let q = 1; q <= 16; q++) {
+        const t = q / 16;
+        const [nx, ny] = at(t);
+        // Pale straw at the foot, green up the culm, a darker ring at each node.
+        const c: [number, number, number] = t < 0.25 ? [tone * 0.86, tone * 0.82, tone * 0.6] : [tone * 0.66, tone * 0.8, tone * 0.5];
+        p.stroke(px, py, nx, ny, 3.2 - t * 1.6, 3.2 - t * 1.7, ...c);
+        if (q % 2 === 0) p.disc(nx, ny, 1.7 - t * 0.6, c[0] * 0.7, c[1] * 0.7, c[2] * 0.7);
+        px = nx;
+        py = ny;
+      }
+      // Leaves from about a fifth of the way up: each arches out and up, then droops, broad at its base.
+      let side = r() < 0.5 ? -1 : 1;
+      for (let t = 0.2 + r() * 0.08; t < 0.97; t += 0.07 + r() * 0.04) {
+        side = -side;
+        const [bx, by] = at(t);
+        const dead = r() < 0.12;
+        const lt = 0.72 + r() * 0.28;
+        const lc: [number, number, number] = dead ? [lt * 0.86, lt * 0.78, lt * 0.52] : [lt * 0.56, lt * 0.74, lt * 0.62];
+        const len = (26 + r() * 22) * (1.1 - t * 0.35);
+        let a = side * (0.45 + r() * 0.5);
+        let lx = bx;
+        let ly = by;
+        const n = 6;
+        for (let q = 0; q < n; q++) {
+          const w = (4.6 - q * 0.62) * (dead ? 0.8 : 1);
+          a += side * (0.16 + q * 0.06);
+          const nx = lx + Math.sin(a) * (len / n);
+          const ny = ly - Math.cos(a) * (len / n);
+          p.stroke(lx, ly, nx, ny, Math.max(0.7, w), Math.max(0.6, w - 0.62), ...lc);
+          lx = nx;
+          ly = ny;
+        }
+      }
+      // A plume on one culm in five: a loose silvery-tan feather leaning off the top.
+      if (r() < 0.22) {
+        const [tx, ty] = at(1);
+        for (let q = 0; q < 26; q++) {
+          const a = (r() - 0.5) * 0.9 + lean * 0.01;
+          const l = 10 + r() * 18;
+          const pl = 0.82 + r() * 0.15;
+          p.stroke(tx, ty + 6, tx + Math.sin(a) * l, ty + 6 - Math.cos(a) * l, 1.4, 0.6, pl, pl * 0.92, pl * 0.8);
+        }
+      }
+    }
+    const t = toTexture(p.bytes([0.6, 0.68, 0.5], 1.3), S, { srgb: true });
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
 /** Lily pads and duckweed seen from above: notched round leaves with veins, a white and a pink flower. Coloured. */
 export function lilyTexture(): THREE.Texture {
   return cached('lily', () => {
@@ -1410,6 +1560,301 @@ export function lilyTexture(): THREE.Texture {
       p.disc(cx, cy, 2.6, 0.95, 0.8, 0.2);
     }
     const t = toTexture(p.bytes([0.3, 0.4, 0.15], 1.4), S, { srgb: true });
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
+/**
+ * One butterfly wing seen from above, hinged on the left edge (u = 0) at mid-height: the forewing reaching forward and out
+ * (toward v = 0), the hindwing rounder behind it. Pale where it takes the instance's colour, dark at the veins, the margin
+ * and two spots, so one texture makes whites, yellows, painted ladies and blues.
+ */
+export function butterflyTexture(): THREE.Texture {
+  return cached('butterfly', () => {
+    const S = 128;
+    const p = new Paint(S, S);
+    const lobe = (cx: number, cy: number, rx: number, ry: number, ang: number, tone: number) => {
+      const ca = Math.cos(ang);
+      const sa = Math.sin(ang);
+      for (let y = 0; y < S; y++) {
+        for (let x = 0; x < S; x++) {
+          const dx = x - cx;
+          const dy = y - cy;
+          const u = (dx * ca + dy * sa) / rx;
+          const v = (-dx * sa + dy * ca) / ry;
+          const d = Math.hypot(u, v);
+          const c = sat((1 - d) * rx * 0.5);
+          if (c <= 0) continue;
+          // Dark margin, veins radiating from the body, and a pale field.
+          const rim = d > 0.82 ? 0.18 : 1;
+          const ra = Math.atan2(dy + (cy - 64) * 0.4, x + 2);
+          const vein = Math.abs(Math.sin(ra * 9)) < 0.1 && d > 0.25 ? 0.45 : 1;
+          const k = tone * rim * vein;
+          p.put(x, y, c, k, k, k);
+        }
+      }
+    };
+    lobe(52, 40, 54, 30, -0.55, 0.96);
+    lobe(46, 86, 40, 30, 0.45, 0.9);
+    // Spots on the forewing, and the dark root where it meets the body.
+    p.disc(78, 26, 6, 0.12, 0.12, 0.12);
+    p.disc(62, 44, 4, 0.15, 0.15, 0.15);
+    for (let y = 30; y < 100; y++) p.put(0, y, 1, 0.2, 0.18, 0.16);
+    const t = toTexture(p.bytes([0.8, 0.8, 0.8], 1.6), S, { srgb: true });
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
+/** Papyrus: tall smooth stems, each crowned with a mop of fine rays, the way they stand in the Hula fens. Coloured, A coverage. */
+export function papyrusTexture(): THREE.Texture {
+  return cached('papyrus', () => {
+    const S = 256;
+    const p = new Paint(S, S);
+    const r = lcg(1601);
+    for (let k = 0; k < 9; k++) {
+      const x0 = 128 + (r() - 0.5) * 120;
+      const top = 30 + r() * 70;
+      const x1 = x0 + (r() - 0.5) * 50;
+      const tone = 0.7 + r() * 0.3;
+      p.stroke(x0, 254, x1, top, 3.4, 2.2, tone * 0.45, tone * 0.62, tone * 0.28);
+      // The umbel: a burst of thin rays drooping outward.
+      const rays = 28 + Math.floor(r() * 12);
+      for (let q = 0; q < rays; q++) {
+        const a = -Math.PI / 2 + (r() - 0.5) * 2.9;
+        const len = 18 + r() * 22;
+        const ex = x1 + Math.cos(a) * len;
+        const ey = top + Math.sin(a) * len * 0.75 + len * 0.25;
+        const g = 0.7 + r() * 0.3;
+        p.stroke(x1, top, ex, ey, 1.4, 0.6, g * 0.5, g * 0.7, g * 0.3);
+      }
+    }
+    // Sheaths and short leaves at the foot.
+    for (let k = 0; k < 14; k++) {
+      const x = 128 + (r() - 0.5) * 140;
+      p.leaf(x, 254, 30 + r() * 30, 7, (r() - 0.5) * 0.8, 0.42, 0.5, 0.28);
+    }
+    const t = toTexture(p.bytes([0.42, 0.56, 0.28], 1.3), S, { srgb: true });
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
+/** Yellow flag iris among sedge: sword leaves fanning from the water's edge, a few yellow flowers held above them. Coloured. */
+export function irisTexture(): THREE.Texture {
+  return cached('iris', () => {
+    const S = 256;
+    const p = new Paint(S, S);
+    const r = lcg(1701);
+    for (let k = 0; k < 30; k++) {
+      const x0 = 128 + (r() - 0.5) * 160;
+      const len = 120 + r() * 120;
+      const ang = (x0 - 128) / 140 + (r() - 0.5) * 0.4;
+      const sedge = k > 18;
+      const tone = 0.7 + r() * 0.3;
+      if (sedge) p.stroke(x0, 254, x0 + Math.sin(ang) * len, 254 - Math.cos(ang) * len, 2.2, 0.6, tone * 0.5, tone * 0.6, tone * 0.3);
+      else p.leaf(x0, 254, len, 9 + r() * 4, ang, tone * 0.32, tone * 0.52, tone * 0.36, 0.86);
+    }
+    for (let k = 0; k < 4; k++) {
+      const x = 128 + (r() - 0.5) * 120;
+      const y = 40 + r() * 50;
+      p.stroke(x, 254, x + (r() - 0.5) * 10, y, 2.4, 1.6, 0.3, 0.48, 0.26);
+      // Three falls hanging out and three standards upright, all yellow, veined at the throat.
+      for (let q = 0; q < 3; q++) {
+        const a = Math.PI * 0.5 + (q - 1) * 1.2;
+        p.leaf(x, y, 16, 10, a, 0.98, 0.82, 0.12, 0.7);
+        p.leaf(x, y, 12, 6, a + Math.PI, 0.96, 0.86, 0.2, 0.9);
+      }
+      p.disc(x, y, 2.5, 0.7, 0.5, 0.1);
+    }
+    const t = toTexture(p.bytes([0.32, 0.46, 0.3], 1.3), S, { srgb: true });
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
+/**
+ * Oleander: narrow dark leaves on upright stems with clusters of flowers at the tips. Data, not colour, like the wildflowers:
+ * R brightness, G marks the petals (tinted per instance: pink, rose, white), B the hearts, A coverage.
+ */
+export function oleanderTexture(): THREE.Texture {
+  return cached('oleander', () => {
+    const S = 256;
+    const p = new Paint(S, S);
+    const r = lcg(1801);
+    const tips: [number, number][] = [];
+    for (let k = 0; k < 14; k++) {
+      const x0 = 128 + (r() - 0.5) * 60;
+      const ang = (r() - 0.5) * 1.5;
+      const len = 140 + r() * 90;
+      const x1 = x0 + Math.sin(ang) * len;
+      const y1 = 254 - Math.cos(ang) * len;
+      p.stroke(x0, 254, x1, y1, 3, 1.6, 0.5, 0, 0);
+      for (let q = 0; q < 7; q++) {
+        const t = 0.25 + q * 0.11;
+        const lx = x0 + (x1 - x0) * t;
+        const ly = 254 + (y1 - 254) * t;
+        for (const sd of [-1, 1]) p.leaf(lx, ly, 26 + r() * 10, 5, ang + sd * (0.5 + r() * 0.3), 0.55 + r() * 0.3, 0, 0);
+      }
+      tips.push([x1, y1]);
+    }
+    for (const [x, y] of tips) {
+      const n = 3 + Math.floor(r() * 4);
+      for (let q = 0; q < n; q++) {
+        const cx = x + (r() - 0.5) * 22;
+        const cy = y + (r() - 0.5) * 16;
+        for (let s = 0; s < 5; s++) p.leaf(cx, cy, 7, 6, (s / 5) * Math.PI * 2 + r() * 0.3, 0.85 + r() * 0.15, 1, 0, 0.95);
+        p.disc(cx, cy, 1.4, 0.8, 0, 1);
+      }
+    }
+    const t = toTexture(p.bytes([0.5, 0, 0], 1.3), S);
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
+/** River weed: long wavy ribbons streaming from the root at the bottom edge (v = 1) toward the top. Coloured, A coverage. */
+export function weedTexture(): THREE.Texture {
+  return cached('weed', () => {
+    const S = 128;
+    const p = new Paint(S, S * 2);
+    const r = lcg(1901);
+    for (let k = 0; k < 16; k++) {
+      let x = 64 + (r() - 0.5) * 70;
+      let y = 254;
+      const ph = r() * 6.28;
+      const len = 120 + r() * 130;
+      const w = 2.5 + r() * 3;
+      const g = 0.55 + r() * 0.45;
+      for (let s = 0; s < len; s += 3) {
+        const nx = x + Math.sin(s * 0.06 + ph) * 1.8;
+        const ny = y - 3;
+        const t = s / len;
+        p.stroke(x, y, nx, ny, w * (1 - t * 0.6), w * (1 - t * 0.6), g * 0.34, g * 0.5, g * 0.18);
+        x = nx;
+        y = ny;
+        if (y < 2) break;
+      }
+    }
+    const t = toTexture(p.bytes([0.3, 0.44, 0.16], 1.4), S, { srgb: true, h: S * 2 });
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
+/** Tape grass (eelgrass): long soft ribbons rising from the bed, bending over near their tips. Coloured, A coverage. */
+export function tapeTexture(): THREE.Texture {
+  return cached('tapegrass', () => {
+    const S = 128;
+    const p = new Paint(S, S * 2);
+    const r = lcg(2001);
+    for (let k = 0; k < 18; k++) {
+      let x = 64 + (r() - 0.5) * 80;
+      let y = 254;
+      const lean = (r() - 0.5) * 0.9;
+      const len = 150 + r() * 100;
+      const w = 3 + r() * 2.5;
+      const g = 0.6 + r() * 0.4;
+      for (let s = 0; s < len; s += 3) {
+        const t = s / len;
+        const nx = x + lean * 3 * t + Math.sin(s * 0.05 + k) * 0.6;
+        const ny = y - 3;
+        p.stroke(x, y, nx, ny, w, w, g * 0.32, g * 0.52, g * 0.2);
+        x = nx;
+        y = ny;
+        if (y < 2 || x < 2 || x > S - 2) break;
+      }
+    }
+    const t = toTexture(p.bytes([0.28, 0.44, 0.16], 1.4), S, { srgb: true, h: S * 2 });
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
+/** Pondweed: wiry stems with oval leaves set alternately along them, a few reaching flat leaves toward the light. Coloured. */
+export function pondweedTexture(): THREE.Texture {
+  return cached('pondweed', () => {
+    const S = 256;
+    const p = new Paint(S, S);
+    const r = lcg(2101);
+    for (let k = 0; k < 7; k++) {
+      const x0 = 128 + (r() - 0.5) * 140;
+      const top = 10 + r() * 80;
+      const x1 = x0 + (r() - 0.5) * 50;
+      p.stroke(x0, 254, x1, top, 2, 1.2, 0.36, 0.42, 0.2);
+      const n = 6 + Math.floor(r() * 5);
+      for (let q = 0; q < n; q++) {
+        const t = 0.12 + (q / n) * 0.85;
+        const lx = x0 + (x1 - x0) * t;
+        const ly = 254 + (top - 254) * t;
+        const side = q % 2 ? 1 : -1;
+        const tone = 0.7 + r() * 0.3;
+        // Young leaves green, older ones going olive and brown.
+        const old = r() < 0.25;
+        p.leaf(lx, ly, 22 + r() * 14, 10 + r() * 5, side * (0.9 + r() * 0.5), tone * (old ? 0.5 : 0.3), tone * (old ? 0.42 : 0.55), tone * 0.16, 0.8);
+      }
+    }
+    const t = toTexture(p.bytes([0.32, 0.46, 0.18], 1.3), S, { srgb: true });
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
+/** Hornwort and stonewort: bushy stems ringed with whorls of fine needles, a soft carpet on a clear bed. Coloured. */
+export function hornwortTexture(): THREE.Texture {
+  return cached('hornwort', () => {
+    const S = 128;
+    const p = new Paint(S, S);
+    const r = lcg(2201);
+    for (let k = 0; k < 14; k++) {
+      const x0 = 64 + (r() - 0.5) * 100;
+      const top = 10 + r() * 70;
+      const x1 = x0 + (r() - 0.5) * 30;
+      const g = 0.6 + r() * 0.4;
+      p.stroke(x0, 126, x1, top, 1.4, 1, g * 0.3, g * 0.42, g * 0.18);
+      for (let y = 124; y > top; y -= 6) {
+        const t = (126 - y) / (126 - top);
+        const cx = x0 + (x1 - x0) * t;
+        const len = 7 * (1 - t * 0.5) + 2;
+        for (let q = 0; q < 6; q++) {
+          const a = (q / 6) * Math.PI * 2 + y;
+          p.stroke(cx, y, cx + Math.cos(a) * len, y - Math.abs(Math.sin(a)) * len * 0.6 - 1, 0.9, 0.5, g * 0.26, g * 0.48, g * 0.16);
+        }
+      }
+    }
+    const t = toTexture(p.bytes([0.26, 0.42, 0.16], 1.4), S, { srgb: true });
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
+/**
+ * Silt and mud lying on a bed, seen from above: soft-edged blotches with darker hollows, worm casts and the faint ripples the
+ * water leaves in it. Grey, so the instance colours it: brown mud, black peat, green algae, ochre iron, white salt.
+ */
+export function siltTexture(): THREE.Texture {
+  return cached('silt', () => {
+    const S = 128;
+    const p = new Paint(S, S);
+    const r = lcg(2301);
+    for (let y = 0; y < S; y++) {
+      for (let x = 0; x < S; x++) {
+        const dx = (x - 64) / 64;
+        const dy = (y - 64) / 64;
+        const d = Math.hypot(dx, dy);
+        // A blotch with a ragged edge.
+        const edge = 0.72 + Math.sin(Math.atan2(dy, dx) * 5 + 1.3) * 0.08 + Math.sin(Math.atan2(dy, dx) * 11) * 0.05;
+        const c = sat((edge - d) * 6);
+        if (c <= 0) continue;
+        const ripple = 0.9 + Math.sin((x + y * 0.4) * 0.35) * 0.06;
+        const hollow = 1 - 0.25 * sat(1 - Math.hypot(dx + 0.2, dy - 0.15) * 3);
+        const k = ripple * hollow * (0.75 + r() * 0.15);
+        p.put(x, y, c, k, k, k);
+      }
+    }
+    for (let i = 0; i < 40; i++) p.disc(20 + r() * 88, 20 + r() * 88, 0.8 + r() * 1.2, 0.55, 0.55, 0.55);
+    const t = toTexture(p.bytes([0.7, 0.7, 0.7], 1.2), S, { srgb: true });
     t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
     return t;
   });

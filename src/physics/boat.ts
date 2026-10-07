@@ -44,9 +44,13 @@ const LAKE_DRIFT = 0.12;
 
 const G = 9.81;
 
-/** Gentle surface motion, shared by the hull and the wake effects so a boat rides the same swell it seems to. */
+/**
+ * Gentle surface motion, shared by the hull and the wake effects so a boat rides the same swell it seems to. The water is
+ * drawn as a flat sheet (its swell is in the shading), so this stays a few centimetres: any more and a hull is seen to lift
+ * clear of the sheet on a crest and settle under it in a trough.
+ */
 export function swell(x: number, z: number, t: number): number {
-  return 0.045 * Math.sin(x * 0.33 + t * 1.25) + 0.035 * Math.sin(z * 0.47 - t * 1.6) + 0.02 * Math.sin((x + z) * 0.9 + t * 2.4);
+  return 0.016 * Math.sin(x * 0.33 + t * 1.25) + 0.012 * Math.sin(z * 0.47 - t * 1.6) + 0.007 * Math.sin((x + z) * 0.9 + t * 2.4);
 }
 
 /**
@@ -104,8 +108,9 @@ export class BoatBody implements Chassis {
       RAPIER.ColliderDesc.cuboid(this.hx, this.hy, this.hz).setMass(p.mass).setFriction(0.35).setRestitution(0.05).setCollisionGroups(GROUPS.vehicle),
       this.body,
     );
-    // Bottom corners, amidships and the bow and stern pair: enough points to float level on a short boat.
-    for (const sx of [-0.8, 0.8]) for (const sz of [-0.85, 0, 0.85]) this.pts.push([sx * this.hx, -this.hy * 0.92, sz * this.hz]);
+    // Bottom corners, amidships and the bow and stern pair: enough points to float level on a short boat. They are on the
+    // keel, so at rest the keel sits exactly `draft` under the surface (and the drawn hull with it).
+    for (const sx of [-0.8, 0.8]) for (const sz of [-0.85, 0, 0.85]) this.pts.push([sx * this.hx, -this.hy, sz * this.hz]);
   }
 
   get speed(): number {

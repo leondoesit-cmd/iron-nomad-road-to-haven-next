@@ -22,6 +22,9 @@ import type { CityPlan, PlanBlock, PlanLot, PlanStrip } from '../cityPlan';
  * either side. The light-rail line is shown by its last two hundred metres. It is a recreation in the spirit of a game
  * level, not a survey, and it is meant to be redrawn: edit the tables below.
  *
+ * Coming into town from the south, the first thing on the left is Ofer Grand Mall (see `world/mall.ts`), with its
+ * footbridge over the street to a plaza and the Prima Link tower on the right.
+ *
  * Driving north up Haim Ozer Street you pass City Hall and Shawarma Malabes, the shopping lanes, Founders' Square with
  * the Great Synagogue across Hovevei Zion Street, Pinsker and Krol streets, then Jabotinsky Road with the Red Line
  * down it, and at the top the Central Bus Station with the stadium beyond the next street. "Left" and "right" below are
@@ -32,6 +35,8 @@ import type { CityPlan, PlanBlock, PlanLot, PlanStrip } from '../cityPlan';
 
 /** Indices the landmark lots below refer to. */
 export const PT_BLOCK = {
+  /** The mall fills the first two blocks on the left; there is no cross street between them. */
+  mall: 0,
   herzl: 2,
   cityHall: 4,
   shops: 5,
@@ -44,7 +49,7 @@ export const PT_BLOCK = {
 } as const;
 
 const blocks: PlanBlock[] = [
-  { len: 70, cross: 6 },
+  { len: 76, cross: 0 }, // 0: Ofer Grand Mall, running on into the next block; across the street its plaza and Prima Link
   { len: 62, cross: 6 },
   { len: 56, cross: 12, street: 'herzl' }, // 2
   { len: 52, cross: 6 },
@@ -101,7 +106,23 @@ const stn = PT_BLOCK.station;
 /** The old shopping streets: low, rendered and three or four floors, a shop on every ground floor. */
 const shopfront = (side: -1 | 1, strip: number, block: number, floors: number): PlanLot => ({ side, strip, block, kind: 'building', style: 2, floors });
 
+const mall = PT_BLOCK.mall;
+
 const lots: PlanLot[] = [
+  // Ofer Grand Mall, the first thing on the left coming into town: the whole first column of the first two blocks. It is a
+  // real building with floors, shops and stairs, raised by `dressLandmarks` from `world/mall.ts`, not a box on a lot.
+  { side: 1, strip: 0, block: mall, kind: 'open', landmark: 'grandMall' },
+  { side: 1, strip: 0, block: mall + 1, kind: 'open', fixed: true },
+  // Across the street: the plaza the footbridge comes down into, and the Prima Link office tower at its back.
+  {
+    side: -1,
+    strip: 0,
+    block: mall,
+    kind: 'open',
+    landmark: 'mallPlaza',
+    buildings: [{ role: 'officeTower', rect: [0, 18, 4, 30], floors: 16, style: 3, tint: 0x4f6774, front: 'e' }],
+  },
+  { side: -1, strip: 0, block: mall + 1, kind: 'open', fixed: true },
   // Founders' Square: the open ground between Haim Ozer, Stampfer, HaBaron Hirsch and Hovevei Zion.
   { side: 1, strip: 0, block: sq, kind: 'open', landmark: 'foundersSquare' },
   // The Great Synagogue stands across Hovevei Zion Street from the square, its front towards the square.
@@ -127,7 +148,8 @@ const lots: PlanLot[] = [
       { role: 'hallSide', rect: [11, 40, 0, 11], floors: 6, style: 0, tint: 0xcdbb94, front: 'n' },
     ],
   },
-  // Shawarma Malabes, on the other side of Haim Ozer Street from City Hall, facing its car park.
+  // Shawarma Melabes, Haim Ozer 4, across from City Hall, facing its car park.
+  // Address: https://wolt.com/en/isr/petah-tikva/restaurant/shawarma-melabes
   { side: 1, strip: 0, block: hall, kind: 'building', style: 2, floors: 3, shop: 'malabes' },
   // The shopping streets between City Hall and the square: three and four storeys of rendered apartments over shops.
   shopfront(-1, 0, PT_BLOCK.shops, 4),
@@ -191,10 +213,11 @@ export const PETAH_TIKVA: CityPlan = {
   sides: { '-1': right, '1': left },
   lots,
   places: [
+    { id: 'grandMall', name: 'OFER GRAND MALL', sub: 'עופר הקניון הגדול פתח תקווה · Jabotinsky Road, the way into town', side: 1, strip: 0, block: mall, r: 70 },
     { id: 'foundersSquare', name: 'FOUNDERS’ SQUARE', sub: 'כיכר המייסדים · where the first well was dug, 1878', side: 1, strip: 0, block: sq, r: 34 },
     { id: 'greatSynagogue', name: 'THE GREAT SYNAGOGUE', sub: 'בית הכנסת הגדול · Beit Yaacov, finished in 1900 with Rothschild’s money', side: 1, strip: 1, block: sq, r: 30 },
     { id: 'cityHall', name: 'CITY HALL', sub: 'עיריית פתח תקווה · Haim Ozer Street', side: -1, strip: 0, block: hall, r: 36 },
-    { id: 'malabes', name: 'SHAWARMA MALABES', sub: 'שווארמה מלאבס · across the street from City Hall', side: 1, strip: 0, block: hall, r: 32 },
+    { id: 'malabes', name: 'SHAWARMA MELABES', sub: 'שווארמה מלאבס · Haim Ozer 4 · opposite Petah Tikva City Hall', side: 1, strip: 0, block: hall, r: 32 },
     { id: 'busStation', name: 'CENTRAL BUS STATION', sub: 'התחנה המרכזית פתח תקווה · Ze’ev Orlov Street, the end of the Red Line', side: 1, strip: 0, block: stn, r: 62 },
     { id: 'stadium', name: 'HAMOSHAVA STADIUM', sub: 'אצטדיון המושבה · eleven and a half thousand seats, Hapoel’s and Maccabi’s', side: 1, strip: 3, block: stn, r: 66 },
   ],

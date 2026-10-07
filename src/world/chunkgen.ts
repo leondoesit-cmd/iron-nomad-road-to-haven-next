@@ -1,3 +1,4 @@
+import { melabesBuildingBoxes } from './melabes';
 import type { LegDef } from '../data';
 import {
   buildLayout,
@@ -21,6 +22,8 @@ import { plantTreesSteps, trunkBox, type TreeSpot } from './flora';
 
 export interface BuildingSpec {
   aabb: Aabb;
+  /** A recessed shop replaces the solid building volume with these colliders. */
+  colliders?: Aabb[];
   /** Floors drive window rows; 'stepped' adds a smaller upper block. */
   floors: number;
   stepped: boolean;
@@ -95,6 +98,7 @@ export class ChunkSource {
         tint: Math.floor(hash2(lot.slot, lot.strip * 3 + lot.side, 17) * 4),
       };
       const spec: BuildingSpec = { aabb, floors, stepped: roll > 0.72 && !lot.fixed, style: lot.style, tint: lot.tint, shop: lot.shop, israeli: L.plan?.vernacular === 'israeli' };
+      if (lot.shop === 'malabes') spec.colliders = melabesBuildingBoxes(aabb, newAabbId);
       this.buildingAabbs.push(spec);
       this.shopGlass.push(...shopPaneBoxes(spec));
     }
@@ -158,7 +162,7 @@ export class ChunkSource {
       key,
       heights,
       city: L.terrain.biome === 'city' || cityChunk(L.terrain.open, cx, cz),
-      aabbs: [...buildings.map((b) => b.aabb), ...this.shopGlass.filter((a) => inChunk(cx, cz, (a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2)), ...aabbs],
+      aabbs: [...buildings.flatMap((b) => b.colliders ?? [b.aabb]), ...this.shopGlass.filter((a) => inChunk(cx, cz, (a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2)), ...aabbs],
       buildings,
       props: L.props.filter((p) => inChunk(cx, cz, p.x, p.z)),
       signs: L.signs.filter((p) => inChunk(cx, cz, p.x, p.z)),
@@ -196,7 +200,7 @@ export class ChunkSource {
 
   /** All obstacle boxes, used by AI and projectiles. */
   allAabbs(): Aabb[] {
-    return [...this.buildingAabbs.map((b) => b.aabb), ...this.layout.aabbs];
+    return [...this.buildingAabbs.flatMap((b) => b.colliders ?? [b.aabb]), ...this.layout.aabbs];
   }
 
   evict(cx: number, cz: number) {

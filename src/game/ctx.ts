@@ -15,11 +15,13 @@ import type { Vehicle } from './vehicle';
 import type { ZombieSystem } from './zombies';
 import type { PhantomSystem } from './phantoms';
 import type { WildlifeSystem } from './wildlife';
+import type { AmbientLife } from './ambientLife';
 import type { RaiderSystem } from './raiders';
 import type { TravellerSystem } from './travellers';
 import type { CrewSystem } from './crew';
 import type { Combat } from './combat';
 import type { Gore } from './gore';
+import type { Arrows } from './arrows';
 import type { WorldDamage } from './destruction';
 import type { AudioEngine } from '../audio/audio';
 import type { InteractRegistry } from './interact';
@@ -46,6 +48,10 @@ export interface LooseWorld {
   takeGoods(id: string, by: Player): boolean;
   /** Set something down on the ground. */
   drop(x: number, z: number, c: Carried): void;
+  /** Set something down exactly: on the ground at (x, z), or resting at height `y`, turned to `yaw`. Returns its id. */
+  place?(c: Carried, x: number, z: number, y?: number, yaw?: number): string;
+  /** Every liftable thing within `r` metres of a point (for working out which one is being looked at). */
+  around?(x: number, z: number, r: number): Loose[];
 }
 
 /** The shared world a running scene (a leg or a camp) exposes to every entity and system. */
@@ -71,6 +77,8 @@ export interface Ctx {
   combat: Combat;
   /** Blood decals, thrown limbs, spent brass and bullet holes. */
   gore: Gore;
+  /** Arrows in the air and where they have landed, to be pulled out again. */
+  arrows?: Arrows;
   /** Things that break when hurt (a plank wall, a barricade). Absent where nothing does. */
   world?: WorldDamage;
   /** Simulation seconds since the scene started. */
@@ -81,6 +89,8 @@ export interface Ctx {
   storm: number;
   /** Heat wave strength, 0 mild to 1 the full swelter. Engines shed heat badly in it. */
   heat: number;
+  /** Rain falling, 0..1: it hides the convoy from raiders a little and cools an engine. */
+  rain?: number;
   players: Player[];
   vehicles: Vehicle[];
   zombies: ZombieSystem;
@@ -88,6 +98,13 @@ export interface Ctx {
   phantoms: PhantomSystem;
   /** Herds, packs and flocks of wild animals. */
   wildlife: WildlifeSystem;
+  /** The small life of the country (insects, small birds, fish, frogs): only for the eye. Absent where there is none. */
+  life?: AmbientLife;
+  /**
+   * People and things that can be looked at but not lifted (Nar on his pallet): a capsule from `a` to `b` of radius `r`, and
+   * the label under the crosshair while it is looked at. `act` names what holding interact does there.
+   */
+  lookables?: { a: [number, number, number]; b: [number, number, number]; r: number; lines: { text: string; css?: string }[]; act?: string }[];
   raiders: RaiderSystem;
   /** People walking the roads: traders, pilgrims, drifters. Neutral until they are given a reason not to be. */
   travellers: TravellerSystem;
@@ -95,6 +112,8 @@ export interface Ctx {
   vehicleByCollider: Map<number, Vehicle>;
   interact: InteractRegistry;
   projectiles: Projectiles;
+  /** Every fire burning, and the light it throws (`game/fires.ts`). */
+  fires?: import('./fires').FireEngine;
   /** Abandoned cars and everything that can be done to them. */
   cars: CarField;
   /** What has come off vehicles and lies in the road. */
@@ -116,6 +135,12 @@ export interface Ctx {
   /** Remove a barricade (rammed, breached or smashed). */
   breakBarricade(a: Aabb, how: 'ram' | 'charge' | 'smash'): void;
   groundAt(x: number, z: number): number;
+  /** The ground as the loaded chunk draws it (a few centimetres off `groundAt` in hollows), for small things set on it. */
+  drawnGroundAt?(x: number, z: number): number;
+  /** How much the leaves of bushes, reeds and cane take out of a sight line from a to b: 0 clear to 1 hidden. Absent where nothing grows. */
+  leavesAlong?(ax: number, ay: number, az: number, bx: number, by: number, bz: number): number;
+  /** The trees standing within `r` of a point (where birds perch). Absent where there are none to ask about. */
+  treesNear?(x: number, z: number, r: number): import('../world/flora').TreeSpot[];
   surfaceAt(x: number, z: number): { grip: number; drag: number; name: Surface };
   /** How much dust the ground gives up under wheels, 0..1: grass holds it down. Absent means all of it. */
   groundDust?(x: number, z: number): number;

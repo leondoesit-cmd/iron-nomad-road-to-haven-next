@@ -1,10 +1,13 @@
-import { PARTS, isInteriorSlot, type PartSlot, type VehicleDef } from '../data';
+import { PARTS, isGlassSlot, isInteriorSlot, wheelLayout, type PartSlot, type VehicleDef } from '../data';
 import { slotsOf } from '../sim/parts';
 import { mountsOfChassis } from './vehicleModels';
 import type { PanelId } from '../sim/paint';
 import { cabinAnchor, cabinLayout } from './interior';
 import { bayVolume } from './attachments';
 import { envelopeOf } from '../sim/engineSize';
+import { carPanes } from './carModels';
+import { GLASS_KEYS } from '../sim/glassfit';
+import type { CarPane } from '../sim/glass';
 
 /**
  * Attach points. Every part slot is a physical place on a vehicle: the engine goes under the bonnet, the radiator
@@ -56,23 +59,30 @@ export const SOCKET_LABEL: Record<PartSlot, string> = {
   seatR: 'Rear seat',
   steer: 'Steering wheel',
   dash: 'Dashboard',
+  glassF: 'Windscreen',
+  glassB: 'Rear window',
+  glassL: 'Left window',
+  glassR: 'Right window',
 };
 
 /** Where Rapier puts the wheels for a chassis (see physics/vehicle.ts): resting wheel centres, chassis frame. */
 export function wheelCentres(def: VehicleDef): [number, number, number][] {
   const p = def.physics;
-  const out: [number, number, number][] = [];
-  const xs = p.wheelsX[0] === 0 ? [0] : p.wheelsX;
-  for (let a = 0; a < p.wheelsZ.length; a++) {
-    for (const wx of xs) {
-      if (out.length >= p.wheelCount) break;
-      out.push([wx, p.hardY - p.suspension.rest, p.wheelsZ[a]]);
-    }
-  }
-  return out;
+  return wheelLayout(p).map((w) => [w.x, w.y - p.suspension.rest, w.z]);
 }
 
 const box = (x: number, y: number, z: number, sx: number, sy: number, sz: number): Anchor => ({ x, y, z, sx, sy, sz });
+
+/** A window as a box: as wide and tall as the glass, as thick as a hand. */
+function paneBox(p: CarPane): Anchor {
+  const [nx, ny, nz] = p.n;
+  const along = Math.abs(nz) > 0.5 || Math.abs(ny) > 0.5; // faces fore or aft (or up): wide across the car
+  const sx = along ? p.hw * 2 : 0.14;
+  const sz = along ? 0.14 + p.hh * 2 * Math.abs(ny) : p.hw * 2;
+  const sy = along ? 0.14 + p.hh * 2 * Math.abs(nz) : p.hh * 2;
+  void nx;
+  return box(p.c[0], p.c[1], p.c[2], sx, sy, sz);
+}
 
 /** The socket for one slot on a chassis, or undefined if the chassis has no such mount. */
 export function socketFor(def: VehicleDef, slot: PartSlot): Socket | undefined {
@@ -90,6 +100,13 @@ export function socketFor(def: VehicleDef, slot: PartSlot): Socket | undefined {
     const a = L && cabinAnchor(L, slot);
     if (!L || !a) return undefined;
     return { slot, label: SOCKET_LABEL[slot], anchors: [box(a.x, a.y - L.g0, a.z, a.sx, a.sy, a.sz)] };
+  }
+  if (isGlassSlot(slot)) {
+    // Glass sits where its panes are on the body model.
+    const keys = GLASS_KEYS[slot] ?? [];
+    const panes = carPanes(def).filter((p) => keys.includes(p.key));
+    if (!panes.length) return undefined;
+    return { slot, label: SOCKET_LABEL[slot], anchors: panes.map(paneBox) };
   }
   if (slot === 'wheels') {
     anchors = wheelCentres(def).map(([x, y, z]) => box(x + Math.sign(x) * 0.04, y, z, Math.max(0.2, wr * 0.55), wr * 2.1, wr * 2.1));

@@ -90,6 +90,7 @@ export class ControlsMenu {
               const o = num('', '', () => st().lookSens[i], (v) => (st().lookSens[i] = v), 0.1, 0.4, 2.5);
               return { value: o.value, step: o.step };
             }),
+            ...perSeat('sp', 'Sprint', (i) => ({ value: () => (st().toggleSprint[i] ? 'CLICK ONCE' : 'HOLD'), step: () => (st().toggleSprint[i] = !st().toggleSprint[i]) })),
             ...invert,
           ];
         case 'kb0':
@@ -125,8 +126,8 @@ export class ControlsMenu {
       const b = input.settings.bindings;
       if (this.tab === 'pad') {
         const v = b.pad[a.id];
-        if (a.id === 'view' && v === SHARED) return `${padLabel(b.pad.vehicle)} · tap`;
-        if (a.id === 'vehicle' && b.pad.view === SHARED) return `${padLabel(v)} · hold`;
+        if (a.id === 'view' && v === SHARED) return `${padLabel(b.pad.sheet)} · tap`;
+        if (a.id === 'sheet' && b.pad.view === SHARED) return `${padLabel(v)} · hold`;
         return padLabel(v);
       }
       if (this.tab === 'mouse') return mouseLabel(b.mouse[a.id]);
@@ -179,6 +180,7 @@ export class ControlsMenu {
         const s = input.settings;
         s.invertLookY = [false, false];
         s.toggleCrouch = [true, true];
+        s.toggleSprint = [true, true];
         s.fpFov = 100;
         s.chaseFov = 110;
         s.fpLens = 0.7;
@@ -200,7 +202,7 @@ export class ControlsMenu {
         `<div class="item bind"><span class="aname">${a.label}<small>${a.hint}</small></span><button class="bindbtn" data-fid="bind:${a.id}">${bound(a)}</button></div>`;
       const note =
         this.tab === 'pad'
-          ? 'Left stick moves and steers, right stick looks. On a pad, view and vehicle share one button by default: tap it to switch view, hold it to get in or out.'
+          ? 'Left stick moves and steers, right stick looks. On a pad, view and the convoy sheet share Back by default: tap it to switch view, hold it for the sheet. Sprint is one click of the left stick.'
           : this.tab === 'mouse'
             ? 'Click the game to capture the mouse. Moving looks around. Trackpads have left and right clicks only.'
             : this.tab === 'play'

@@ -51,7 +51,7 @@ export interface MapMover {
 }
 
 /** Map-only pin kinds on top of the compass ones: the places a leg is made of, and its named water. */
-export type MapPinKind = CompassPin['kind'] | 'site' | 'lake' | 'falls' | 'spring' | 'swamp' | 'river';
+export type MapPinKind = CompassPin['kind'] | 'site' | 'lake' | 'falls' | 'spring' | 'swamp' | 'river' | 'heritage';
 export interface MapPin {
   x: number;
   z: number;

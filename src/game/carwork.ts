@@ -1,9 +1,9 @@
 import * as THREE from 'three';
-import { INTERIOR_SLOTS, PARTS, partDef, type PartSlot } from '../data';
+import { GLASS_SLOTS, INTERIOR_SLOTS, PARTS, isGlassSlot, partDef, type PartSlot } from '../data';
 import { MK_CSS, modelKey } from '../render/workFx';
 import { accessPointsOf } from '../render/accessPoints';
 import { FUEL_CAN, carriedName, type Carried } from '../sim/carry';
-import { cutHood, removePart, removeTyre, tyreAt } from '../sim/garage';
+import { cutHood, idInSlot, removePart, removeTyre, tyreAt } from '../sim/garage';
 import { bayFit, bayText, engineSpec, hoodState } from '../sim/engines';
 import { OIL_CAN } from '../sim/oil';
 import { partName } from '../sim/parts';
@@ -28,7 +28,7 @@ export { isOwnRide };
 const SLOT_LABEL = (slot: PartSlot) => PARTS.labels[slot];
 
 /** What the wrench works on by hand: the bolt-ons and the cabin. The gearbox, the panels and the rest need the crowbar. */
-export const WRENCH_SLOTS: PartSlot[] = ['engine', 'wheels', 'armor', 'side', 'weapon', 'utility', 'front', 'roof', 'rear', ...INTERIOR_SLOTS];
+export const WRENCH_SLOTS: PartSlot[] = ['engine', 'wheels', 'armor', 'side', 'weapon', 'utility', 'front', 'roof', 'rear', ...INTERIOR_SLOTS, ...GLASS_SLOTS];
 
 /** The repair a job needs maps to the slot it is done at. */
 const REPAIR_SLOT: Record<RepairKind, PartSlot> = { fire: 'engine', leak: 'utility', tire: 'wheels', engine: 'engine', radiator: 'cooling', gearbox: 'gearbox', mount: 'weapon', body: 'armor' };
@@ -36,7 +36,7 @@ const REPAIR_SLOT: Record<RepairKind, PartSlot> = { fire: 'engine', leak: 'utili
 const handPos = (p: Player) => p.human.hand.getWorldPosition(new THREE.Vector3());
 
 /** Seconds to unbolt something. */
-const unboltSecs = (slot: PartSlot) => (slot === 'engine' ? 3.4 : slot === 'wheels' ? 2.8 : slot === 'weapon' ? 2.2 : 1.8);
+const unboltSecs = (slot: PartSlot) => (slot === 'engine' ? 3.4 : slot === 'wheels' ? 2.8 : slot === 'weapon' ? 2.2 : isGlassSlot(slot) ? 2.4 : 1.8);
 
 /** Is there a part (or a tyre) on this mount that the wrench would take off? */
 function fittedOn(v: Vehicle, slot: PartSlot, index: number) {

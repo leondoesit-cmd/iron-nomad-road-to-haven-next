@@ -14,8 +14,8 @@ export type Panel = 'hood' | 'doorL' | 'doorR' | 'trunk';
 export const PANELS: Panel[] = ['hood', 'doorL', 'doorR', 'trunk'];
 
 /** The places on a vehicle a job is done at. Doors, the bonnet and the boot are panels; the rest are just places. */
-export type Spot = 'hood' | 'doorL' | 'doorR' | 'trunk' | 'flap' | 'wheel' | 'under' | 'roof' | 'front' | 'rear' | 'flank' | 'gun';
-export const SPOTS: Spot[] = ['hood', 'doorL', 'doorR', 'trunk', 'flap', 'wheel', 'under', 'roof', 'front', 'rear', 'flank', 'gun'];
+export type Spot = 'hood' | 'doorL' | 'doorR' | 'trunk' | 'flap' | 'wheel' | 'under' | 'roof' | 'front' | 'rear' | 'flank' | 'gun' | 'screen' | 'back';
+export const SPOTS: Spot[] = ['hood', 'doorL', 'doorR', 'trunk', 'flap', 'wheel', 'under', 'roof', 'front', 'rear', 'flank', 'gun', 'screen', 'back'];
 
 /** Open (or missing, or never there) per panel. */
 export type PanelOpen = Record<Panel, boolean>;
@@ -90,6 +90,7 @@ const w = (at: Spot[], open = false, swap = true): Work => ({ at, open, swap });
  *  - the cabin: through the door on that side, open (the rear seat through either door; the wheel and dash via the driver's).
  *  - fuel: at the flap. Stowing (inside, secure): the boot with its lid open, or the back seat through an open door (a pickup's
  *    cab and a buggy's seat well too). Loads on the outside are set down at the roof, the bed, the rack or the rear cage (`sim/cargo.ts`).
+ *  - glass: the windscreen and rear window at their own points, a door's window at that door (door shut or open).
  *  - bolt-ons outside (armour, mounts, rack, gun post): proximity only.
  */
 export function workFor(def: VehicleDef, job: Job): Work | null {
@@ -144,6 +145,16 @@ export function workFor(def: VehicleDef, job: Job): Work | null {
       return w(['roof']);
     case 'rear':
       return w(['rear']);
+    // Glass is worked on from outside, doors and lids shut: the windscreen and the rear window at their own points, a door's
+    // window at the door.
+    case 'glassF':
+      return w(['screen']);
+    case 'glassB':
+      return w(['back']);
+    case 'glassL':
+      return w(['doorL']);
+    case 'glassR':
+      return w(['doorR']);
   }
   return null;
 }
@@ -187,6 +198,8 @@ export const SPOT_NAME: Record<Spot, { name: string; where: string }> = {
   rear: { name: 'rear mount', where: 'at the back' },
   flank: { name: 'side mounts', where: 'on the side' },
   gun: { name: 'gun post', where: 'by the gun' },
+  screen: { name: 'windscreen', where: 'at the front' },
+  back: { name: 'rear window', where: 'at the back' },
 };
 
 /** The spot's name on this chassis: the driver's and passenger's doors, a hatchback's tailgate, a van's rear door. */

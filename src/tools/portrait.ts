@@ -2,28 +2,45 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { HERO_IDS, isHero, type HeroId } from '../data/heroes';
-import { Humanoid, type Palette } from '../render/humanoid';
+import { Humanoid, type Palette, type PoseKind } from '../render/humanoid';
 import { HERO_LOOKS } from '../render/heroLooks';
+import { CHARACTER_EXPRESSIONS, type CharacterExpression } from '../render/nuhat';
+import { CakeEater } from '../render/cake';
+import { BurgerEater } from '../render/burger';
+import { UdudLounger } from '../render/udud';
+import type { LeisurePose } from '../render/leisure';
 import { TEX_H, TEX_W, paintPortraitNow } from '../render/portrait';
 import { identityOf, lookOf } from '../render/outfit';
 import { heroLoadout } from '../game/campaign';
 import { newGear, type Loadout } from '../sim/gear';
 
 /**
- * A close look at the two heroes, outside the game: their faces under even light, turned to any angle, in any of a few
- * outfits, optionally beside the photograph they were drawn from.
+ * A close look at the heroes, outside the game: their faces under even light, turned to any angle, in any of a few outfits,
+ * standing, sat on the ground or lying down, optionally beside the photograph they were drawn from.
  *
  * Open /portrait.html on the dev server. Query parameters (also settable from the console with `__portrait.set({...})`):
- *   hero  chinsky | leo | both         view  close | face | bust | body  yaw  degrees (0 faces the camera)
- *   kit   start | own | helmet | cap | goggles | gasmask                 light studio | sun
+ *   hero  any HERO_IDS entry | all   view  close | face | bust | body  yaw  degrees (0 faces the camera)
+ *   pose  stand | walk | sit | lie | sheet (one hero three times: standing, sitting and lying, side by side)
+ *   expression neutral | talking | smiling | wondering (Nuhat; combines with any pose)
+ *         eat (sat on a crate eating a huge slice of cake, a spoonful every few seconds)
+ *         burger (sat at a crate table: a bite of a burger, a pull on a beer, a laugh)
+ *         lounge (laid back in a canvas chair, occasionally adjusting his glasses; Udud's default)
+ *         drink | smoke | relax (bottle and joint; relax alternates between the two)
+ *   kit   start | shirt | own | helmet | cap | goggles | gasmask         light studio | sun
+ *         (shirt: their own top over the starter trousers and boots; own: their own top and nothing else)
  *   ref   URL of a reference photo to show alongside                     ui    0 hides the buttons
  */
 
+type Pose = 'stand' | 'walk' | 'sit' | 'lie';
+const POSES: readonly Pose[] = ['stand', 'sit', 'lie'];
+
 interface Params {
-  hero: HeroId | 'both';
+  hero: HeroId | 'all';
   view: 'close' | 'face' | 'bust' | 'body';
+  pose: Pose | 'sheet' | 'eat' | 'burger' | 'lounge' | LeisurePose;
+  expression: CharacterExpression;
   yaw: number;
-  kit: 'start' | 'own' | 'helmet' | 'cap' | 'goggles' | 'gasmask';
+  kit: 'start' | 'shirt' | 'own' | 'helmet' | 'cap' | 'goggles' | 'gasmask';
   light: 'studio' | 'sun';
   ref: string;
   ui: boolean;
@@ -31,10 +48,13 @@ interface Params {
 
 const q = new URLSearchParams(location.search);
 const params: Params = {
-  hero: isHero(q.get('hero')) ? (q.get('hero') as HeroId) : q.get('hero') === 'both' ? 'both' : 'leo',
+  // 'both' was the name for everyone when there were two.
+  hero: isHero(q.get('hero')) ? (q.get('hero') as HeroId) : q.get('hero') === 'all' || q.get('hero') === 'both' ? 'all' : 'leo',
   view: (['close', 'face', 'bust', 'body'] as const).find((v) => v === q.get('view')) ?? 'face',
+  pose: ([...POSES, 'walk', 'sheet', 'eat', 'burger', 'lounge', 'drink', 'smoke', 'relax'] as const).find((v) => v === q.get('pose')) ?? (q.get('hero') === 'udud' ? 'lounge' : 'stand'),
+  expression: CHARACTER_EXPRESSIONS.find(v => v === q.get('expression')) ?? (q.get('hero') === 'nuhat' ? 'smiling' : 'neutral'),
   yaw: Number(q.get('yaw') ?? 0),
-  kit: (['start', 'own', 'helmet', 'cap', 'goggles', 'gasmask'] as const).find((v) => v === q.get('kit')) ?? 'start',
+  kit: (['start', 'shirt', 'own', 'helmet', 'cap', 'goggles', 'gasmask'] as const).find((v) => v === q.get('kit')) ?? 'start',
   light: q.get('light') === 'sun' ? 'sun' : 'studio',
   ref: q.get('ref') ?? '',
   ui: q.get('ui') !== '0',
@@ -62,7 +82,7 @@ sun.shadow.camera.bottom = -0.2;
 sun.shadow.bias = -0.0003;
 sun.shadow.normalBias = 0.01;
 scene.add(hemi, sun, sun.target);
-const floor = new THREE.Mesh(new THREE.CircleGeometry(4, 48), new THREE.MeshStandardMaterial({ color: 0x4a4038, roughness: 0.95 }));
+const floor = new THREE.Mesh(new THREE.CircleGeometry(6, 64), new THREE.MeshStandardMaterial({ color: 0x4a4038, roughness: 0.95 }));
 floor.rotation.x = -Math.PI / 2;
 floor.receiveShadow = true;
 scene.add(floor);
@@ -72,12 +92,14 @@ const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = false;
 controls.addEventListener('change', () => render());
 
-function outfit(kit: Params['kit']): Loadout['worn'] {
-  const l = heroLoadout();
+function outfit(kit: Params['kit'], hero?: HeroId): Loadout['worn'] {
+  const l = heroLoadout(hero);
   const w = { ...l.worn };
   switch (kit) {
     case 'own':
       return {};
+    case 'shirt':
+      return { legs: w.legs, feet: w.feet };
     case 'helmet':
       return { ...w, head: newGear('h_scrap') };
     case 'cap':
@@ -91,24 +113,73 @@ function outfit(kit: Params['kit']): Loadout['worn'] {
   }
 }
 
-let people: { id: HeroId; h: Humanoid }[] = [];
+let people: { id: HeroId; pose: Pose | 'eat' | 'burger' | 'lounge' | LeisurePose; h: Humanoid }[] = [];
+/** The cake eaters on show, each with its own crates, cake and spoon round the rig. */
+let eaters: (CakeEater | BurgerEater)[] = [];
+let loungers: UdudLounger[] = [];
+
+/** Where each pose is on the sheet: the feet, or lying, the soles (the body runs off to the right from there). */
+const SHEET_X: Record<Pose, number> = { stand: -1.2, walk: -1.2, sit: 0, lie: 0.8 };
 
 function build() {
-  for (const p of people) scene.remove(p.h.root);
-  const ids = params.hero === 'both' ? [...HERO_IDS] : [params.hero];
-  people = ids.map((id, i) => {
-    // Seats as in split screen: Chinsky is player 1 (left), Leo player 2 (right).
-    const seat = id === 'chinsky' ? 0 : 1;
-    const pal: Palette = { ...identityOf(seat), look: lookOf(outfit(params.kit)), hero: id };
+  for (const p of people) {
+    scene.remove(p.h.root);
+    p.h.dispose();
+  }
+  for (const e of eaters) scene.remove(e.group);
+  eaters = [];
+  for (const l of loungers) scene.remove(l.group);
+  loungers = [];
+  if (params.pose === 'eat' || params.pose === 'burger' || params.pose === 'lounge') {
+    const ids = params.hero === 'all' ? [...HERO_IDS] : [params.hero];
+    people = ids.map((id, i) => {
+      const pal: Palette = { ...identityOf(id === 'leo' ? 1 : 0), look: lookOf(outfit(params.kit, id)), hero: id };
+      const h = new Humanoid(pal);
+      h.expression = params.expression;
+      if (params.pose === 'lounge') {
+        const l = new UdudLounger(h);
+        l.group.position.x = (i - (ids.length - 1) / 2) * 1.3;
+        l.group.rotation.y = (params.yaw * Math.PI) / 180;
+        scene.add(l.group);
+        loungers.push(l);
+        return { id, pose: 'lounge' as const, h };
+      }
+      const e = params.pose === 'burger' ? new BurgerEater(h) : new CakeEater(h);
+      e.group.position.x = (i - (ids.length - 1) / 2) * 1.3;
+      e.group.rotation.y = (params.yaw * Math.PI) / 180;
+      scene.add(e.group);
+      eaters.push(e);
+      return { id, pose: params.pose as 'eat' | 'burger', h };
+    });
+    frame();
+    return;
+  }
+  const ids = params.hero === 'all' ? [...HERO_IDS] : [params.hero];
+  const sheet = params.pose === 'sheet' && ids.length === 1;
+  const cast = sheet ? POSES.map((pose) => ({ id: ids[0], pose })) : ids.map((id) => ({ id, pose: params.pose === 'sheet' ? 'stand' : params.pose }));
+  people = cast.map(({ id, pose }, i) => {
+    // Seats as in split screen: Chinsky is player 1 (left) and Leo player 2 (right); Nar wears player 1's colours, as solo.
+    const seat = id === 'leo' ? 1 : 0;
+    const pal: Palette = { ...identityOf(seat), look: lookOf(outfit(params.kit, id)), hero: id };
     const h = new Humanoid(pal);
-    h.update(0.016, 'stand', 0, 0, 0);
-    h.root.position.x = ids.length > 1 ? (i === 0 ? -0.45 : 0.45) : 0;
-    h.root.rotation.y = (params.yaw * Math.PI) / 180;
+    h.expression = params.expression;
+    const leisure = pose === 'drink' || pose === 'smoke' || pose === 'relax';
+    h.leisure = leisure ? pose : null;
+    h.update(0.016, leisure || pose === 'walk' ? 'stand' : pose as PoseKind, pose === 'walk' ? 1.4 : 0, 0, 0);
+    const yaw = (params.yaw * Math.PI) / 180;
+    if (sheet) {
+      // Lying, the body runs back from the feet: turned side-on, head to the right.
+      h.root.position.set(SHEET_X[pose as Pose], 0, 0);
+      h.root.rotation.y = pose === 'lie' ? yaw - Math.PI / 2 : yaw;
+    } else {
+      h.root.position.x = (i - (cast.length - 1) / 2) * 0.9;
+      h.root.rotation.y = yaw;
+    }
     h.root.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = true;
     });
     scene.add(h.root);
-    return { id, h };
+    return { id, pose, h };
   });
   frame();
 }
@@ -130,15 +201,29 @@ function frame() {
     dist = 0.5;
   } else if (params.view === 'bust') {
     t.y -= 0.22;
-    dist = 1.6;
+    dist = params.hero === 'nuhat' ? 2.25 : 1.6;
   } else if (params.view === 'body') {
     t.y = 0.95 * Math.max(...people.map((p) => HERO_LOOKS[p.id].scale));
     dist = 3.6;
     fov = 34;
   }
-  if (params.hero === 'both' && params.view === 'face') dist = 1.9;
+  if (params.pose !== 'stand' && params.view === 'body') {
+    // Sat or lying, the body is low: aim at the middle of everyone shown, from a little higher.
+    const box = new THREE.Box3();
+    for (const p of people) box.expandByObject(p.h.root);
+    for (const l of loungers) box.expandByObject(l.group);
+    box.getCenter(t);
+    t.y = Math.max(0.45, t.y);
+    // Back off until the whole group fits both across and up the frame, with a margin.
+    const half = Math.tan((fov * Math.PI) / 360);
+    const view = canvas.parentElement!;
+    const aspect = (view.clientWidth * (params.ref ? 0.5 : 1)) / Math.max(1, view.clientHeight);
+    dist = 1.2 * Math.max((box.max.x - box.min.x) / (2 * half * aspect), (box.max.y - box.min.y) / (2 * half), 1.5) + (box.max.z - box.min.z) / 2;
+  }
+  // Side by side, 0.9 m apart: back off far enough to get every face in.
+  if (people.length > 1 && params.view === 'face') dist = 0.5 + 1.9 * (people.length - 1);
   camera.fov = fov;
-  camera.position.set(t.x, t.y + (params.view === 'body' ? 0.25 : 0.02), t.z + dist);
+  camera.position.set(t.x, t.y + (params.view === 'body' ? (params.pose === 'stand' ? 0.25 : 0.12 * dist) : 0.02), t.z + dist);
   controls.target.copy(t);
   controls.update();
   lights();
@@ -191,12 +276,14 @@ const bar = document.getElementById('bar')!;
 function buttons() {
   bar.classList.toggle('hide', !params.ui);
   const groups: [keyof Params, (string | number)[]][] = [
-    ['hero', ['chinsky', 'leo', 'both']],
+    ['hero', [...HERO_IDS, 'all']],
     ['view', ['close', 'face', 'bust', 'body']],
+    ['pose', [...POSES, 'walk', 'sheet', 'eat', 'burger', 'lounge', 'drink', 'smoke', 'relax']],
     ['yaw', [0, 35, 90, 180, -35]],
-    ['kit', ['start', 'own', 'helmet', 'cap', 'goggles', 'gasmask']],
+    ['kit', ['start', 'shirt', 'own', 'helmet', 'cap', 'goggles', 'gasmask']],
     ['light', ['studio', 'sun']],
   ];
+  if (params.hero === 'nuhat') groups.splice(3, 0, ['expression', [...CHARACTER_EXPRESSIONS]]);
   bar.innerHTML = '';
   for (const [key, opts] of groups) {
     for (const o of opts) {
@@ -210,8 +297,13 @@ function buttons() {
 }
 
 function set(p: Partial<Params>) {
+  if (p.hero === 'udud' && p.pose === undefined) p = { ...p, pose: 'lounge' };
   Object.assign(params, p);
   buttons();
+  if (Object.keys(p).every(key => key === 'expression')) {
+    for (const person of people) person.h.expression = params.expression;
+    return;
+  }
   build();
 }
 
@@ -251,10 +343,10 @@ function showTexture(id: HeroId, crop: [number, number, number, number] = [0.35,
 
 declare global {
   interface Window {
-    __portrait?: { set: typeof set; params: Params; render: typeof render; people: () => typeof people; showTexture: typeof showTexture };
+    __portrait?: { set: typeof set; params: Params; render: typeof render; people: () => typeof people; showTexture: typeof showTexture; eaters: () => (CakeEater | BurgerEater)[] };
   }
 }
-window.__portrait = { set, params, render, people: () => people, showTexture };
+window.__portrait = { set, params, render, people: () => people, showTexture, eaters: () => eaters };
 window.addEventListener('resize', layout);
 buttons();
 {
@@ -266,7 +358,17 @@ buttons();
   console.info(`portrait: build ${(t1 - t0).toFixed(0)} ms, first draw ${(performance.now() - t1).toFixed(0)} ms`);
 }
 // Keep drawing, so the page always has a fresh frame to show (and to screenshot).
+let lastFrame = performance.now();
 const loop = () => {
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - lastFrame) / 1000);
+  lastFrame = now;
+  for (const e of eaters) e.update(dt);
+  for (const l of loungers) l.update(dt);
+  for (const p of people) {
+    if (p.pose === 'eat' || p.pose === 'burger' || p.pose === 'lounge') continue;
+    p.h.update(dt, p.h.leisure || p.pose === 'walk' ? 'stand' : p.pose as PoseKind, p.pose === 'walk' ? 1.4 : 0, 0, 0);
+  }
   render();
   requestAnimationFrame(loop);
 };

@@ -1,4 +1,4 @@
-import { FIT_SLOTS, PARTS, chassisDef, isInteriorSlot, mountsFor, partDef, type Cost, type FuelType, type PartSlot, type Stocks, type VehicleDef } from '../data';
+import { FIT_SLOTS, GLASS_NONE, PARTS, chassisDef, isGlassSlot, isInteriorSlot, mountsFor, partDef, type Cost, type FuelType, type PartSlot, type Stocks, type VehicleDef } from '../data';
 import { clamp } from '../core/math';
 import { newHealth, type VehicleHealth } from './damage';
 import { OIL_CRITICAL, OIL_LOW } from './oil';
@@ -6,6 +6,7 @@ import type { BodySave } from './bodywork';
 import { effectiveStats, mkOf, newPart, newUid, slotsOf, type Fit, type PartItem, type Stats, type Tyres } from './parts';
 import { fuelOf, stockEngineSpec } from './engines';
 import { factoryIdFor } from './drivetrain';
+import { clearPanes, glassCond, glassIdIn, glassItem } from './glassfit';
 import { COOLANT_LOW } from './fluids';
 import { fuelMismatch } from './fuel';
 import type { PanelPaint } from './paint';
@@ -126,6 +127,7 @@ export function fromHealth(b: VehicleBuild, h: VehicleHealth, fuelFrac: number) 
 
 /** The part in a slot with its condition read off the vehicle, as it would come out. */
 export function currentCond(b: VehicleBuild, slot: PartSlot): number {
+  if (isGlassSlot(slot)) return glassCond(b, defOf(b), slot);
   switch (slot) {
     case 'engine':
       return b.comp.engine;
@@ -170,6 +172,10 @@ export const EMPTY_ID: Partial<Record<PartSlot, string>> = {
   seatR: 'bench_none',
   steer: 'steer_none',
   dash: 'dash_none',
+  glassF: GLASS_NONE.glassF,
+  glassB: GLASS_NONE.glassB,
+  glassL: GLASS_NONE.glassL,
+  glassR: GLASS_NONE.glassR,
 };
 
 /** Slots a part can be taken off and left empty: everything that has a factory part or a placeholder. */
@@ -181,6 +187,8 @@ export const REMOVABLE: PartSlot[] = FIT_SLOTS.filter((s) => EMPTY_ID[s]);
  */
 export function partInSlot(b: VehicleBuild, slot: PartSlot): PartItem | null {
   if (slot === 'wheels') return null;
+  // Glass wears by what has happened to its panes, and one that has gone is nothing to carry.
+  if (isGlassSlot(slot)) return glassItem(b, defOf(b), slot);
   const fitted = b.fit[slot];
   if (fitted) return partDef(fitted.id).empty ? null : { ...fitted, cond: currentCond(b, slot) };
   const id = stockPartId(defOf(b), slot);
@@ -190,6 +198,7 @@ export function partInSlot(b: VehicleBuild, slot: PartSlot): PartItem | null {
 /** Which part sits in a slot (fitted, or the factory one), without making an item of it. Null for an empty mount. */
 export function idInSlot(b: VehicleBuild, slot: PartSlot): string | null {
   if (slot === 'wheels') return tyreIdAt(b, 0);
+  if (isGlassSlot(slot)) return glassIdIn(defOf(b), b.fit, slot);
   const fitted = b.fit[slot];
   if (fitted) return partDef(fitted.id).empty ? null : fitted.id;
   return stockPartId(defOf(b), slot) ?? null;
@@ -199,11 +208,25 @@ export function idInSlot(b: VehicleBuild, slot: PartSlot): string | null {
 
 const tyreNone = () => newPart('tyre_none', 1);
 
+/** The tyre a chassis left the factory with on wheel `i`. */
+export function factoryTyreId(def: VehicleDef, i: number): string {
+  return def.tyres?.[i] ?? `tyre_${def.id}`;
+}
+
 /** Which tyre is on a wheel: fitted, or the factory one. Null for a bare hub. */
 export function tyreIdAt(b: VehicleBuild, i: number): string | null {
   const t = b.tyres[i];
   if (t) return partDef(t.id).empty ? null : t.id;
-  return `tyre_${b.chassis}`;
+  return factoryTyreId(defOf(b), i);
+}
+
+/**
+ * Whether a tyre goes on wheel `i` of this chassis: an ordinary tyre on an ordinary hub, and a wheel made for one kind of
+ * hub (a motorcycle front wheel, a rickshaw's small wheel) only on that kind.
+ */
+export function tyreFits(def: VehicleDef, i: number, id: string): boolean {
+  const want = partDef(factoryTyreId(def, i)).wheel;
+  return partDef(id).wheel === want;
 }
 
 /** The tyre on a wheel as something you could carry, wearing what it wears now. */
@@ -229,6 +252,7 @@ export function installTyre(b: VehicleBuild, i: number, item: PartItem): Install
   const d = partDef(item.id);
   if (d.slot !== 'wheels' || d.empty) return { ok: false, reason: 'That is not a tyre' };
   if (i < 0 || i >= b.tyres.length) return { ok: false, reason: 'No such wheel' };
+  if (!tyreFits(defOf(b), i, item.id)) return { ok: false, reason: `${d.name} does not go on that hub` };
   const removed = tyreAt(b, i) ?? undefined;
   b.tyres[i] = item;
   b.comp.tires[i] = item.cond > 0.02 ? item.cond : 0;
@@ -258,6 +282,13 @@ export function installPart(b: VehicleBuild, item: PartItem, at?: PartSlot | num
   if (cat === 'wheels') {
     if (!slotsOf(def).includes('wheels')) return { ok: false, reason: `A ${def.name} has no wheels to fit` };
     if (typeof at === 'number') return installTyre(b, at, item);
+    // Whole wheels go on one at a time, each on a hub made for it.
+    if (def.physics.wholeWheels) {
+      const i = b.tyres.findIndex((t, k) => tyreFits(def, k, item.id) && !tyreIdAt(b, k));
+      const at2 = i >= 0 ? i : b.tyres.findIndex((_, k) => tyreFits(def, k, item.id));
+      if (at2 < 0) return { ok: false, reason: `${d.name} does not go on a ${def.name}` };
+      return installTyre(b, at2, item);
+    }
     let removed: PartItem | undefined;
     b.tyres.forEach((_, i) => {
       const r = installTyre(b, i, i === 0 ? item : { ...item, uid: newUid('p') });
@@ -271,6 +302,8 @@ export function installPart(b: VehicleBuild, item: PartItem, at?: PartSlot | num
   const removed = partInSlot(b, slot) ?? undefined;
   b.fit[slot] = item;
   setComp(b, slot, item.cond);
+  // A new pane starts as worn as it was carried, whatever the old one had taken.
+  if (isGlassSlot(slot)) clearPanes(b, slot);
   let note: string | undefined;
   if (slot === 'engine') {
     const mismatch = fuelMismatch(fuelOf(def, b.fit), b.tank, b.fuel);
@@ -302,6 +335,7 @@ export function removePart(b: VehicleBuild, slot: PartSlot): PartItem | null {
   const empty = EMPTY_ID[slot];
   if (empty) b.fit[slot] = newPart(empty, 1);
   else delete b.fit[slot];
+  if (isGlassSlot(slot)) clearPanes(b, slot);
   const stock = PARTS.stockCondition;
   if (slot === 'engine') b.comp.engine = Math.min(b.comp.engine, stock);
   else if (slot === 'cooling') b.comp.radiator = Math.min(b.comp.radiator ?? 1, stock);
@@ -355,7 +389,7 @@ export function dismantleYield(b: VehicleBuild): { stocks: Partial<Stocks>; item
   for (const slot of FIT_SLOTS) {
     const it = partInSlot(b, slot);
     // Factory seats, wheel and dash are not worth hauling out of a breaker's yard; only what was fitted comes back.
-    if (it && !(isInteriorSlot(slot) && partDef(it.id).stock)) items.push(it);
+    if (it && !((isInteriorSlot(slot) || isGlassSlot(slot)) && partDef(it.id).stock)) items.push(it);
   }
   for (let i = 0; i < b.tyres.length; i++) {
     const t = tyreAt(b, i);
@@ -436,6 +470,8 @@ export function conditionSummary(b: VehicleBuild): string {
   if (st.noDriverSeat) bits.push('no driver seat');
   if (st.noPassengerSeat) bits.push('no passenger seat');
   if (st.noDash) bits.push('no dashboard');
+  const noGlass = (['glassF', 'glassB', 'glassL', 'glassR'] as const).filter((g) => slotsOf(defOf(b)).includes(g) && idInSlot(b, g) === null).length;
+  if (noGlass) bits.push(noGlass === 1 && idInSlot(b, 'glassF') === null ? 'no windscreen' : 'glass missing');
   if (st.tyresGone) bits.push(`${st.tyresGone} wheel${st.tyresGone > 1 ? 's' : ''} bare`);
   if (b.comp.oil < OIL_CRITICAL) bits.push('oil dry');
   else if (b.comp.oil < OIL_LOW) bits.push('low on oil');

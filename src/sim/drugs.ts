@@ -168,6 +168,12 @@ export const LOOK_KEYS: (keyof Look)[] = [
   'tintR', 'tintG', 'tintB', 'sky', 'eye', 'breathe', 'spores', 'mush', 'tempo',
 ];
 
+/** Spatial distortion only; colour, trails and hallucinations keep their normal strength and timing. */
+export const MORPH_KEYS = ['warp', 'kaleido', 'pulse', 'breathe'] as const satisfies readonly (keyof Look)[];
+const DEFAULT_MORPH_STRENGTH = 0.8;
+const MORPH_STRENGTH = 0.8;
+const MORPH_DURATION = 0.7;
+
 export const NO_LOOK: Look = Object.freeze({
   hue: 0, sat: 0, warp: 0, chroma: 0, dbl: 0, kaleido: 0, tunnel: 0, pulse: 0, blur: 0, edge: 0, glow: 0, dark: 0, trail: 0, roll: 0, bright: 0,
   tintR: 0, tintG: 0, tintB: 0, sky: 0, eye: 0, breathe: 0, spores: 0, mush: 0, tempo: 0,
@@ -182,11 +188,11 @@ const LOOK_RANGE: Partial<Record<keyof Look, [number, number]>> = {
   tempo: [-0.6, 0.6],
 };
 
-function foldLook(out: Look, src: Partial<Look> | undefined, k: number) {
+function foldLook(out: Look, src: Partial<Look> | undefined, k: number, morphK = k) {
   if (!src || k <= 0) return;
   for (const key of LOOK_KEYS) {
     const v = src[key];
-    if (v !== undefined) out[key] += v * k;
+    if (v !== undefined) out[key] += v * ((MORPH_KEYS as readonly (keyof Look)[]).includes(key) ? morphK : k);
   }
 }
 
@@ -245,7 +251,7 @@ export const DRUGS: Record<DrugId, DrugDef> = {
   painkiller: {
     id: 'painkiller',
     name: 'Painkillers',
-    blurb: 'Half damage for 90s. You feel nothing, then everything.',
+    blurb: 'Half damage for 90s. Eases drug morphing by a further 20% and cuts its remaining time by 30%. A sore comedown.',
     cls: 'medical',
     glyph: 'P',
     color: '#9ad0ff',
@@ -600,6 +606,8 @@ export interface ActiveDrug {
   age: number;
   /** Seconds of effect left. */
   left: number;
+  /** Separate visual clock after a painkiller: morphing is weaker and ends before the other effects. */
+  morphLeft?: number;
   /** Seconds of comedown left. */
   crash: number;
   crashMax: number;
@@ -612,6 +620,7 @@ export interface ActiveDrug {
 export type Phase = 'onset' | 'peak' | 'taper' | 'comedown';
 
 export type DrugEvent =
+  | { type: 'delayedDose'; id: DrugId; source: string; result: DoseResult }
   | { type: 'vomit'; purge: boolean }
   | { type: 'stumble'; dir: number }
   | { type: 'outburst'; kind: 'laugh' | 'hiccup' | 'sing'; loud: number }
@@ -633,7 +642,10 @@ export interface DoseResult {
   notes: string[];
 }
 
+export interface DelayedDose { id: DrugId; left: number; source: string }
+
 export interface DrugSave {
+  delayed?: DelayedDose[];
   active: ActiveDrug[];
   toxicity: number;
   dependence: number;
@@ -655,6 +667,8 @@ const smooth = (t: number) => {
 
 export class DrugState {
   active: ActiveDrug[] = [];
+  /** Ingested effects wait here, per player and across scene changes/saves. */
+  delayed: DelayedDose[] = [];
   toxicity = 0;
   dependence = 0;
   /** Seconds since the last dose. */
@@ -777,6 +791,11 @@ export class DrugState {
       cur.age = Math.max(cur.age, def.onset);
       cur.crash = cur.crashMax = def.crash;
       cur.tol = tolBefore;
+      // A fresh dose restores its visuals; stacked doses add visual time to what remains.
+      if (cur.morphLeft !== undefined) {
+        if (def.stack === 'stack') cur.morphLeft = Math.min(cur.left, cur.morphLeft + def.duration);
+        else delete cur.morphLeft;
+      }
     } else {
       this.active.push({ id, age: 0, left: def.duration, crash: def.crash, crashMax: def.crash, peak: 0, tol: tolBefore });
     }
@@ -794,6 +813,11 @@ export class DrugState {
       const al = this.active.find((a) => a.id === 'alcohol');
       if (al) al.left *= 0.6;
     }
+    if (id === 'painkiller') {
+      for (const a of this.active) {
+        if (a.id !== 'painkiller' && a.left > 0) a.morphLeft = (a.morphLeft ?? a.left) * MORPH_DURATION;
+      }
+    }
     this.recompute();
     const overdose = this.overdosing;
     if (overdose && !this.wasOverdosing) {
@@ -803,9 +827,14 @@ export class DrugState {
     return { heal: def.heal, overdose, relieved, notes };
   }
 
+  scheduleDose(id: DrugId, seconds: number, source: string) {
+    this.delayed.push({ id, left: Math.max(0, seconds), source });
+  }
+
   /** Sleep it off: the night passes. Effects clear, toxicity goes, the body half forgets. */
   rest() {
     this.active = [];
+    this.delayed = [];
     this.toxicity = 0;
     this.dependence *= 0.7;
     for (const k of Object.keys(this.tolerance) as DrugId[]) this.tolerance[k] = (this.tolerance[k] ?? 0) * 0.5;
@@ -868,6 +897,7 @@ export class DrugState {
     }
     for (const a of this.active) {
       a.age += dt;
+      if (a.morphLeft !== undefined) a.morphLeft = Math.max(0, a.morphLeft - dt);
       if (a.left > 0) {
         a.left -= dt;
         a.peak = Math.max(a.peak, this.potency(a));
@@ -890,6 +920,15 @@ export class DrugState {
     const over = this.overdosing;
     if (over && !this.wasOverdosing) this.events.push({ type: 'overdose' });
     this.wasOverdosing = over;
+    // Apply after the existing doses tick, so a newly triggered dose starts at age zero.
+    const due: DelayedDose[] = [];
+    this.delayed = this.delayed.filter((d) => {
+      d.left -= dt;
+      if (d.left > 1e-8) return true;
+      due.push(d);
+      return false;
+    });
+    for (const d of due) this.events.push({ type: 'delayedDose', id: d.id, source: d.source, result: this.dose(d.id) });
   }
 
   // ------------------------------------------------------------------ the maths
@@ -935,12 +974,21 @@ export class DrugState {
     // Mods and look.
     const m: DrugMods = { ...NEUTRAL };
     const l: Look = { ...NO_LOOK };
+    const morphStrength: Partial<Record<DrugId, number>> = {};
     for (const a of this.active) {
       const def = DRUGS[a.id];
       if (a.left > 0) {
         const k = this.strength[a.id] ?? 0;
+        let morphK = k;
+        if (a.morphLeft !== undefined) {
+          // Replace the normal taper with the shorter visual taper, without fading the rest of the trip.
+          const taper = def.stack === 'refresh' && def.taper > 0 ? smooth(a.left / def.taper) : 1;
+          const visualTaper = smooth(a.morphLeft / Math.max(1, def.taper * MORPH_DURATION));
+          morphK = taper > 0 ? k / taper * MORPH_STRENGTH * visualTaper : 0;
+        }
+        morphStrength[a.id] = morphK;
         foldMods(m, def.on, k);
-        foldLook(l, def.look, k);
+        foldLook(l, def.look, k, morphK);
         if (def.front) {
           // A bump over the onset: nothing at the first sip, worst around the time it comes on, gone by twice that.
           const bump = Math.sin(Math.PI * clamp(a.age / (def.onset * 2.2), 0, 1));
@@ -949,13 +997,17 @@ export class DrugState {
       } else if (a.crashMax > 0) {
         const kc = clamp(a.crash / a.crashMax, 0, 1) * Math.max(0.35, Math.min(a.peak, 3));
         foldMods(m, def.down, kc);
-        foldLook(l, def.lookDown, kc);
+        foldLook(l, def.lookDown, kc, a.morphLeft === undefined ? kc : 0);
       }
     }
     for (const b of this.blendsCache) {
       if (b.k < BLEND_MIN) continue;
       foldMods(m, b.def.mods, b.k);
-      foldLook(l, b.def.look, b.k);
+      const morphRatio = Math.min(...b.def.needs.map((id) => {
+        const k = this.strength[id] ?? 0;
+        return k > 0 ? (morphStrength[id] ?? 0) / k : 0;
+      }));
+      foldLook(l, b.def.look, b.k, b.k * morphRatio);
     }
     // The body's own complaints.
     const w = this.withdrawal;
@@ -989,6 +1041,13 @@ export class DrugState {
     }
     clampMods(m);
     clampLook(l);
+    // Keep the same 20% cut when a heavy blend would otherwise saturate the visual range.
+    if (this.active.some((a) => a.morphLeft !== undefined) &&
+        this.active.every((a) => a.id === 'painkiller' || a.morphLeft !== undefined)) {
+      for (const key of MORPH_KEYS) l[key] = Math.min(l[key], MORPH_STRENGTH);
+    }
+    // Apply after the range limit so even peak blends have 20% less default distortion.
+    for (const key of MORPH_KEYS) l[key] *= DEFAULT_MORPH_STRENGTH;
     this.modsCache = m;
     this.lookCache = l;
   }
@@ -1091,6 +1150,7 @@ export class DrugState {
   serialize(): DrugSave {
     return {
       active: this.active.map((a) => ({ ...a })),
+      delayed: this.delayed.map((d) => ({ ...d })),
       toxicity: this.toxicity,
       dependence: this.dependence,
       since: Math.min(this.since, 999),
@@ -1106,6 +1166,7 @@ export class DrugState {
     if (!d) return s;
     const known = (id: unknown): id is DrugId => typeof id === 'string' && id in DRUGS;
     s.active = (d.active ?? []).filter((a) => known(a.id)).map((a) => ({ ...a }));
+    s.delayed = (d.delayed ?? []).filter((v) => known(v.id) && Number.isFinite(v.left) && v.left >= 0 && typeof v.source === 'string').map((v) => ({ ...v }));
     s.toxicity = d.toxicity ?? 0;
     s.dependence = d.dependence ?? 0;
     s.since = d.since ?? 999;

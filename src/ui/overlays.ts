@@ -1,9 +1,9 @@
-import { ENCOUNTERS, HEROES, LEGS, STRUCTURES, encounterById, legById, otherHero, seatHeroes, t, type HeroId, type LegDef } from '../data';
+import { ENCOUNTERS, HEROES, LEGS, STRUCTURES, encounterById, legById, nextHero, otherHero, seatHeroes, t, type HeroId, type LegDef } from '../data';
 import { FocusUI, type FocusItem } from './focus';
 import { LedgerPanel } from './ledger';
 import { ControlsMenu } from './controls';
 import { Guide } from './guide';
-import { PROMPT_ACTION, keyLabel, padLabel, padPhysical, viewSharesVehicle, type KeyMap } from '../input/bindings';
+import { PROMPT_ACTION, keyLabel, padLabel, padPhysical, type KeyMap } from '../input/bindings';
 import { escapeHtml } from './hud';
 import { hasSave, initSave, savedSolo } from '../save/save';
 import { Btn, wasPressed } from '../input/intents';
@@ -20,18 +20,22 @@ import type { Traveller } from '../game/travellers';
 import type { Game } from '../game/game';
 import type { CampScene } from '../game/campScene';
 import type { QualityPreset } from '../render/renderer';
+import { BENCHMARK_CASES, BENCHMARK_SCENARIOS } from '../game/benchmark';
 
 export class Overlays {
   root = document.getElementById('overlay')!;
   private pauseEl: HTMLElement | null = null;
   pauseFocus = new FocusUI();
-  /** Who plays alone (Leo unless picked otherwise), and whether split screen has swapped Chinsky and Leo between seats. */
+  /** Who plays alone (Leo unless picked otherwise), and who sits in each split-screen seat (Chinsky and Leo unless picked otherwise). */
   private soloHero: HeroId = seatHeroes(true)[0];
-  private swapped = false;
+  private pair: [HeroId, HeroId] = seatHeroes(false);
   private debugEl: HTMLElement | null = null;
   private titleReady = false;
   private tickers: ((dt: number) => void)[] = [];
   private ledger: LedgerPanel | null = null;
+  private benchmarkDuration: 'quick' | 'standard' = 'standard';
+  private benchmarkProgress: HTMLElement | null = null;
+  private benchmarkPaint = 0;
 
   constructor(private game: Game) {
     this.pauseFocus.onCancel = () => {
@@ -42,8 +46,7 @@ export class Overlays {
   /** Who sits in each seat for the next run: Chinsky left and Leo right in split screen, Leo alone, unless picked otherwise. */
   heroes(): [HeroId, HeroId] {
     if (this.game.solo) return [this.soloHero, otherHero(this.soloHero)];
-    const [a, b] = seatHeroes(false);
-    return this.swapped ? [b, a] : [a, b];
+    return [this.pair[0], this.pair[1]];
   }
 
   private clear() {
@@ -84,7 +87,7 @@ export class Overlays {
   showTitle() {
     this.clear();
     void initSave().then(() => {
-      if (this.game.phase === 'title') this.renderTitle();
+      if (this.game.phase === 'title' && this.root.querySelector('.title-screen')) this.renderTitle();
     });
     this.renderTitle();
   }
@@ -111,6 +114,7 @@ export class Overlays {
         <div class="btnrow" style="margin-bottom:14px"><button data-fid="mode">Players: ${solo ? '‹ 1 · SOLO ›' : '‹ 2 · SPLIT SCREEN ›'}</button></div>
         <div class="slots">${slotHtml(0)}${solo ? '' : slotHtml(1)}</div>
         <div class="btnrow" style="margin-top:22px">
+          <button data-fid="story" class="g-go">Story</button>
           <button data-fid="new">New convoy</button>
           <button data-fid="cont" ${hasSave() ? '' : 'disabled'}>Continue${saved}</button>
           <button data-fid="set">Settings</button>
@@ -120,6 +124,8 @@ export class Overlays {
         <div class="btnrow" style="margin-top:10px">
           <button data-fid="learn" class="g-go">How to play</button>
           <button data-fid="train" class="g-go">Training</button>
+          <button data-fid="garden">Amirat's garden</button>
+          <button data-fid="bench">Benchmark</button>
         </div>
         <p style="font-size:.78em;margin-top:18px">${solo ? 'One player, full screen. Plug in a gamepad and press A, or use the keyboard (WASD with F, or the arrow keys with Right Shift).' : 'Two players, one screen. Plug in two gamepads and press A, or share the keyboard.'} Chrome or Edge recommended; gamepads need localhost or HTTPS.</p>
         ${g.input.nonStandard.size ? '<p style="color:var(--amber)">A controller without the standard mapping was detected. Controls may be wrong.</p>' : ''}
@@ -129,6 +135,7 @@ export class Overlays {
       { el: el('mode'), press: () => this.titleLock <= 0 && this.toggleSolo() },
       { el: el('name0'), press: () => this.titleLock <= 0 && this.cycleName(0) },
       ...(solo ? [] : [{ el: el('name1'), press: () => this.titleLock <= 0 && this.cycleName(1) }]),
+      { el: el('story'), press: () => this.titleLock <= 0 && g.startStory() },
       { el: el('new'), press: () => this.titleLock <= 0 && g.startNewGame() },
       { el: el('cont'), press: () => this.titleLock <= 0 && g.continueGame(), disabled: !hasSave() },
       { el: el('set'), press: () => this.titleLock <= 0 && this.showSettings(() => this.showTitle()) },
@@ -136,6 +143,8 @@ export class Overlays {
       { el: el('how'), press: () => this.titleLock <= 0 && this.showControls(() => this.showTitle()) },
       { el: el('learn'), press: () => this.titleLock <= 0 && this.showGuide(() => this.showTitle(), () => g.startTraining()) },
       { el: el('train'), press: () => this.titleLock <= 0 && g.startTraining() },
+      { el: el('garden'), press: () => { if (this.titleLock <= 0) location.href = '/garden.html'; } },
+      { el: el('bench'), press: () => this.titleLock <= 0 && this.showBenchmark() },
     ];
     g.focus.setItems(items);
     const start = items.findIndex((i) => i.el === el('new'));
@@ -157,10 +166,10 @@ export class Overlays {
     g.focus.cursor = [0, 0];
   }
 
-  /** Pick the other hero for a seat. In split screen the two always differ, so picking one swaps them. */
+  /** Pick the next hero for a seat. In split screen the two always differ, so a seat passes over whoever has the other. */
   private cycleName(i: number) {
-    if (this.game.solo) this.soloHero = otherHero(this.soloHero);
-    else this.swapped = !this.swapped;
+    if (this.game.solo) this.soloHero = nextHero(this.soloHero);
+    else this.pair[i] = nextHero(this.pair[i], this.pair[1 - i]);
     this.game.audio.play('click');
     // The demo behind the menu restarts so whoever was picked rides in it.
     this.game.restartAttract();
@@ -172,7 +181,7 @@ export class Overlays {
   /** After a player joins, the same A press must not also confirm a menu item. */
   private titleLock = 0;
   tickTitle(dt: number) {
-    if (!this.titleReady || this.game.phase !== 'title') return;
+    if (!this.titleReady || this.game.phase !== 'title' || !this.root.querySelector('.title-screen')) return;
     this.titleLock = Math.max(0, this.titleLock - dt);
     const j = this.game.input.joined + (this.game.input.slots[0]?.kind === 'pad' ? 10 : 0) + (this.game.input.slots[1]?.kind === 'pad' ? 20 : 0);
     if (j !== this.lastJoined) {
@@ -191,23 +200,90 @@ export class Overlays {
 
   // ------------------------------------------------------------------ settings & controls
 
+  showBenchmark(message?: string) {
+    this.clear();
+    this.benchmarkProgress = null;
+    const g = this.game, report = g.benchmarkReport;
+    const results = report ? `<h3>Last completed run</h3>
+      <p>${escapeHtml(report.quality.toUpperCase())} · ${report.width} × ${report.height} · ${report.pixelRatio.toFixed(2)} render pixels / CSS pixel · ${report.duration} run</p>
+      <div class="benchmark-table"><table><thead><tr><th>Scenario / view</th><th>FPS</th><th>1% low</th><th>95% frame</th><th>CPU sim</th><th>CPU draw</th><th>Calls</th><th>Triangles</th></tr></thead><tbody>
+      ${report.results.map(r => `<tr><td>${escapeHtml(r.scenario)}<small>${escapeHtml(r.mode)}</small></td><td>${r.fps.toFixed(1)}</td><td>${r.low1Fps.toFixed(1)}</td><td>${r.p95Ms.toFixed(1)} ms</td><td>${r.simulationMs.toFixed(1)} ms</td><td>${r.renderCpuMs.toFixed(1)} ms</td><td>${Math.round(r.calls)}</td><td>${(r.triangles / 1000).toFixed(0)}k</td></tr>`).join('')}
+      </tbody></table></div>
+      <p class="benchmark-note">FPS includes browser frame pacing and may be capped by your display. 1% low uses the slowest 1% of frames; 95% of frames finish within the listed frame time. CPU draw is submission time, not GPU execution. JSON includes 99% frame time, slow-frame counts and discarded simulation steps.</p>` : '';
+    this.root.innerHTML = `<div class="menu benchmark-menu"><h2>Performance benchmark</h2>
+      <p>Runs ${BENCHMARK_SCENARIOS.length} scenarios in single screen, top / bottom split, and left / right split: ${BENCHMARK_CASES.length} tests.</p>
+      <p>${BENCHMARK_SCENARIOS.map(s => escapeHtml(s.name)).join(' · ')}</p>
+      <p class="benchmark-note">Uses your current <b>${g.R.quality.toUpperCase()}</b> graphics preset at fixed resolution. Each scene warms up before measurement. Audio is muted; your settings and joined controllers return afterwards. Keep this tab visible and the window size steady.</p>
+      ${message ? `<p role="status">${escapeHtml(message)}</p>` : ''}
+      <div class="btnrow"><button data-fid="duration">${this.benchmarkDuration === 'standard' ? 'Standard · about 3 minutes' : 'Quick · about 1 minute'}</button><button data-fid="run">${report ? 'Run again' : 'Run benchmark'}</button>${report ? '<button data-fid="download">Download results</button>' : ''}<button data-fid="back">Back</button></div>
+      ${results}</div>`;
+    const el = (id: string) => this.root.querySelector<HTMLElement>(`[data-fid="${id}"]`)!;
+    g.focus.setItems([
+      { el: el('duration'), press: () => { this.benchmarkDuration = this.benchmarkDuration === 'standard' ? 'quick' : 'standard'; this.showBenchmark(); } },
+      { el: el('run'), press: () => g.startBenchmark(this.benchmarkDuration) },
+      ...(report ? [{ el: el('download'), press: () => {
+        const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+        const a = document.createElement('a');
+        a.href = url; a.download = `iron-nomad-benchmark-${report.createdAt.slice(0, 19).replace(/:/g, '-')}.json`;
+        a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } }] : []),
+      { el: el('back'), press: () => this.showTitle() },
+    ]);
+    g.focus.cursor = [1, 1];
+    g.focus.active = true;
+    g.focus.onCancel = () => this.showTitle();
+  }
+
+  showBenchmarkRunning() {
+    this.clear();
+    this.root.innerHTML = `<div class="benchmark-live"><strong>Benchmark</strong><div data-benchmark-progress role="status"></div><button data-fid="cancel">Cancel · Esc</button></div>`;
+    this.benchmarkProgress = this.root.querySelector('[data-benchmark-progress]');
+    this.benchmarkPaint = 0;
+    this.game.focus.setItems([{ el: this.root.querySelector('[data-fid="cancel"]')!, press: () => this.game.stopBenchmark() }]);
+    this.game.focus.active = true;
+    this.game.focus.onCancel = () => this.game.stopBenchmark();
+    this.updateBenchmarkProgress();
+  }
+
+  updateBenchmarkProgress(hidden = false) {
+    const run = this.game.benchmark, el = this.benchmarkProgress;
+    if (!run || !el) return;
+    const now = performance.now();
+    if (!hidden && now - this.benchmarkPaint < 200) return;
+    this.benchmarkPaint = now;
+    const test = run.current;
+    if (!test) return;
+    const limit = run.stage === 'warming' ? run.warmupMs : run.measureMs;
+    const stage = hidden ? 'Paused while tab is hidden · this test will restart' : run.stage === 'loading' ? 'Loading' : `${run.stage === 'warming' ? 'Warming up' : 'Measuring'} · ${(Math.max(0, limit - run.elapsed) / 1000).toFixed(0)} s`;
+    el.textContent = `${run.index + 1} / ${BENCHMARK_CASES.length} · ${test.scenario.name} · ${test.name} · ${stage}`;
+  }
+
   showSettings(back: () => void) {
     const g = this.game;
     const wasPausedOverlay = g.paused;
     const host = wasPausedOverlay ? this.pauseEl! : this.root;
     const solo = g.solo;
+    let musicBusy = false;
+    let audioStatusTimer: ReturnType<typeof setInterval> | undefined;
+    const recordingStatus = () => g.audio.samples ? `${g.audio.samples.loaded}/${g.audio.samples.total} loaded${g.audio.samples.failures.size ? ` · ${g.audio.samples.failures.size} unavailable` : ''}` : 'Start audio with a key or click';
     const render = () => {
+      if (audioStatusTimer) clearInterval(audioStatusTimer);
       const s = g.input.settings;
       const row = (id: string, label: string, val: string) =>
         `<div class="item"><span>${label}</span><span style="display:flex;gap:6px;align-items:center"><button data-fid="${id}-" style="padding:0 8px">-</button><span style="min-width:96px;text-align:center;font-family:var(--mono)">${val}</span><button data-fid="${id}+" style="padding:0 8px">+</button></span></div>`;
       const d = g.campaign.difficulty;
-      host.innerHTML = `<div class="menu" style="min-width:640px"><h2>Settings</h2><div class="list">
+      host.innerHTML = `<div class="menu" style="min-width:min(640px,92vw);max-height:90vh;overflow-y:auto;pointer-events:auto"><h2>Settings</h2><div class="list">
         ${row('q', 'Graphics preset', g.R.quality.toUpperCase())}
         ${row('ui', 'UI scale', `${Math.round(g.hud.uiScale * 100)}%`)}
         ${solo ? '' : row('lay', 'Split screen', g.R.layout === 'horizontal' ? 'TOP / BOTTOM' : 'LEFT / RIGHT')}
         ${row('vol', 'Master volume', `${Math.round(g.audio.volume * 100)}%`)}
-        ${row('mus', 'Music volume', `${Math.round(g.audio.musicVolume * 100)}%`)}
-        ${row('tts', 'Radio TTS voice', g.audio.ttsEnabled ? 'ON' : 'OFF')}
+        ${row('user-mus', 'User music in vehicles', g.audio.userMusicEnabled ? 'ON' : 'OFF')}
+        ${row('user-vol', 'User music volume', `${Math.round(g.audio.userMusicVolume * 100)}%`)}
+        ${row('tts', 'Optional synthesized radio voice', g.audio.ttsEnabled ? 'ON' : 'OFF')}
+        ${row('voice', 'Read story lines aloud (browser voice)', g.storyVoice.enabled ? 'ON' : 'OFF')}
+        <div style="font-size:.7em;text-transform:none;letter-spacing:0">Recorded effects: <span data-audio-status>${recordingStatus()}</span> · <a href="audio/CREDITS.txt" target="_blank" rel="noopener">Sound credits and licenses</a></div>
+        <div class="item"><span>User music folder</span><span style="display:flex;gap:6px"><button data-fid="music-folder" ${musicBusy ? 'disabled' : ''}>Choose music folder</button><button data-fid="music-game" ${musicBusy ? 'disabled' : ''}>Default music folder</button></span></div>
+        <div style="font-size:.7em;text-transform:none;letter-spacing:0;max-width:620px;overflow-wrap:anywhere">${escapeHtml(g.audio.userMusic.label)} · ${escapeHtml(g.audio.userMusic.status)}<br>Drop tracks into public/music, or choose a folder on your device. Imports stay in this browser; reselect to refresh. Music pauses for radio speech and resumes where it left off.</div>
         ${row('rm1', solo ? 'Rumble' : 'P1 rumble', s.rumble[0] ? 'ON' : 'OFF')}
         ${solo ? '' : row('rm2', 'P2 rumble', s.rumble[1] ? 'ON' : 'OFF')}
         ${row('aa1', solo ? 'Aim assist' : 'P1 aim assist', `${Math.round(s.aimAssist[0] * 100)}%`)}
@@ -216,6 +292,7 @@ export class Overlays {
         ${row('dr', 'Drain (fuel, food)', `${d.drain.toFixed(2)}×`)}
         ${row('ag', 'Aggro (enemy senses)', `${d.aggro.toFixed(2)}×`)}
         ${row('dm', 'Damage taken', `${d.damage.toFixed(2)}×`)}
+        ${row('god', 'God mode (every weapon from the start)', g.godMode ? 'ON' : 'OFF')}
         <div class="item"><button data-fid="back">Back</button><span class="mutedtxt" style="color:#c9bd9f">${solo ? '' : 'Per-player options apply to that seat.'}</span></div>
       </div></div>`;
       (host.querySelectorAll('.menu button') as NodeListOf<HTMLElement>).forEach((b) => (b.style.pointerEvents = 'auto'));
@@ -239,12 +316,28 @@ export class Overlays {
           case 'vol':
             g.audio.setVolume(clamp(g.audio.volume + dir * 0.1, 0, 1));
             break;
+          case 'game-mus':
+            g.audio.setGameMusicEnabled(!g.audio.gameMusicEnabled);
+            break;
+          case 'user-mus':
+            g.audio.setUserMusicEnabled(!g.audio.userMusicEnabled);
+            break;
+          case 'user-vol':
+            g.audio.setUserMusicVolume(clamp(g.audio.userMusicVolume + dir * 0.1, 0, 1));
+            break;
           case 'mus':
             g.audio.setMusicVolume(clamp(g.audio.musicVolume + dir * 0.1, 0, 1));
             break;
           case 'tts':
             g.audio.setTtsEnabled(!g.audio.ttsEnabled);
             g.saveSettings();
+            break;
+          case 'voice':
+            g.storyVoice.enabled = !g.storyVoice.enabled;
+            if (!g.storyVoice.enabled) g.storyVoice.stop();
+            break;
+          case 'god':
+            g.setGodMode(!g.godMode);
             break;
           case 'rm1':
             st.rumble[0] = !st.rumble[0];
@@ -277,20 +370,55 @@ export class Overlays {
         render();
         fc.setItems(makeItems(), keys);
       };
-      const ids = ['q', 'ui', ...(solo ? [] : ['lay']), 'vol', 'mus', 'tts', 'rm1', ...(solo ? [] : ['rm2']), 'aa1', ...(solo ? [] : ['aa2']), 'ms', 'dr', 'ag', 'dm'];
+      const ids = ['q', 'ui', ...(solo ? [] : ['lay']), 'vol', 'user-mus', 'user-vol', 'tts', 'voice', 'rm1', ...(solo ? [] : ['rm2']), 'aa1', ...(solo ? [] : ['aa2']), 'ms', 'dr', 'ag', 'dm', 'god'];
       const makeItems = (): FocusItem[] => [
         ...ids.flatMap((id) => [
           { el: el(`${id}-`), press: () => step(id, -1) },
           { el: el(`${id}+`), press: () => step(id, 1) },
         ]),
+        { el: el('music-folder'), press: () => {
+          if (musicBusy) return;
+          const picker = document.createElement('input');
+          picker.type = 'file';
+          picker.multiple = true;
+          picker.setAttribute('webkitdirectory', '');
+          picker.accept = 'audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac,.opus,.webm';
+          picker.onchange = async () => {
+            const files = Array.from(picker.files ?? []);
+            if (!files.length) return;
+            musicBusy = true;
+            const label = files[0].webkitRelativePath.split('/')[0] || 'Selected music';
+            const pending = g.audio.userMusic.selectFiles(files, label);
+            render();
+            await pending;
+            musicBusy = false;
+            if (host.querySelector('[data-fid="music-folder"]')) render();
+          };
+          picker.click();
+        } },
+        { el: el('music-game'), press: async () => {
+          if (musicBusy) return;
+          musicBusy = true;
+          const pending = g.audio.userMusic.useGameFolder();
+          render();
+          await pending;
+          musicBusy = false;
+          if (host.querySelector('[data-fid="music-game"]')) render();
+        } },
         { el: el('back'), press: () => done() },
       ];
       fc.setItems(makeItems());
+      const status = host.querySelector<HTMLElement>('[data-audio-status]');
+      audioStatusTimer = setInterval(() => {
+        if (!status?.isConnected) { clearInterval(audioStatusTimer); return; }
+        status.textContent = recordingStatus();
+      }, 500);
     };
     const fc = wasPausedOverlay ? this.pauseFocus : g.focus;
     const prevActive = fc.active;
     const prevCancel = fc.onCancel;
     const done = () => {
+      if (audioStatusTimer) clearInterval(audioStatusTimer);
       fc.onCancel = prevCancel;
       fc.active = prevActive;
       back();
@@ -325,8 +453,7 @@ export class Overlays {
     const b = g.input.settings.bindings;
     const pad = (id: keyof typeof PROMPT_ACTION | 'wheel' | 'sheet' | 'view' | 'map' | 'inventory') => {
       const action = id === 'wheel' || id === 'sheet' || id === 'view' || id === 'map' || id === 'inventory' ? id : PROMPT_ACTION[id];
-      if (action === 'view' && b.pad.view === -2) return `${padLabel(b.pad.vehicle)} tap`;
-      if (action === 'vehicle' && viewSharesVehicle(b.pad)) return `${padLabel(b.pad.vehicle)} hold`;
+      if (action === 'view' && b.pad.view === -2) return `${padLabel(b.pad.sheet)} tap`;
       return padLabel(padPhysical(b.pad, action));
     };
     const pair = (a: string, c: string) => `${pad(a as 'A')} / ${pad(c as 'A')}`;
@@ -340,13 +467,13 @@ export class Overlays {
       [pad('A'), 'Tap jump (when nothing is in reach) · hold to loot, repair, strip, siphon, refuel, revive', 'Handbrake', 'Reload', 'Rotate'],
       [pad('B'), 'Crouch', 'Tap lights · hold engine off', 'Cancel', 'Cancel'],
       [pad('X'), 'Reload · hold swap utility · wrench: workbench', 'Tap horn · hold siren', 'Reload', 'Watch post'],
-      [pad('Y'), 'Enter any vehicle (abandoned cars become yours) · hold bail out', 'Exit · hold to bail at speed', 'Exit', 'Build wheel'],
+      [pad('Y'), 'Get in any vehicle (abandoned cars become yours)', 'Get out · hold to bail at speed', 'Get out', 'Build wheel'],
       [pad('view'), 'Switch first / third person', 'Same: look from the cab', 'Same: look along the gun', '—'],
       ['D-pad', 'Tap ping · hold command wheel', 'Same', 'Same', 'Same'],
       [pad('map'), 'Tap map: closer look, whole leg, close', 'Same', 'Same', 'Same'],
       [pad('inventory'), 'Inventory: change what you wear and hold (the game pauses)', 'Same', 'Same', 'Same'],
-      [pair('L3', 'R3'), 'Sprint / reset cam', 'Camera distance / look back', 'Zoom', 'Snap grid'],
-      [`Start / ${pad('sheet')}`, 'Pause · hold convoy sheet', 'Same', 'Same', 'Same'],
+      [pair('L3', 'R3'), 'Click to sprint (stays on until you stop) / reset cam', 'Camera distance / look back', 'Zoom', 'Snap grid'],
+      [`Start / ${pad('sheet')}`, 'Pause · hold for the convoy sheet', 'Same', 'Same', 'Same'],
     ];
     const kbLine = (set: 0 | 1) => {
       const m: KeyMap = b.kb[set];
@@ -391,6 +518,7 @@ export class Overlays {
     const who = by >= 0 && !g.solo ? `Paused by Player ${by + 1}` : 'Paused';
     const dis = g.hud.disconnected;
     const reconnect = dis[0] || dis[1] ? `<p style="color:var(--amber)">${dis[0] ? 'Player 1' : 'Player 2'}'s controller disconnected. Reconnect it or press a key.</p>` : '';
+    const night = g.scene?.mode === 'camp' && (g.scene as CampScene).canSkipNight;
     el.innerHTML = `<div class="menu"><h2>${who}</h2>${reconnect}<div class="list">
       <div class="item"><button data-fid="res">Resume</button></div>
       <div class="item"><button data-fid="set">Settings</button></div>
@@ -398,6 +526,7 @@ export class Overlays {
       <div class="item"><button data-fid="how">Controls</button></div>
       <div class="item"><button data-fid="learn">How to play</button></div>
       ${g.tutorial ? '<div class="item"><button data-fid="skip">Skip this lesson</button></div>' : ''}
+      ${night ? '<div class="item"><button data-fid="night">Skip the night</button></div>' : ''}
       ${g.solo ? '' : '<div class="item"><button data-fid="swap">Swap player seats</button></div>'}
       <div class="item"><button data-fid="quit">${g.tutorial ? 'Leave training' : 'Quit to title'}</button></div></div></div>`;
     (el.querySelectorAll('.menu button') as NodeListOf<HTMLElement>).forEach((b) => (b.style.pointerEvents = 'auto'));
@@ -408,6 +537,7 @@ export class Overlays {
       { el: q('ctl'), press: () => this.showControlSettings(() => this.renderPause(by)) },
       { el: q('how'), press: () => this.showControls(() => this.renderPause(by)) },
       { el: q('learn'), press: () => this.showGuide(() => this.renderPause(by)) },
+      ...(night ? [{ el: q('night'), press: () => (g.setPause(false, -1), (g.scene as CampScene).skipNight()) }] : []),
       ...(g.tutorial ? [{ el: q('skip'), press: () => (g.tutorial?.skip(), g.setPause(false, -1)) }] : []),
       ...(g.solo
         ? []

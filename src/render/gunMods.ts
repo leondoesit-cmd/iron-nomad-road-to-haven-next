@@ -45,6 +45,8 @@ export const ANCHORS: Record<GunModel, Anchors> = {
   sniper: { top: { y: 0.065, z: 0.3 }, muzzle: { y: 0.034, z: 1.21 }, under: { y: 0.012, z: 0.95 }, mag: { y: -0.105, z: 0.3 }, stock: { y: -0.01, z: -0.4 }, side: { x: -0.034, y: 0.02, z: 0.85 }, r: 0.015 },
   lever: { top: { y: 0.058, z: 0.25 }, muzzle: { y: 0.04, z: 0.85 }, under: { y: -0.012, z: 0.62 }, mag: { y: 0.008, z: 0.84 }, stock: { y: -0.01, z: -0.26 }, side: { x: -0.03, y: 0.03, z: 0.5 }, r: 0.012 },
   crossbow: { top: { y: 0.05, z: 0.22 }, muzzle: { y: 0.04, z: 0.58 }, under: { y: -0.035, z: 0.38 }, mag: { y: 0.03, z: 0.58 }, stock: { y: 0.0, z: -0.15 }, side: { x: -0.025, y: 0.02, z: 0.35 }, r: 0.01 },
+  // A bow takes no add-ons: these only place the arrow's point of departure, on the shelf beside the grip.
+  bow: { top: { y: 0.05, z: 0.0 }, muzzle: { y: 0.035, z: 0.06 }, under: { y: -0.08, z: 0.0 }, mag: { y: 0.0, z: 0.0 }, stock: { y: 0.0, z: -0.04 }, side: { x: -0.03, y: 0.0, z: 0.0 }, r: 0.01 },
   combat: { top: { y: 0.076, z: 0.1 }, muzzle: { y: 0.042, z: 0.82 }, under: { y: -0.02, z: 0.5 }, mag: { y: 0.01, z: 0.7 }, stock: { y: -0.01, z: -0.35 }, side: { x: -0.03, y: 0.04, z: 0.45 }, r: 0.013 },
   coach: { top: { y: 0.066, z: 0.06 }, muzzle: { y: 0.035, z: 0.72 }, under: { y: 0.0, z: 0.4 }, mag: { y: 0.03, z: 0.02 }, stock: { y: -0.03, z: -0.24 }, side: { x: -0.04, y: 0.03, z: 0.3 }, r: 0.0135, dbl: true },
   lmg: { top: { y: 0.078, z: 0.22 }, muzzle: { y: 0.04, z: 0.84 }, under: { y: -0.015, z: 0.6 }, mag: { y: -0.16, z: 0.18 }, stock: { y: 0.0, z: -0.38 }, side: { x: -0.036, y: 0.02, z: 0.6 }, r: 0.013 },

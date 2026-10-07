@@ -11,8 +11,12 @@ import { grantLoot } from './lootGrant';
 import { rollGunLoot } from '../sim/gunLoot';
 import { FLASH_SECS, MELEE, MUZZLE, knockFor, type MeleeFeel } from '../sim/weaponfx';
 import { stormSight } from '../sim/weather';
+import { rainSight } from '../sim/climate';
+import { FIRE, SIGHT, aimSpread, fighting, guessAt, hears, inSight, mayFire, newWatch, sightRange, sightRate, stepWatch, type Watch } from '../sim/enemySight';
+import type { RigidBody } from '../physics/physics';
 import type { Ctx } from './ctx';
 import type { Player } from './player';
+import { playerShows, vehicleShows } from './sight';
 import { Vehicle, type Pilot } from './vehicle';
 
 type RState = 'approach' | 'probe' | 'flank' | 'ram' | 'retreat' | 'flee';
@@ -25,13 +29,18 @@ interface Target {
   vehicle: Vehicle | null;
   player: Player | null;
   d: number;
+  /** In sight right now: a vehicle with a clear line to it, a person this raider can make out (not just remembers). */
+  seen: boolean;
 }
 
-/** Closest thing worth attacking: a convoy vehicle or a player on foot. */
+/**
+ * The convoy vehicle most worth going for: the nearest, occupied ones first. A vehicle is big and loud, so a raider knows
+ * where one is without seeing it (it still needs a line to shoot). People on foot it has to see first: `perceive`.
+ */
 export function acquire(ctx: Ctx, x: number, z: number, maxD: number): Target | null {
   let best: Target | null = null;
-  // Dust in the air shortens what a raider can pick out.
-  maxD *= stormSight(ctx.storm);
+  // Dust in the air shortens what a raider can pick out, and so does heavy rain.
+  maxD *= stormSight(ctx.storm) * rainSight(ctx.rain ?? 0);
   for (const v of ctx.vehicles) {
     if (v.faction !== 'convoy' || v.wreck) continue;
     const d = Math.hypot(v.position.x - x, v.position.z - z);
@@ -39,16 +48,106 @@ export function acquire(ctx: Ctx, x: number, z: number, maxD: number): Target | 
     const occupied = v.driver || v.passenger ? 0 : 25; // prefer occupied vehicles
     if (!best || d + occupied < best.d) {
       const lv = v.body.body.linvel();
-      best = { x: v.position.x, z: v.position.z, vx: lv.x, vz: lv.z, vehicle: v, player: null, d: d + occupied };
+      best = { x: v.position.x, z: v.position.z, vx: lv.x, vz: lv.z, vehicle: v, player: null, d: d + occupied, seen: false };
     }
   }
+  return best;
+}
+
+/** People a raider will go for on foot: alive, out of a vehicle, and not already down (it moves on to whoever still fights). */
+const quarry = (p: Player) => p.targetable && !p.inVehicle && p.state !== 'downed';
+
+/**
+ * One brain tick of a raider's eyes and ears on the people on foot about (`sim/enemySight.ts`). `reach` scales its sight (a
+ * bored sentry's is short, a scope's long). Returns the height to aim at on whoever it makes out, or null if nobody.
+ */
+export function perceive(ctx: Ctx, w: Watch, ex: number, ey: number, ez: number, dt: number, reach = 1, exclude?: RigidBody): number | null {
+  const weather = stormSight(ctx.storm) * rainSight(ctx.rain ?? 0);
+  let seen: { who: number; x: number; z: number; rate: number } | null = null;
+  let heard: { who: number; x: number; z: number; d: number } | null = null;
+  let aimY: number | null = null;
   for (const p of ctx.players) {
-    if (!p.targetable || p.inVehicle) continue;
-    const d = Math.hypot(p.pos.x - x, p.pos.z - z);
-    if (d > maxD) continue;
-    if (!best || d < best.d) best = { x: p.pos.x, z: p.pos.z, vx: 0, vz: 0, vehicle: null, player: p, d };
+    if (!quarry(p)) continue;
+    const d = Math.hypot(p.pos.x - ex, p.pos.z - ez);
+    const hunting = fighting(w) && w.who === p.index;
+    const look = { speed: p.moveSpeed, crouch: p.crouch, dark: ctx.night, weather, hunting };
+    if (d < SIGHT.touch || d < sightRange(look) * reach) {
+      const s = playerShows(ctx, ex, ey, ez, p, exclude);
+      const rate = sightRate({ ...look, d: d / reach, show: s.show });
+      if (rate > 0 && (!seen || rate > seen.rate)) {
+        seen = { who: p.index, x: p.pos.x, z: p.pos.z, rate };
+        aimY = s.aimY;
+      }
+    }
+    const fired = ctx.raiders.lastShot[p.index];
+    const shot = !!fired && ctx.time - fired.t < 0.35;
+    if (hears(d, p.footSignature(), shot, shot ? fired.quiet : 1) && (!heard || d < heard.d)) {
+      const [gx, gz] = guessAt(p.pos.x, p.pos.z, d, ctx.rng.next(), ctx.rng.next());
+      heard = { who: p.index, x: gx, z: gz, d };
+    }
+  }
+  stepWatch(w, dt, seen, heard, ctx.rng.next());
+  return aimY;
+}
+
+/** What a raider goes for: the vehicle `acquire` found, or the person it is watching for, whichever is nearer. */
+function choose(ctx: Ctx, w: Watch, veh: Target | null, x: number, z: number): Target | null {
+  let best = veh;
+  // Someone it has seen and is hunting, or heard or glimpsed and is coming to look at.
+  const p = w.who >= 0 && (fighting(w) || w.aware >= 0.35) ? ctx.players[w.who] : null;
+  if (p && quarry(p)) {
+    const now = w.spotted && w.lost === 0;
+    const tx = now ? p.pos.x : w.x;
+    const tz = now ? p.pos.z : w.z;
+    const d = Math.hypot(tx - x, tz - z);
+    if (!best || d < best.d) best = { x: tx, z: tz, vx: 0, vz: 0, vehicle: null, player: p, d, seen: inSight(w) };
   }
   return best;
+}
+
+type V3 = [number, number, number];
+
+/**
+ * Where a raider car's crew sits, in the car's own frame: a capsule from `a` to `b` of radius `r`, and the height above which
+ * a hit is to the head. The buggy's driver sits up in an open frame over the body; the wagon's two are side by side in the
+ * armoured cab, behind its visor slits.
+ */
+const CREW: Record<'raiderBuggy' | 'wagon', { a: V3; b: V3; r: number; headY: number }> = {
+  raiderBuggy: { a: [0, 0.3, 0.02], b: [0, 0.95, 0.12], r: 0.28, headY: 0.85 },
+  wagon: { a: [-0.45, 1.0, 0.8], b: [0.45, 1.0, 0.8], r: 0.34, headY: 1.15 },
+};
+
+/**
+ * How far along a ray (unit direction) it first comes within `r` of segment ab, or null if it does not within `maxD`. The
+ * entry point is backed off from the closest approach as if the ray met the tube square on, which is near enough for a body.
+ */
+export function rayCapsule(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, a: V3, b: V3, r: number, maxD: number): number | null {
+  const ex = b[0] - a[0];
+  const ey = b[1] - a[1];
+  const ez = b[2] - a[2];
+  const wx = ox - a[0];
+  const wy = oy - a[1];
+  const wz = oz - a[2];
+  const ee = ex * ex + ey * ey + ez * ez;
+  const de = dx * ex + dy * ey + dz * ez;
+  const dw = dx * wx + dy * wy + dz * wz;
+  const ew = ex * wx + ey * wy + ez * wz;
+  const den = ee - de * de;
+  let s = den > 1e-9 ? clamp((de * ew - ee * dw) / den, 0, maxD) : 0;
+  let t = ee > 1e-9 ? (de * s + ew) / ee : 0;
+  if (t < 0) {
+    t = 0;
+    s = clamp(-dw, 0, maxD);
+  } else if (t > 1) {
+    t = 1;
+    s = clamp(de - dw, 0, maxD);
+  }
+  const qx = ox + dx * s - (a[0] + ex * t);
+  const qy = oy + dy * s - (a[1] + ey * t);
+  const qz = oz + dz * s - (a[2] + ez * t);
+  const d2 = qx * qx + qy * qy + qz * qz;
+  if (d2 > r * r) return null;
+  return Math.max(0, s - Math.sqrt(r * r - d2));
 }
 
 export class RaiderPilot implements Pilot {
@@ -68,6 +167,13 @@ export class RaiderPilot implements Pilot {
   private burstT = 0;
   despawn = false;
   isWagon: boolean;
+  /** What the crew has left between them. Shoot them out of the seats and the car is left whole. */
+  crewHp: number;
+  /** The crew is dead or has climbed out. */
+  out = false;
+  /** The gunner's eyes on whoever is about on foot. */
+  readonly watch: Watch = newWatch();
+  private aimY = 1.1;
   private flankPoint = { x: 0, z: 0 };
 
   constructor(
@@ -77,10 +183,16 @@ export class RaiderPilot implements Pilot {
   ) {
     this.isWagon = v.kind === 'wagon';
     this.state = 'approach';
+    this.crewHp = def.crewHp ?? 60;
   }
 
   drive(v: Vehicle, dt: number): DriveInput {
     const ctx = this.ctx;
+    // The engine is shot out: nobody sits in a dead car under fire. Out they get, guns and all.
+    if (v.health.comp.engine <= 0) {
+      ctx.raiders.bail(v);
+      return { steer: 0, throttle: 0, brake: 1, handbrake: false };
+    }
     this.stateT += dt;
     this.brainT -= dt;
     this.fireCd -= dt;
@@ -174,7 +286,13 @@ export class RaiderPilot implements Pilot {
   private think(v: Vehicle) {
     const ctx = this.ctx;
     const p = v.position;
-    this.target = acquire(ctx, p.x, p.z, 320);
+    // The gunner's eyes, up on the car: who on foot it can make out past rock, wood and leaf.
+    const eye = p.y + 1.6;
+    const aimY = perceive(ctx, this.watch, p.x, eye, p.z, 0.2, 1, v.body.body);
+    if (aimY !== null) this.aimY = aimY;
+    const veh = acquire(ctx, p.x, p.z, 320);
+    if (veh?.vehicle && veh.d < this.def.range + 30) veh.seen = vehicleShows(ctx, p.x, eye, p.z, veh.vehicle);
+    this.target = choose(ctx, this.watch, veh, p.x, p.z);
     const tgt = this.target;
     if (v.hpFrac < 0.28 && this.state !== 'flee' && !this.isWagon) {
       this.state = 'flee';
@@ -266,9 +384,9 @@ export class RaiderPilot implements Pilot {
     const ctx = this.ctx;
     const range = this.def.range;
     if (tgt.d > range) return;
-    const p = v.position;
-    // No line of sight, no shot.
-    if (ctx.obs.segmentBlocked(p.x, p.z, tgt.x, tgt.z, 1.4)) return;
+    // No line of sight, no shot: a vehicle needs a clear line, a person has to be in sight (or only just lost, for the end
+    // of a burst where they were) and the gunner past its first beat of bringing the gun round.
+    if (tgt.player ? !mayFire(this.watch) : !tgt.seen) return;
     if (this.burstT > 0) {
       this.burstT -= dt;
       if (this.fireCd > 0) return;
@@ -290,7 +408,7 @@ export class RaiderPilot implements Pilot {
     const mx = m.matrixWorld.elements[12];
     const my = m.matrixWorld.elements[13];
     const mz = m.matrixWorld.elements[14];
-    const ty = (tgt.vehicle ? tgt.vehicle.position.y + 0.8 : tgt.player ? tgt.player.pos.y + 1.1 : 1);
+    const ty = tgt.vehicle ? tgt.vehicle.position.y + 0.8 : tgt.player ? this.aimY : 1;
     let dx = tgt.x - mx;
     let dy = ty - my;
     let dz = tgt.z - mz;
@@ -303,7 +421,7 @@ export class RaiderPilot implements Pilot {
       side: 'raider',
       ownVehicle: v,
       damage: dmg,
-      spread: 0.02 + (tgt.d / range) * 0.03,
+      spread: (0.02 + (tgt.d / range) * 0.03) * (tgt.player ? aimSpread(this.watch, tgt.player.moveSpeed) : 1),
       range: range + 15,
       noise: 0,
       tracer: true,
@@ -363,6 +481,20 @@ export class Infantry {
   idleX = 0;
   idleZ = 0;
   scanPhase = Math.random() * 6.28;
+  /** Its eyes and ears on the people about on foot (`sim/enemySight.ts`), and where on them it aims. */
+  watch: Watch = newWatch();
+  aimY = 1.1;
+  /** Rounds left in the gun, and seconds of a reload. */
+  mag = FIRE.mag;
+  reloadT = 0;
+  /** Lost them: the place it is searching round, where it is looking now, and for how long before it tries elsewhere. */
+  anchorX = NaN;
+  anchorZ = 0;
+  searchX = 0;
+  searchZ = 0;
+  searchT = 0;
+  /** A clear line to the vehicle it is after, as of the last brain tick. */
+  clear = false;
 
   constructor(
     public kind: RaiderKind,
@@ -389,12 +521,14 @@ export class RaiderSystem {
   kills = 0;
   /** Raiders each player put down on foot, by player index. */
   killedByPlayer: [number, number] = [0, 0];
+  /** When each player last fired, and how loud the gun was (a muzzle flash is too brief for a brain that thinks 4 times a second). */
+  readonly lastShot: { t: number; quiet: number }[] = [{ t: -99, quiet: 1 }, { t: -99, quiet: 1 }];
 
   constructor(private ctx: Ctx) {}
 
   get vehiclesAlive() {
     let n = 0;
-    for (const v of this.ctx.vehicles) if (v.faction === 'raider' && !v.wreck) n++;
+    for (const v of this.ctx.vehicles) if (v.hostile) n++;
     return n;
   }
   get infantryAlive() {
@@ -448,9 +582,78 @@ export class RaiderSystem {
     const r2 = r * r;
     for (const u of this.units) if (!u.dead && (u.x - x) ** 2 + (u.z - z) ** 2 < r2) fn(u.x, u.y + 1.2, u.z);
     for (const v of this.ctx.vehicles) {
-      if (v.faction !== 'raider' || v.wreck) continue;
+      if (!v.hostile) continue;
       if ((v.position.x - x) ** 2 + (v.position.z - z) ** 2 < r2) fn(v.position.x, v.position.y + 0.7, v.position.z);
     }
+  }
+
+  /**
+   * The nearest raider crew a round passes through: the driver up in a buggy's open frame, or the pair in a wagon's cab.
+   * `only` limits it to one car (a round that has just holed its panel), `skip` leaves one out (a crew it has gone through).
+   */
+  crewRayTest(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxD: number, only?: Vehicle | null, skip?: Vehicle | null): { vehicle: Vehicle; dist: number; head: boolean } | null {
+    let best: { vehicle: Vehicle; dist: number; head: boolean } | null = null;
+    for (const [v, pilot] of this.pilots) {
+      if (pilot.out || v.wreck || v === skip || (only && v !== only)) continue;
+      const seat = CREW[v.kind as keyof typeof CREW];
+      if (!seat) continue;
+      // Too far off the line to matter.
+      const px = v.position.x - ox;
+      const py = v.position.y - oy;
+      const pz = v.position.z - oz;
+      const along = px * dx + py * dy + pz * dz;
+      if (along < -3 || along > maxD + 3 || px * px + py * py + pz * pz - along * along > 9) continue;
+      const [lx, ly, lz] = v.localOf(ox, oy, oz);
+      const [ex, ey, ez] = v.localOf(ox + dx, oy + dy, oz + dz);
+      const ldy = ey - ly;
+      const t = rayCapsule(lx, ly, lz, ex - lx, ldy, ez - lz, seat.a, seat.b, seat.r, best ? best.dist : maxD);
+      if (t === null) continue;
+      best = { vehicle: v, dist: t, head: ly + ldy * t > seat.headY };
+    }
+    return best;
+  }
+
+  /** A round found a raider car's crew. Returns true if it finished them; the car is left as it was. */
+  hurtCrew(v: Vehicle, amount: number, killer: number): boolean {
+    const pilot = this.pilots.get(v);
+    if (!pilot || pilot.out || v.wreck) return false;
+    pilot.crewHp -= amount * (1 - (pilot.def.crewCover ?? 0));
+    if (pilot.crewHp > 0) return false;
+    const ctx = this.ctx;
+    this.leave(v, pilot);
+    // Dead at the wheel: the car runs on with nobody steering, slows and stops.
+    v.slumped = !!v.visual.driver;
+    ctx.campaign.stats.raidersKilled++;
+    this.kills++;
+    if (killer >= 0) this.killedByPlayer[killer]++;
+    ctx.audio.play('zdie', v.position.x, v.position.z, 0.6);
+    this.kit(v.position.x, v.position.z, v.kind === 'wagon' ? 2 : 1);
+    return true;
+  }
+
+  /** A car shot to pieces under its crew: they climb out and carry on the fight on foot, and the car stays where it stopped. */
+  bail(v: Vehicle) {
+    const pilot = this.pilots.get(v);
+    if (!pilot || pilot.out || v.wreck) return;
+    this.leave(v, pilot);
+    if (v.visual.driver) v.visual.driver.root.visible = false;
+    const n = v.kind === 'wagon' ? 2 : 1;
+    const gun = ENEMIES.raiders.gunman;
+    for (let i = 0; i < n; i++) {
+      const side = i === 0 ? 1 : -1;
+      const [x, , z] = v.doorPos(side);
+      const u = this.spawnInfantry('gunman', x, z);
+      u.hp = clamp(pilot.crewHp / n, 12, gun.hp);
+      u.state = 'fire';
+    }
+  }
+
+  /** The crew is gone from the car, one way or the other: nobody drives it or fires its gun again. */
+  private leave(v: Vehicle, pilot: RaiderPilot) {
+    pilot.out = true;
+    v.driver = null;
+    v.abandoned = true;
+    v.setEngine(false);
   }
 
   infantryRayTest(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxD: number): { unit: Infantry; dist: number; head: boolean } | null {
@@ -493,7 +696,7 @@ export class RaiderSystem {
   }
 
   /** The whole camp turns on whoever is there, and its reinforcements are called out. */
-  alertCamp(camp: string) {
+  alertCamp(camp: string, word?: { who: number; x: number; z: number }) {
     let fresh = false;
     for (const q of this.units) {
       if (q.dead || q.post?.camp !== camp) continue;
@@ -501,16 +704,37 @@ export class RaiderSystem {
       q.alerted = true;
       q.lostT = 0;
       if (q.state === 'approach') q.state = q.kind === 'sniper' ? 'snipe' : 'fire';
+      // The shout says where: they all come, but each has to see them for itself before it shoots.
+      if (word) this.tell(q, word.who, word.x, word.z);
     }
     if (fresh) this.onAlarm?.(camp);
+  }
+
+  /** Word of where someone is (a shout, a round from that way): it turns and comes to look, but does not yet see them. */
+  private tell(q: Infantry, who: number, x: number, z: number) {
+    const w = q.watch;
+    if (w.who === who ? inSight(w) : fighting(w)) return;
+    if (w.who !== who) w.spotted = false;
+    w.who = who;
+    w.x = x;
+    w.z = z;
+    w.aware = Math.max(w.aware, SIGHT.heardAware);
   }
 
   damageInfantry(u: Infantry, amount: number, killer: number, silent = false): boolean {
     if (u.dead) return false;
     u.hp -= amount * (1 - u.def.armor);
     u.recent = 0.2;
+    // Hit, it knows roughly which way it came from; the shout carries that to the rest of the camp.
+    const by = killer >= 0 ? this.ctx.players[killer] : null;
+    let word: { who: number; x: number; z: number } | undefined;
+    if (by && !silent) {
+      const [gx, gz] = guessAt(by.pos.x, by.pos.z, Math.hypot(by.pos.x - u.x, by.pos.z - u.z), this.ctx.rng.next(), this.ctx.rng.next());
+      word = { who: killer, x: gx, z: gz };
+      this.tell(u, killer, gx, gz);
+    }
     // A hit raises the alarm; a clean takedown with the blade does not.
-    if (u.post && !(silent && u.hp <= 0)) this.alertCamp(u.post.camp);
+    if (u.post && !(silent && u.hp <= 0)) this.alertCamp(u.post.camp, word);
     if (u.hp <= 0) {
       u.dead = true;
       u.deadT = 0;
@@ -578,6 +802,10 @@ export class RaiderSystem {
 
   update(dt: number) {
     const ctx = this.ctx;
+    for (const p of ctx.players) {
+      if (p.muzzleT <= 0 || !this.lastShot[p.index]) continue;
+      this.lastShot[p.index] = { t: ctx.time, quiet: p.equip === 'gun' ? p.kit().quiet : 1 };
+    }
     // Vehicle cleanup: fled, far away, or wrecked for a while.
     for (const [v, pilot] of this.pilots) {
       if (v.wreck && !pilot.despawn) {
@@ -617,9 +845,14 @@ export class RaiderSystem {
 
   onVehicleDestroyed(v: Vehicle) {
     if (v.faction !== 'raider') return;
+    const wagon = v.kind === 'wagon';
+    // A car whose crew was already shot or had climbed out was counted then: blowing it up now kills nobody.
+    if (v.abandoned) {
+      if (wagon) this.dropGear(v.position.x, v.position.z, 'wreck');
+      return;
+    }
     this.ctx.campaign.stats.raidersKilled++;
     this.kills++;
-    const wagon = v.kind === 'wagon';
     // The wreck itself is what is worth stripping (its engine, its plates, its gun mount); the crew's own kit is on the ground by it.
     this.kit(v.position.x, v.position.z, wagon ? 3 : Math.random() < 0.5 ? 1 : 0);
     if (wagon) this.dropGear(v.position.x, v.position.z, 'wreck');
@@ -633,18 +866,29 @@ export class RaiderSystem {
     u.brainT -= dt;
     u.fireCd -= dt;
     if (u.recent > 0) u.recent -= dt;
+    if (u.reloadT > 0 && (u.reloadT -= dt) <= 0) u.mag = FIRE.mag;
     if (u.brainT <= 0) {
       u.brainT = 0.25;
+      // Eyes and ears. A bored sentry looks about half as hard as one that knows there is trouble; a scope reaches further.
+      const eye = u.y + 1.55;
+      const aimY = perceive(ctx, u.watch, u.x, eye, u.z, 0.25, (u.post && !u.alerted ? 0.5 : 1) * (u.kind === 'sniper' ? 1.4 : 1));
+      if (aimY !== null) u.aimY = aimY;
       if (u.post && !u.alerted) {
         u.target = null;
-        if (this.guardNotices(u)) this.alertCamp(u.post.camp);
-      } else u.target = acquire(ctx, u.x, u.z, 160);
+        if (this.guardNotices(u)) this.alertCamp(u.post.camp, inSight(u.watch) ? { who: u.watch.who, x: u.watch.x, z: u.watch.z } : undefined);
+      } else {
+        const veh = acquire(ctx, u.x, u.z, 160);
+        if (veh?.vehicle && veh.d < 140) veh.seen = vehicleShows(ctx, u.x, eye, u.z, veh.vehicle);
+        u.target = choose(ctx, u.watch, veh, u.x, u.z);
+      }
+      // Lost them with the gun half empty: a moment to fill it.
+      if (u.reloadT <= 0 && u.mag < FIRE.mag / 2 && !inSight(u.watch)) u.reloadT = FIRE.reload[0];
     }
     let tgt = u.target;
     if (u.post && u.alerted) {
       // Past the leash a sentry lets go and walks home; with nobody in sight for a while it stands down.
       if (tgt && Math.hypot(tgt.x - u.post.x, tgt.z - u.post.z) > LEASH) tgt = null;
-      u.lostT = tgt ? 0 : u.lostT + dt;
+      u.lostT = tgt?.seen ? 0 : u.lostT + dt;
       if (u.lostT > 14) u.alerted = false;
     }
     let wantX = 0;
@@ -657,7 +901,18 @@ export class RaiderSystem {
       const nx = dx / d;
       const nz = dz / d;
       const standoff = u.kind === 'sniper' ? 80 : 26;
-      if (u.kind === 'saboteur') {
+      // Someone it remembers or only heard, not someone it sees: no shooting at shadows. It goes to look (a sniper holds
+      // its ground and watches the place).
+      const hunting = !!tgt.player && !tgt.seen && u.kind !== 'saboteur';
+      if (hunting) {
+        u.telegraph = 0;
+        if (u.kind !== 'sniper') {
+          const s = this.search(u, dt);
+          wantX = s.x;
+          wantZ = s.z;
+          spd = s.spd;
+        }
+      } else if (u.kind === 'saboteur') {
         // Run at the nearest vehicle, then torch it.
         let bestV: Vehicle | null = null;
         let bd = Infinity;
@@ -708,7 +963,8 @@ export class RaiderSystem {
           wantZ = -nz;
           spd = u.speed * 0.8;
         }
-        if (d < 130 && !ctx.obs.segmentBlocked(u.x, u.z, tgt.x, tgt.z, 1.4) && u.fireCd <= 0) {
+        const clear = tgt.player ? mayFire(u.watch) && u.watch.lost === 0 : tgt.seen;
+        if (d < 130 && clear && u.fireCd <= 0) {
           // Telegraphed shot: a red glint for 0.9 s so watchers get a chance to react.
           u.telegraph += dt;
           ctx.fx.glow.emit(u.x + Math.sin(u.yaw) * 0.6, u.y + 1.4, u.z + Math.cos(u.yaw) * 0.6, 0, 0, 0, 0.1, 0.35, 0.2, 1, 0.1, 0.05, 0.9, 0, 0);
@@ -738,11 +994,8 @@ export class RaiderSystem {
           wantZ = nx * u.strafe;
           spd = u.speed * 0.6;
         }
-        if (d < u.def.range && u.fireCd <= 0 && !ctx.obs.segmentBlocked(u.x, u.z, tgt.x, tgt.z, 1.4)) {
-          u.fireCd = 0.35 + Math.random() * 0.25;
-          if (Math.random() < 0.18) u.fireCd += 1.3;
-          this.shootAt(u, tgt, d, u.def.dps * 0.7);
-        }
+        const clear = tgt.player ? mayFire(u.watch) : tgt.seen;
+        if (d < u.def.range && u.fireCd <= 0 && u.reloadT <= 0 && clear) this.pull(u, tgt, d);
       }
     } else if (u.post) {
       const g = this.guardStep(u, dt);
@@ -767,32 +1020,70 @@ export class RaiderSystem {
     u.flashT = Math.max(0, u.flashT - dt);
   }
 
-  /** Does a sentry see, hear or smell someone? Engines carry far, a crouched walker barely; shots and horns carry further. */
+  /**
+   * Does a sentry notice someone? Someone on foot only once its watch has picked them out (see `perceive`: behind a rock
+   * or down in a bush they can pass). A vehicle by its engine and bulk: engines carry far, shots and horns further.
+   */
   private guardNotices(u: Infantry): boolean {
     const ctx = this.ctx;
-    const sight = stormSight(ctx.storm);
+    if (inSight(u.watch)) return true;
+    const sight = stormSight(ctx.storm) * rainSight(ctx.rain ?? 0);
     for (const p of ctx.players) {
-      if (!p.alive) continue;
       const v = p.vehicle;
-      const px = v ? v.position.x : p.pos.x;
-      const pz = v ? v.position.z : p.pos.z;
-      const d = Math.hypot(px - u.x, pz - u.z);
-      let range = v ? (Math.abs(v.speed) > 2 ? 120 : 55) : p.crouch ? 20 : 45;
+      if (!p.alive || !v) continue;
+      const d = Math.hypot(v.position.x - u.x, v.position.z - u.z);
+      let range = Math.abs(v.speed) > 2 ? 120 : 55;
       range *= 0.75 + clamp(p.signatureShown / 50, 0, 1) * 0.6;
       if (p.signatureShown >= 55) range = Math.max(range, 100);
       if (d > range * sight) continue;
-      if (d < 14 || !ctx.obs.segmentBlocked(u.x, u.z, px, pz, 1.4)) return true;
+      if (d < 14 || vehicleShows(ctx, u.x, u.y + 1.55, u.z, v)) return true;
     }
     return false;
+  }
+
+  /** Lost them, or only heard them: go to where they were, then cast about round it, warily. */
+  private search(u: Infantry, dt: number): { x: number; z: number; spd: number } {
+    const w = u.watch;
+    u.searchT -= dt;
+    if (!(Math.hypot(w.x - u.anchorX, w.z - u.anchorZ) < 3)) {
+      // Fresh word of them: straight to the place.
+      u.anchorX = u.searchX = w.x;
+      u.anchorZ = u.searchZ = w.z;
+      u.searchT = 15;
+    } else if (u.searchT <= 0 || Math.hypot(u.searchX - u.x, u.searchZ - u.z) < 1.5) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 3 + Math.random() * 9;
+      u.searchX = u.anchorX + Math.sin(a) * r;
+      u.searchZ = u.anchorZ + Math.cos(a) * r;
+      u.searchT = 5;
+    }
+    const dx = u.searchX - u.x;
+    const dz = u.searchZ - u.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 0.8) return { x: 0, z: 0, spd: 0 };
+    return { x: dx / d, z: dz / d, spd: u.speed * 0.7 };
+  }
+
+  /** One pull of a gunman's trigger, and the reload when the gun runs dry. */
+  private pull(u: Infantry, tgt: Target, d: number) {
+    u.fireCd = FIRE.cadence[0] + Math.random() * (FIRE.cadence[1] - FIRE.cadence[0]);
+    this.shootAt(u, tgt, d, u.def.dps * 0.7);
+    if (--u.mag <= 0) u.reloadT = FIRE.reload[0] + Math.random() * (FIRE.reload[1] - FIRE.reload[0]);
   }
 
   /** What a sentry does with no one to shoot at: wander near its post (or stand and scan), or walk back to it. */
   private guardStep(u: Infantry, dt: number): { x: number; z: number; spd: number } {
     const post = u.post!;
     u.idleT -= dt;
+    const w = u.watch;
     if (u.alerted) {
       u.idleX = post.x;
       u.idleZ = post.z;
+    } else if (w.who >= 0 && w.aware >= 0.35 && Math.hypot(w.x - post.x, w.z - post.z) < LEASH * 0.5) {
+      // Heard something, or half saw it: wander over and look, slowly.
+      u.idleX = w.x;
+      u.idleZ = w.z;
+      u.idleT = 2;
     } else if (u.idleT <= 0) {
       u.idleT = 3 + Math.random() * 5;
       const a = Math.random() * Math.PI * 2;
@@ -817,7 +1108,8 @@ export class RaiderSystem {
     const ox = u.x + Math.sin(u.yaw) * 0.5;
     const oy = u.y + 1.4;
     const oz = u.z + Math.cos(u.yaw) * 0.5;
-    const ty = tgt.vehicle ? tgt.vehicle.position.y + 0.8 : tgt.player ? tgt.player.pos.y + 1.1 : 1;
+    // At a person: whatever of them shows (a head over a rock), and wide until its aim has settled on them.
+    const ty = tgt.vehicle ? tgt.vehicle.position.y + 0.8 : tgt.player ? u.aimY : 1;
     let dx = tgt.x - ox;
     let dy = ty - oy;
     let dz = tgt.z - oz;
@@ -825,11 +1117,12 @@ export class RaiderSystem {
     dx /= l;
     dy /= l;
     dz /= l;
+    const aim = tgt.player ? aimSpread(u.watch, tgt.player.moveSpeed) : 1;
     ctx.combat.shoot(ox, oy, oz, dx, dy, dz, {
       side: 'raider',
       ammo: u.kind === 'sniper' ? 'sniper' : 'raider',
       damage: dmg,
-      spread: u.kind === 'sniper' ? 0.006 : 0.025 + d * 0.0009,
+      spread: (u.kind === 'sniper' ? 0.006 : 0.025 + d * 0.0009) * aim,
       range: u.def.range + 10,
       tracer: true,
     });

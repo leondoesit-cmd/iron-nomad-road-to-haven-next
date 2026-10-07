@@ -1,0 +1,226 @@
+{
+  "engine-v8-idle": [
+    "engine-v8-idle-0.wav",
+    "engine-v8-idle-1.wav",
+    "engine-v8-idle-2.wav"
+  ],
+  "engine-v8-load": [
+    "engine-v8-load-0.wav",
+    "engine-v8-load-1.wav",
+    "engine-v8-load-2.wav"
+  ],
+  "exhaustOpen": [
+    "exhaustOpen-0.wav",
+    "exhaustOpen-1.wav",
+    "exhaustOpen-2.wav"
+  ],
+  "radiatorFan": [
+    "radiatorFan-0.wav",
+    "radiatorFan-1.wav",
+    "radiatorFan-2.wav"
+  ],
+  "radiatorSteam": [
+    "radiatorSteam-0.wav",
+    "radiatorSteam-1.wav",
+    "radiatorSteam-2.wav"
+  ],
+  "tireRoad": [
+    "tireRoad-0.wav",
+    "tireRoad-1.wav",
+    "tireRoad-2.wav"
+  ],
+  "gearWhine": [
+    "gearWhine-0.wav",
+    "gearWhine-1.wav",
+    "gearWhine-2.wav"
+  ],
+  "weaponRack": [
+    "weaponRack-0.wav",
+    "weaponRack-1.wav",
+    "weaponRack-2.wav"
+  ],
+  "magIn": [
+    "magIn-0.wav",
+    "magIn-1.wav",
+    "magIn-2.wav"
+  ],
+  "weaponClick": [
+    "weaponClick-0.wav",
+    "weaponClick-1.wav",
+    "lock_open_01.ogg"
+  ],
+  "weaponHandle": [
+    "weaponHandle-0.wav",
+    "weaponHandle-1.wav",
+    "weaponHandle-2.wav",
+    "weaponHandle-3.wav",
+    "weaponHandle-4.wav",
+    "weaponHandle-5.wav"
+  ],
+  "gearShift": [
+    "gearShift-0.wav",
+    "gearShift-1.wav",
+    "gearShift-2.wav",
+    "gearShift-3.wav"
+  ],
+  "tireGravel": [
+    "tireGravel-0.wav",
+    "tireGravel-1.wav",
+    "tireGravel-2.wav"
+  ],
+  "tireSkidGravel": [
+    "tireSkidGravel-0.wav",
+    "tireSkidGravel-1.wav"
+  ],
+  "tirePuncture": [
+    "tirePuncture-0.wav",
+    "tirePuncture-1.wav",
+    "tirePuncture-2.wav"
+  ],
+  "magOut": [
+    "magOut-0.wav",
+    "magOut-1.wav",
+    "magOut-2.wav"
+  ],
+  "rifleMagIn": [
+    "rifleMagIn-0.wav",
+    "rifleMagIn-1.wav",
+    "rifleMagIn-2.wav"
+  ],
+  "rifleRack": [
+    "rifleRack-0.wav",
+    "rifleRack-1.wav",
+    "rifleRack-2.wav"
+  ],
+  "carPanel": [
+    "metal_sheet_01.ogg",
+    "metal_sheet_02.ogg",
+    "metal_sheet_03.ogg"
+  ],
+  "tireFlat": [
+    "impactSoft_medium_000.ogg",
+    "impactSoft_medium_001.ogg",
+    "impactSoft_medium_002.ogg"
+  ],
+  "gearGrind": [
+    "metal_sheet_04.ogg",
+    "metal_sheet_05.ogg",
+    "metal_sheet_06.ogg"
+  ],
+  "hotTick": [
+    "impactMetal_light_000.ogg",
+    "impactMetal_light_001.ogg",
+    "impactMetal_light_002.ogg"
+  ],
+  "weaponPump": [
+    "reload-shotguncock_0.wav",
+    "rifleRack-1.wav",
+    "weaponRack-1.wav"
+  ],
+  "weaponBolt": [
+    "rifleRack-0.wav",
+    "rifleRack-1.wav",
+    "rifleRack-2.wav"
+  ],
+  "starterFail": [
+    "starterFail-0.wav",
+    "starterFail-1.wav",
+    "starterFail-2.wav"
+  ],
+  "engineStart-bike": [
+    "engineStart-bike-0.wav"
+  ],
+  "engineStart": [
+    "engineStart-bike-0.wav",
+    "engineStart-car-0.wav",
+    "engineStart-diesel-0.wav",
+    "engineStart-v8-0.wav"
+  ],
+  "engineStop-bike": [
+    "engineStop-bike-0.wav"
+  ],
+  "engineStop": [
+    "engineStop-bike-0.wav",
+    "engineStop-car-0.wav",
+    "engineStop-diesel-0.wav",
+    "engineStop-v8-0.wav"
+  ],
+  "engineStart-car": [
+    "engineStart-car-0.wav"
+  ],
+  "engineStop-car": [
+    "engineStop-car-0.wav"
+  ],
+  "engineStart-diesel": [
+    "engineStart-diesel-0.wav"
+  ],
+  "engineStop-diesel": [
+    "engineStop-diesel-0.wav"
+  ],
+  "engineStart-v8": [
+    "engineStart-v8-0.wav"
+  ],
+  "engineStop-v8": [
+    "engineStop-v8-0.wav"
+  ],
+  "tireSqueal": [
+    "tireSqueal-0.wav",
+    "tireSqueal-1.wav",
+    "tireSqueal-2.wav"
+  ],
+  "shellInsert": [
+    "magIn-0.wav",
+    "magIn-1.wav",
+    "magIn-2.wav"
+  ],
+  "magInPistol": [
+    "magIn-0.wav",
+    "magIn-1.wav",
+    "magIn-2.wav"
+  ],
+  "magInRifle": [
+    "rifleMagIn-0.wav",
+    "rifleMagIn-1.wav",
+    "rifleMagIn-2.wav"
+  ],
+  "rackRifle": [
+    "rifleRack-0.wav",
+    "rifleRack-1.wav",
+    "rifleRack-2.wav"
+  ],
+  "boostAir": [
+    "tirePuncture-0.wav",
+    "tirePuncture-1.wav",
+    "tirePuncture-2.wav"
+  ],
+  "engine-bike-idle": [
+    "engine-bike-idle.wav",
+    "engine-bike-idle-0.wav",
+    "engine-bike-idle-1.wav"
+  ],
+  "engine-bike-load": [
+    "engine-bike-load.wav",
+    "engine-bike-load-0.wav",
+    "engine-bike-load-1.wav"
+  ],
+  "engine-car-idle": [
+    "engine-car-idle.wav",
+    "engine-car-idle-0.wav",
+    "engine-car-idle-1.wav"
+  ],
+  "engine-car-load": [
+    "engine-car-load.wav",
+    "engine-car-load-0.wav",
+    "engine-car-load-1.wav"
+  ],
+  "engine-diesel-idle": [
+    "engine-diesel-idle.wav",
+    "engine-diesel-idle-0.wav",
+    "engine-diesel-idle-1.wav"
+  ],
+  "engine-diesel-load": [
+    "engine-diesel-load.wav",
+    "engine-diesel-load-0.wav",
+    "engine-diesel-load-1.wav"
+  ]
+}

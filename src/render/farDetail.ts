@@ -9,7 +9,8 @@ import { makeRoadMaterial, ROAD_REPEAT, type TerrainUniforms } from './terrainMa
 /**
  * What the far landscape adds beyond the streamed chunks so the view keeps its landmarks for navigation: the paved
  * roads as plain ribbons, and the props that stand out against the sky or the ground (dead trees, big rocks,
- * containers, poles, pylons, buses) as instances of cheap stand-ins. Each prop kind is one draw call for the whole world.
+ * containers, poles, pylons, buses) as instances of cheap stand-ins. Each kind shares geometry across spatial batches,
+ * so views submit only nearby regions instead of running the vertex shader on every instance in the world.
  *
  * Both step aside per chunk once that chunk is fully built in detail: the green channel of the far landscape's
  * loaded-chunk mask, read in the vertex shader for props (the instance collapses to a point) and in the fragment
@@ -22,6 +23,7 @@ const MIN_ROCK = 1.5;
 const ROAD_STEP = 8;
 /** Height of the far road over the ground: above the far terrain (laid 0.6 under), close to the detailed road. */
 const ROAD_LIFT = 0.1;
+const PROP_REGION = 256;
 
 /** Kinds drawn from the real prototype: few enough in the world that its full detail is cheap. */
 const REAL: ReadonlySet<PropKind> = new Set<PropKind>(['pylon', 'bus', 'tram', 'tent', 'cairn']);
@@ -192,19 +194,31 @@ export class FarDetail {
       if (mb.empty) continue;
       const geo = mb.build();
       this.geos.push(geo);
-      const im = new THREE.InstancedMesh(geo, mat, list.length);
-      list.forEach((p, i) => {
-        // Same placement as MeshBuilder.append: yaw about +Y, uniform scale.
-        q.setFromAxisAngle(up, p.yaw);
-        im.setMatrixAt(i, m4.compose(v.set(p.x, p.y, p.z), q, s.setScalar(p.scale)));
-      });
-      im.instanceMatrix.needsUpdate = true;
-      // Spread over the whole world: a bounding sphere test would keep them all anyway.
-      im.frustumCulled = false;
-      im.castShadow = false;
-      im.receiveShadow = true;
-      im.name = `far:${k}`;
-      this.group.add(im);
+      const regions = new Map<string, PropSpawn[]>();
+      for (const p of list) {
+        const region = `${Math.floor(p.x / PROP_REGION)},${Math.floor(p.z / PROP_REGION)}`;
+        let batch = regions.get(region);
+        if (!batch) regions.set(region, batch = []);
+        batch.push(p);
+      }
+      for (const [region, batch] of regions) {
+        const im = new THREE.InstancedMesh(geo, mat, batch.length);
+        let maxScale = 0;
+        batch.forEach((p, i) => {
+          // Keep the original prototype and exact placement for every prop, including its variant/seed.
+          q.setFromAxisAngle(up, p.yaw);
+          im.setMatrixAt(i, m4.compose(v.set(p.x, p.y, p.z), q, s.setScalar(p.scale)));
+          maxScale = Math.max(maxScale, Math.abs(p.scale));
+        });
+        im.instanceMatrix.needsUpdate = true;
+        im.computeBoundingSphere();
+        // Trip breathing moves a vertex by at most 1.5 * 0.16 in local space. Keep edge instances visible.
+        im.boundingSphere!.radius += 0.25 * maxScale + 0.01;
+        im.castShadow = false;
+        im.receiveShadow = true;
+        im.name = `far:${k}@${region}`;
+        this.group.add(im);
+      }
     }
   }
 
@@ -282,6 +296,7 @@ export class FarDetail {
   }
 
   dispose() {
+    for (const child of this.group.children) if ((child as THREE.InstancedMesh).isInstancedMesh) (child as THREE.InstancedMesh).dispose();
     for (const g of this.geos) g.dispose();
     for (const m of this.mats) m.dispose();
     this.group.removeFromParent();

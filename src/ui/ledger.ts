@@ -4,6 +4,7 @@ import { escapeHtml } from './hud';
 import { PLAYER_CSS } from '../render/palette';
 import { DRUG_IDS, DRUGS, type DrugId } from '../sim/drugs';
 import { LABEL, RECIPES, canAfford, checkTierUp, costText, spend, whole } from '../sim/resources';
+import { HIDE_PRICE } from '../sim/hunting';
 import { buildName, defOf, maxHpOf, needsService, rebuildOnto, serviceBuild, serviceCost, statsOf } from '../sim/garage';
 import { engineLine, engineSpec } from '../sim/engines';
 import { loyaltyBand, settleCut } from '../sim/loyalty';
@@ -131,12 +132,16 @@ export class LedgerPanel {
     const owedTotal = c.crewLive.reduce((a, m) => a + Object.values(m.owed).reduce((x, y) => x + (y ?? 0), 0), 0);
     const left = `<section><h3>Stores</h3>${stocksHtml}
       <div class="stockrow"><span>Ammo</span><b>${c.ammo}</b></div>
+      <div class="stockrow"><span>Arrows</span><b>${c.items.arrow}</b></div>
       <div class="stockrow"><span>Bandages / Medkits / Flares / Molotovs / Charges</span><b>${c.items.bandage}/${c.items.medkit}/${c.items.flare}/${c.items.molotov}/${c.items.charge}</b></div>
       <div class="stockrow"><span>Pharmacy</span><b>${drugsHtml}</b></div>
+      <div class="stockrow"><span>Hides</span><b>${c.items.hides ?? 0}</b></div>
       <div class="stockrow"><span>Salvaged chassis</span><b>${c.chassis}</b></div>
       <div class="stockrow"><span>Radio fragments</span><b>${c.fragments.size}/4</b></div>
       <h3>Crafting</h3>
       <div class="card"><div class="btns">${craftBtns(RECIPES.filter((r) => !isDrug(r)))}</div></div>
+      <h3>Tanner</h3>
+      <div class="card"><div class="btns">${this.hideButtons()}</div><div class="mutedtxt">Hides come off butchered game. A clean shot and a fresh carcass keep them whole; a blast, a fire or a bumper ruins them.</div></div>
       <h3>Workbench</h3>
       <div class="card"><div class="btns">${this.benchButtons()}</div><div class="mutedtxt">Scrap comes from breaking down spares you do not need (Garage tab) or a vehicle. Here it becomes hardware for repairs and rebuilds.</div></div>
       <h3>Still &amp; apothecary</h3>
@@ -234,6 +239,36 @@ export class LedgerPanel {
         ),
       )
       .join('');
+  }
+
+  /** Hides: sold for Scrap, or cut into leather wraps that bind a wound like a bandage. */
+  private hideButtons() {
+    const c = this.c;
+    const have = c.items.hides ?? 0;
+    const sell = this.btn(
+      'hides-sell',
+      `Sell ${have || ''} hide${have === 1 ? '' : 's'} <span class="cost">+${have * HIDE_PRICE} Scrap</span>`,
+      () => {
+        const n = c.items.hides ?? 0;
+        if (!n) return this.deny('No hides to sell');
+        c.items.hides = 0;
+        c.stocks.scrap += n * HIDE_PRICE;
+        this.ok(`Sold ${n} hide${n === 1 ? '' : 's'} for ${n * HIDE_PRICE} Scrap.`);
+      },
+      have > 0,
+    );
+    const wraps = this.btn(
+      'hides-wrap',
+      `Leather wraps <span class="cost">2 Hides → 3 Bandages</span>`,
+      () => {
+        if ((c.items.hides ?? 0) < 2) return this.deny('Not enough hides');
+        c.items.hides -= 2;
+        c.items.bandage += 3;
+        this.ok('Cut 2 hides into 3 leather wraps.');
+      },
+      have >= 2,
+    );
+    return sell + wraps;
   }
 
   private tradeButtons() {
@@ -440,6 +475,7 @@ export class LedgerPanel {
     if (!this.buyCost(r.cost)) return this.deny('Not enough stock');
     const y = r.yields;
     if (y.ammo) this.c.ammo += y.ammo;
+    if (y.arrow) this.c.items.arrow += y.arrow;
     if (y.medkit) this.c.items.medkit += y.medkit;
     if (y.bandage) this.c.items.bandage += y.bandage;
     if (y.molotov) this.c.items.molotov += y.molotov;

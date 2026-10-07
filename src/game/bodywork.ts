@@ -668,7 +668,10 @@ export class Bodywork {
         ctx.marks.lift(key);
         continue;
       }
-      ctx.marks.lay(key, cp.x, cp.z, halfW, style, (x, z) => ctx.groundAt(x, z));
+      // The tyre's own contact height (the road it is on, or the ground as drawn), carried across the ribbon by the ground's slope.
+      const drawn = ctx.drawnGroundAt ? (x: number, z: number) => ctx.drawnGroundAt!(x, z) : (x: number, z: number) => ctx.groundAt(x, z);
+      const g0 = cp.y - drawn(cp.x, cp.z);
+      ctx.marks.lay(key, cp.x, cp.z, halfW, style, (x, z) => drawn(x, z) + g0);
     }
     void dt;
   }
@@ -885,6 +888,8 @@ export class Bodywork {
     const empty = !s.dents.length && !s.gone.length && !s.glass && !s.open && !Object.keys(s.stress).length && s.dirt.every((d) => d < 0.004);
     if (empty) delete b.body;
     else b.body = s;
+    // Fitted panes carry how worn they are, so a mended window is whole again after a save.
+    this.v.glass?.syncFit(b);
   }
 
   /** Test and tooling access: the parts this body knows about, with their state. */

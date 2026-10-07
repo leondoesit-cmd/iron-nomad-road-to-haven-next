@@ -5,7 +5,7 @@ import { legById } from '../src/data';
 import { ChunkSource } from '../src/world/chunkgen';
 import { TREE_DIMS, TREE_SPECIES } from '../src/world/flora';
 import { forestAt, lushAt } from '../src/world/hydro';
-import { CELL, CHUNK, heightAt } from '../src/world/terrain';
+import { CELL, CHUNK, heightAt, waterAt } from '../src/world/terrain';
 import { ChunkView, makeChunkMaterials } from '../src/render/chunkview';
 import { buildScatter } from '../src/render/scatter';
 import { buildTreesSteps, impostorDims, planFarForest, treeGeometry, treeInstances } from '../src/render/trees';
@@ -58,7 +58,7 @@ describe('tree models', () => {
 });
 
 describe('trees of a chunk', () => {
-  it('draws the same trees the same way every time, one mesh per species plus the impostors', () => {
+  it('draws the same trees the same way every time, with variant batches and unchanged impostors', () => {
     const a = chunkAt(-1700, 1300);
     const b = new ChunkSource(leg).get(a.cx, a.cz);
     expect(a.trees.length).toBeGreaterThan(30);
@@ -69,8 +69,8 @@ describe('trees of a chunk', () => {
     let r = g.next();
     while (!r.done) r = g.next();
     const set = r.value;
-    const species = new Set(a.trees.map((t) => t.sp));
-    expect(set.near.length).toBe(species.size);
+    const variants = new Set(a.trees.map((t) => t.sp * 3 + t.v));
+    expect(set.near.length).toBe(variants.size);
     expect(set.near.reduce((n, im) => n + im.count, 0)).toBe(a.trees.length);
     expect(set.far!.count).toBe(a.trees.length);
     for (const im of set.near) expect(im.castShadow).toBe(true);
@@ -168,6 +168,91 @@ describe('ground cover', () => {
       const depth = fen.level - heightAt(def, p.x, p.z);
       expect(depth).toBeGreaterThan(0.1);
     }
+  });
+});
+
+describe('under the water', () => {
+  const cover = (x: number, z: number) => {
+    const d = chunkAt(x, z);
+    return buildScatter(def, d.cx, d.cz, d.aabbs, d.props, 1, undefined, d.heights);
+  };
+  const m = new THREE.Matrix4();
+  const p = new THREE.Vector3();
+  const sc = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  /** How many instances of a mesh stand with their top above the water they are in. */
+  const poking = (im: THREE.InstancedMesh | null) => {
+    if (!im) return 0;
+    im.geometry.computeBoundingBox();
+    const top = im.geometry.boundingBox!.max.y;
+    let n = 0;
+    for (let i = 0; i < im.count; i++) {
+      im.getMatrixAt(i, m);
+      m.decompose(p, q, sc);
+      const w = waterAt(def, p.x, p.z);
+      if (!w || p.y + top * sc.y > w.level + 0.02) n++;
+    }
+    return n;
+  };
+
+  it('lays cobbles on a river bed, with tape grass and mud in the slack by the banks', () => {
+    const r = def.hydro!.rivers.find((c) => c.name.includes('Greywater'))!;
+    const i = Math.floor(r.n / 2);
+    const s = cover(r.x[i], r.z[i]);
+    expect(s.bedRocks.reduce((k, b) => k + b.count, 0)).toBeGreaterThan(100);
+    expect(s.tape?.count ?? 0).toBeGreaterThan(5);
+    expect(s.silt?.count ?? 0).toBeGreaterThan(5);
+    expect(poking(s.tape)).toBe(0);
+    expect(poking(s.pondweed)).toBe(0);
+  });
+
+  it('carpets a fen with peat, pondweed and hornwort, and drowned branches', () => {
+    const s = cover(1000, 2080);
+    expect(s.silt?.count ?? 0).toBeGreaterThan(200);
+    expect(s.pondweed?.count ?? 0).toBeGreaterThan(50);
+    expect(s.hornwort?.count ?? 0).toBeGreaterThan(50);
+    expect(s.snags?.count ?? 0).toBeGreaterThan(10);
+    expect(poking(s.pondweed)).toBe(0);
+    expect(poking(s.hornwort)).toBe(0);
+  });
+
+  it('grows a meadow of tape grass in a clear lake, and stonewort in a spring', () => {
+    const hy = def.hydro!;
+    const l = def.lakes[hy.lakes[0]];
+    let shore = 0;
+    for (let r = 0; r < l.reach; r += 4) {
+      const w = waterAt(def, l.x + r, l.z);
+      if (w && w.depth < 1) {
+        shore = r;
+        break;
+      }
+    }
+    const lake = cover(l.x + shore, l.z);
+    expect(lake.tape?.count ?? 0).toBeGreaterThan(20);
+    expect(lake.shells?.count ?? 0).toBeGreaterThan(0);
+    expect(poking(lake.tape)).toBe(0);
+    const oasis = hy.springs.find((sp) => sp.oasis)!;
+    const spring = cover(oasis.x, oasis.z);
+    expect(spring.hornwort?.count ?? 0).toBeGreaterThan(5);
+    expect(spring.bedRocks.reduce((k, b) => k + b.count, 0)).toBeGreaterThan(10);
+    expect(poking(spring.hornwort)).toBe(0);
+  });
+
+  it('puts water snails on the wet mud along a stream', () => {
+    const r = def.hydro!.rivers.find((c) => c.kind === 'stream')!;
+    let n = 0;
+    for (const f of [0.3, 0.5, 0.7]) {
+      const i = Math.floor(r.n * f);
+      n += cover(r.x[i], r.z[i]).snails?.count ?? 0;
+    }
+    expect(n).toBeGreaterThan(5);
+  });
+
+  it('puts nothing of it in the desert', () => {
+    const s = cover(0, 10);
+    expect(s.bedRocks.length).toBe(0);
+    expect(s.silt).toBeNull();
+    expect(s.tape).toBeNull();
   });
 });
 

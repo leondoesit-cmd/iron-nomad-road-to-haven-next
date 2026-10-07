@@ -4,7 +4,7 @@ import { shared } from './dispose';
 import { applyKit } from './materials';
 import { clamp01, lerp, smoothstep } from '../core/math';
 import { valueNoise3 } from '../core/noise';
-import { DEG, GRID_U, GRID_V, RAY_Z, beardCover, hairlineAt, paintTexels, phiAt, rayY, thetaAt, type HeadShape, type PortraitSpec, type V3 } from './portraitPaint';
+import { DEG, GRID_U, GRID_V, RAY_Z, beardCover, hairlineAt, scalpDensity, paintTexels, phiAt, rayY, thetaAt, type HeadShape, type PortraitSpec, type V3 } from './portraitPaint';
 import type { PaintJob } from './portraitPaint.worker';
 
 export type { FacePaint, FacialHair, HairSpec, HeadShape, PortraitSpec, V2, V3 } from './portraitPaint';
@@ -155,6 +155,11 @@ export function headField(s: HeadShape): HeadField {
   f.pair([cbx - cbr * 0.45, E + cby, Z + cbz - cbr * 0.9], [cbr, cbr * 0.7, cbr * 0.95], 0.022);
   const [ckx, cky, ckz, ckr] = s.cheek;
   f.pair([ckx, E + cky, Z + ckz - ckr], [ckr * 0.95, ckr * 1.05, ckr], 0.024);
+  if (s.jowl) {
+    const [x, y, z, r] = s.jowl;
+    f.pair([x, E + y, Z + z - r], [r, r * 0.95, r * 0.9], 0.026);
+  }
+  if (s.eyeBag) f.pair([X + 0.002, E - 0.012, Z - 0.005], [s.eyeW * 1.15, s.eyeBag, 0.009], 0.008);
   // Jaw: the ramus up to the ear, then the body of the mandible round to the chin.
   const [jx, jy, jz] = s.jaw;
   const chinY = E + s.chin.y;
@@ -166,6 +171,7 @@ export function headField(s: HeadShape): HeadField {
   f.ell([0, E + m.y + 0.006, Z + m.z - 0.028], [m.halfW + 0.006, 0.026, 0.028], 0.02);
   // Neck, down into the collar.
   f.cap([0, -0.09, s.neck.z], [0, E - 0.05, s.neck.z - 0.006], s.neck.r, s.neck.r * 0.94, 0.03);
+  if (s.underChin) f.ell([0, chinY - 0.008, chinZ - 0.038], [s.chin.halfW * 1.5, s.underChin, 0.04], 0.025);
   // Brow ridge and the glabella between the brows.
   f.pair([0.025, E + 0.017, Z + s.brow - 0.014], [0.03, 0.0105, 0.014], 0.016);
   f.ell([0, E + 0.013, Z + s.brow - 0.016], [0.016, 0.014, 0.016], 0.014);
@@ -184,19 +190,23 @@ export function headField(s: HeadShape): HeadField {
   f.pair([0.0068, baseY + 0.0026, tipZ - 0.0185], [0.0041, 0.0022, 0.0055], 0.003, true);
   // Lips: each half is a capsule from the corner to the middle, so the corners can lift independently.
   const lipZ = Z + m.z;
+  const opening = (m.open ?? 0) / 2;
   for (const side of [-1, 1] as const) {
     const lift = m.lift[side < 0 ? 0 : 1];
     const cx = side * m.halfW;
     const cy2 = E + m.y + lift;
-    f.cap([cx, cy2 + 0.0012, lipZ - 0.017], [side * 0.004, E + m.y + m.upper * 0.55, lipZ - 0.0035], 0.0022, m.upper * 0.62, 0.0042);
-    f.cap([cx * 0.96, cy2 - 0.0012, lipZ - 0.018], [side * 0.004, E + m.y - m.lower * 0.6, lipZ - 0.006], 0.002, m.lower * 0.68, 0.0042);
+    f.cap([cx, cy2 + 0.0012, lipZ - 0.017], [side * 0.004, E + m.y + m.upper * 0.55 + opening, lipZ - 0.0035], 0.0022, m.upper * 0.62, 0.0042);
+    f.cap([cx * 0.96, cy2 - 0.0012, lipZ - 0.018], [side * 0.004, E + m.y - m.lower * 0.6 - opening, lipZ - 0.006], 0.002, m.lower * 0.68, 0.0042);
   }
-  // The line between the lips, cut in, and the hollow under the lower lip.
-  for (const side of [-1, 1] as const) {
-    const lift = m.lift[side < 0 ? 0 : 1];
-    f.cap([side * (m.halfW + 0.002), E + m.y + lift, lipZ - 0.02], [0, E + m.y, lipZ - 0.001], 0.0009, 0.001, 0.0016, true);
+  // Closed lips have a sculpted seam. A small opening uses the painter's cavity colour:
+  // cutting a sub-grid slit into the ray surface produces triangular spikes at its edges.
+  if (!opening) {
+    for (const side of [-1, 1] as const) {
+      const lift = m.lift[side < 0 ? 0 : 1];
+      f.cap([side * (m.halfW + 0.002), E + m.y + lift, lipZ - 0.02], [0, E + m.y, lipZ - 0.001], 0.0009, 0.001, 0.0016, true);
+    }
   }
-  f.ell([0, E + m.y - m.lower - 0.009, lipZ - 0.005], [0.013, 0.0042, 0.006], 0.006, true);
+  f.ell([0, E + m.y - m.lower - 0.009, lipZ - 0.005], [0.013, 0.0042, m.hollow ?? 0.006], 0.006, true);
   return f;
 }
 
@@ -319,7 +329,13 @@ function hairDepth(spec: PortraitSpec, mode: HairMode, th: number, ph: number, y
     const n = valueNoise3(across, along, 0.5, 71) * 0.7 + valueNoise3(across * 2.3, along * 1.7, 2.5, 72) * 0.3;
     t += (n - 0.45) * h.groove * smoothstep(0, h.taper * 1.5, above);
   }
-  return (mode === 'covered' ? Math.min(t, 0.0035) : Math.max(0, t)) - SINK;
+  // Curls: the hair stands up in small knots all over, rather than lying in strands.
+  if (h.curl) {
+    // Knots about four degrees across: anything finer is lost between the grid's columns.
+    const n = valueNoise3((th * DEG) / 4, (ph * DEG) / 4, 4.5, 73) * 0.65 + valueNoise3((th * DEG) / 2.2, (ph * DEG) / 2.2, 6.5, 74) * 0.35;
+    t += (n - 0.5) * h.curl * 2 * smoothstep(0, h.taper, above);
+  }
+  return (mode === 'covered' ? Math.min(t, 0.0035) : Math.max(0, t)) * scalpDensity(spec, y) - SINK;
 }
 
 // ------------------------------------------------------------------------------------------ assembly
@@ -553,6 +569,15 @@ export function portraitGeometry(spec: PortraitSpec, mode: HairMode): THREE.Buff
 /** The material that draws a portrait head; its texture is painted the first time it is drawn. */
 export function portraitMaterial(spec: PortraitSpec): THREE.Material {
   return prepare(spec).mat;
+}
+
+/**
+ * Start painting a head's full texture now rather than on its first draw: for an expression that will be swapped in
+ * later, so it is not blurry the first time it shows. Does nothing headless.
+ */
+export function warmPortrait(spec: PortraitSpec) {
+  const b = prepare(spec);
+  if (b.state === 'none' && typeof Worker !== 'undefined') startPainting(b);
 }
 
 /** Paint now, here, rather than on first draw (tools and tests). Returns the RGBA texels, roughness in alpha. */

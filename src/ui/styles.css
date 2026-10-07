@@ -386,6 +386,29 @@ canvas.minimap {
 .gauge.stamina {
   display: none;
 }
+.gauge.breath {
+  display: none;
+}
+.bar.air {
+  height: 7px;
+}
+.bar.air .fill {
+  background: #7fd4ff;
+  transition: none;
+}
+.bar.air.low .fill {
+  background: var(--amber);
+}
+/* Head under the surface: the picture goes blue-green and murky toward the edges, and softens. */
+.underwater {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(40, 110, 130, 0.38) 25%, rgba(8, 40, 62, 0.82) 100%);
+  backdrop-filter: blur(1.5px) saturate(0.8) hue-rotate(-12deg);
+  opacity: 0;
+  transition: opacity 0.18s;
+}
 .bar.stam {
   height: 7px;
 }
@@ -643,6 +666,26 @@ canvas.minimap {
 }
 .reticle.hit {
   filter: drop-shadow(0 0 4px #ff3a2a);
+}
+/* A bow's draw, as a ring round the reticle that fills as the string comes back. */
+.reticle .drawring {
+  position: absolute;
+  left: -11px;
+  top: -11px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: none;
+  background: conic-gradient(rgba(255, 255, 255, 0.92) calc(var(--d, 0) * 360deg), rgba(255, 255, 255, 0.14) 0);
+  -webkit-mask: radial-gradient(circle, transparent 20px, #000 21px, #000 23px, transparent 24px);
+  mask: radial-gradient(circle, transparent 20px, #000 21px, #000 23px, transparent 24px);
+  filter: drop-shadow(0 0 2px #000);
+}
+.reticle .drawring.full {
+  background: #ffd27a;
+}
+.reticle .drawring.shake {
+  background: #ff7a5a;
 }
 .vignette {
   position: absolute;
@@ -1778,6 +1821,8 @@ button:disabled {
 .invcol.hidewear {
   display: none;
 }
+/* `.ledger .invcol`: outranks `.ledger section { overflow: hidden }`, so a long bag (god mode's armoury) scrolls. */
+.ledger .invcol,
 .invcol {
   display: flex;
   flex-direction: column;
@@ -2259,6 +2304,7 @@ button:disabled {
     overflow-y: auto;
     align-content: start;
   }
+  .ledger .invcol,
   .invcol {
     overflow: visible;
   }
@@ -2685,4 +2731,115 @@ kbd {
 }
 .g-kbrow em {
   white-space: nowrap;
+}
+.benchmark-menu {
+  width: min(1080px, 95vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  pointer-events: auto;
+}
+.benchmark-menu p { text-transform: none; letter-spacing: 0; }
+.benchmark-note { font-size: .78em; color: var(--paper-dim); }
+.benchmark-table { overflow-x: auto; }
+.benchmark-table table { width: 100%; border-collapse: collapse; font: 13px var(--mono); }
+.benchmark-table th, .benchmark-table td { text-align: right; padding: 8px; border-bottom: 1px solid #ffffff20; white-space: nowrap; }
+.benchmark-table th:first-child, .benchmark-table td:first-child { text-align: left; }
+.benchmark-table small { display: block; color: var(--paper-dim); }
+#overlay:has(.benchmark-live) { align-items: flex-start; justify-content: flex-start; background: transparent; }
+.benchmark-live { margin: 12px; padding: 10px 14px; max-width: min(540px, 90vw); background: #17120de6; pointer-events: auto; font: 13px var(--mono); }
+.benchmark-live [data-benchmark-progress] { margin: 6px 0; }
+.benchmark-live button { font-size: 12px; padding: 4px 10px; }
+
+/* ---- Hands-on carrying (game/grab.ts): a dot at the crosshair, what you hold or look at under it, the buttons down the left. */
+.handdot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 50%;
+  background: #f4efe2;
+  box-shadow: 0 0 2px #000, 0 0 6px rgba(0, 0, 0, 0.5);
+  display: none;
+  pointer-events: none;
+}
+.lookinfo,
+.handhints {
+  position: absolute;
+  display: none;
+  pointer-events: none;
+  font-family: var(--font);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #f4efe2;
+  text-shadow: -1px -1px 0 #14110d, 1px -1px 0 #14110d, -1px 1px 0 #14110d, 1px 1px 0 #14110d, 0 0 6px rgba(0, 0, 0, 0.75);
+}
+.lookinfo {
+  left: 50%;
+  top: calc(50% + 18px);
+  transform: translateX(-50%);
+  text-align: center;
+  font-size: calc(15px * var(--u, 1));
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.lookinfo div:first-child {
+  font-size: 1.08em;
+}
+.handhints {
+  left: 18px;
+  top: 58%;
+  font-size: calc(14px * var(--u, 1));
+  line-height: 1.35;
+}
+.handhints b {
+  font-weight: 900;
+}
+
+/* ---- Story objective (game/story.ts) and the corner toast. */
+.objective {
+  display: none;
+  margin-top: 8px;
+  padding: 7px 12px 8px;
+  max-width: 300px;
+  background: var(--panel);
+  border-left: 3px solid #e8b04a;
+  font-size: 0.92em;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+.objective .otitle {
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #f4e2b8;
+  margin-bottom: 3px;
+}
+.objective .ostep {
+  color: #d8cfbc;
+  line-height: 1.4;
+}
+.objective .ostep.done {
+  color: #9fdc8c;
+}
+.objective .ohint {
+  margin-top: 4px;
+  color: #b8ad98;
+  font-size: 0.88em;
+  font-style: italic;
+}
+.toast {
+  position: absolute;
+  left: 14px;
+  top: 6px;
+  display: none;
+  pointer-events: none;
+  font-family: var(--font);
+  font-weight: 800;
+  font-size: calc(12px * var(--u, 1));
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #d8e85a;
+  text-shadow: 0 0 2px #000, 1px 1px 0 #000;
 }

@@ -9,6 +9,8 @@ export interface Interactable {
   /** Hold time in seconds. */
   dur: number;
   priority: number;
+  /** A direct handoff takes precedence over loose ground pickups and vehicle tools. */
+  direct?: boolean;
   enabled(p: Player): boolean;
   /** Called every tick while the hold progresses. Return false to cancel. */
   onTick?(p: Player, t: number): boolean | void;

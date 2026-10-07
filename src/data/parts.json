@@ -1,11 +1,15 @@
 {
-  "slots": ["engine", "cooling", "gearbox", "exhaust", "wheels", "suspension", "brakes", "hood", "doorL", "doorR", "armor", "weapon", "utility", "front", "roof", "rear", "side", "seatD", "seatP", "seatR", "steer", "dash"],
+  "slots": ["engine", "cooling", "gearbox", "exhaust", "wheels", "suspension", "brakes", "hood", "doorL", "doorR", "armor", "weapon", "utility", "front", "roof", "rear", "side", "seatD", "seatP", "seatR", "steer", "dash", "glassF", "glassB", "glassL", "glassR"],
   "labels": {
     "seatD": "Driver seat",
     "seatP": "Passenger seat",
     "seatR": "Rear seat",
     "steer": "Steering wheel",
     "dash": "Dashboard",
+    "glassF": "Windscreen",
+    "glassB": "Rear window",
+    "glassL": "Left window",
+    "glassR": "Right window",
     "engine": "Engine",
     "cooling": "Radiator",
     "gearbox": "Gearbox",
@@ -1632,7 +1636,8 @@
       "blurb": "A flap of tarp. Light, and no use against a bullet.",
       "stats": {"armorS": -0.03, "top": 0.015},
       "cost": { "parts": 10, "scrap": 15 },
-      "weight": 8
+      "weight": 8,
+      "window": false
     },
     {
       "id": "door_plate",
@@ -1652,7 +1657,8 @@
       "blurb": "A thick door with a slit for a window.",
       "stats": {"armorS": 0.16, "armor": 0.02, "top": -0.02},
       "cost": { "parts": 20, "scrap": 30, "tech": 5 },
-      "weight": 5
+      "weight": 5,
+      "window": false
     },
     {
       "id": "seat_none",
@@ -1855,6 +1861,229 @@
       "stats": {"burn": -0.02, "light": 0.05},
       "cost": { "parts": 14, "scrap": 20, "tech": 3 },
       "weight": 4
+    },
+    {
+      "id": "gls_ws_none",
+      "slot": "glassF",
+      "mk": 1,
+      "name": "No windscreen",
+      "blurb": "An open frame. The wind and the dust come straight in.",
+      "stats": {"light": 0},
+      "stock": true,
+      "empty": true,
+      "cost": {  },
+      "weight": 0
+    },
+    {
+      "id": "gls_rw_none",
+      "slot": "glassB",
+      "mk": 1,
+      "name": "No rear window",
+      "blurb": "An open frame at the back of the cab.",
+      "stats": {},
+      "stock": true,
+      "empty": true,
+      "cost": {  },
+      "weight": 0
+    },
+    {
+      "id": "gls_side_none",
+      "slot": "glassL",
+      "mk": 1,
+      "name": "No side window",
+      "blurb": "An open window frame.",
+      "stats": {},
+      "stock": true,
+      "empty": true,
+      "cost": {  },
+      "weight": 0
+    },
+    {
+      "id": "gls_ws_std",
+      "slot": "glassF",
+      "mk": 1,
+      "name": "Windscreen",
+      "blurb": "A curved pane of toughened glass, a little pitted by the road.",
+      "stats": {},
+      "glass": {"hp": 1},
+      "stock": true,
+      "cost": { "parts": 4, "scrap": 6 },
+      "weight": 0
+    },
+    {
+      "id": "gls_rw_std",
+      "slot": "glassB",
+      "mk": 1,
+      "name": "Rear window",
+      "blurb": "A flat pane of glass in a rubber seal.",
+      "stats": {},
+      "glass": {"hp": 1},
+      "stock": true,
+      "cost": { "parts": 4, "scrap": 6 },
+      "weight": 0
+    },
+    {
+      "id": "gls_side_std",
+      "slot": "glassL",
+      "mk": 1,
+      "name": "Side window",
+      "blurb": "A flat pane of door glass.",
+      "stats": {},
+      "glass": {"hp": 1},
+      "stock": true,
+      "cost": { "parts": 4, "scrap": 6 },
+      "weight": 0
+    },
+    {
+      "id": "gls_ws_pane",
+      "slot": "glassF",
+      "mk": 1,
+      "name": "Salvaged Windscreen",
+      "blurb": "A windscreen cut out of a wreck. Cloudy, but whole.",
+      "stats": {},
+      "glass": {"hp": 1},
+      "cost": { "parts": 4, "scrap": 6 },
+      "weight": 10
+    },
+    {
+      "id": "gls_rw_pane",
+      "slot": "glassB",
+      "mk": 1,
+      "name": "Salvaged Rear Window",
+      "blurb": "A rear window cut out of a wreck.",
+      "stats": {},
+      "glass": {"hp": 1},
+      "cost": { "parts": 4, "scrap": 6 },
+      "weight": 10
+    },
+    {
+      "id": "gls_side_pane",
+      "slot": "glassL",
+      "mk": 1,
+      "name": "Salvaged Side Window",
+      "blurb": "A door window lifted out of a wreck.",
+      "stats": {},
+      "glass": {"hp": 1},
+      "cost": { "parts": 4, "scrap": 6 },
+      "weight": 12
+    },
+    {
+      "id": "gls_ws_lam",
+      "slot": "glassF",
+      "mk": 2,
+      "name": "Laminated Windscreen",
+      "blurb": "Two sheets of glass round a plastic film. It cracks, but it holds together.",
+      "stats": {"top": 0.003},
+      "glass": {"hp": 2.2},
+      "cost": { "parts": 10, "scrap": 16, "tech": 2 },
+      "weight": 5
+    },
+    {
+      "id": "gls_rw_lam",
+      "slot": "glassB",
+      "mk": 2,
+      "name": "Laminated Rear Window",
+      "blurb": "Laminated glass: a rock stars it instead of going through.",
+      "stats": {"top": 0.002},
+      "glass": {"hp": 2.2},
+      "cost": { "parts": 10, "scrap": 16, "tech": 2 },
+      "weight": 5
+    },
+    {
+      "id": "gls_side_lam",
+      "slot": "glassL",
+      "mk": 2,
+      "name": "Laminated Side Window",
+      "blurb": "Film-backed door glass. Slow to shatter.",
+      "stats": {"top": 0.002},
+      "glass": {"hp": 2.2},
+      "cost": { "parts": 10, "scrap": 16, "tech": 2 },
+      "weight": 5
+    },
+    {
+      "id": "gls_ws_bullet",
+      "slot": "glassF",
+      "mk": 3,
+      "name": "Bulletproof Windscreen",
+      "blurb": "Thick ballistic glass. It will stop a burst of rifle fire, and weighs like it.",
+      "stats": {"armorF": 0.02, "top": -0.012},
+      "glass": {"hp": 5},
+      "cost": { "parts": 20, "scrap": 30, "tech": 8 },
+      "weight": 2
+    },
+    {
+      "id": "gls_side_bullet",
+      "slot": "glassL",
+      "mk": 3,
+      "name": "Bulletproof Side Window",
+      "blurb": "Ballistic door glass. Heavy, and very hard to find.",
+      "stats": {"armorS": 0.02, "top": -0.008},
+      "glass": {"hp": 5},
+      "cost": { "parts": 20, "scrap": 30, "tech": 8 },
+      "weight": 2
+    },
+    {
+      "id": "eng_594",
+      "slot": "engine",
+      "mk": 1,
+      "name": "594cc Twin",
+      "blurb": "An old air-cooled bike twin. It coughs, it leaks, it goes.",
+      "stats": {},
+      "engine": { "litres": 0.594, "kw": 17, "mass": 48, "size": 1, "fuel": "petrol", "layout": "I2" },
+      "stock": true,
+      "cost": { "parts": 8, "scrap": 12 },
+      "weight": 0
+    },
+    {
+      "id": "tyre_trike",
+      "slot": "wheels",
+      "mk": 1,
+      "name": "Motorcycle Wheel",
+      "blurb": "A laced front wheel off an old bike, tyre and all.",
+      "stats": {},
+      "wheel": "moto",
+      "stock": true,
+      "cost": { "parts": 6, "scrap": 8 },
+      "weight": 0
+    },
+    {
+      "id": "tyre_trike_r",
+      "slot": "wheels",
+      "mk": 1,
+      "name": "Small Wheel T2",
+      "blurb": "A small pressed-steel wheel off a rickshaw axle.",
+      "stats": {},
+      "wheel": "small",
+      "stock": true,
+      "cost": { "parts": 5, "scrap": 7 },
+      "weight": 0
+    },
+    { "id": "rad_trike", "slot": "cooling", "mk": 1, "name": "Twin's Cooling Fins", "blurb": "Deep fins on the barrels and an oil cooler. Air-cooled: keep it moving.", "stats": {}, "cooling": 24, "stock": true, "cost": { "parts": 8, "scrap": 12 }, "weight": 0 },
+    { "id": "gbx_trike", "slot": "gearbox", "mk": 1, "name": "Trike Gearbox", "blurb": "The bike's own four-speed, with a chain to the back axle.", "stats": {}, "gearbox": { "rating": 22, "gearing": 0, "mass": 14 }, "stock": true, "cost": { "parts": 8, "scrap": 12 }, "weight": 0 },
+    { "id": "sus_trike", "slot": "suspension", "mk": 1, "name": "Trike Suspension", "blurb": "A bike fork in front and leaf springs under the cab.", "stats": {}, "suspension": { "load": 420, "travel": 1, "mass": 0 }, "stock": true, "cost": { "parts": 8, "scrap": 12 }, "weight": 0 },
+    { "id": "brk_trike", "slot": "brakes", "mk": 1, "name": "Trike Brakes", "blurb": "Drums all round. Plan ahead.", "stats": {}, "brakes": { "power": 1, "energy": 40 }, "stock": true, "cost": { "parts": 8, "scrap": 12 }, "weight": 0 },
+    { "id": "exh_trike", "slot": "exhaust", "mk": 1, "name": "Trike Exhaust", "blurb": "Two rusty pipes and a lot of noise.", "stats": {}, "exhaust": { "flow": 0, "noise": 1 }, "stock": true, "cost": { "parts": 8, "scrap": 12 }, "weight": 0 },
+    {
+      "id": "rr_rickshaw",
+      "slot": "rear",
+      "mk": 1,
+      "name": "Rickshaw Cab",
+      "blurb": "A rusted tin cab with a bench, a curtain and mesh in the windows. Room for a passenger and whatever you can wedge in beside them.",
+      "stats": { "cargo": 4, "hp": 0.15, "top": -0.03 },
+      "cost": { "parts": 14, "scrap": 24 },
+      "weight": 1,
+      "hold": { "zone": "bed", "units": 10, "max": 4 }
+    },
+    {
+      "id": "sus_lift",
+      "slot": "suspension",
+      "mk": 1,
+      "name": "Suspension Lift Kit",
+      "blurb": "Longer shocks and spacers. More clearance, more travel, a little more lean in the bends.",
+      "stats": { "offroad": 0.14, "grip": -0.02 },
+      "suspension": { "load": 900, "travel": 1.3, "mass": 0 },
+      "cost": { "parts": 12, "scrap": 18 },
+      "weight": 6
     }
   ],
   "paints": [

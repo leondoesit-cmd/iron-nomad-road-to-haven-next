@@ -25,6 +25,8 @@ interface Burner {
   t: number;
   tick: number;
   owner: Player | null;
+  /** Burning on the water: a flare goes on under it, spilt fuel floats and drifts on the current. */
+  water?: boolean;
 }
 interface Charge {
   aabb: Aabb;
@@ -46,14 +48,10 @@ export class Projectiles {
   burners: Burner[] = [];
   charges: Charge[] = [];
   decoys: Decoy[] = [];
-  /** One shared light follows the brightest flare or fire so night camps get a real glow without a light per flare. */
-  light = new THREE.PointLight(0xff4a2a, 0, 55, 1.6);
   /** Meshes for things in the air, made on first use and kept hidden between throws (the scene's teardown frees them with its root). */
   private pool: Record<Throw['kind'], THREE.Group[]> = { flare: [], molotov: [] };
 
-  constructor(private ctx: Ctx) {
-    ctx.root.add(this.light);
-  }
+  constructor(private ctx: Ctx) {}
 
   private makeMesh(kind: Throw['kind']): THREE.Group {
     const g = new THREE.Group();
@@ -143,63 +141,73 @@ export class Projectiles {
         f.mesh.position.set(f.x, f.y, f.z);
         f.mesh.rotation.set(f.t * (f.kind === 'molotov' ? 13 : 7), f.t * 3, f.t * 5);
       }
+      // The flame streams back off whatever is burning as it flies, and lights the ground it passes over.
       if (f.kind === 'flare') {
-        ctx.fx.fire(f.x, f.y, f.z, 0.3);
+        ctx.fires?.hold(f, { x: f.x, y: f.y - 0.04, z: f.z, r: 0.07, fuel: 'flare', shape: 'point', heat: 0.85, light: 0.7, bed: false, vx: f.vx, vz: f.vz });
         ctx.fx.spark(f.x, f.y, f.z, 1, 2.5);
         if (Math.random() < 0.5) ctx.fx.puff(f.x, f.y, f.z, 0.75, 0.7, 0.68, 0.5, 0.7);
       } else {
         // A burning rag streams flame and smoke behind the bottle.
-        ctx.fx.fire(f.x, f.y + 0.2, f.z, 0.3, true);
+        ctx.fires?.hold(f, { x: f.x, y: f.y + 0.12, z: f.z, r: 0.07, fuel: 'petrol', shape: 'point', heat: 0.75, light: 0.4, bed: false, vx: f.vx, vz: f.vz });
         if (Math.random() < 0.4) ctx.fx.blackSmoke(f.x, f.y + 0.2, f.z);
       }
       const gy = ctx.groundAt(f.x, f.z);
+      const water = ctx.waterAt(f.x, f.z);
+      const submerged = water && water.depth > 0.1 && f.y <= water.level;
       const hitWall = ctx.obs.pointInside(f.x, f.z, f.y);
-      if (f.y <= gy + 0.1 || hitWall || f.t > THROW_LIFE || this.contact(f)) {
+      if (f.y <= gy + 0.1 || submerged || hitWall || f.t > THROW_LIFE || this.contact(f)) {
         this.flying.splice(i, 1);
+        ctx.fires?.release(f);
         if (f.mesh) f.mesh.visible = false;
-        if (f.kind === 'flare') this.burners.push({ kind: 'flare', x: f.x, z: f.z, r: 1, t: 28, tick: 0, owner: f.owner });
+        if (submerged) {
+          ctx.fx.puff(f.x, water.level, f.z, 0.75, 0.78, 0.8, 0.3, 0.4);
+          ctx.audio.play('splash', f.x, f.z, 0.3);
+          // A flare burns on under water; a bottle bursts and its fuel spreads over the surface, still burning.
+          if (f.kind === 'flare') this.burners.push({ kind: 'flare', x: f.x, z: f.z, r: 1, t: 28, tick: 0, owner: f.owner, water: true });
+          else {
+            this.burners.push({ kind: 'fire', x: f.x, z: f.z, r: 2.6, t: 6, tick: 0, owner: f.owner, water: true });
+            ctx.fx.fireSplash(f.x, water.level + 0.1, f.z, 2.6);
+          }
+          continue;
+        }
+        if (f.kind === 'flare') {
+          this.burners.push({ kind: 'flare', x: f.x, z: f.z, r: 1, t: 28, tick: 0, owner: f.owner });
+          ctx.audio.play('thunk', f.x, f.z, 0.14);
+        }
         else {
           this.burners.push({ kind: 'fire', x: f.x, z: f.z, r: 3.6, t: 7, tick: 0, owner: f.owner });
-          ctx.fx.explosion(f.x, gy + 0.3, f.z, 0.4);
+          // A bottle breaks and spreads burning fuel. It does not detonate or excavate a crater.
+          for (let shard = 0; shard < 8; shard++) ctx.gore.gibs.throw('shard', f.x, Math.max(gy + 0.05, f.y), f.z,
+            (Math.random() - 0.5) * 3, 0.5 + Math.random() * 2, (Math.random() - 0.5) * 3, 0.15 + Math.random() * 0.2, 0.3, 0.5, 0.32);
           ctx.fx.fireSplash(f.x, gy + 0.2, f.z, 3.6);
           ctx.gore.scorch(f.x, f.z, 1.8);
           ctx.audio.play('glass', f.x, f.z, 0.4);
-          ctx.audio.play('boom', f.x, f.z, 0.6);
           ctx.sig.emit(f.x, f.z, 70, 'noise');
         }
       }
     }
-    let flareLight = 0;
     for (let i = this.burners.length - 1; i >= 0; i--) {
       const b = this.burners[i];
       b.t -= dt;
       b.tick -= dt;
-      const gy = ctx.groundAt(b.x, b.z);
+      // On the water it rides the surface, and spilt fuel drifts off on the current.
+      const w = b.water ? ctx.waterAt(b.x, b.z) : null;
+      if (b.water && b.kind === 'fire' && w?.flow) {
+        b.x += w.flow[0] * dt * 0.8;
+        b.z += w.flow[1] * dt * 0.8;
+      }
+      const gy = w ? w.level : ctx.groundAt(b.x, b.z);
       if (b.kind === 'flare') {
-        ctx.fx.fire(b.x + (Math.random() - 0.5) * 0.2, gy + 0.2, b.z + (Math.random() - 0.5) * 0.2, 0.6);
-        if (Math.random() < 0.3) ctx.fx.blackSmoke(b.x, gy + 0.6, b.z);
+        // The fire engine draws it, lights the ground red round it, and smokes it.
+        ctx.fires?.hold(b, { x: b.x, y: gy + 0.05, z: b.z, r: 0.08, fuel: 'flare', shape: 'point', heat: Math.min(1, b.t / 4), bed: false });
         // A flare is a lure: zombies investigate the glow.
         if (b.tick <= 0) {
           b.tick = 0.4;
           ctx.sig.emit(b.x, b.z, 75, 'noise');
         }
-        const fl = Math.min(1, b.t / 4);
-        if (fl > flareLight) {
-          flareLight = fl;
-          this.light.position.set(b.x, gy + 2.2, b.z);
-        }
       } else {
-        for (let k = 0; k < 3; k++) ctx.fx.fire(b.x + (Math.random() - 0.5) * b.r * 1.6, gy + 0.2, b.z + (Math.random() - 0.5) * b.r * 1.6, 1.2);
-        // Taller tongues in the middle, black smoke off the top, and the odd ember lifting away.
-        if (Math.random() < 0.5) ctx.fx.fire(b.x + (Math.random() - 0.5) * b.r, gy + 0.6, b.z + (Math.random() - 0.5) * b.r, 1.6, true);
-        if (Math.random() < 0.3) ctx.fx.blackSmoke(b.x + (Math.random() - 0.5) * b.r, gy + 1.2, b.z + (Math.random() - 0.5) * b.r);
-        if (Math.random() < 0.12) ctx.fx.spark(b.x + (Math.random() - 0.5) * b.r, gy + 0.8, b.z + (Math.random() - 0.5) * b.r, 1, 2);
-        // A real fire lights the ground round it, flickering, and dies down as it burns out.
-        const fl = Math.min(1, b.t / 2) * (0.8 + 0.2 * Math.sin(ctx.time * 31 + b.x));
-        if (fl * 1.2 > flareLight) {
-          flareLight = fl * 1.2;
-          this.light.position.set(b.x, gy + 1.6, b.z);
-        }
+        // A pool of burning fuel: flames, a black bed, smoke, light, and dry grass round it catching.
+        ctx.fires?.hold(b, { x: b.x, y: gy + 0.02, z: b.z, r: b.r * 0.8, fuel: 'petrol', heat: Math.min(1, b.t / 2), bed: !b.water, spreads: !b.water, owner: b.owner?.index ?? -1 });
         ctx.zombies.burnArea(b.x, b.z, b.r, 24, dt, b.owner?.index ?? -1);
         ctx.wildlife.burnArea(b.x, b.z, b.r, 24, dt, b.owner?.index ?? -1);
         ctx.raiders.burnArea(b.x, b.z, b.r, 18, dt);
@@ -214,9 +222,11 @@ export class Projectiles {
           if (v.faction === 'raider' && Math.hypot(v.position.x - b.x, v.position.z - b.z) < b.r + 1.5) v.takeHit(10 * dt, b.x, b.z, { incendiary: true, silent: true });
         }
       }
-      if (b.t <= 0) this.burners.splice(i, 1);
+      if (b.t <= 0) {
+        this.burners.splice(i, 1);
+        ctx.fires?.release(b);
+      }
     }
-    this.light.intensity = flareLight * 45;
     for (let i = this.charges.length - 1; i >= 0; i--) {
       const c = this.charges[i];
       c.t -= dt;
@@ -247,6 +257,5 @@ export class Projectiles {
     this.charges.length = 0;
     this.decoys.length = 0;
     for (const list of Object.values(this.pool)) for (const m of list) m.visible = false;
-    this.light.intensity = 0;
   }
 }

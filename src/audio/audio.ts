@@ -1,11 +1,16 @@
+import { UserMusic } from './userMusic';
 import { clamp } from '../core/math';
 import { SampleLibrary } from './samples';
 import { SpatialAudioEngine, type SpatialListener, type OcclusionTester } from './spatial';
 import { RadioAudioEngine } from './radio';
 import { VehicleAudioEngine, type EngineParams } from './engineAudio';
 import { FoleyEngine } from './foley';
+import { RoomAcoustics, performance, soundProfile } from './dynamics';
+import type { SpatialRoute } from './spatial';
 
 export type SoundId =
+  | 'weaponHandle' | 'magOut' | 'magIn' | 'weaponRack' | 'weaponPump' | 'weaponBolt' | 'weaponClick' | 'shellInsert'
+  | 'carPanel' | 'tirePuncture' | 'engineStart' | 'engineStop' | 'starterFail'
   | 'pistol'
   | 'shotgun'
   | 'mg'
@@ -53,7 +58,18 @@ export type SoundId =
   | 'chip'
   | 'ricochet'
   | 'slash'
-  | 'plunge';
+  | 'plunge'
+  | 'gasp'
+  | 'quack'
+  | 'howl'
+  | 'bellow'
+  | 'flutter'
+  | 'chirp'
+  | 'hiss'
+  | 'twang'
+  | 'creak'
+  | 'thunk'
+  | 'rustle' | 'treeHit' | 'treeCreak' | 'footGrass' | 'footStone' | 'footSand' | 'footWood' | 'thunder';
 
 /**
  * The sound of the water around the players, 0..1 each: `roar` of the nearest waterfall and how `tall` it is (a tall one is
@@ -68,6 +84,18 @@ export interface WaterAmbience {
   night: number;
 }
 
+/**
+ * The living country around the players, 0..1 each: `birds` sing by day in the woods and meadows (a few larks even over the
+ * dust), `cicadas` saw in the heat of the day among trees and scrub, `crickets` chirp in the grass after dark, and `owls`
+ * call from the woods at night.
+ */
+export interface NatureAmbience {
+  birds: number;
+  cicadas: number;
+  crickets: number;
+  owls: number;
+}
+
 export type MusicState = 'none' | 'travel' | 'stealth' | 'combat' | 'camp' | 'raid';
 
 export type EngineState = EngineParams;
@@ -79,21 +107,19 @@ export interface PlayOptions {
   muffle?: number;
   /** Pitch multiplier, for the cues that take one (a swing: a knife is higher than an axe). */
   pitch?: number;
+  /** Physical action strength, independent of master volume or weapon suppression. */
+  intensity?: number;
+  /** Recorded mechanism or engine family to use for this event. */
+  bank?: string;
+  /** Override the cue's hearing range in metres. */
+  range?: number;
 }
 
-/**
- * AAA Hybrid Sample-Based Foley & Directional HRTF Audio Engine.
- * Features:
- * - Granular Multi-Layer Foley: hybrid sampled architecture for gunshots (mechanical clicks,
- *   explosive sub-bass body, dynamic shell casing bounces, indoor/canyon tail reverberations).
- * - Multi-Track RPM-Sampled Vehicle Audio: idle/mid/high loops, turbocharger spooling with blow-off
- *   valve, transmission whine, exhaust backfire pops, chassis creaks under G-force.
- * - Binaural 3D Spatial HRTF: Web Audio PannerNode with 'HRTF' panning and distance-attenuated
- *   low-pass occlusion when sound sources (infected, raiders, gunfire) are behind concrete walls.
- * - Contextual Voice Barks & Radio Chatter: authentic walkie-talkie bandpass, mic clicks,
- *   compression, squelch tails, and procedural speech cadence synthesis.
- */
+/** Recording-based positional game audio, with per-player mixing and occlusion. */
 export class AudioEngine {
+  userMusic = new UserMusic();
+  private userMusicActive = false;
+  private radioTtsEnabled = false;
   ctx: AudioContext | null = null;
   master!: GainNode;
   sfx!: GainNode;
@@ -111,11 +137,13 @@ export class AudioEngine {
     lfoGain: GainNode;
   }[] = [];
 
-  private noiseBuf: AudioBuffer | null = null;
   listeners: SpatialListener[] = [{ x: 0, z: 0 }, { x: 0, z: 0 }];
   muted = false;
   volume = 0.7;
   musicVolume = 0.55;
+  gameMusicEnabled = false;
+  userMusicEnabled = true;
+  userMusicVolume = 0.55;
   indoor = false;
   solo = false;
 
@@ -126,15 +154,22 @@ export class AudioEngine {
   vehicleAudio: VehicleAudioEngine | null = null;
   foley: FoleyEngine | null = null;
 
-  private stems: Record<string, GainNode> = {};
   private musicState: MusicState = 'none';
-  private musicTimer = 0;
-  private beat = 0;
-  private bass?: OscillatorNode;
-  private radioHiss?: GainNode;
-  private wind?: { gain: GainNode; filt: BiquadFilterNode };
-  private water?: { roar: GainNode; roarLp: BiquadFilterNode; rumble: GainNode; babble: GainNode; insects: GainNode; frogs: GainNode; frogLevel: number };
   private lastPlay = new Map<string, number>();
+  private rooms: RoomAcoustics[] = [];
+  private active = new Set<{ x: number; z: number; route: SpatialRoute; opts: PlayOptions; shape: { range: number; reference: number }; source: AudioBufferSourceNode }>();
+  private environmentUpdate = -Infinity;
+  /** Smoothed 0..1 per listener: how far inside a running vehicle they sit. */
+  private cabin = [0, 0];
+  private cabinTarget = [0, 0];
+  private cabinAt = 0;
+
+  /** Everything but gunfire, blasts and the vehicle's own noise gives way to a running engine the listener sits in. */
+  private duckFor(id: string, i: number) {
+    if (['pistol', 'shotgun', 'mg', 'sniper', 'boom', 'horn', 'crash', 'carPanel', 'glass', 'tink', 'chip', 'tirePuncture', 'ricochet', 'siren', 'alarm'].includes(id) || id.startsWith('engine') || id === 'starterFail') return 1;
+    return 1 - 0.7 * (this.cabin[i] ?? 0);
+  }
+  private bedDuck() { return 1 - 0.7 * Math.max(this.cabin[0], this.solo ? 0 : this.cabin[1]); }
 
   /** Must be called from a user gesture. */
   init() {
@@ -166,7 +201,7 @@ export class AudioEngine {
 
     // Music bus
     this.musicBus = ctx.createGain();
-    this.musicBus.gain.value = this.musicVolume * 0.5;
+    this.musicBus.gain.value = this.userMusicActive || !this.gameMusicEnabled ? 0 : this.musicVolume * 0.5;
     this.musicBus.connect(this.master);
 
     // Per-player buses
@@ -205,15 +240,9 @@ export class AudioEngine {
       this.trip.push({ filt, fb, wet, delay, lfo, lfoGain });
     }
 
-    // Generic noise buffer
-    const len = ctx.sampleRate * 2;
-    this.noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
-    const d = this.noiseBuf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-
-    // Initialize AAA subsystems
+    this.rooms = this.buses.map(bus => new RoomAcoustics(ctx, bus));
     this.samples = new SampleLibrary(ctx);
-    this.samples.init();
+    void this.samples.init();
 
     this.spatial = new SpatialAudioEngine(ctx);
     this.spatial.setSolo(this.solo);
@@ -221,11 +250,20 @@ export class AudioEngine {
     this.radio = new RadioAudioEngine(ctx, this.samples);
     this.radio.setVolume(this.volume);
     this.radio.setMuted(this.muted);
+    this.radio.setTtsEnabled(this.radioTtsEnabled);
     this.vehicleAudio = new VehicleAudioEngine(ctx, this.samples, this.spatial);
     this.foley = new FoleyEngine(ctx, this.samples);
 
-    this.initMusic();
-    this.initWind();
+
+  }
+
+  updateUserMusic(inVehicle: boolean) {
+    this.userMusic.update(inVehicle && this.userMusicEnabled, this.radio?.speechActive ?? false, this.volume * this.userMusicVolume, this.muted);
+    const active = inVehicle && this.userMusicEnabled && this.userMusic.available;
+    if (active !== this.userMusicActive) {
+      this.userMusicActive = active;
+      if (this.musicBus) this.musicBus.gain.value = active || !this.gameMusicEnabled ? 0 : this.musicVolume * 0.5;
+    }
   }
 
   setVolume(v: number) {
@@ -236,7 +274,21 @@ export class AudioEngine {
 
   setMusicVolume(v: number) {
     this.musicVolume = v;
-    if (this.musicBus) this.musicBus.gain.value = v * 0.5;
+    if (this.musicBus) this.musicBus.gain.value = this.userMusicActive || !this.gameMusicEnabled ? 0 : v * 0.5;
+  }
+
+  setGameMusicEnabled(enabled: boolean) {
+    this.gameMusicEnabled = enabled;
+    if (this.musicBus) this.musicBus.gain.value = !enabled || this.userMusicActive ? 0 : this.musicVolume * 0.5;
+  }
+
+  setUserMusicEnabled(enabled: boolean) {
+    this.userMusicEnabled = enabled;
+    if (!enabled) this.updateUserMusic(false);
+  }
+
+  setUserMusicVolume(v: number) {
+    this.userMusicVolume = clamp(v, 0, 1);
   }
 
   setMuted(m: boolean) {
@@ -246,10 +298,11 @@ export class AudioEngine {
   }
 
   get ttsEnabled(): boolean {
-    return this.radio?.ttsEnabled ?? true;
+    return this.radioTtsEnabled;
   }
 
   setTtsEnabled(enabled: boolean) {
+    this.radioTtsEnabled = enabled;
     this.radio?.setTtsEnabled(enabled);
   }
 
@@ -260,9 +313,7 @@ export class AudioEngine {
   setSolo(s: boolean) {
     this.solo = s;
     if (this.spatial) this.spatial.setSolo(s);
-    if (this.pans.length > 0 && s) {
-      this.pans[0].pan.value = 0;
-    }
+    this.pans.forEach((pan, i) => { pan.pan.value = s ? 0 : i === 0 ? -0.35 : 0.35; });
   }
 
   setIndoor(indoor: boolean) {
@@ -290,6 +341,32 @@ export class AudioEngine {
 
   setListeners(l: SpatialListener[]) {
     this.listeners = l;
+    l.forEach((x, i) => { this.cabinTarget[i] = clamp(x.cabin ?? 0, 0, 1); });
+    if (this.ctx) {
+      const dt = clamp(this.ctx.currentTime - this.cabinAt, 0, 0.25); this.cabinAt = this.ctx.currentTime;
+      for (let i = 0; i < 2; i++) this.cabin[i] += (this.cabinTarget[i] - this.cabin[i]) * (1 - Math.exp(-dt * 3));
+      this.vehicleAudio && (this.vehicleAudio.cabin = this.cabin);
+    }
+    if (!this.ctx) return;
+    if (this.ctx.currentTime - this.environmentUpdate > 0.25) {
+      this.environmentUpdate = this.ctx.currentTime;
+      l.forEach((listener, i) => {
+        let enclosure = listener.enclosure ?? ((listener.indoor ?? this.indoor) ? 1 : 0);
+        if (listener.enclosure === undefined && !(listener.indoor ?? this.indoor) && this.spatial?.occlusionTester) {
+          let walls = 0;
+          for (const [dx, dz] of [[14,0],[-14,0],[0,14],[0,-14]]) {
+            const occ = this.spatial.occlusionTester(listener.x, listener.z, listener.x + dx, listener.z + dz);
+            walls += typeof occ === 'boolean' ? Number(occ) : clamp(occ, 0, 1);
+          }
+          enclosure = walls / 4 * 0.65;
+        }
+        this.rooms[i]?.update(enclosure);
+      });
+    }
+    for (const voice of this.active) {
+      const listener = l[voice.route.busIndex];
+      if (listener) this.spatial?.updateSpatialRoute(voice.route, voice.x, voice.z, listener, voice.opts.occluded, voice.shape);
+    }
   }
 
   private nearest(x: number, z: number) {
@@ -303,13 +380,6 @@ export class AudioEngine {
       }
     }
     return { bus: best, dist: bd };
-  }
-
-  private noise(): AudioBufferSourceNode {
-    const n = this.ctx!.createBufferSource();
-    n.buffer = this.noiseBuf!;
-    n.loop = true;
-    return n;
   }
 
   /** Duck everything except the cue, for high-priority alerts. */
@@ -333,6 +403,7 @@ export class AudioEngine {
     out.connect(this.buses[0] || this.sfx);
     if (!this.solo && this.buses[1]) out.connect(this.buses[1]);
     const duration = this.radio.playRadioChatter(text, out, vol);
+    setTimeout(() => out.disconnect(), (duration + 0.5) * 1000);
     this.duck(Math.max(1.5, duration + 0.2), 0.45);
   }
 
@@ -343,11 +414,14 @@ export class AudioEngine {
    */
   play(id: SoundId, x?: number, z?: number, vol = 1, opts: PlayOptions = {}) {
     const ctx = this.ctx;
-    if (!ctx || this.muted) return;
+    if (!ctx || this.muted || !this.samples) return;
+    const bank = opts.bank && this.samples.all(opts.bank).length ? opts.bank : id;
+    if (!this.samples.all(bank).length) return;
 
     // Rate-limiting identical rapid cues
     const t0 = ctx.currentTime;
-    const last = this.lastPlay.get(id) ?? 0;
+    const emitterKey = x === undefined || z === undefined ? id : `${id}:${Math.round(x / 4)}:${Math.round(z / 4)}`;
+    const last = this.lastPlay.get(emitterKey) ?? -Infinity;
     const minGap =
       id === 'mg'
         ? 0.04
@@ -369,27 +443,57 @@ export class AudioEngine {
         ? 0.05
         : id === 'yelp' || id === 'growl' || id === 'caw'
         ? 0.2
+        : id === 'quack' || id === 'flutter' || id === 'chirp' || id === 'bellow' || id === 'hiss'
+        ? 0.12
+        : id === 'howl'
+        ? 0.25
+        : id === 'thunk'
+        ? 0.03
         : 0;
     if (t0 - last < minGap) return;
-    this.lastPlay.set(id, t0);
+    this.lastPlay.set(emitterKey, t0);
+    if (this.lastPlay.size > 512) for (const [key, time] of this.lastPlay) if (t0 - time > 5) this.lastPlay.delete(key);
+    // Select once per physical event: both listeners hear the same recorded performance.
+    const buffer = this.samples.get(bank)!;
+    const variation = performance(id, opts.intensity ?? clamp(vol, 0, 1), opts.pitch ?? 1);
+    const eventOpts = { ...opts, pitch: variation.pitch };
+    // A wing-clap in the leaves is a rustle, not a bang: the take is recorded loud.
+    const eventVolume = vol * variation.gain * (id === 'flutter' ? 0.22 : 1);
 
     // 1. Non-positional UI sounds
     if (x === undefined || z === undefined) {
-      for (const b of this.buses) this.voice(id, b, vol, opts);
+      this.voice(id, this.sfx, eventVolume, eventOpts, buffer, variation.cutoff);
       return;
     }
 
     // 2. Positional 3D HRTF with concrete wall occlusion
     if (this.spatial) {
       // Find eligible listeners within audible perimeter
+      const profile = soundProfile(id);
+      const shape = { range: opts.range ?? profile.range, reference: profile.reference };
       for (let i = 0; i < this.listeners.length; i++) {
         if (this.solo && i > 0) break;
         const l = this.listeners[i];
-        const destBus = this.buses[i] || this.sfx;
-        const route = this.spatial.createSpatialRoute(x, z, l, i, destBus, opts.occluded);
+        const destBus = this.rooms[i]?.input || this.buses[i] || this.sfx;
+        const route = this.spatial.createSpatialRoute(x, z, l, i, destBus, opts.occluded, shape);
         if (route) {
-          // Route voice through the occlusion filter and HRTF panner
-          this.voice(id, route.filter, vol, { ...opts, indoor: opts.indoor ?? this.indoor });
+          const source = this.voice(id, route.filter, eventVolume * this.duckFor(id, i), eventOpts, buffer, variation.cutoff);
+          if (!source) continue;
+          const voice = { x, z, route, opts, shape, source };
+          this.active.add(voice);
+          const cleanup = source.onended;
+          source.onended = event => {
+            cleanup?.call(source, event);
+            this.active.delete(voice);
+            route.filter.disconnect(); route.panner.disconnect(); route.gain.disconnect();
+          };
+          // Bound simultaneous voices; evict oldest effects during dense action.
+          if (this.active.size > 64) {
+            const oldest = this.active.values().next().value!;
+            oldest.route.gain.gain.setTargetAtTime(0, t0, 0.015);
+            oldest.source.stop(t0 + 0.06);
+            this.active.delete(oldest);
+          }
         }
       }
     } else {
@@ -397,702 +501,121 @@ export class AudioEngine {
       const n = this.nearest(x, z);
       if (n.dist > 170) return;
       const att = 1 / (1 + Math.pow(n.dist / 28, 2));
-      this.voice(id, this.buses[n.bus] || this.sfx, vol * att, opts);
+      this.voice(id, this.buses[n.bus] || this.sfx, eventVolume * att, eventOpts, buffer, variation.cutoff);
     }
   }
 
-  private env(g: GainNode, t0: number, peak: number, attack: number, decay: number) {
-    g.gain.setValueAtTime(0.0001, t0);
-    g.gain.linearRampToValueAtTime(peak, t0 + attack);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + attack + decay);
-  }
-
-  private burst(
-    dest: AudioNode,
-    t0: number,
-    type: BiquadFilterType,
-    freq: number,
-    q: number,
-    peak: number,
-    attack: number,
-    decay: number,
-  ) {
+  private voice(id: SoundId, dest: AudioNode, v: number, opts: PlayOptions = {}, buffer?: AudioBuffer, cutoff = 22000) {
     const ctx = this.ctx!;
-    const n = this.noise();
-    const f = ctx.createBiquadFilter();
-    f.type = type;
-    f.frequency.value = freq;
-    f.Q.value = q;
-    const g = ctx.createGain();
-    this.env(g, t0, peak, attack, decay);
-    n.connect(f).connect(g).connect(dest);
-    n.start(t0, Math.random());
-    n.stop(t0 + attack + decay + 0.05);
-  }
-
-  private tone(
-    dest: AudioNode,
-    t0: number,
-    type: OscillatorType,
-    f0: number,
-    f1: number,
-    peak: number,
-    attack: number,
-    decay: number,
-  ) {
-    const ctx = this.ctx!;
-    const o = ctx.createOscillator();
-    o.type = type;
-    o.frequency.setValueAtTime(f0, t0);
-    o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + attack + decay);
-    const g = ctx.createGain();
-    this.env(g, t0, peak, attack, decay);
-    o.connect(g).connect(dest);
-    o.start(t0);
-    o.stop(t0 + attack + decay + 0.05);
-  }
-
-  private voice(id: SoundId, dest: AudioNode, v: number, opts: PlayOptions = {}) {
-    const ctx = this.ctx!;
-    const t0 = ctx.currentTime;
+    const take = buffer ?? this.samples?.get(id);
+    if (!take || !this.samples) return null;
     const out = ctx.createGain();
     out.gain.value = clamp(v, 0, 1.8);
-    if (opts.muffle && opts.muffle > 0) {
-      // Everything the voice plays goes through a low-pass: the high crack of a shot is what a suppressor takes away.
-      const lp = ctx.createBiquadFilter();
-      lp.type = 'lowpass';
-      lp.frequency.value = 6500 - 5600 * clamp(opts.muffle, 0, 1);
-      lp.Q.value = 0.5;
-      out.connect(lp).connect(dest);
-    } else out.connect(dest);
-
-    // Hybrid Foley Handlers
-    switch (id) {
-      case 'pistol':
-      case 'shotgun':
-      case 'mg':
-      case 'sniper':
-        if (this.foley) {
-          this.foley.playGunshot(id, out, t0, {
-            vol: 1,
-            indoor: opts.indoor ?? this.indoor,
-            canyon: !opts.indoor && !this.indoor,
-          });
-        } else {
-          // Procedural fallback
-          this.burst(out, t0, 'bandpass', 1900, 0.9, 0.9, 0.002, 0.11);
-          this.tone(out, t0, 'triangle', 190, 55, 0.7, 0.002, 0.09);
-        }
-        break;
-
-      case 'boom':
-        if (this.foley) {
-          this.foley.playExplosion(out, t0, 1.2);
-        } else {
-          this.burst(out, t0, 'lowpass', 900, 0.5, 1.2, 0.004, 1.0);
-          this.tone(out, t0, 'sine', 90, 28, 1.1, 0.004, 0.9);
-        }
-        this.duck(0.7, 0.45);
-        break;
-
-      case 'bell':
-        if (this.foley) {
-          this.foley.playDuskBell(out, t0, 1.0);
-        } else {
-          for (let k = 0; k < 3; k++) {
-            const s = t0 + k * 1.1;
-            this.tone(out, s, 'sine', 330, 330, 0.7, 0.004, 1.5);
-          }
-        }
-        this.duck(2.6, 0.35);
-        break;
-
-      case 'zdie':
-        if (this.foley) {
-          this.foley.playZombieDeath(out, t0, 0.85);
-        } else {
-          this.tone(out, t0, 'sawtooth', 140, 45, 0.5, 0.02, 0.45);
-        }
-        break;
-
-      case 'crash':
-        this.burst(out, t0, 'lowpass', 1400, 0.7, 1.1, 0.002, 0.35);
-        this.tone(out, t0, 'square', 100, 40, 0.6, 0.002, 0.22);
-        if (this.samples?.subBassBody.length) {
-          const sSrc = ctx.createBufferSource();
-          sSrc.buffer = this.samples.subBassBody[1];
-          const sg = ctx.createGain();
-          sg.gain.setValueAtTime(0.8, t0);
-          sSrc.connect(sg).connect(out);
-          sSrc.start(t0);
-        }
-        break;
-
-      case 'hit':
-        this.tone(out, t0, 'sine', 160, 60, 0.7, 0.002, 0.12);
-        this.burst(out, t0, 'lowpass', 600, 0.5, 0.4, 0.002, 0.1);
-        break;
-
-      case 'thud':
-        this.tone(out, t0, 'sine', 110, 45, 0.7, 0.003, 0.14);
-        this.burst(out, t0, 'lowpass', 400, 0.5, 0.35, 0.002, 0.12);
-        break;
-
-      case 'swing': {
-        const k = opts.pitch ?? 1;
-        this.burst(out, t0, 'bandpass', 700 * k, 0.7, 0.3, 0.05, 0.12);
-        // A heavy weapon drags a low rush behind the whoosh.
-        if (k < 0.95) this.burst(out, t0 + 0.02, 'lowpass', 320, 0.6, 0.18, 0.06, 0.16);
-        break;
-      }
-
-      case 'slash': {
-        // A blade biting: a wet, bright rip over a short dull thump.
-        this.burst(out, t0, 'bandpass', 1900, 0.9, 0.4, 0.001, 0.07);
-        this.burst(out, t0, 'lowpass', 500, 0.5, 0.3, 0.001, 0.09);
-        this.tone(out, t0, 'sine', 140, 60, 0.35, 0.002, 0.08);
-        break;
-      }
-
-      case 'tink': {
-        // A round striking metal: a dry slap and a short ring.
-        this.burst(out, t0, 'highpass', 2400, 0.8, 0.3, 0.001, 0.04);
-        const f = 1800 + Math.random() * 1400;
-        this.tone(out, t0, 'triangle', f, f * 0.93, 0.18, 0.001, 0.09);
-        break;
-      }
-
-      case 'chip': {
-        // A round in stone, plaster or wood: a dull crack and falling grit.
-        this.burst(out, t0, 'bandpass', 1100, 0.8, 0.35, 0.001, 0.06);
-        this.burst(out, t0 + 0.03, 'highpass', 3500, 0.7, 0.1, 0.002, 0.12);
-        break;
-      }
-
-      case 'ricochet': {
-        // The whine of a round skipping off steel: a falling, wavering note.
-        const f = 2600 + Math.random() * 900;
-        this.tone(out, t0, 'sine', f, f * 0.42, 0.22, 0.003, 0.34);
-        this.burst(out, t0, 'highpass', 3000, 0.8, 0.15, 0.001, 0.05);
-        break;
-      }
-
-      case 'splash':
-        this.burst(out, t0, 'bandpass', 1500, 0.8, 0.32, 0.01, 0.4);
-        this.burst(out, t0, 'lowpass', 500, 0.6, 0.3, 0.005, 0.3);
-        break;
-
-      case 'drip':
-        this.tone(out, t0, 'sine', 1700, 650, 0.1, 0.002, 0.09);
-        break;
-
-      case 'plunge':
-        // Going over a waterfall: the slap, the deep boom of the body going under, and the white water closing over.
-        this.burst(out, t0, 'bandpass', 1100, 0.6, 0.55, 0.004, 0.5);
-        this.tone(out, t0, 'sine', 140, 42, 0.8, 0.004, 0.45);
-        this.burst(out, t0 + 0.05, 'lowpass', 700, 0.5, 0.45, 0.08, 1.3);
-        break;
-
-      case 'reload':
-        // Multi-stage mechanical reload foley
-        if (this.samples?.mechanicalClicks.length) {
-          const c1 = ctx.createBufferSource();
-          c1.buffer = this.samples.mechanicalClicks[0];
-          c1.playbackRate.value = 1.1;
-          const g1 = ctx.createGain();
-          g1.gain.value = 0.5;
-          c1.connect(g1).connect(out);
-          c1.start(t0);
-
-          const c2 = ctx.createBufferSource();
-          c2.buffer = this.samples.mechanicalClicks[1];
-          c2.playbackRate.value = 0.95;
-          const g2 = ctx.createGain();
-          g2.gain.value = 0.6;
-          c2.connect(g2).connect(out);
-          c2.start(t0 + 0.45);
-        } else {
-          this.tone(out, t0, 'square', 900, 700, 0.15, 0.002, 0.03);
-          this.tone(out, t0 + 0.5, 'square', 1200, 800, 0.2, 0.002, 0.04);
-        }
-        break;
-
-      case 'horn':
-        for (const f of [233, 294]) this.tone(out, t0, 'square', f, f * 0.98, 0.35, 0.02, 0.55);
-        break;
-
-      case 'siren':
-        this.tone(out, t0, 'sawtooth', 600, 900, 0.3, 0.1, 0.4);
-        break;
-
-      case 'wrench':
-        for (let i = 0; i < 3; i++) this.tone(out, t0 + i * 0.07, 'square', 1500 - i * 200, 900, 0.1, 0.001, 0.025);
-        break;
-
-      case 'yelp':
-        this.tone(out, t0, 'sawtooth', 900 + Math.random() * 300, 380, 0.3, 0.01, 0.16);
-        this.tone(out, t0 + 0.12, 'triangle', 700, 300, 0.2, 0.01, 0.12);
-        break;
-
-      case 'growl': {
-        const o = ctx.createOscillator();
-        o.type = 'sawtooth';
-        o.frequency.setValueAtTime(70 + Math.random() * 20, t0);
-        o.frequency.linearRampToValueAtTime(55, t0 + 0.7);
-        const lfo = ctx.createOscillator();
-        lfo.frequency.value = 26;
-        const lg = ctx.createGain();
-        lg.gain.value = 18;
-        lfo.connect(lg).connect(o.frequency);
-        const f = ctx.createBiquadFilter();
-        f.type = 'lowpass';
-        f.frequency.value = 420;
-        const g = ctx.createGain();
-        this.env(g, t0, 0.45, 0.08, 0.6);
-        o.connect(f).connect(g).connect(out);
-        o.start(t0);
-        lfo.start(t0);
-        o.stop(t0 + 0.8);
-        lfo.stop(t0 + 0.8);
-        break;
-      }
-
-      case 'caw':
-        this.tone(out, t0, 'sawtooth', 520, 340, 0.22, 0.02, 0.14);
-        this.tone(out, t0 + 0.2, 'sawtooth', 480, 300, 0.2, 0.02, 0.16);
-        break;
-
-      case 'scream': {
-        const o = ctx.createOscillator();
-        o.type = 'sawtooth';
-        o.frequency.setValueAtTime(800, t0);
-        o.frequency.linearRampToValueAtTime(1500, t0 + 0.25);
-        o.frequency.linearRampToValueAtTime(1100, t0 + 0.9);
-        const lfo = ctx.createOscillator();
-        lfo.frequency.value = 28;
-        const lg = ctx.createGain();
-        lg.gain.value = 90;
-        lfo.connect(lg).connect(o.frequency);
-        const f = ctx.createBiquadFilter();
-        f.type = 'bandpass';
-        f.frequency.value = 1400;
-        f.Q.value = 2;
-        const g = ctx.createGain();
-        this.env(g, t0, 0.6, 0.03, 0.9);
-        o.connect(f).connect(g).connect(out);
-        lfo.start(t0);
-        o.start(t0);
-        o.stop(t0 + 1);
-        lfo.stop(t0 + 1);
-        this.duck(0.8, 0.5);
-        break;
-      }
-
-      case 'beep':
-        this.tone(out, t0, 'sine', 1000, 1000, 0.3, 0.002, 0.07);
-        break;
-
-      case 'pickup':
-        this.tone(out, t0, 'triangle', 520, 780, 0.35, 0.005, 0.12);
-        this.tone(out, t0 + 0.08, 'triangle', 780, 1040, 0.3, 0.005, 0.14);
-        break;
-
-      case 'loot':
-        this.tone(out, t0, 'triangle', 400, 520, 0.3, 0.003, 0.1);
-        this.burst(out, t0, 'bandpass', 2500, 1, 0.12, 0.002, 0.06);
-        break;
-
-      case 'click':
-        this.tone(out, t0, 'square', 1200, 900, 0.12, 0.001, 0.025);
-        break;
-
-      case 'glass': {
-        // A pane going: a hard crack and a spill of bright tinkles.
-        this.burst(out, t0, 'highpass', 3000, 0.8, 0.5, 0.001, 0.12);
-        for (let i = 0; i < 7; i++) {
-          const f = 2600 + Math.random() * 3200;
-          this.tone(out, t0 + 0.04 + i * 0.045 + Math.random() * 0.03, 'triangle', f, f * 0.97, 0.12, 0.001, 0.05);
-        }
-        break;
-      }
-
-      case 'shell': {
-        // Brass ringing off a hard floor: a bright ping and a smaller one on the second hop.
-        const f = 3100 + Math.random() * 1500;
-        this.tone(out, t0, 'triangle', f, f * 0.96, 0.22, 0.001, 0.05);
-        this.tone(out, t0 + 0.055, 'triangle', f * 1.08, f * 1.03, 0.11, 0.001, 0.035);
-        this.burst(out, t0, 'highpass', 5200, 1, 0.1, 0.001, 0.015);
-        break;
-      }
-
-      case 'confirm':
-        this.tone(out, t0, 'triangle', 600, 900, 0.25, 0.004, 0.1);
-        this.tone(out, t0 + 0.07, 'triangle', 900, 1200, 0.2, 0.004, 0.12);
-        break;
-
-      case 'deny':
-        this.tone(out, t0, 'square', 180, 120, 0.2, 0.004, 0.14);
-        break;
-
-      case 'build':
-        this.tone(out, t0, 'square', 300, 240, 0.2, 0.002, 0.07);
-        this.burst(out, t0, 'lowpass', 900, 0.6, 0.3, 0.002, 0.1);
-        break;
-
-      case 'alarm':
-        for (let k = 0; k < 4; k++) this.tone(out, t0 + k * 0.28, 'sawtooth', 520, 520, 0.22, 0.01, 0.2);
-        this.duck(1.4, 0.55);
-        break;
-
-      case 'retch':
-        this.tone(out, t0, 'sawtooth', 130, 70, 0.4, 0.04, 0.3);
-        this.burst(out, t0 + 0.28, 'lowpass', 700, 0.7, 0.35, 0.01, 0.35);
-        this.tone(out, t0 + 0.55, 'sawtooth', 110, 60, 0.3, 0.03, 0.25);
-        break;
-
-      case 'laugh':
-        for (let k = 0; k < 5; k++)
-          this.tone(out, t0 + k * 0.12, 'sawtooth', 520 - k * 30 + Math.random() * 40, 380 - k * 25, 0.22, 0.01, 0.09);
-        break;
-
-      case 'hiccup':
-        this.tone(out, t0, 'triangle', 240, 520, 0.3, 0.004, 0.07);
-        this.burst(out, t0, 'bandpass', 900, 1.5, 0.12, 0.002, 0.05);
-        break;
-
-      case 'sing':
-        for (const [k, f] of [[0, 330], [0.3, 392], [0.6, 349], [0.9, 294]] as const)
-          this.tone(out, t0 + k, 'triangle', f * (0.96 + Math.random() * 0.08), f, 0.25, 0.04, 0.28);
-        break;
-
-      case 'whisper':
-        this.burst(out, t0, 'bandpass', 3200, 2.5, 0.18, 0.25, 0.7);
-        this.burst(out, t0 + 0.2, 'bandpass', 2400, 3, 0.12, 0.2, 0.6);
-        break;
-
-      case 'gulp':
-        this.tone(out, t0, 'sine', 220, 120, 0.3, 0.01, 0.09);
-        this.tone(out, t0 + 0.14, 'sine', 200, 110, 0.25, 0.01, 0.09);
-        this.burst(out, t0, 'lowpass', 500, 0.6, 0.12, 0.01, 0.2);
-        break;
-
-      case 'toke':
-        this.burst(out, t0, 'bandpass', 1400, 0.8, 0.25, 0.25, 0.4);
-        this.tone(out, t0 + 0.55, 'sine', 90, 70, 0.1, 0.01, 0.2);
-        break;
-
-      case 'pill':
-        this.tone(out, t0, 'square', 1500, 1100, 0.15, 0.001, 0.03);
-        this.burst(out, t0 + 0.05, 'bandpass', 2200, 1, 0.1, 0.002, 0.06);
-        break;
-
-      case 'munch':
-        for (let k = 0; k < 4; k++) {
-          this.burst(out, t0 + k * 0.17, 'bandpass', 1100 + Math.random() * 500, 1.2, 0.2, 0.004, 0.08);
-          this.tone(out, t0 + k * 0.17, 'triangle', 160, 90, 0.08, 0.004, 0.06);
-        }
-        break;
-
-      case 'trickle':
-        this.burst(out, t0, 'bandpass', 2600, 0.7, 0.14, 0.15, 1.6);
-        this.burst(out, t0 + 0.2, 'highpass', 4200, 0.5, 0.07, 0.2, 1.3);
-        break;
-
-      case 'plop':
-        this.tone(out, t0, 'sine', 180, 60, 0.25, 0.004, 0.14);
-        this.burst(out, t0, 'lowpass', 400, 0.8, 0.14, 0.004, 0.12);
-        break;
-
-      case 'radio':
-        if (this.samples?.micClickIn) {
-          const ptt = ctx.createBufferSource();
-          ptt.buffer = this.samples.micClickIn;
-          const g = ctx.createGain();
-          g.gain.value = 0.8;
-          ptt.connect(g).connect(out);
-          ptt.start(t0);
-        } else {
-          this.burst(out, t0, 'bandpass', 2600, 1.2, 0.22, 0.01, 0.28);
-          this.tone(out, t0 + 0.05, 'square', 740, 740, 0.06, 0.004, 0.08);
-          this.tone(out, t0 + 0.2, 'square', 520, 520, 0.05, 0.004, 0.1);
-        }
-        break;
+    // A casing on the ground is a dry tick, not a struck bell: the metal recording's ring is chopped off after a few ms.
+    if (id === 'shell') {
+      const t = ctx.currentTime, g = clamp(v, 0, 1.8);
+      out.gain.setValueAtTime(g, t);
+      out.gain.exponentialRampToValueAtTime(Math.max(0.0005, g * 0.02), t + 0.07);
+      out.gain.linearRampToValueAtTime(0, t + 0.1);
     }
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.value = Math.min(id === 'shell' ? 4200 : cutoff, opts.muffle ? 6500 - 5600 * clamp(opts.muffle, 0, 1) : 22000);
+    out.connect(lp).connect(dest);
+    const source = this.samples.playBuffer(take, out, ctx.currentTime, 1, opts.pitch ?? 1);
+    const cleanup = source.onended;
+    source.onended = event => { cleanup?.call(source, event); out.disconnect(); lp.disconnect(); };
+    return source;
   }
 
-  // ---------------------------------------------------------------- Engines
-
-  /**
-   * Multi-track RPM-sampled vehicle engine audio loops with turbo spool,
-   * transmission whine, backfire pops, and G-force chassis creaks.
-   */
   updateEngines(list: EngineState[], dt: number) {
     if (!this.ctx) return;
     if (this.vehicleAudio) {
-      this.vehicleAudio.updateEngines(list, dt, this.listeners, this.buses, this.muted);
+      this.vehicleAudio.updateEngines(list, dt, this.listeners, this.rooms.length ? this.rooms.map(room => room.input) : this.buses, this.muted);
     }
   }
 
   silenceEngines() {
+    for (const voice of this.active) voice.source.stop();
+    this.active.clear();
+    for (const id of this.ambience.keys()) this.setRecordedAmbience(id, 0);
     if (this.vehicleAudio) {
       this.vehicleAudio.silenceEngines();
     }
   }
 
-  // ---------------------------------------------------------------- Wind
-
-  private initWind() {
-    const ctx = this.ctx!;
-    const n = this.noise();
-    const filt = ctx.createBiquadFilter();
-    filt.type = 'bandpass';
-    filt.frequency.value = 380;
-    filt.Q.value = 0.7;
-    const gain = ctx.createGain();
-    gain.gain.value = 0;
-    const lfo = ctx.createOscillator();
-    lfo.frequency.value = 0.17;
-    const lfoGain = ctx.createGain();
-    lfoGain.gain.value = 140;
-    lfo.connect(lfoGain).connect(filt.frequency);
-    n.connect(filt).connect(gain).connect(this.sfx);
-    n.start();
-    lfo.start();
-    this.wind = { gain, filt };
-  }
-
-  setWind(level: number) {
-    const w = this.wind;
-    if (!w || !this.ctx) return;
-    w.gain.gain.setTargetAtTime(this.muted ? 0 : level * 0.42, this.ctx.currentTime, 0.6);
-    w.filt.Q.setTargetAtTime(0.7 + level * 0.5, this.ctx.currentTime, 0.6);
-  }
-
-  // ---------------------------------------------------------------- Water
-
-  /**
-   * Loops for the water, made the first time they are wanted: a waterfall's roar (broad noise through a low-pass, with a
-   * sub-bass rumble under it for a tall drop), a river's babble (two bands of noise whose pitch and loudness wander, so it
-   * burbles instead of hissing) and a swamp's insects (a narrow high band, pulsed). Frogs are not a loop: `setWaterAmbience`
-   * scatters croaks while the swamp is close and the light is going.
-   */
-  private initWater() {
-    const ctx = this.ctx!;
-    const bus = (v = 0) => {
-      const g = ctx.createGain();
-      g.gain.value = v;
-      g.connect(this.sfx);
-      return g;
-    };
-    const lfo = (freq: number, depth: number, target: AudioParam) => {
-      const o = ctx.createOscillator();
-      o.frequency.value = freq;
-      const g = ctx.createGain();
-      g.gain.value = depth;
-      o.connect(g).connect(target);
-      o.start();
-    };
-    const roar = bus();
-    const roarLp = ctx.createBiquadFilter();
-    roarLp.type = 'lowpass';
-    roarLp.frequency.value = 1400;
-    roarLp.Q.value = 0.4;
-    const n1 = this.noise();
-    n1.connect(roarLp).connect(roar);
-    n1.start(0, Math.random());
-    const rumble = bus();
-    const rLp = ctx.createBiquadFilter();
-    rLp.type = 'lowpass';
-    rLp.frequency.value = 140;
-    const n2 = this.noise();
-    n2.connect(rLp).connect(rumble);
-    n2.start(0, Math.random());
-    // Babble: a lower and a higher band, each wandering in pitch, through gains that wobble at uneven rates.
-    const babble = bus();
-    for (const [f, q, rate, wob] of [
-      [650, 1.4, 0.73, 3.1],
-      [2100, 2.2, 1.37, 5.3],
-    ]) {
-      const bp = ctx.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.frequency.value = f;
-      bp.Q.value = q;
-      lfo(rate, f * 0.35, bp.frequency);
-      const g = ctx.createGain();
-      g.gain.value = 0.55;
-      lfo(wob, 0.4, g.gain);
-      const n = this.noise();
-      n.connect(bp).connect(g).connect(babble);
-      n.start(0, Math.random());
+  private ambience = new Map<string, {
+    gain: GainNode; filter: BiquadFilterNode; nextAt: number; phase: number;
+    layers: Set<{ source: AudioBufferSourceNode; envelope: GainNode; retiring: boolean }>;
+  }>();
+  /** Slow changes and overlapping recorded takes avoid an endlessly identical loop. */
+  setRecordedAmbience(id: string, level: number, cutoff = 20000) {
+    const ctx = this.ctx;
+    if (!ctx || !this.samples) return;
+    const target = clamp(level, 0, 1) * this.bedDuck(), now = ctx.currentTime;
+    let bed = this.ambience.get(id);
+    if (target < 0.001) {
+      if (bed) {
+        bed.gain.gain.setTargetAtTime(0, now, 0.12);
+        for (const layer of bed.layers) if (!layer.retiring) { layer.retiring = true; layer.source.stop(now + 0.6); }
+        this.ambience.delete(id);
+      }
+      return;
     }
-    const insects = bus();
-    const ibp = ctx.createBiquadFilter();
-    ibp.type = 'bandpass';
-    ibp.frequency.value = 5200;
-    ibp.Q.value = 9;
-    const pulse = ctx.createGain();
-    pulse.gain.value = 0.5;
-    lfo(23, 0.5, pulse.gain);
-    const n3 = this.noise();
-    n3.connect(ibp).connect(pulse).connect(insects);
-    n3.start(0, Math.random());
-    const frogs = bus(1);
-    this.water = { roar, roarLp, rumble, babble, insects, frogs, frogLevel: 0 };
+    if (!bed) {
+      if (!this.samples.all(id).length) return;
+      const gain = ctx.createGain(); gain.gain.value = 0;
+      const filter = ctx.createBiquadFilter(); filter.type = 'lowpass';
+      filter.connect(gain).connect(this.sfx);
+      bed = { gain, filter, nextAt: now, phase: Math.random() * Math.PI * 2, layers: new Set() };
+      this.ambience.set(id, bed);
+    }
+    if (now >= bed.nextAt) {
+      const buffer = this.samples.get(id);
+      if (buffer) {
+        const fade = Math.min(1.8, Math.max(0.25, buffer.duration * 0.15));
+        for (const layer of bed.layers) if (!layer.retiring) {
+          layer.retiring = true;
+          layer.envelope.gain.setTargetAtTime(0, now, fade / 4);
+          layer.source.stop(now + fade);
+        }
+        const source = ctx.createBufferSource(); source.buffer = buffer; source.loop = true;
+        // Keep field-recorded animal pitch essentially intact.
+        source.playbackRate.value = 0.996 + Math.random() * 0.008;
+        const envelope = ctx.createGain(); envelope.gain.value = 0;
+        source.connect(envelope).connect(bed.filter);
+        envelope.gain.setTargetAtTime(1, now, fade / 4);
+        const layer = { source, envelope, retiring: false };
+        const owner = bed;
+        owner.layers.add(layer);
+        source.onended = () => {
+          source.disconnect(); envelope.disconnect(); owner.layers.delete(layer);
+          if (!owner.layers.size) { owner.filter.disconnect(); owner.gain.disconnect(); }
+        };
+        source.start(now, Math.random() * buffer.duration);
+        bed.nextAt = now + Math.max(4, Math.min(20, buffer.duration * 0.85));
+      }
+    }
+    const swell = 0.94 + 0.06 * Math.sin(now * 0.17 + bed.phase);
+    bed.gain.gain.setTargetAtTime(target * swell, now, 0.4);
+    bed.filter.frequency.setTargetAtTime(cutoff, now, 0.3);
   }
-
-  /** How the water around the players sounds now. Cheap to call a few times a second: the levels ease. */
+  setWind(level: number) { this.setRecordedAmbience('wind', 0.15 * clamp(level, 0, 1)); }
+  setVegetationAmbience(trees: number, grass: number, wind: number) {
+    this.setRecordedAmbience('vegetation', trees * (0.035 + wind * 0.22));
+    this.setRecordedAmbience('grassWind', grass * (0.025 + wind * 0.12));
+  }
   setWaterAmbience(a: WaterAmbience) {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    if (!this.water) {
-      if (a.roar + a.babble + a.marsh <= 0) return;
-      this.initWater();
-    }
-    const w = this.water!;
-    const now = ctx.currentTime;
-    const m = this.muted ? 0 : 1;
-    const tall = clamp(a.tall, 0, 1);
-    const roar = clamp(a.roar, 0, 1);
-    w.roar.gain.setTargetAtTime(m * roar * (0.34 - 0.08 * tall), now, 0.5);
-    w.roarLp.frequency.setTargetAtTime(1700 - 1000 * tall, now, 0.5);
-    w.rumble.gain.setTargetAtTime(m * roar * (0.15 + 0.6 * tall), now, 0.5);
-    w.babble.gain.setTargetAtTime(m * clamp(a.babble, 0, 1) * 0.16 * (1 - roar * 0.6), now, 0.6);
-    const marsh = clamp(a.marsh, 0, 1);
-    const night = clamp(a.night, 0, 1);
-    w.insects.gain.setTargetAtTime(m * marsh * (0.015 + 0.035 * night), now, 0.8);
-    w.frogLevel = marsh * night;
-    // Frogs: now and then one, and the next answers.
-    if (m && w.frogLevel > 0.05 && Math.random() < 0.35 * w.frogLevel) this.croak(w.frogs, now + Math.random() * 0.2, w.frogLevel);
+    this.setRecordedAmbience('waterfall', a.roar * 0.45, 15000 - a.tall * 5000);
+    this.setRecordedAmbience('stream', a.babble * 0.22);
+    this.setRecordedAmbience('frogs', a.marsh * a.night * 0.12);
   }
-
-  /** One frog: a run of short buzzing pulses, low and falling a little. */
-  private croak(dest: AudioNode, t0: number, level: number) {
-    const ctx = this.ctx!;
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.value = 420 + Math.random() * 380;
-    bp.Q.value = 3;
-    bp.connect(dest);
-    const f = 95 + Math.random() * 90;
-    const n = 3 + Math.floor(Math.random() * 5);
-    for (let i = 0; i < n; i++) this.tone(bp, t0 + i * 0.052, 'sawtooth', f, f * 0.88, 0.07 * level, 0.004, 0.032);
+  setNatureAmbience(a: NatureAmbience) {
+    this.setRecordedAmbience('birds', a.birds * 0.12);
+    this.setRecordedAmbience('cicadas', a.cicadas * 0.09);
+    this.setRecordedAmbience('crickets', a.crickets * 0.1);
+    this.setRecordedAmbience('owl', a.owls * 0.08);
   }
-
-  // ---------------------------------------------------------------- Music
-
-  private initMusic() {
-    const ctx = this.ctx!;
-    for (const name of ['drone', 'drums', 'pulse', 'harm', 'strings', 'pluck', 'hiss']) {
-      const g = ctx.createGain();
-      g.gain.value = 0;
-      g.connect(this.musicBus);
-      this.stems[name] = g;
-    }
-    const o = ctx.createOscillator();
-    o.type = 'sawtooth';
-    o.frequency.value = 41.2;
-    const lp = ctx.createBiquadFilter();
-    lp.type = 'lowpass';
-    lp.frequency.value = 180;
-    const o2 = ctx.createOscillator();
-    o2.type = 'sine';
-    o2.frequency.value = 41.4;
-    o.connect(lp).connect(this.stems.drone);
-    o2.connect(this.stems.drone);
-    o.start();
-    o2.start();
-    this.bass = o;
-
-    const n = this.noise();
-    const hp = ctx.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.value = 3500;
-    const hg = ctx.createGain();
-    hg.gain.value = 0.05;
-    n.connect(hp).connect(hg).connect(this.stems.hiss);
-    n.start();
-    this.radioHiss = hg;
-  }
-
-  setMusic(state: MusicState) {
-    if (!this.ctx || state === this.musicState) return;
-    this.musicState = state;
-    const target: Record<string, number> = { drone: 0, drums: 0, pulse: 0, harm: 0, strings: 0, pluck: 0, hiss: 0 };
-    switch (state) {
-      case 'travel':
-        target.drone = 0.8;
-        target.drums = 0.5;
-        break;
-      case 'stealth':
-        target.drone = 0.7;
-        target.pulse = 0.6;
-        break;
-      case 'combat':
-        target.drone = 0.9;
-        target.drums = 1;
-        target.harm = 0.7;
-        break;
-      case 'camp':
-        target.drone = 0.35;
-        target.pluck = 0.7;
-        target.hiss = 0.8;
-        break;
-      case 'raid':
-        target.drone = 0.9;
-        target.drums = 0.9;
-        target.strings = 0.8;
-        break;
-      default:
-        break;
-    }
-    const t = this.ctx.currentTime;
-    for (const k of Object.keys(target)) this.stems[k].gain.setTargetAtTime(target[k], t, 0.8);
-  }
-
-  updateMusic(dt: number) {
-    const ctx = this.ctx;
-    if (!ctx || this.musicState === 'none') return;
-    this.musicTimer -= dt;
-    if (this.musicTimer > 0) return;
-    const state = this.musicState;
-    const bpm = state === 'combat' ? 128 : state === 'raid' ? 110 : state === 'travel' ? 84 : state === 'stealth' ? 70 : 60;
-    const step = 60 / bpm / 2;
-    this.musicTimer = step;
-    const t0 = ctx.currentTime + 0.05;
-    const b = this.beat++;
-    const root = [41.2, 41.2, 49, 36.7][Math.floor(b / 16) % 4];
-    if (this.bass) this.bass.frequency.setTargetAtTime(root, t0, 0.3);
-    if (state === 'travel' || state === 'combat' || state === 'raid') {
-      const g = this.stems.drums;
-      if (b % 4 === 0 || (state !== 'travel' && b % 8 === 6)) this.drum(g, t0, 'kick');
-      if (b % 4 === 2) this.drum(g, t0, 'snare');
-      if (state !== 'travel' && b % 2 === 1) this.drum(g, t0, 'hat');
-    }
-    if (state === 'stealth' && b % 4 === 0) {
-      this.tone(this.stems.pulse, t0, 'sine', root * 2, root * 2, 0.5, 0.01, 0.35);
-      if (b % 16 === 8) this.tone(this.stems.pulse, t0, 'sine', root * 3, root * 3, 0.3, 0.01, 0.5);
-    }
-    if (state === 'combat' && b % 8 === 0) {
-      for (const m of [1, 1.5, 2]) this.tone(this.stems.harm, t0, 'sawtooth', root * 2 * m, root * 2 * m, 0.14, 0.005, 0.5);
-    }
-    if (state === 'raid' && b % 16 === 0) {
-      for (const m of [2, 3, 3.02, 4]) this.tone(this.stems.strings, t0, 'sawtooth', root * m, root * m, 0.12, 0.6, 2.4);
-    }
-    if (state === 'camp' && b % 2 === 0) {
-      const scale = [1, 1.2, 1.5, 1.8, 2, 2.4];
-      const m = scale[(b * 7 + Math.floor(b / 8)) % scale.length];
-      this.tone(this.stems.pluck, t0, 'triangle', root * 4 * m, root * 4 * m * 0.99, 0.28, 0.003, 0.9);
-    }
-  }
-
-  private drum(dest: AudioNode, t0: number, kind: 'kick' | 'snare' | 'hat') {
-    if (kind === 'kick') {
-      this.tone(dest, t0, 'sine', 120, 38, 0.9, 0.003, 0.22);
-    } else if (kind === 'snare') {
-      this.burst(dest, t0, 'bandpass', 1800, 0.7, 0.45, 0.002, 0.14);
-      this.tone(dest, t0, 'triangle', 220, 120, 0.3, 0.002, 0.08);
-    } else {
-      this.burst(dest, t0, 'highpass', 7000, 0.7, 0.16, 0.001, 0.04);
-    }
-  }
+  // Procedural score removed. Player-selected recordings continue through UserMusic.
+  setMusic(state: MusicState) { this.musicState = state; }
+  updateMusic(_dt: number) {}
 }

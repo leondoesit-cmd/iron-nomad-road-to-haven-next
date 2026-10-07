@@ -1,4 +1,4 @@
-import { PARTS, PART_SLOTS, isInteriorSlot, mountsFor, partDef, type Cost, type PartSlot } from '../data';
+import { PARTS, PART_SLOTS, isGlassSlot, isInteriorSlot, mountsFor, partDef, type Cost, type PartSlot } from '../data';
 import { BAY_SHORT, bayText, engineLine, engineSpec, hoodState } from '../sim/engines';
 import { TANK_DREGS, addReserve, planDrain, reserveOf } from '../sim/fuel';
 import { forecastSwap, forecastWorthy, currentFigures, type Forecast } from '../sim/forecast';
@@ -27,6 +27,7 @@ const SLOT_GROUPS: { name: string; slots: PartSlot[] }[] = [
   { name: 'Body', slots: ['hood', 'doorL', 'doorR', 'armor', 'side', 'front', 'rear', 'roof'] },
   { name: 'Fittings', slots: ['weapon', 'utility'] },
   { name: 'Cabin', slots: ['seatD', 'seatP', 'seatR', 'steer', 'dash'] },
+  { name: 'Glass', slots: ['glassF', 'glassB', 'glassL', 'glassR'] },
 ];
 
 /** What a wheel is called, by its place on the chassis: front or rear, left or right. */
@@ -122,6 +123,10 @@ export class GarageView {
       if (id && isWorn(slot)) {
         const cond = currentCond(b, slot);
         if (it || cond < 0.999) note = ` <em class="${cond < 0.35 ? 'bad' : cond < 0.7 ? 'mid' : ''}">${Math.round(cond * 100)}%</em>`;
+      } else if (id && isGlassSlot(slot)) {
+        // Glass shows what it has taken: whole is not worth a word.
+        const cond = currentCond(b, slot);
+        if (cond < 0.8) note = ` <em class="${cond < 0.1 ? 'bad' : 'mid'}">${cond < 0.1 ? 'smashed' : cond < 0.4 ? 'crazed' : 'cracked'}</em>`;
       }
       const mk = it && !partDef(it.id).stock ? partDef(it.id).mk : 0;
       return this.h
@@ -291,12 +296,12 @@ export class GarageView {
 
   private partLine(it: PartItem): string {
     const d = partDef(it.id);
-    return `<b style="color:${RARITY_CSS[d.stock ? 1 : d.mk]}">${escapeHtml(d.name)}</b> <span class="cost">${d.stock ? 'Factory' : `Mk${d.mk}`}${isWorn(d.slot) ? ` · ${Math.round(it.cond * 100)}%` : ''}</span>`;
+    return `<b style="color:${RARITY_CSS[d.stock ? 1 : d.mk]}">${escapeHtml(d.name)}</b> <span class="cost">${d.stock ? 'Factory' : `Mk${d.mk}`}${isWorn(d.slot) ? ` · ${Math.round(it.cond * 100)}%` : isGlassSlot(d.slot) && !d.empty ? ` · ${it.cond >= 0.8 ? 'whole' : it.cond >= 0.4 ? 'cracked' : 'crazed'}` : ''}</span>`;
   }
 
   private pickerHtml(): string {
     if (!this.sel) {
-      return `<div class="gpanel"><h3>Fit a part</h3><div class="mutedtxt">Choose a mount on a vehicle to fit, replace or fabricate a part. Any engine goes in any vehicle, petrol or diesel, big or small, and the gearbox, springs, brakes and exhaust are judged against it: the forecast shows what it will cost you. Doors, bonnet, seats, the steering wheel, the dash and every tyre come off. Paint is free.</div></div>`;
+      return `<div class="gpanel"><h3>Fit a part</h3><div class="mutedtxt">Choose a mount on a vehicle to fit, replace or fabricate a part. Any engine goes in any vehicle, petrol or diesel, big or small, and the gearbox, springs, brakes and exhaust are judged against it: the forecast shows what it will cost you. Doors, bonnet, seats, the steering wheel, the dash, the glass and every tyre come off. Paint is free.</div></div>`;
     }
     const { i, slot, wheel } = this.sel;
     const c = this.c;

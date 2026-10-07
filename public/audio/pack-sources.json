@@ -1,0 +1,1058 @@
+[
+  {
+    "file": "pistol0.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/1911/A_42P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds"
+  },
+  {
+    "file": "pistol1.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Bersa/F_47P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds"
+  },
+  {
+    "file": "shotgun0.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Model 12/K_22P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds"
+  },
+  {
+    "file": "shotgun1.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/CD/H_21P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds"
+  },
+  {
+    "file": "mg0.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/AK-47/C_28P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds"
+  },
+  {
+    "file": "mg1.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/AR-15/D_32P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds"
+  },
+  {
+    "file": "sniper0.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/1917/B_24P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds"
+  },
+  {
+    "file": "sniper1.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Mosin Nagant/M_21P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds"
+  },
+  {
+    "file": "engine.wav",
+    "source": "https://opengameart.org/content/racing-car-engine-sound-loops",
+    "author": "domasx2",
+    "license": "CC0-1.0",
+    "original": "engine.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV"
+  },
+  {
+    "file": "footstep_snow_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_snow_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_light_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_light_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_medium_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_medium_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_medium_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_medium_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_light_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_light_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_snow_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_snow_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_snow_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_snow_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_heavy_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_heavy_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_light_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_light_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_medium_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_medium_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_medium_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_medium_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_light_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_light_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_snow_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_snow_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_snow_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_snow_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_heavy_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_heavy_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_light_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_light_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_medium_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_medium_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_heavy_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_heavy_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_heavy_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_heavy_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_heavy_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_heavy_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_heavy_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_heavy_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_concrete_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_concrete_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactSoft_medium_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_medium_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactSoft_medium_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_medium_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_concrete_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_concrete_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_heavy_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_heavy_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_heavy_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_heavy_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_concrete_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_concrete_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactSoft_medium_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_medium_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactSoft_medium_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_medium_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_concrete_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_concrete_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactBell_heavy_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactBell_heavy_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_wood_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_wood_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_heavy_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_heavy_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_wood_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_wood_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactBell_heavy_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactBell_heavy_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactSoft_medium_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_medium_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_concrete_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_concrete_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactBell_heavy_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactBell_heavy_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_wood_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_wood_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_wood_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_wood_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactBell_heavy_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactBell_heavy_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_heavy_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_heavy_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactBell_heavy_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactBell_heavy_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_wood_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_wood_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_grass_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_grass_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_medium_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_medium_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_medium_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_medium_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_carpet_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_carpet_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_medium_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_medium_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_light_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_light_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_grass_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_grass_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_grass_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_grass_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_medium_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_medium_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_medium_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_medium_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_grass_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_grass_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_light_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_light_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_carpet_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_carpet_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_medium_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_medium_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_medium_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_medium_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_carpet_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_carpet_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_light_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_light_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_light_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_light_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_carpet_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_carpet_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_medium_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_medium_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_medium_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_medium_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_carpet_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_carpet_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "footstep_grass_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_grass_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_medium_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_medium_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactMetal_light_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_light_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactSoft_heavy_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_heavy_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_light_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_light_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_light_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_light_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactSoft_heavy_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_heavy_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactSoft_heavy_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_heavy_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_light_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_light_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_heavy_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_heavy_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_light_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_light_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactSoft_heavy_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_heavy_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactSoft_heavy_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_heavy_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactWood_light_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_light_004.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_heavy_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_heavy_001.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_heavy_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_heavy_000.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_heavy_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_heavy_002.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "impactGlass_heavy_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_heavy_003.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "tools_08.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_08.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "tools_09.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_09.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "tools_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_01.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "tools_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_02.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "tools_03.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_03.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "tools_07.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_07.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "tools_06.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_06.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "tools_04.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_04.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "tools_05.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_05.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "keys_03.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_03.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "keys_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_02.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "keys_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_01.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "keys_05.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_05.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "keys_04.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_04.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "keys_06.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_06.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "keys_07.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_07.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "lock_open_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "lock_open_01.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_cracking_04.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_cracking_04.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_cracking_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_cracking_01.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_cracking_03.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_cracking_03.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_cracking_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_cracking_02.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_squeak_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_squeak_02.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_squeak_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_squeak_01.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_hit_09.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_09.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_hit_08.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_08.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_hit_05.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_05.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_hit_04.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_04.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_hit_06.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_06.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_hit_07.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_07.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_hit_03.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_03.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_hit_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_02.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "wood_hit_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_01.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "metal_sheet_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_sheet_01.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "metal_sheet_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_sheet_02.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "metal_sheet_03.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_sheet_03.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "metal_sheet_06.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_sheet_06.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "metal_sheet_04.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_sheet_04.ogg",
+    "edit": "Unmodified"
+  },
+  {
+    "file": "metal_sheet_05.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_sheet_05.ogg",
+    "edit": "Unmodified"
+  }
+]

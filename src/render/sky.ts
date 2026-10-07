@@ -23,6 +23,10 @@ uniform float uEnv;
 uniform float uScatter;
 // Trip, set per view: x aurora and rings, y the eye, z phase (seconds), w stars in daylight.
 uniform vec4 uTrip;
+// Weather: x how dark and heavy the cloud is, y rain falling here, z lightning lighting the cloud, w a rainbow.
+uniform vec4 uWx;
+// A thunderhead on the horizon: its bearing (x, z unit), how much of the sky it fills, and lightning flickering in it.
+uniform vec4 uTower;
 varying vec3 vDir;
 
 float h12( vec2 p ) {
@@ -67,22 +71,63 @@ void main() {
   col += uSunColor * ( pow( mup, 18.0 ) * 0.14 * uScatter + pow( mup, 40.0 ) * 0.35 + pow( mup, 400.0 ) * 1.5 ) * day * mix( 1.0, 0.65, yc ) * above;
   // Dust band hugging the horizon.
   col = mix( col, hz, exp( - yc * 16.0 ) * 0.55 );
-  // Clouds: two fbm layers projected on a dome, lit from the sun side.
+  // A thunderhead standing on the horizon: a tower of cloud in one quarter of the sky, its anvil spreading at the top, bright
+  // where the sun catches it and slate below, with grey curtains of rain hanging under it and lightning flickering inside.
+  if ( uTower.z > 0.01 && y > -0.02 ) {
+    vec2 hd = normalize( d.xz + vec2( 1e-5 ) );
+    float ang = acos( clamp( dot( hd, uTower.xy ), -1.0, 1.0 ) );
+    float az = atan( hd.y, hd.x );
+    float tn = fbm( vec2( az * 3.2, y * 5.0 ) + uTime * 0.004 );
+    float tn2 = fbm( vec2( az * 9.0, y * 14.0 ) - uTime * 0.006 );
+    // Width narrows with height, then the anvil flares out.
+    float hgt = y / max( 0.02, uTower.z * 0.5 );
+    float width = mix( 0.75, 0.45, smoothstep( 0.0, 0.7, hgt ) ) + 0.55 * smoothstep( 0.72, 0.95, hgt ) * ( 1.0 - smoothstep( 0.95, 1.15, hgt ) );
+    float tower = smoothstep( width + 0.12, width - 0.15, ang + ( tn - 0.5 ) * 0.5 ) * ( 1.0 - smoothstep( 0.9, 1.15, hgt + ( tn2 - 0.5 ) * 0.25 ) );
+    tower *= uTower.z * smoothstep( -0.02, 0.02, y );
+    float tlit = clamp( 0.35 + 0.65 * max( 0.0, dot( normalize( vec3( hd.x, 0.0, hd.y ) ), normalize( vec3( uSunDir.x, 0.0, uSunDir.z ) ) ) ), 0.0, 1.0 );
+    vec3 tCol = mix( vec3( 0.2, 0.21, 0.24 ) * ( 0.6 + 0.4 * day ), uHorizon * 0.9 + uSunColor * 0.45 * tlit * day, smoothstep( 0.15, 0.95, hgt ) * ( 0.55 + 0.45 * tn2 ) );
+    tCol = mix( tCol, uZenith * 0.35, uNight * 0.8 );
+    // Lightning inside it lights it from within.
+    tCol += vec3( 0.75, 0.8, 1.0 ) * uTower.w * ( 0.5 + tn2 ) * 2.5 * ( 1.0 - uEnv );
+    // Rain: dark streaky curtains from its base to the ground.
+    float shaft = smoothstep( width * 0.75, width * 0.35, ang ) * ( 1.0 - smoothstep( 0.0, 0.12, hgt ) ) * smoothstep( 0.35, 0.65, fbm( vec2( az * 28.0, uTime * 0.05 ) ) );
+    col = mix( col, mix( uHorizon * 0.62, vec3( 0.32, 0.34, 0.38 ), 0.6 ), shaft * uTower.z * 0.55 * ( 1.0 - uNight * 0.7 ) );
+    col = mix( col, tCol, tower * 0.96 );
+  }
+  // Clouds: two fbm layers projected on a dome, lit from the sun side. Under a storm they close into one low slate lid.
   if ( y > 0.0 && uCloud > 0.0 ) {
     vec2 uv = d.xz / ( y * 1.4 + 0.1 );
-    vec2 drift = vec2( uTime * 0.0035, uTime * 0.0012 );
+    vec2 drift = vec2( uTime * 0.0035, uTime * 0.0012 ) * ( 1.0 + uWx.x * 2.5 );
     float n = fbm( uv * 0.75 + drift );
     float n2 = fbm( uv * 2.6 - drift * 1.6 + n );
     float dens = n * 0.75 + n2 * 0.45;
-    float c = smoothstep( 0.78 - uCloud * 0.32, 0.98 - uCloud * 0.32, dens );
-    c *= smoothstep( 0.0, 0.16, y );
-    float thick = smoothstep( 0.8, 1.25, dens );
-    float lit = 0.55 + 0.45 * pow( mup, 1.5 );
+    float cov = min( uCloud, 1.0 );
+    float over = max( 0.0, uCloud - 1.0 );
+    float c = smoothstep( 0.78 - cov * 0.32 - over * 0.5, 0.98 - cov * 0.32 - over * 0.5, dens );
+    c *= smoothstep( 0.0, 0.16 - over * 0.12, y );
+    float thick = clamp( smoothstep( 0.8, 1.25, dens ) + uWx.x * 0.6, 0.0, 1.0 );
+    float lit = 0.55 + 0.45 * pow( mup, 1.5 ) * ( 1.0 - uWx.x * 0.8 );
     vec3 shadeCol = mix( uHorizon * 0.62 + uZenith * 0.12, uHorizon * 0.95 + uSunColor * 0.35, lit );
     shadeCol *= 1.0 - thick * 0.35;
     shadeCol += uSunColor * pow( mup, 10.0 ) * ( 1.0 - thick ) * 1.4 * day;
+    // A thunderhead's base: slate grey, darker in its folds.
+    shadeCol = mix( shadeCol, vec3( 0.2, 0.21, 0.23 ) * ( 0.75 + 0.5 * n2 ) * ( 0.5 + 0.5 * day ), uWx.x * 0.85 );
     shadeCol = mix( shadeCol, uZenith * 0.5 + uHorizon * 0.2, uNight * 0.85 );
-    col = mix( col, shadeCol, c * 0.9 );
+    // Lightning overhead lights the whole lid from inside.
+    shadeCol += vec3( 0.8, 0.84, 1.0 ) * uWx.z * ( 0.6 + 0.8 * n2 ) * 3.0 * ( 1.0 - uEnv );
+    col = mix( col, shadeCol, c * ( 0.9 + 0.1 * over ) );
+  }
+  // Rain greys out the distance, most at the horizon.
+  col = mix( col, uHorizon * 0.85, uWx.y * 0.5 * ( 1.0 - smoothstep( 0.0, 0.5, yc ) ) );
+  // A rainbow: the primary bow at 42 degrees round the point opposite the sun, red outside, and a faint secondary at 51.
+  if ( uWx.w > 0.005 && y > 0.0 ) {
+    float th = acos( clamp( dot( d, - uSunDir ), -1.0, 1.0 ) );
+    float b1 = ( 0.7330 - th ) / 0.0349;
+    vec3 spec = clamp( vec3( 1.0 - abs( b1 - 1.0 ) * 1.6, 1.0 - abs( b1 ) * 1.6, 1.0 - abs( b1 + 1.0 ) * 1.6 ), 0.0, 1.0 );
+    float b2 = ( th - 0.8901 ) / 0.0436;
+    vec3 spec2 = clamp( vec3( 1.0 - abs( b2 - 1.0 ) * 1.6, 1.0 - abs( b2 ) * 1.6, 1.0 - abs( b2 + 1.0 ) * 1.6 ), 0.0, 1.0 );
+    float fade = smoothstep( 0.0, 0.12, y ) * ( 1.0 - uEnv );
+    col += ( spec * 0.32 + spec2 * 0.1 ) * uWx.w * fade * uSunColor * day;
   }
   // Ground below the horizon (seen in reflections and from cliff tops).
   float g = smoothstep( 0.0, -0.06, y );
@@ -163,7 +208,10 @@ export class SkyDome {
     uCloud: { value: 0.35 },
     uEnv: { value: 0 },
     uScatter: { value: 0.5 },
-    uTrip: { value: new THREE.Vector4() },
+    // All zero: a Vector4 starts with w = 1, which would light the stars by day.
+    uTrip: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uWx: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uTower: { value: new THREE.Vector4(0, 1, 0, 0) },
   };
   private material: THREE.ShaderMaterial;
   private envScene = new THREE.Scene();
@@ -200,7 +248,7 @@ export class SkyDome {
   updateEnv(gl: THREE.WebGLRenderer, dt: number, minAge = 0.75): THREE.Texture | null {
     this.envAge += dt;
     const u = this.uniforms;
-    const sig = [u.uSunDir.value.x, u.uSunDir.value.y, u.uSunDir.value.z, u.uSunColor.value.r, u.uSunColor.value.g, u.uZenith.value.b, u.uHorizon.value.r, u.uHorizon.value.g, u.uNight.value, u.uCloud.value];
+    const sig = [u.uSunDir.value.x, u.uSunDir.value.y, u.uSunDir.value.z, u.uSunColor.value.r, u.uSunColor.value.g, u.uZenith.value.b, u.uHorizon.value.r, u.uHorizon.value.g, u.uNight.value, u.uCloud.value, u.uWx.value.x, u.uTower.value.z];
     let diff = this.lastSig.length ? 0 : 1;
     for (let i = 0; i < this.lastSig.length; i++) diff = Math.max(diff, Math.abs(sig[i] - this.lastSig[i]));
     if (this.envRT && (diff < 0.01 || this.envAge < minAge)) return this.envRT.texture;

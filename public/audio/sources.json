@@ -1,0 +1,3539 @@
+[
+  {
+    "file": "pistol0.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/1911/A_42P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "eefa62a4397d6784821f917d82059d04ca0025b965d0d478c87eab6ccd4bc3c1"
+  },
+  {
+    "file": "pistol1.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Bersa/F_47P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "1506bac476eec235f4deed9170cbc42293f25e3d643f754965216775582a6e54"
+  },
+  {
+    "file": "shotgun0.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Model 12/K_22P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "76fd75186dce5d026a55061a069a41a89903add98859c5f3fe077c7e1786f4ad"
+  },
+  {
+    "file": "shotgun1.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/CD/H_21P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "038204865e10a564300c8456247b93b3b05bc49f1c0fc441cb2b4f204822c07e"
+  },
+  {
+    "file": "mg0.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/AK-47/C_28P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "cdf1ae55f8073d3450bca5ca9ae5f2ccc7fb05c9816d190ccbc2f883c758d32d"
+  },
+  {
+    "file": "mg1.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/AR-15/D_32P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "ee4f8c57d61ba41a3e95f313969540279f0cb3d6625088620916b2c9680521dc"
+  },
+  {
+    "file": "sniper0.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/1917/B_24P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "a78b438189ca0997f04c03092cc59b38c44de5f59edff74a10400cd742ce797d"
+  },
+  {
+    "file": "sniper1.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Mosin Nagant/M_21P.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV, first 2.5 seconds; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "4583bb9c19233b49814b664f46196459a143d22e3a993d1bb7b1e954bcfdd019"
+  },
+  {
+    "file": "engine.wav",
+    "source": "https://opengameart.org/content/racing-car-engine-sound-loops",
+    "author": "domasx2",
+    "license": "CC0-1.0",
+    "original": "engine.wav",
+    "edit": "Leading silence trimmed, mono 44.1kHz PCM WAV; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "ed76d972422bf9fabedba8de816bfd0aecd0bbf899df1e614292b6ec8e41a6d1"
+  },
+  {
+    "file": "footstep_snow_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_snow_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "db52bafdc66304f3b999f2c29227826c65993916e630ac2ffbca17d07b263178"
+  },
+  {
+    "file": "impactGlass_light_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_light_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "710db7451bb7857b9140dfe6afe4621ea2188ad65eda3919c569d1bb285b933d"
+  },
+  {
+    "file": "impactGlass_medium_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_medium_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "48616f22c95589ed9fe55babf0fd012721d7b2ef1b9e85c2ad6408a2cd7c164f"
+  },
+  {
+    "file": "impactGlass_medium_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_medium_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "dccea1ecc3d942ee5fd217c684632638f6c039c97cd3ae59c75ab15d0c3f0b59"
+  },
+  {
+    "file": "impactGlass_light_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_light_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "765290ce32fa108c939a0dbd6fbacbcd05abde622b57b708eb8a64058ef4225a"
+  },
+  {
+    "file": "footstep_snow_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_snow_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "68272e3f1cabcabd02d328fd344454d7c04cb58b5a86972fcdd858f845e3d007"
+  },
+  {
+    "file": "footstep_snow_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_snow_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "980fb9a1c9227aed7995067b0357f373053337f2416316db8ea0438418542fb4"
+  },
+  {
+    "file": "impactWood_heavy_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_heavy_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "2c647ae6bd29c72ae2523f7e16e325d8d331b75cc99ab4f637c48a0e11c34677"
+  },
+  {
+    "file": "impactGlass_light_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_light_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "05e513fbd42829060eb37855f8c3866722ec5c39a8937c9bfde518cc609effa2"
+  },
+  {
+    "file": "impactGlass_medium_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_medium_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "d3d806cb3012c9ddd87010b30295ccb74d6d8b690077d19e67afd09a9d8feb03"
+  },
+  {
+    "file": "impactGlass_medium_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_medium_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "9252d50bfb85edb17d6073c4a7806e10cdb9de56d3dbfc93a4b9727146d2df6d"
+  },
+  {
+    "file": "impactGlass_light_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_light_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "d750cf88097d0c3e69920e6e14496e1444e1a9da01aa4cca8f5ec8cb44c57b4f"
+  },
+  {
+    "file": "footstep_snow_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_snow_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "c05fa4a9dc9a7aabc04996466fb589537e49af76de9998d8f9e6270ec92dcef7"
+  },
+  {
+    "file": "footstep_snow_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_snow_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "7fe9ce5f5732aaa0a50ef02bb1ac162c27f6bd85214e86aaea6e13e7a41dbc00"
+  },
+  {
+    "file": "impactWood_heavy_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_heavy_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "f1b07a53ac10c615fff9ba470511fdeb722b5902e1a8520759fc20ad6f546015"
+  },
+  {
+    "file": "impactGlass_light_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_light_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "f535b7cb7835400d8d28bcf9e1cf047ce3c0eb7a6456bdb1a4a27acbec1ed2cb"
+  },
+  {
+    "file": "impactGlass_medium_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_medium_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "853fe77ad46bd0cf106e40e741b039e15b90f73edecd92cde524fbad9e3ebe00"
+  },
+  {
+    "file": "impactWood_heavy_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_heavy_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "15ff82332f342c30e469215539e1cc57e11b221aa2cf7e11e811d313a9927f3d"
+  },
+  {
+    "file": "impactWood_heavy_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_heavy_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "ce1e06f2a05f2634c645cb72f6a1623e64bc2d92be34917430a61031fb6597d4"
+  },
+  {
+    "file": "impactWood_heavy_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_heavy_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "af07511902b309b3f6d8f0e1fafbe93869127fb88099ebdc0aa6a00a98dc3cb0"
+  },
+  {
+    "file": "impactMetal_heavy_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_heavy_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "e07045693e4a2b3d165c424e3dab4c781d9ff8880a386880ac89a51315d7f831"
+  },
+  {
+    "file": "footstep_concrete_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_concrete_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "8b513c2f0316324060b9174b8f28df6c2147418c506e6a53b77f18e149a5547b"
+  },
+  {
+    "file": "impactSoft_medium_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_medium_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "5069e3571a77d7f7aae9ef71d0364aa245fb7d64a7c8cc9956f221d03088c089"
+  },
+  {
+    "file": "impactSoft_medium_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_medium_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "5c4a1f35fde7e14046931da7bc3d1b23736541b7190ba107e08a379c4ca43cd6"
+  },
+  {
+    "file": "footstep_concrete_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_concrete_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "b21fa546d74941196b25da8a20b7010abd8c05c4fcf93545d1f344e66a664e13"
+  },
+  {
+    "file": "impactMetal_heavy_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_heavy_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "83554049f81f4db9209379e103c30bfa63f65c42189a03f300b045c2c82e23ae"
+  },
+  {
+    "file": "impactMetal_heavy_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_heavy_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "b0f2ba4dabde9a87eb9c188a19d31e0c2300fd321adeba08d3b9b8aa011d7037"
+  },
+  {
+    "file": "footstep_concrete_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_concrete_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "d7267e183067757c92c169de2a379abea592cfca6b39bb2e8feea15221ad79fe"
+  },
+  {
+    "file": "impactSoft_medium_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_medium_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "7642a4fd43e547afe4f7adfadb3dabb681c0ff512f52c1674bae30a726841faf"
+  },
+  {
+    "file": "impactSoft_medium_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_medium_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "7d3ba0bb5e60a11b5d3e558c141303dcf494256675fbf753c0d252d2cf0481e3"
+  },
+  {
+    "file": "footstep_concrete_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_concrete_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "507a75eb19b897087855a3be3cf11a12d7fa37d143ad535eeebe0b8031c7325d"
+  },
+  {
+    "file": "impactBell_heavy_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactBell_heavy_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "49fe4fafa2001bd0d312976796824571ca8429851f285997e1327d17bb34fd00"
+  },
+  {
+    "file": "footstep_wood_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_wood_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "b33e0854e2b3f6b6492e25c25ef8f90447a332f7c6bb25dd02edced9581d3441"
+  },
+  {
+    "file": "impactMetal_heavy_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_heavy_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "b914c8f1eb7c0f34bb165d7c77f4be0351f6be0660c13c53e65424e262e2c093"
+  },
+  {
+    "file": "footstep_wood_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_wood_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "5f1c252942a220d658121bd9417448cd19649ded9fff2ff15f6e50899373ce8e"
+  },
+  {
+    "file": "impactBell_heavy_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactBell_heavy_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "94b8bb5f2d43ab65e4bcc32b28562416e9bc2c51d9fd4be1e333660ee52f977f"
+  },
+  {
+    "file": "impactSoft_medium_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_medium_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "b0a4dea90eed47accf50b768beff1166f2f1486fb139e4d025b2427637624bca"
+  },
+  {
+    "file": "footstep_concrete_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_concrete_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "24dd8db2413e5b81ad181e1205c12a1c7801da5f85715d471b92a4b2f632e45e"
+  },
+  {
+    "file": "impactBell_heavy_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactBell_heavy_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "9df61e3ae9a83dc65e5a1fd3ed19d480876f3b22b963a1b9ef6fa293592dcec4"
+  },
+  {
+    "file": "footstep_wood_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_wood_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "e4f68e1c9fd55b4dc8ca89ed2bbab6f200171bc54bdc18aa96b80d8e7336f462"
+  },
+  {
+    "file": "footstep_wood_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_wood_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "2a68a083daa9eda08fed0ea5da5280dfbe0de226196c576be02f95259dd139d9"
+  },
+  {
+    "file": "impactBell_heavy_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactBell_heavy_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "5572ccdeb3b62373b86fa955355b3a222c36e815f0636ba16165189a21cf2514"
+  },
+  {
+    "file": "impactMetal_heavy_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_heavy_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "6d65b463c0555dd5be16b8db6d2cbe23a94e07a4637779b8ad17d0db3e500a87"
+  },
+  {
+    "file": "impactBell_heavy_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactBell_heavy_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "a4171ed1a4a17fb858a38de1c59b5b42e50d8f046c525706c0e3ac8671f189f5"
+  },
+  {
+    "file": "footstep_wood_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_wood_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "9ff095b05cee5eec40b081defe3f0eef7232bb16d4865ce03b9f6dbab875cfdd"
+  },
+  {
+    "file": "footstep_grass_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_grass_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "9d49497777405d78d7cf7f2888e28277f3a23192300cfd1d79d54876b20f479f"
+  },
+  {
+    "file": "impactWood_medium_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_medium_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "1723a9fd25103ed41af06054814e84e65f4a772bac86ab2dc927da93d9592ff5"
+  },
+  {
+    "file": "impactMetal_medium_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_medium_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "03e10f800199c7166208e41c11cf4acfac6cc265467f02357da71972bc967295"
+  },
+  {
+    "file": "footstep_carpet_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_carpet_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "4ae7454338d57c7d102145919ae653c7d010eb542797c4f25a1c7470be3a7e4c"
+  },
+  {
+    "file": "impactWood_medium_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_medium_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "15271dbe8e2872dbb0ff1aeb7b12b2d2b92b7c1951c88532b9ab9158c36dfc73"
+  },
+  {
+    "file": "impactMetal_light_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_light_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "9b1c35820fba507081261f19ab5f461f69a5e2627a7d91acdb73ca3cfc997979"
+  },
+  {
+    "file": "footstep_grass_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_grass_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "fb28781bd22b2eefdc14077f1adf5c94d7fe9c3a130194633b55f3e0d39d9f04"
+  },
+  {
+    "file": "footstep_grass_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_grass_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "0546e1d8ab2def714425701a18bd34c5ee2794b12e858e5b595aabcf38a34137"
+  },
+  {
+    "file": "impactWood_medium_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_medium_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "635c37cfcd854b187d643d450ff0397798dcc29ae94da32192b814fae6bd854c"
+  },
+  {
+    "file": "impactWood_medium_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_medium_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "3f3f1917428b828f733a963167833c707bf88296ff158e1559c57c5cb813d799"
+  },
+  {
+    "file": "footstep_grass_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_grass_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "73a520139f5be716a403bfe9c80e0e94d1e61d8e9de04a354b336392164b53dc"
+  },
+  {
+    "file": "impactMetal_light_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_light_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "92d5db6bfc672d9dc1b4f390b2900504f013187fa36335472554fafefa9050b1"
+  },
+  {
+    "file": "footstep_carpet_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_carpet_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "4ae7454338d57c7d102145919ae653c7d010eb542797c4f25a1c7470be3a7e4c"
+  },
+  {
+    "file": "impactMetal_medium_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_medium_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "7e89ce2ca0dbda95ea2b78d4b50791cab35c10d20e9f5ccd45dd0b00e99ff548"
+  },
+  {
+    "file": "impactMetal_medium_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_medium_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "2a185e2e57211d02c1bdd33b872d6b6a2fe83e6c14f4e56f426a95e717acf08e"
+  },
+  {
+    "file": "footstep_carpet_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_carpet_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "9af3c3f76705107339e72036e4053bdca3eaa50ad31c8c929f42ce8d40e5d781"
+  },
+  {
+    "file": "impactMetal_light_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_light_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "25a96f90a9a1f88a531e824e126f0519504625e5635e65a72e4f31611428db29"
+  },
+  {
+    "file": "impactMetal_light_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_light_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "33b5e6e37c6e9d54e07bf5a89b12c76e879f40c1ea83cdd82714df1d6f9fec6d"
+  },
+  {
+    "file": "footstep_carpet_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_carpet_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "b9524658b52a99a20590f8feefc103088637fd13ea8ec35811aee785e1f2f330"
+  },
+  {
+    "file": "impactMetal_medium_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_medium_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "e8a9eaba7c4d27422e4eeb3e6c7100d5d7dc0f83e005efc98c960adcc5265337"
+  },
+  {
+    "file": "impactMetal_medium_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_medium_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "a96f879fec0864a8938e0c745b6996a6c5679c16a234ce31a01cc995e8401003"
+  },
+  {
+    "file": "footstep_carpet_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_carpet_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "9af3c3f76705107339e72036e4053bdca3eaa50ad31c8c929f42ce8d40e5d781"
+  },
+  {
+    "file": "footstep_grass_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "footstep_grass_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "086fd4ab3546a507ea5f5c759a9a10e535c95ade13705c238bc0eeffd7d4e8ba"
+  },
+  {
+    "file": "impactWood_medium_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_medium_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "7ba48f2f99c91c71be420841a91f1e69c0cbc4fe887fcd7213144d67bb87b13a"
+  },
+  {
+    "file": "impactMetal_light_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactMetal_light_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "fba69c467ddd85da7b1d82e259f936b876d9ba6a3d6f1b24bdd10468e46bfe08"
+  },
+  {
+    "file": "impactSoft_heavy_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_heavy_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "d130ae541951243d3f6ed963d0057450a445ffe117fbf9a084d34eb1635cb563"
+  },
+  {
+    "file": "impactWood_light_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_light_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "b183cf7a5bd783817e0e4b82af34ac6658fa1927049089dadc8b15c2ecc771dc"
+  },
+  {
+    "file": "impactWood_light_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_light_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "cdfbe8af2fe7ff9ee28f337a0a989deee0f327620da456c8413644880e9d0004"
+  },
+  {
+    "file": "impactSoft_heavy_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_heavy_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "d00286a2dc62ee5cb4d42bf56120e7050a855f69e655fc1294410aadd337eba3"
+  },
+  {
+    "file": "impactSoft_heavy_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_heavy_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "4d0096364ba9e46119d2ff6df493fdc101bd2e1efae061da5e5f77a53b3fdcb6"
+  },
+  {
+    "file": "impactWood_light_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_light_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "4b76bf3ccc8e60d19188f3165b778a7817786faa6887c55d9049bcbeef3b425f"
+  },
+  {
+    "file": "impactGlass_heavy_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_heavy_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "c7742b0e33c1733ddaf902aa68464a4f5364e4d4cb6ff11b76a7aa4151a138dd"
+  },
+  {
+    "file": "impactWood_light_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_light_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "eb45e35b4bed784d3f120de4afec4b0d6ac09d9e143cce8cfcb7d739e1b1f3c3"
+  },
+  {
+    "file": "impactSoft_heavy_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_heavy_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "49e7ca88743fca974bb8676ea138b751cfd8f9033b5e7af8736c2a215d6edbc1"
+  },
+  {
+    "file": "impactSoft_heavy_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactSoft_heavy_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "e008f0b6b14f62339c8fe9f9b45cbd6317ba4f66604c4899053b8017020a36f0"
+  },
+  {
+    "file": "impactWood_light_004.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactWood_light_004.ogg",
+    "edit": "Unmodified",
+    "sha256": "e10009f67ddaeb3a59a3e1129cfc1615d84ba60ab578eae07e7092ac223f099c"
+  },
+  {
+    "file": "impactGlass_heavy_001.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_heavy_001.ogg",
+    "edit": "Unmodified",
+    "sha256": "58686e0e562612cc566791844a10e269f8d1921f4766c14ba43976fd0a429f4e"
+  },
+  {
+    "file": "impactGlass_heavy_000.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_heavy_000.ogg",
+    "edit": "Unmodified",
+    "sha256": "b44b39a940e8948e74b9bd3776bff980df43cf220abdaf0d467dc4c43c0244a5"
+  },
+  {
+    "file": "impactGlass_heavy_002.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_heavy_002.ogg",
+    "edit": "Unmodified",
+    "sha256": "4978654ac840ad519692d5d5ba48a8101cabce13b9a577be73ad589185e5e9ed"
+  },
+  {
+    "file": "impactGlass_heavy_003.ogg",
+    "source": "https://kenney.nl/assets/impact-sounds",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "original": "impactGlass_heavy_003.ogg",
+    "edit": "Unmodified",
+    "sha256": "aed07b154f24410c17e5262bbef832842fb275d41fe297f721af7501d0e9c23a"
+  },
+  {
+    "file": "tools_08.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_08.ogg",
+    "edit": "Unmodified",
+    "sha256": "7b12fb3f6e7eb4207e76809cc8b875bbd9161b1b340a3f13349023ed127e109d"
+  },
+  {
+    "file": "tools_09.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_09.ogg",
+    "edit": "Unmodified",
+    "sha256": "81a2a696eff9980f31e4081470d4ce5de40477f52177aa9c0d7f7f18166a2086"
+  },
+  {
+    "file": "tools_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_01.ogg",
+    "edit": "Unmodified",
+    "sha256": "a679ab1a1d3fafcddf408e3f39fa55c23f5725ff84d8c9aff6e04511805616cc"
+  },
+  {
+    "file": "tools_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_02.ogg",
+    "edit": "Unmodified",
+    "sha256": "f38aa1f822bd1d4ba2fbf7df2a8c12ea27dbca537b81cf9032b8729fe7223822"
+  },
+  {
+    "file": "tools_03.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_03.ogg",
+    "edit": "Unmodified",
+    "sha256": "2e3e006dc02d0ddd462b7a961e86712922849862379ac4f9524bff876cac92e3"
+  },
+  {
+    "file": "tools_07.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_07.ogg",
+    "edit": "Unmodified",
+    "sha256": "bd0b8f1b7438bf1a2e69cfda7e760ba98ca8dbe37195a1fc8e922fadfc291138"
+  },
+  {
+    "file": "tools_06.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_06.ogg",
+    "edit": "Unmodified",
+    "sha256": "a8ca49d4c86d295c983312b8859d4620db4fdf198142f3e6defe71db615c1acd"
+  },
+  {
+    "file": "tools_04.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_04.ogg",
+    "edit": "Unmodified",
+    "sha256": "38dff738edb9ad33e35dd65dedd1d3c07e5a04c4613631daa99b0a6a7bf2597b"
+  },
+  {
+    "file": "tools_05.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_05.ogg",
+    "edit": "Unmodified",
+    "sha256": "32e51e074cfbf11c1bef75ad827ffd07be6215ced153d6a7eda7954703c193ce"
+  },
+  {
+    "file": "keys_03.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_03.ogg",
+    "edit": "Unmodified",
+    "sha256": "7feae62edb5f00bff8f798aca958413a058a3ec3c341677235834903291e6fe4"
+  },
+  {
+    "file": "keys_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_02.ogg",
+    "edit": "Unmodified",
+    "sha256": "ce802cc346ef49a71fcae75ec2a45bbf8c7a1cfe365d3d5b6755b902ce4b9523"
+  },
+  {
+    "file": "keys_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_01.ogg",
+    "edit": "Unmodified",
+    "sha256": "8bc33b2545a8bd9c1b0e2c47665c6bb9ca981ab972415f66a2d468d0b4921a5a"
+  },
+  {
+    "file": "keys_05.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_05.ogg",
+    "edit": "Unmodified",
+    "sha256": "d31aef529ad99479417b4968fa239cf4841f0ae7eba23933b19a476c7c3d2f07"
+  },
+  {
+    "file": "keys_04.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_04.ogg",
+    "edit": "Unmodified",
+    "sha256": "22f7c1475af93208149c1219b1fc7fdfd746a5fed1b95a7fe60b130c0c27ee2d"
+  },
+  {
+    "file": "keys_06.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_06.ogg",
+    "edit": "Unmodified",
+    "sha256": "9f637b55456930eddaa9432ace31009d37c543b64738fa1ab8452d58b1c82123"
+  },
+  {
+    "file": "keys_07.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "keys_07.ogg",
+    "edit": "Unmodified",
+    "sha256": "6c759cbd2dd2d1ea7f11a84d1b40f9e9ac62d49faf260100760e2dc9c77c4a28"
+  },
+  {
+    "file": "lock_open_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "lock_open_01.ogg",
+    "edit": "Unmodified",
+    "sha256": "f37728690c9559d32527b55e25102a1acb7beafdfab7ad12e099285d13d29e01"
+  },
+  {
+    "file": "wood_cracking_04.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_cracking_04.ogg",
+    "edit": "Unmodified",
+    "sha256": "9ac6d1ab3bce4a872bbde85fc1dc73f8243c1cfed95b0d135f3632be8b632e38"
+  },
+  {
+    "file": "wood_cracking_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_cracking_01.ogg",
+    "edit": "Unmodified",
+    "sha256": "ee00fa26ec72a2bd05adc71a4edf6627db2adedc6f0416ef6788c4790c1d2724"
+  },
+  {
+    "file": "wood_cracking_03.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_cracking_03.ogg",
+    "edit": "Unmodified",
+    "sha256": "9d0a3e8ee99fbf4e83472fcc26a48f834a6ac01c60769b9712e93f1e2a7f3116"
+  },
+  {
+    "file": "wood_cracking_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_cracking_02.ogg",
+    "edit": "Unmodified",
+    "sha256": "128a798ebb92958c9bee5a71c420c3f61f59c241ecaca75f0bbde780bb086abd"
+  },
+  {
+    "file": "wood_squeak_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_squeak_02.ogg",
+    "edit": "Unmodified",
+    "sha256": "841793c92034e419afec66538f7cf08f0f36f307aa3a1a5aaf7b664a0a178dee"
+  },
+  {
+    "file": "wood_squeak_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_squeak_01.ogg",
+    "edit": "Unmodified",
+    "sha256": "c6c90e02993b2e044937f344351b417aeff6841aa4cd683f208d85ececf23392"
+  },
+  {
+    "file": "wood_hit_09.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_09.ogg",
+    "edit": "Unmodified",
+    "sha256": "7e90e5834792ea302ef767235b92862045b4075021c73bc2e0ee3f352bc5cdc1"
+  },
+  {
+    "file": "wood_hit_08.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_08.ogg",
+    "edit": "Unmodified",
+    "sha256": "b91720c949e065eabf8980beefe95bc1ede281224d834838c32a6753f2ad93a1"
+  },
+  {
+    "file": "wood_hit_05.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_05.ogg",
+    "edit": "Unmodified",
+    "sha256": "a6e1a4cfb65c4fc46248b3db84666275d466c2434c283028c7f0ce70035e75de"
+  },
+  {
+    "file": "wood_hit_04.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_04.ogg",
+    "edit": "Unmodified",
+    "sha256": "c7723f3c577cc6f46b091233fcb735016c6e15d462b371393baa4d265aef52b6"
+  },
+  {
+    "file": "wood_hit_06.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_06.ogg",
+    "edit": "Unmodified",
+    "sha256": "6224beb74c930ac6b88358ced7c024b23a50d71acfe565e83cc29ffbe383676e"
+  },
+  {
+    "file": "wood_hit_07.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_07.ogg",
+    "edit": "Unmodified",
+    "sha256": "80176bf1f0a503df1b802c758af2c62f72b6c93c586b8071615174fd7b5abfca"
+  },
+  {
+    "file": "wood_hit_03.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_03.ogg",
+    "edit": "Unmodified",
+    "sha256": "0f78a5cbe44d2ee45dfc1709f72af87bcbe5e3a8ad369b52535cfe6dbbd626a6"
+  },
+  {
+    "file": "wood_hit_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_02.ogg",
+    "edit": "Unmodified",
+    "sha256": "533144d0633e756d91a7ee6d3a1f00bed81ad85d221232c5e4812e4fd7b14177"
+  },
+  {
+    "file": "wood_hit_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "wood_hit_01.ogg",
+    "edit": "Unmodified",
+    "sha256": "cf3211d80094cd363e8e56906ad42a8baf10f31ef9e197f3f63464a957bade3a"
+  },
+  {
+    "file": "metal_sheet_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_sheet_01.ogg",
+    "edit": "Unmodified",
+    "sha256": "114002a50404928b5e257d1d188d1da5f197c251868ef37182e9aba15bca7a72"
+  },
+  {
+    "file": "metal_sheet_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_sheet_02.ogg",
+    "edit": "Unmodified",
+    "sha256": "152604697b4a7e36f7b0644bb4ffc9fbb96831c2387313e9e14c732068420606"
+  },
+  {
+    "file": "metal_sheet_03.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_sheet_03.ogg",
+    "edit": "Unmodified",
+    "sha256": "f7938996a1271dcd4e54e0b3fcbbbaa9960ec93dcc745dd4d0dbd7d300b0a9bc"
+  },
+  {
+    "file": "metal_sheet_06.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_sheet_06.ogg",
+    "edit": "Unmodified",
+    "sha256": "d420000a04be527a1cbd6ddf9f9d4a77e7929c8941364b2dc575c1254204a8c2"
+  },
+  {
+    "file": "metal_sheet_04.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_sheet_04.ogg",
+    "edit": "Unmodified",
+    "sha256": "4c3a2db2940ce846d745fea57407dd8644e60dc15ecc203dee2d02713ebb2fd4"
+  },
+  {
+    "file": "metal_sheet_05.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_sheet_05.ogg",
+    "edit": "Unmodified",
+    "sha256": "cea32d672ee3bbc4098cdfc9c5984858071b2a8255ff2abd30e4c900822dfd7f"
+  },
+  {
+    "file": "waterfall.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/small-cascade-s0507.html",
+    "original": "/UPLOAD/mp3/0507.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 25s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x); circular 0.3s loop crossfade",
+    "sha256": "176dee4e074780507044d15c41a39a2a3c7fdf5627bb696b6416efd6595c0cea"
+  },
+  {
+    "file": "stream.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/small-stream-4-s1354.html",
+    "original": "/UPLOAD/mp3/1354.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 25s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x); circular 0.3s loop crossfade",
+    "sha256": "d31a8d9944f7d1eeb5ebfcc9399e2311d8ca78233bfefaabffab501c9647dacc"
+  },
+  {
+    "file": "splash.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/splash-small-1-s1529.html",
+    "original": "/UPLOAD/mp3/1529.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 2s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "0247750f3b7c9ce65cd8eaa8f4d9190ea05eaab7e834f43dd1339bc810d61ca7"
+  },
+  {
+    "file": "plunge.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/splash-big-3-s1521.html",
+    "original": "/UPLOAD/mp3/1521.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 3s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "ac693d9f84a5e08a50900ae5ed31353217090f7a9d32935515bd7d486bb5813c"
+  },
+  {
+    "file": "drip.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/drops-of-water-3-s1386.html",
+    "original": "/UPLOAD/mp3/1386.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 2s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "65bacd7aa973fcbde5b219bccb0863f59eed47d45cb819f73afe44dbb6fde8f8"
+  },
+  {
+    "file": "leaves.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/feet-in-leaves-s0137.html",
+    "original": "/UPLOAD/mp3/0137.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 2s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "8a44f250335b7e085bc81efd65e87707570d635092200bbb2cb544fc6ed40f08"
+  },
+  {
+    "file": "vegetation.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/forest-wind-in-the-trees-s0904.html",
+    "original": "/UPLOAD/mp3/0904.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 25s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x); circular 0.3s loop crossfade",
+    "sha256": "37c1cb295b32402f081a5bb5db623bba50f9470ef6d214dfe08826c15c753930"
+  },
+  {
+    "file": "grassWind.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/wind-in-tall-grass-s0908.html",
+    "original": "/UPLOAD/mp3/0908.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 25s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x); circular 0.3s loop crossfade",
+    "sha256": "63002eb56e0352e5a71336c67e833661c752a69b038380e58f17322eee2fe6aa"
+  },
+  {
+    "file": "birds.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/forest-s0100.html",
+    "original": "/UPLOAD/mp3/0100.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 25s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x); circular 0.3s loop crossfade",
+    "sha256": "96ce99110b7e52171f949b80a3289add3dba0c18ffab70c2d34099a21bea75c5"
+  },
+  {
+    "file": "owl.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/tawny-owl-2-s1764.html",
+    "original": "/UPLOAD/mp3/1764.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 6s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x); circular 0.3s loop crossfade",
+    "sha256": "e644832cfcabef59daf8d5d7edb52914ad6d76db2e3f15c385eb28a145fd34c6"
+  },
+  {
+    "file": "crickets.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/field-cricket-s1020.html",
+    "original": "/UPLOAD/mp3/1020.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 25s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x); circular 0.3s loop crossfade",
+    "sha256": "c16c4cfc3965d49d1dc41cfdaa0e83f068e46e30337f4e33164d4da23f1651be"
+  },
+  {
+    "file": "frogs.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/one-frog-s0819.html",
+    "original": "/UPLOAD/mp3/0819.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 15s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x); circular 0.3s loop crossfade",
+    "sha256": "e3a82bbf294519b75592f33b01b4a1e77ec6fd3e30d10a434829c945b51ac255"
+  },
+  {
+    "file": "quack.wav",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/ducks-s0276.html",
+    "original": "/UPLOAD/mp3/0276.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 2s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "c96f3006e65f19c4dddd2d3f20798516c232fd3922765381be160acc8989de09"
+  },
+  {
+    "file": "caw.wav",
+    "author": "Le tiroir du fond",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/carrion-crow-3-s3463.html",
+    "original": "/UPLOAD/mp3/3463.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 3s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "e1766ee5795670fdd61eb994c2312866ff1f535f4f62fcacae70e43e14e300bc"
+  },
+  {
+    "file": "flutter.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/flight-of-a-pigeon-s0840.html",
+    "original": "/UPLOAD/mp3/0840.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 2s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "b03d61fce63effedd71278a1588b27ba45267b370651d10ffc8edfd7c1d0fbf7"
+  },
+  {
+    "file": "rain.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/summer-rain-on-terrace-s1019.html",
+    "original": "/UPLOAD/mp3/1019.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 25s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x); circular 0.3s loop crossfade",
+    "sha256": "9b01e545796efbc92cfa1dda5223e3284f652baa7ac4fb4677e47af3a7756984"
+  },
+  {
+    "file": "thunder.wav",
+    "author": "Joseph SARDIN & Axeline T.",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/thunder-2-s3113.html",
+    "original": "/UPLOAD/mp3/3113.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 6s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "2c178943d9954f6bbe471ae525ed130ca1dd9164162dd1020e4f646b4cbfecfa"
+  },
+  {
+    "file": "fire.wav",
+    "author": "JosephSardin",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/big-branching-fire-1-s0987.html",
+    "original": "/UPLOAD/mp3/0987.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 25s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x); circular 0.3s loop crossfade",
+    "sha256": "77d84a015f8f5e775ee2f3a53556c31b0d3fc757cb3cd8d34433fb97a9276b1f"
+  },
+  {
+    "file": "horn.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/bus-horn-s3594.html",
+    "original": "/UPLOAD/mp3/3594.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 2s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "30558923ff2ad8d1332c27fc079bc9713b8541efa196b6adad0d401c57718c72"
+  },
+  {
+    "file": "bell.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/church-bell-s0135.html",
+    "original": "/UPLOAD/mp3/0135.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 4s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "16ba4d0ee0c6c31e6c1bd878a80d942e122afa905838254f5ecd543a356d3bec"
+  },
+  {
+    "file": "gasp.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/breathless-man-s1103.html",
+    "original": "/UPLOAD/mp3/1103.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 2s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "c55c721493b7e51271dada285024ec6b31bab12788cf99d3fe80f92e1898a924"
+  },
+  {
+    "file": "munch.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/apple-crunched-2-s1114.html",
+    "original": "/UPLOAD/mp3/1114.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 1.5s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "2d4e50bc653e2abbfac9b10cc0722dbb3aa828fbca48ac9939a8911a76696142"
+  },
+  {
+    "file": "laugh.wav",
+    "author": "anonyme",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/laugh-s0475.html",
+    "original": "/UPLOAD/mp3/0475.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 4s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "a5964d242ec8db98a5bc371c1c0ba5bc3fc5eabb9ea178e549080b369714324c"
+  },
+  {
+    "file": "retch.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/man-vomiting-1-s2496.html",
+    "original": "/UPLOAD/mp3/2496.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 4s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "db16adb8c5a16928f1feadb755878c000aba1bd884b7c1b8cfda364ce95053dc"
+  },
+  {
+    "file": "twang.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/archery-s0549.html",
+    "original": "/UPLOAD/mp3/0549.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 0.45s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "d3ea4ac529396f532ebd4f9fdce386410914f666e4f454929b282e542ed723d1"
+  },
+  {
+    "file": "creak.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/rope-s0554.html",
+    "original": "/UPLOAD/mp3/0554.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 2s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "dc4840b78056e464e76ad96a99caa4a0e38ecd761ff4f5bf16ce03e6f95480bb"
+  },
+  {
+    "file": "boom.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/explosion-far-away-s1023.html",
+    "original": "/UPLOAD/mp3/1023.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 4s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "cd15027c22d4d02448a4daa80044ead3adb0b973ee771459bf7372ff01232452"
+  },
+  {
+    "file": "radio.wav",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/crackling-radio-1-s0312.html",
+    "original": "/UPLOAD/mp3/0312.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 2s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "d2090c3395c1a852c46a9e72914d581b08698930a84ff60403c4f8642590a8b8"
+  },
+  {
+    "file": "whisper.wav",
+    "author": "Joseph SARDIN & Axeline T.",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/whisper-1-s3255.html",
+    "original": "/UPLOAD/mp3/3255.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 3s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "078dd425017717fd307a7fdf15ef1654db4daa584ec10eeab0fd4babf2d0c2d7"
+  },
+  {
+    "file": "slash.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/cutting-board-zucchini-3-s2070.html",
+    "original": "/UPLOAD/mp3/2070.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 0.6s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "d52c86054699441a8a1ce3265ec78daa80a8303e6f475d1e9634f79d8095c8e5"
+  },
+  {
+    "file": "swing.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/whoosh-8-s1801.html",
+    "original": "/UPLOAD/mp3/1801.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 0.6s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "0338a022ab59bda27280ffe4a72c6a4d75082bfafe3ab122c24b1db75f265ac6"
+  },
+  {
+    "file": "hit.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/punch-13-s2468.html",
+    "original": "/UPLOAD/mp3/2468.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 1s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "fe1e8d575079f4487291a2429ff4f82a87d92469d05ceb174fc3b5471effe9c0"
+  },
+  {
+    "file": "trickle.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/man-urinating-2-s1717.html",
+    "original": "/UPLOAD/mp3/1717.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 6s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "315ab67517f40c33e796554c1311b485144e6d792ae51e3f05a3ede7df9c9847"
+  },
+  {
+    "file": "alarm.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/smoke-detector-alarm-3-s1153.html",
+    "original": "/UPLOAD/mp3/1153.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 4s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "7aff67c6b2b3e9b54b59d3cf3f4173571d760c40195e7e69b077183a78a33cf1"
+  },
+  {
+    "file": "beep.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/carbon-monoxide-detector-s0925.html",
+    "original": "/UPLOAD/mp3/0925.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 0.3s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "4a6adeaab17ac9629c8d194319d59732f0c6fcccb1a8f16351095de03c546f0e"
+  },
+  {
+    "file": "siren.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/ambulance-siren-2-s1464.html",
+    "original": "/UPLOAD/mp3/1464.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 6s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "756505726da0278a547e96ad004deafcaaac99a0c139988e8236584715334f52"
+  },
+  {
+    "file": "wind.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/strong-wind-and-trees-2-s1451.html",
+    "original": "/UPLOAD/mp3/1451.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 25s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x); circular 0.3s loop crossfade",
+    "sha256": "4d52dd68843713c161b294da97a8de0bbb047609f3b5a8c323614a3a62128a0d"
+  },
+  {
+    "file": "cicadas.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/cicada-2-short-s2398.html",
+    "original": "/UPLOAD/mp3/2398.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 20s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x); circular 0.3s loop crossfade",
+    "sha256": "881626229163c473a4ddceccd15b22b0a6fc9a7790ea67f3c8ff6e05511f49bd"
+  },
+  {
+    "file": "chirp.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/birds-waking-4-s1906.html",
+    "original": "/UPLOAD/mp3/1906.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 2s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "ab4b620bb6f95244acbe684263f1ba07b457b3904f97c946ea7325676906df92"
+  },
+  {
+    "file": "growl.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/barking-of-a-spitz-s0682.html",
+    "original": "/UPLOAD/mp3/0682.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 2s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "b803391a37671e4fd8d1906f89d642ebd039081e2e971b6b4e58754d4b0f6e6a"
+  },
+  {
+    "file": "yelp.wav",
+    "author": "Dorian CLAIR",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/cry-of-pain-s2361.html",
+    "original": "/UPLOAD/mp3/2361.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 1s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "1e9b0a2a386b77eec71a10f65df63716868723b2aea48fa5422919630cb5be75"
+  },
+  {
+    "file": "zdie.wav",
+    "author": "Dorian CLAIR",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/cry-of-pain-s2361.html",
+    "original": "/UPLOAD/mp3/2361.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 1s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "1e9b0a2a386b77eec71a10f65df63716868723b2aea48fa5422919630cb5be75"
+  },
+  {
+    "file": "scream.wav",
+    "author": "Dorian CLAIR",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/cry-of-pain-s2361.html",
+    "original": "/UPLOAD/mp3/2361.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 1s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "1e9b0a2a386b77eec71a10f65df63716868723b2aea48fa5422919630cb5be75"
+  },
+  {
+    "file": "gulp.wav",
+    "author": "Joseph SARDIN & Axeline T.",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/drink-from-the-gourd-1-s3247.html",
+    "original": "/UPLOAD/mp3/3247.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 4s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "56d15e4cabc43f5c1f08802262e29847409ab3fb6245a49904d342eca93d4354"
+  },
+  {
+    "file": "sing.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/happy-birthday-s2194.html",
+    "original": "/UPLOAD/mp3/2194.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 7s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "a55f3fcc15a467931b2e1491f8f5025e161455ccb8d586f8197d19e946362f89"
+  },
+  {
+    "file": "branchBreak.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/broken-twigs-2-s1300.html",
+    "original": "/UPLOAD/mp3/1300.mp3",
+    "edit": "Mono 44.1kHz PCM WAV, opening excerpt 2s, leading silence removal, edge fades; no synthesized layers.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "2d578fe9b006f152430c93a75f81f02c3dc098f8f9a160033289498807f96516"
+  },
+  {
+    "file": "howl.wav",
+    "author": "betchkal",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/betchkal/sounds/500646/",
+    "original": "500646 Freesound high-quality MP3 preview",
+    "edit": "Opening excerpt, mono 44.1kHz WAV, leading silence trimmed.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "5debf354aa2014993823c17c7be52644177520a6c44c4299a524101b5e227d59"
+  },
+  {
+    "file": "hiss.wav",
+    "author": "7h3_lark",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/7h3_lark/sounds/268580/",
+    "original": "268580 Freesound high-quality MP3 preview",
+    "edit": "Opening excerpt, mono 44.1kHz WAV, leading silence trimmed.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "7a350b7656d33ca6061d1db1e95851d1e1320bca1c026bfe262adb696e37baa5"
+  },
+  {
+    "file": "hiccup.wav",
+    "author": "eZZin",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/eZZin/sounds/619255/",
+    "original": "619255 Freesound high-quality MP3 preview",
+    "edit": "Opening excerpt, mono 44.1kHz WAV, leading silence trimmed.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "91dadc41f8699c19820449ed41f19a6158cc588604b9b5f4eae3a0d5a961b8f9"
+  },
+  {
+    "file": "sand.wav",
+    "author": "Daphne_in_Wonderland",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/Daphne_in_Wonderland/sounds/383490/",
+    "original": "383490 Freesound high-quality MP3 preview",
+    "edit": "Isolated real footfall at 38.72s; 0.6s excerpt, mono PCM WAV, gain normalization.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "09890f4c775b741d2c33e3d54fa525e1be3d85f2d764bebc5a2a4d22db07f9a9"
+  },
+  {
+    "file": "bellow.wav",
+    "author": "Alexander / Orange Free Sounds",
+    "license": "CC-BY-4.0",
+    "source": "https://orangefreesounds.com/deer-sound/",
+    "original": "https://www.orangefreesounds.com/wp-content/uploads/2016/11/Deer-sound.mp3",
+    "edit": "Mono 44.1kHz WAV, leading silence trimmed.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "f610283b4e906eb6a0ffe92df44bcccd03a3f8adaac44cbce0fec5ed0b2802f7"
+  },
+  {
+    "file": "reload.wav",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "original": "gunreload1.wav",
+    "edit": "Unmodified",
+    "sha256": "685cac6a184e3cc3ec09a25b6ddb1d6feffd86d469778f339aa423d384035c50"
+  },
+  {
+    "file": "sand1.wav",
+    "author": "Daphne_in_Wonderland",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/Daphne_in_Wonderland/sounds/383490/",
+    "original": "383490 Freesound high-quality MP3 preview",
+    "edit": "Isolated real footfall at 34.32s; 0.6s excerpt, mono PCM WAV, gain normalization.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "d29fe592e901df5dbfdd775f8e4f0ad4db2e09e1a482a72cc8e56168ad87c83e"
+  },
+  {
+    "file": "sand2.wav",
+    "author": "Daphne_in_Wonderland",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/Daphne_in_Wonderland/sounds/383490/",
+    "original": "383490 Freesound high-quality MP3 preview",
+    "edit": "Isolated real footfall at 33.22s; 0.6s excerpt, mono PCM WAV, gain normalization.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "d136f3167a3ba9bf6b863da8d7427f5c8e15cbfd85fdcec1b7a0d2d06101375e"
+  },
+  {
+    "file": "sand3.wav",
+    "author": "Daphne_in_Wonderland",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/Daphne_in_Wonderland/sounds/383490/",
+    "original": "383490 Freesound high-quality MP3 preview",
+    "edit": "Isolated real footfall at 14.92s; 0.6s excerpt, mono PCM WAV, gain normalization.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "01abf2c0c48183538b8d4339bf39fd885dfa66c396afd0a848fb505a1a40f97e"
+  },
+  {
+    "file": "sand4.wav",
+    "author": "Daphne_in_Wonderland",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/Daphne_in_Wonderland/sounds/383490/",
+    "original": "383490 Freesound high-quality MP3 preview",
+    "edit": "Isolated real footfall at 73.42s; 0.6s excerpt, mono PCM WAV, gain normalization.; peak normalized to -3dBFS (gain capped at 25x)",
+    "sha256": "e8fec1eef567a7f665e006b96dce622186819b42a6b57d1608527420c2f3c6da"
+  },
+  {
+    "file": "metal_spring_01.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_spring_01.ogg",
+    "edit": "Original recorded metal spring foley, unchanged",
+    "sha256": "bc7d84bf0353ef884c62dc0a9ef29e05864d452ac8509a40e125fb9d7507f98f"
+  },
+  {
+    "file": "metal_spring_02.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "metal_spring_02.ogg",
+    "edit": "Original recorded metal spring foley, unchanged",
+    "sha256": "373fb40c3f895e04623633057160a217005b04816a957094ae3c3d66fe21dca0"
+  },
+  {
+    "file": "waterfall-take2.wav",
+    "source": "https://bigsoundbank.com/mini-waterfall-s0996.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0996.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "6674a5afa7667a2f63723b4c2e0c5374cd2f77030ec3fd0ed36fc0f7ed136c19"
+  },
+  {
+    "file": "waterfall-take3.wav",
+    "source": "https://bigsoundbank.com/small-waterfall-2-s0219.html",
+    "author": "gamin",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0219.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "a22adaffda81baaf8a5e72b43f453591ff760149149e1bd7d8a476a2ef5a2f7a"
+  },
+  {
+    "file": "stream-take2.wav",
+    "source": "https://bigsoundbank.com/small-stream-1-s0213.html",
+    "author": "gamin",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0213.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "5db18bb5c24dc96448bae69c562c9568949420b5eb954c088dbd0584317dc596"
+  },
+  {
+    "file": "stream-take3.wav",
+    "source": "https://bigsoundbank.com/forest-and-stream-3-s2716.html",
+    "author": "Pierre SIBANARCO",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2716.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "f01ef11af99e67d68c408ca1aa5e650acbd2989147de05c1cb627d63f6813992"
+  },
+  {
+    "file": "splash-take2.wav",
+    "source": "https://bigsoundbank.com/splash-small-6-s1534.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1534.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "79242186a7952bd9dfa54ede360729a2d27946aa9cb4ce75748dab125f6441fb"
+  },
+  {
+    "file": "splash-take3.wav",
+    "source": "https://bigsoundbank.com/splash-small-3-s1531.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1531.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "e3b281d876d6d10ccc595272989ac8a18ac9728b1fb18b82dad355b38ee770af"
+  },
+  {
+    "file": "plunge-take2.wav",
+    "source": "https://bigsoundbank.com/splash-big-1-s1519.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1519.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "f8e3ea53ddb7f75f2de0b4ef813e523554b2d48a20b5d2c3b6310a7d229e8670"
+  },
+  {
+    "file": "plunge-take3.wav",
+    "source": "https://bigsoundbank.com/splash-big-3-s1521.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1521.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "33b8887f80728c36a5c10af5704a77b537984af1386f25d2d59c02656694a8cd"
+  },
+  {
+    "file": "drip-take2.wav",
+    "source": "https://bigsoundbank.com/drops-of-water-1-s1384.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1384.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "f08c323e39a90a3cbe30f1ef9cbb39d442bef2238c2653b4ef884048d74d312b"
+  },
+  {
+    "file": "drip-take3.wav",
+    "source": "https://bigsoundbank.com/drops-of-water-2-s1385.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1385.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "14f83664145932f5456a7af027412cca76f9de2c051420eb42bed3bf98bc72db"
+  },
+  {
+    "file": "leaves-take2.wav",
+    "source": "https://bigsoundbank.com/feet-in-leaves-2-s2889.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2889.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "4be8632f865921d7b8772ae9b08fa0ba9f7ef944d43aca657745360fcf215c62"
+  },
+  {
+    "file": "leaves-take3.wav",
+    "source": "https://bigsoundbank.com/steps-on-the-twigs-s1301.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1301.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "2c8cb4b67381640b1ec71af977192755c1b1d4b9ac3662702e816d329339f890"
+  },
+  {
+    "file": "vegetation-take2.wav",
+    "source": "https://bigsoundbank.com/wind-in-a-tree-s0659.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0659.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "13a4e189bfe6a020533f4d019acbc3bbca3e26762ff63e738d563a6eaa23846c"
+  },
+  {
+    "file": "vegetation-take3.wav",
+    "source": "https://bigsoundbank.com/wind-and-tree-squeaks-s1051.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1051.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "6cbe944ed0765d5eeab211acb000ff9c7eb3cf86aef120ddf7e609ed84e3f7f3"
+  },
+  {
+    "file": "grassWind-take2.wav",
+    "source": "https://bigsoundbank.com/wind-in-tall-grass-s0908.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0908.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "7a9d34af6dd88b344263689c7a683206cbede66ea5a2f8f5ff22d2b6b2330074"
+  },
+  {
+    "file": "grassWind-take3.wav",
+    "source": "https://bigsoundbank.com/wind-s0595.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0595.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "d6c856b4718c74f4e16d7b6b481edfb19ed3c1be5fc9cad18fc76ff591dc957e"
+  },
+  {
+    "file": "birds-take2.wav",
+    "source": "https://bigsoundbank.com/wake-birds-3-s0999.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0999.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "e9cbd0849fdb222449755b2a62e5a8499a32cf8ecb406739795fa750a8170228"
+  },
+  {
+    "file": "birds-take3.wav",
+    "source": "https://bigsoundbank.com/birds-waking-4-s1906.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1906.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "891a370caeea0c5f70ff20204308bb60ebc297d80452527281d3361dda839b5e"
+  },
+  {
+    "file": "owl-take2.wav",
+    "source": "https://bigsoundbank.com/long-eared-owl-1-s0936.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0936.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "2da5131e76ea4f83e1bf4902cdfdb8fe9e0523d66edf64db482db8216ba6c83b"
+  },
+  {
+    "file": "owl-take3.wav",
+    "source": "https://bigsoundbank.com/tawny-owl-1-s1763.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1763.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "66f00b7a9b31f244eb6268ef7d883eed6cfcea113a2e389831dedefc05aae2a5"
+  },
+  {
+    "file": "crickets-take2.wav",
+    "source": "https://bigsoundbank.com/nocturnal-insects-4-s1470.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1470.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "3f87a1499c3b722c55e625da22763cfbb6a17ef2f600970ee033d593cccdbd31"
+  },
+  {
+    "file": "crickets-take3.wav",
+    "source": "https://bigsoundbank.com/insect-song-s1052.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1052.mp3",
+    "edit": "Later insect recording excerpt, 10 to 22s; mono 32kHz, peak normalized to -3dBFS, short edge fades",
+    "sha256": "c7c727fe50f952454f01fbecb690e79f7fa53cb16e15d957217516b0b8f3c486"
+  },
+  {
+    "file": "frogs-take2.wav",
+    "source": "https://bigsoundbank.com/frogs-2-s0998.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0998.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "a2577b75a0953a761f134a7bdeec2e5e5cee5a35a876682df3716c4767dd6fcf"
+  },
+  {
+    "file": "frogs-take3.wav",
+    "source": "https://bigsoundbank.com/frogs-1-s0997.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0997.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "df9c7a004bf2c29bab10e064a5b302854abdd2d0ee3f6f29b4a5d9a106c74312"
+  },
+  {
+    "file": "caw-take2.wav",
+    "source": "https://bigsoundbank.com/carrion-crow-4-s3464.html",
+    "author": "Le tiroir du fond",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/3464.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "5348d6b2195c180dacf152dce163e22682feaebfc46fc73b53f37897d2a7740b"
+  },
+  {
+    "file": "caw-take3.wav",
+    "source": "https://bigsoundbank.com/carrion-crow-2-s3462.html",
+    "author": "Le tiroir du fond",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/3462.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "ac9e05e2c69586114dc0ca8a8144d01bd0ffd4e34f3cf28d9a8256b924b1bca9"
+  },
+  {
+    "file": "flutter-take2.wav",
+    "source": "https://bigsoundbank.com/flight-bird-1-s2891.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2891.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "44fefb6eed6c2f86ec15131f7b335807a35a39d1e326a2005d78d11f1197fdbc"
+  },
+  {
+    "file": "flutter-take3.wav",
+    "source": "https://bigsoundbank.com/flight-bird-4-s2894.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2894.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "c6913fd9fe5d374c3e7982e97a42ea5b16202b58a6c8b0dcf41f057134182839"
+  },
+  {
+    "file": "rain-take2.wav",
+    "source": "https://bigsoundbank.com/rain-on-puddle-s1290.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1290.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "87d20b3e63872481be0a6e83e2dd5c7c4383976805efc1d4005427c1227c271a"
+  },
+  {
+    "file": "rain-take3.wav",
+    "source": "https://bigsoundbank.com/summer-rain-on-terrace-s1019.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1019.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "1a4113e9b365744cb331d67d7f3c5d5c1b67b0022b9be946f170fc29ddf460ff"
+  },
+  {
+    "file": "thunder-take2.wav",
+    "source": "https://bigsoundbank.com/thunder-4-s3115.html",
+    "author": "Joseph SARDIN & Axeline T.",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/3115.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "8b25d39151f1d8caef1b318d5b0dc5572211e022e748477c1d478ed4bab50579"
+  },
+  {
+    "file": "thunder-take3.wav",
+    "source": "https://bigsoundbank.com/rain-and-storm-2-s0740.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0740.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "cc01441ad35606ea9a70499dc70e0fd12ca35b6ba99f454de1042f5c93f6414b"
+  },
+  {
+    "file": "fire-take2.wav",
+    "source": "https://bigsoundbank.com/fireplace-5-s2857.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2857.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "c023f3750a45ca8d49d00915bdc42fd90063a5b80a75cd1ebf79787d7c61b386"
+  },
+  {
+    "file": "fire-take3.wav",
+    "source": "https://bigsoundbank.com/fireplace-4-s2856.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2856.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "dbd4ebf8ee8f238ed3fac2358140f23aa9898b4b37db297b3e3edeeadb436bef"
+  },
+  {
+    "file": "horn-take2.wav",
+    "source": "https://bigsoundbank.com/recent-car-horn-2-s0258.html",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0258.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "a3180aa10610fd4e6495147e28043319c810c554143194818012d462cc1e6605"
+  },
+  {
+    "file": "horn-take3.wav",
+    "source": "https://bigsoundbank.com/bus-horn-s3594.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/3594.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "edf6b216a198aad462f93a9c71a4eb0d5bef0ef7e4806de95ea24d88ebc0ed8e"
+  },
+  {
+    "file": "bell-take2.wav",
+    "source": "https://bigsoundbank.com/small-bell-1-s0292.html",
+    "author": "GlaneurDeSons",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0292.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "c4c3cb3d98f635e25e71c7755214babf5635edc4d4ba50eec304617720502665"
+  },
+  {
+    "file": "bell-take3.wav",
+    "source": "https://bigsoundbank.com/church-bell-s0135.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0135.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "2fbf01a545a4179b98c0df7d9f4e4f7c5dce3f857987d83bddbbc18d815446c8"
+  },
+  {
+    "file": "gasp-take2.wav",
+    "source": "https://bigsoundbank.com/breathless-woman-s1345.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1345.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "8cd382bd2d9b82dc8ced231a7d393e02b756cfbca9b0d2e89178d63b479a836f"
+  },
+  {
+    "file": "gasp-take3.wav",
+    "source": "https://bigsoundbank.com/man-breathing-s2195.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2195.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "a4d0fdcf5d8e80540212cb58af6817fe47c8edb89520c1e9d4e98b212e949d0f"
+  },
+  {
+    "file": "gulp-take2.wav",
+    "source": "https://bigsoundbank.com/drink-from-the-gourd-1-s3247.html",
+    "author": "Joseph SARDIN & Axeline T.",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/3247.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "24b1bafdb6f38baa0ebc013045b2a73deb4bee972b1e0e2919268abb9060ac6f"
+  },
+  {
+    "file": "gulp-take3.wav",
+    "source": "https://bigsoundbank.com/straw-suction-1-s1244.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1244.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "ff143ae265232934c8f4a7598193a3b67d490600a9d890f5195f14d6b54572c9"
+  },
+  {
+    "file": "munch-take2.wav",
+    "source": "https://bigsoundbank.com/eat-a-rusk-s0407.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0407.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "538fa09a1487baf69199ece61105304a8c438fe02477bd5e21c366ec885c9d66"
+  },
+  {
+    "file": "munch-take3.wav",
+    "source": "https://bigsoundbank.com/raw-carrot-crunched-1-s1594.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1594.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "59373cd06915e2113052e2de6dcc4d78e0e9661e3c761fff56b7acd713265fe9"
+  },
+  {
+    "file": "laugh-take2.wav",
+    "source": "https://bigsoundbank.com/strident-laughter-s0489.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0489.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "bff79eb37c5737f4b8380448ac11f4a2a3369e16daa5ee42216cd416182f5fbe"
+  },
+  {
+    "file": "laugh-take3.wav",
+    "source": "https://bigsoundbank.com/laughter-s0490.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0490.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "d118b8859dc7c3c44f595c7cf5f9f983ce78aaa84b5545ceb1229fcfafd2b127"
+  },
+  {
+    "file": "retch-take2.wav",
+    "source": "https://bigsoundbank.com/man-vomiting-4-s2499.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2499.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "47df26697c5c9f88a10d6a6e214d55e22a018c70cf870f656883b6542ee1fdb5"
+  },
+  {
+    "file": "retch-take3.wav",
+    "source": "https://bigsoundbank.com/man-vomiting-3-s2498.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2498.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "99620b2a6b81149b7d872719ef75fce627bba3ee6fc9aa213740644aee1f94b7"
+  },
+  {
+    "file": "boom-take2.wav",
+    "source": "https://bigsoundbank.com/explosion-2-s1808.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1808.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "b3b33d6ea154c37718d47d302c14616783da94ee891f33df9dc29d5083f8a8c4"
+  },
+  {
+    "file": "boom-take3.wav",
+    "source": "https://bigsoundbank.com/explosion-far-away-s1023.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1023.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "a322d6958a7e7ef25ff2b67be0b2782026abf785609908b2567cddd09e8af1df"
+  },
+  {
+    "file": "radio-take2.wav",
+    "source": "https://bigsoundbank.com/crackling-radio-2-s0313.html",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0313.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "8cc9564e55f7716a74f59e915ecdc9c78880af54f87f6b88a84b1f659aa83f21"
+  },
+  {
+    "file": "radio-take3.wav",
+    "source": "https://bigsoundbank.com/radio-frequency-sweep-2-s2618.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2618.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "b32b640dce5ca34e8c7c8cf761f5fc672c709873fa6b70b816b873c33cb27886"
+  },
+  {
+    "file": "whisper-take2.wav",
+    "source": "https://bigsoundbank.com/whisper-2-s3256.html",
+    "author": "Joseph SARDIN & Axeline T.",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/3256.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "347325e7747b8d4b08b447ce5b4c9e41c1baf9a6bc2f896acecc0385ae343c84"
+  },
+  {
+    "file": "whisper-take3.wav",
+    "source": "https://bigsoundbank.com/whisper-1-s3255.html",
+    "author": "Joseph SARDIN & Axeline T.",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/3255.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "14602b3cf114a100a8a41305d8f6001e58e567d642451b4a8d12aad4667cac93"
+  },
+  {
+    "file": "slash-take2.wav",
+    "source": "https://bigsoundbank.com/knife-blade-7-s2580.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2580.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "c3bd6f8539ff7ed8b8e513895151c62300f1f80d9c3148571334f39a39b79b89"
+  },
+  {
+    "file": "slash-take3.wav",
+    "source": "https://bigsoundbank.com/cutting-board-zucchini-3-s2070.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2070.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "256b1969cd3050088ebf7c598f2232b7bad3c6adb9a3308948740d25bde6db53"
+  },
+  {
+    "file": "swing-take2.wav",
+    "source": "https://bigsoundbank.com/sword-through-the-air-s0128.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0128.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "aba050176a120cbc24c040a8734ea0cfe5d7c6fa87c8f7db38ae45b5921977ab"
+  },
+  {
+    "file": "swing-take3.wav",
+    "source": "https://bigsoundbank.com/whoosh-2-s0573.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0573.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "4774859186f2dae948427f1bc436f3870d08a5e4c91ade46e55f6c5b3629c963"
+  },
+  {
+    "file": "hit-take2.wav",
+    "source": "https://bigsoundbank.com/punch-5-s2460.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2460.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "978c193cb72ff422c20e4a2030088bb978b657f3341dfba12058254934888844"
+  },
+  {
+    "file": "hit-take3.wav",
+    "source": "https://bigsoundbank.com/punch-s0105.html",
+    "author": "charlesdu76",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0105.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "f494e6236eff648ea81d317fea1a9436149ae9f23a8a2935dcd0948a052c8200"
+  },
+  {
+    "file": "trickle-take2.wav",
+    "source": "https://bigsoundbank.com/man-pees-s0151.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0151.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "09af514f8f5a6c23030a372fcc7b9cae63e02c5accc4d684adce0c50686122da"
+  },
+  {
+    "file": "trickle-take3.wav",
+    "source": "https://bigsoundbank.com/man-urinating-3-s1718.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1718.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "a11df8edaf20f16034b73a8703bd69b3c7c3a5a194f7eebbac9344834dd337b1"
+  },
+  {
+    "file": "alarm-take2.wav",
+    "source": "https://bigsoundbank.com/smoke-detector-alarm-s0800.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0800.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "45d8870d9dbf031284764845447cb012d77a8b76dd0e6f65b6d96da7898815d0"
+  },
+  {
+    "file": "alarm-take3.wav",
+    "source": "https://bigsoundbank.com/carbon-monoxide-detector-s0925.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0925.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "ba207abf294d3178b88b909bd7b3f31c3fc54224506c8b5f39bb008547de964d"
+  },
+  {
+    "file": "beep-take2.wav",
+    "source": "https://bigsoundbank.com/truck-reverse-beep-s1298.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1298.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "60b533e04770677d47dd6be146a34066110295013b4daf6cf0e3d486f333d006"
+  },
+  {
+    "file": "beep-take3.wav",
+    "source": "https://bigsoundbank.com/digital-watch-alarm-s2256.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2256.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "a2e784b6921edbad2ad84af1d0eaf1904acf5ade60f6edcf5a703dc0319c11b8"
+  },
+  {
+    "file": "siren-take2.wav",
+    "source": "https://bigsoundbank.com/ambulance-siren-2-s1464.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1464.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "4e9876c76a3ba02feffeebcb80cfa79b00aae7eaee87232db6982f58717c6080"
+  },
+  {
+    "file": "siren-take3.wav",
+    "source": "https://bigsoundbank.com/ambulance-siren-2-s1464.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1464.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "78c4035a8226b94b4dfd2bc81e70bb5560c2adba465540040b30eeb42d840967"
+  },
+  {
+    "file": "growl-take2.wav",
+    "source": "https://bigsoundbank.com/small-dogs-bark-growl-s1060.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1060.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "689a4a21da3caf83c6e87103c6eef990847fc3b93c6ef653fa52910d9a3d3a3f"
+  },
+  {
+    "file": "growl-take3.wav",
+    "source": "https://bigsoundbank.com/small-dogs-bark-growl-2-s1061.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1061.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "2d48e9f06b88b11cfd9f16cf70e1a0c736565c56558e4239676b3b9bdb77b838"
+  },
+  {
+    "file": "branchBreak-take2.wav",
+    "source": "https://bigsoundbank.com/broken-twigs-1-s1299.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1299.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "3b691908d8254f7f91406de0f74714d33fafbd0cf5b253e3eac5f959f32277bf"
+  },
+  {
+    "file": "branchBreak-take3.wav",
+    "source": "https://bigsoundbank.com/steps-on-the-twigs-s1301.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1301.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "2c8cb4b67381640b1ec71af977192755c1b1d4b9ac3662702e816d329339f890"
+  },
+  {
+    "file": "chirp-take2.wav",
+    "source": "https://bigsoundbank.com/awakening-birds-s0222.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0222.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "d02a30fe28987d7b4149711e67ea8b1125ccfd07a19d2939a901b109588fd200"
+  },
+  {
+    "file": "chirp-take3.wav",
+    "source": "https://bigsoundbank.com/evening-birds-s1859.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1859.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "c84a6d02f7ea22b9650ae09b56fd2f38628412fe631b9404478a8ab6c6ffc6ac"
+  },
+  {
+    "file": "wind-take2.wav",
+    "source": "https://bigsoundbank.com/wind-s0595.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0595.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "d6c856b4718c74f4e16d7b6b481edfb19ed3c1be5fc9cad18fc76ff591dc957e"
+  },
+  {
+    "file": "wind-take3.wav",
+    "source": "https://bigsoundbank.com/strong-wind-and-trees-1-s1450.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1450.mp3",
+    "edit": "Distinct recording or later performance excerpt; mono 32kHz, peak limited, attack fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "87003e1a2f3d3644690595436c5fd3bc1d7177cf48f94c2ca4ef0d869f540820"
+  },
+  {
+    "file": "pistol-take2.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/1911/A_34P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "1c8de1b506025e36cfe51270c504b9eddd5413a711e55687cd8917dc6672e929"
+  },
+  {
+    "file": "pistol-take3.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Bersa/F_41P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "96286ed2629666779e103d7b6db38c3c88b094a16c5aa5d64bef2361a4229be4"
+  },
+  {
+    "file": "pistol-take4.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Smith & Wesson 642/V_22P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "b157d6099c069d81f345ef1423ce5d9a8d88a281755e49dceb87b06732ccc886"
+  },
+  {
+    "file": "pistol-take5.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Smith & Wesson 642/V_27P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "c47962fc5c6e90ac93add2bb1ac8ada58b7dba2959a90066d01bcfbc9b98c733"
+  },
+  {
+    "file": "shotgun-take2.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Model 12/K_17P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "7308851d01a44cad581c62a08d635f8b730a3cfed556f9a8261cbeb796e8defa"
+  },
+  {
+    "file": "shotgun-take3.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/CD/H_16P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "1633b165c8606f4b8256b554f32553a8a70168279cb172f19f894ce125cbd47d"
+  },
+  {
+    "file": "mg-take2.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/AK-47/C_27P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "fe407e806bc24a5559e562dee9e9cbf2a01e915de3f90de834503d4eeddec4d3"
+  },
+  {
+    "file": "mg-take3.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/AK-47/C_29P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "35f0faaef1a143186d6ed2ae5b5e3dd214d5dc90273580f6dc968ca40934d9ad"
+  },
+  {
+    "file": "mg-take4.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/AK-47/C_31P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "fae5c11e191f82524fc256a3788ebb4a058983bb9dda69d5353709ea25a016c4"
+  },
+  {
+    "file": "mg-take5.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/AK-47/C_34P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "15e5ce1d7916bb96b0f639b1815be5314437781e369ee71be2e478bab78e54a8"
+  },
+  {
+    "file": "sniper-take2.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/1917/B_16P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "b4b42ec25c046e6430d9b5d8f91b8fe318bdd6b29b30a2476dd4a2adce977b06"
+  },
+  {
+    "file": "sniper-take3.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Mosin Nagant/M_26P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "497a3968a207e090bc93fb48e3a130cbb12d6ab00766d0ec3b45dea797143d50"
+  },
+  {
+    "file": "sniper-take4.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Tikka/W_24P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "6fc34fec8717ccb86ee3656ab2e5f8880ee8386b1e615d88a3a7b11dd2b6594d"
+  },
+  {
+    "file": "sniper-take5.wav",
+    "source": "https://opengameart.org/content/the-free-firearm-sound-library",
+    "author": "Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney",
+    "license": "CC0-1.0",
+    "original": "Prepared SFX Library/Tikka/W_29P.wav",
+    "edit": "Distinct firearm take, mono 32kHz PCM, opening excerpt, edge fade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "4d267f830513e9c0fe30da9a6c03fa6673fcdff25012a934a62703ed26fc9d92"
+  },
+  {
+    "file": "tools_10.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_10.ogg",
+    "edit": "Unmodified recorded foley",
+    "sha256": "0ed377175537e140950a7656012d991910135925c8f2df93d6ed60819e51eedd"
+  },
+  {
+    "file": "tools_11.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_11.ogg",
+    "edit": "Unmodified recorded foley",
+    "sha256": "04a8867b10ef3b694891cd3260747e7970de4eb0dea8db32f7935f24f44482a0"
+  },
+  {
+    "file": "tools_12.ogg",
+    "source": "https://opengameart.org/content/100-cc0-metal-and-wood-sfx",
+    "author": "rubberduck",
+    "license": "CC0-1.0",
+    "original": "tools_12.ogg",
+    "edit": "Unmodified recorded foley",
+    "sha256": "27b4bc998d47d4e7c0bc91b1f7bd9529b9be6c0ef7fdc1540f5ecb885cc1774c"
+  },
+  {
+    "file": "howl-performance1.wav",
+    "author": "betchkal",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/betchkal/sounds/500646/",
+    "original": "500646 Freesound high-quality MP3 preview",
+    "edit": "Recorded excerpt 42.600s to 45.600s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "49c12e10f608a5d48b89c2a5d1af3287ea61d13050da9af52b8cb4e8e6cea1c5"
+  },
+  {
+    "file": "howl-performance2.wav",
+    "author": "betchkal",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/betchkal/sounds/500646/",
+    "original": "500646 Freesound high-quality MP3 preview",
+    "edit": "Recorded excerpt 35.950s to 38.950s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "e9f85f171af89d7450c3a58497fe6a2065c4c6d9d6755a2bda1119acf733d728"
+  },
+  {
+    "file": "howl-performance3.wav",
+    "author": "betchkal",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/betchkal/sounds/500646/",
+    "original": "500646 Freesound high-quality MP3 preview",
+    "edit": "Recorded excerpt 9.900s to 12.900s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "36925d0f615fa8497302d3bdcf44c839f5869a41b2ce72167b1a987a3df98c74"
+  },
+  {
+    "file": "hiss-performance1.wav",
+    "author": "7h3_lark",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/7h3_lark/sounds/268580/",
+    "original": "268580 Freesound high-quality MP3 preview",
+    "edit": "Recorded excerpt 16.600s to 18.100s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "9326526ded490b93f546d94e19284658f0d589c1995dfcc3c6f310f2510e4b74"
+  },
+  {
+    "file": "hiss-performance2.wav",
+    "author": "7h3_lark",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/7h3_lark/sounds/268580/",
+    "original": "268580 Freesound high-quality MP3 preview",
+    "edit": "Recorded excerpt 8.900s to 10.400s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "b044f8b572060de416904df3deca1c3a53800f9ab5c495c34ae29d4d7f2aa0c3"
+  },
+  {
+    "file": "hiss-performance3.wav",
+    "author": "7h3_lark",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/7h3_lark/sounds/268580/",
+    "original": "268580 Freesound high-quality MP3 preview",
+    "edit": "Recorded excerpt 12.700s to 14.200s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "4a00560de1fedda509e3ec4ae930668e60ae3279a640bf8162a3cca05b7c6002"
+  },
+  {
+    "file": "hiccup-performance1.wav",
+    "author": "eZZin",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/eZZin/sounds/619255/",
+    "original": "619255 Freesound high-quality MP3 preview",
+    "edit": "Recorded excerpt 112.450s to 113.050s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "e5c36f783058dd64e1608f620da35c25a94cd4eeb10dadd974d3c9023fc81cbf"
+  },
+  {
+    "file": "hiccup-performance2.wav",
+    "author": "eZZin",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/eZZin/sounds/619255/",
+    "original": "619255 Freesound high-quality MP3 preview",
+    "edit": "Recorded excerpt 81.200s to 81.800s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "72490fd1f50a97d9a45fcbb6e7bebf5d3e62d115b62f5686fd24ba2e19198b6a"
+  },
+  {
+    "file": "hiccup-performance3.wav",
+    "author": "eZZin",
+    "license": "CC0-1.0",
+    "source": "https://freesound.org/people/eZZin/sounds/619255/",
+    "original": "619255 Freesound high-quality MP3 preview",
+    "edit": "Recorded excerpt 42.900s to 43.500s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "e0279886885aaec19dbf878c1f624fca5b69142fa657022361cc8b1a99c66588"
+  },
+  {
+    "file": "quack-performance1.wav",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/ducks-s0276.html",
+    "original": "/UPLOAD/mp3/0276.mp3",
+    "edit": "Recorded excerpt 18.700s to 20.200s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "1368ba29c34a4b5a5756220d94bb9f215fbe5d545c0149283c8e8cae7085b705"
+  },
+  {
+    "file": "quack-performance2.wav",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/ducks-s0276.html",
+    "original": "/UPLOAD/mp3/0276.mp3",
+    "edit": "Recorded excerpt 6.050s to 7.550s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "3a3b2b8b00087cd114f01c7a42d476ca9f2a410907207e07be1f5a1f10c82141"
+  },
+  {
+    "file": "quack-performance3.wav",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/ducks-s0276.html",
+    "original": "/UPLOAD/mp3/0276.mp3",
+    "edit": "Recorded excerpt 1.800s to 3.300s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "ff0d9b010a7ba9a56262e3819ef34f354b0167d016f5449f80be3a998de5fc90"
+  },
+  {
+    "file": "sing-performance1.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/happy-birthday-s2194.html",
+    "original": "/UPLOAD/mp3/2194.mp3",
+    "edit": "Recorded excerpt 8.750s to 11.750s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "83dbedc4f5a9b5b1a263bdb44f09d7daeb5b9329b6e0c94458ea03ce4d7e94f8"
+  },
+  {
+    "file": "sing-performance2.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/happy-birthday-s2194.html",
+    "original": "/UPLOAD/mp3/2194.mp3",
+    "edit": "Recorded excerpt 11.800s to 14.800s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "3524ff0fff9a2325646f7d0307a598a725d2a0eac2924dad485cdab98380331e"
+  },
+  {
+    "file": "sing-performance3.wav",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "source": "https://bigsoundbank.com/happy-birthday-s2194.html",
+    "original": "/UPLOAD/mp3/2194.mp3",
+    "edit": "Recorded excerpt 5.350s to 8.350s; mono 32kHz, bounded peak normalization and edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "c42ae3461ea468817736706a70b731e1014d56853cbb9c44aac42f24923514b8"
+  },
+  {
+    "source": "https://bigsoundbank.com/motorcycle-s0281.html",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0281.mp3",
+    "file": "engine-bike-idle.wav",
+    "edit": "Recorded excerpt 5.000s to 7.000s; mono 32kHz, bounded peak normalization and loop crossfade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "9757eefcfb4d374e629b643b320dc0fedbe0760fcaa278b244d4469c3d30d1f2"
+  },
+  {
+    "source": "https://bigsoundbank.com/motorcycle-s0281.html",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0281.mp3",
+    "file": "engine-bike-load.wav",
+    "edit": "Recorded excerpt 3.000s to 5.000s; mono 32kHz, bounded peak normalization and loop crossfade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "4d7c4799badbdaf933c0c8205c6a9c21a58d9f015703c4abc941ca78d935f9ca"
+  },
+  {
+    "source": "https://bigsoundbank.com/small-gasoline-engine-s0966.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0966.mp3",
+    "file": "engine-car-idle.wav",
+    "edit": "Recorded excerpt 35.000s to 37.000s; mono 32kHz, bounded peak normalization and loop crossfade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "13dfb8af96b970f7cb5adbfcdc7458024e56853bec3add912beaaf3975e6f6e0"
+  },
+  {
+    "source": "https://bigsoundbank.com/small-gasoline-engine-s0966.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0966.mp3",
+    "file": "engine-car-load.wav",
+    "edit": "Recorded excerpt 7.000s to 9.000s; mono 32kHz, bounded peak normalization and loop crossfade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "6b98589386070d9bcf7434c2b0a96db830574079c47d122d600e9a0920c3be54"
+  },
+  {
+    "source": "https://bigsoundbank.com/truck-engine-s1145.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1145.mp3",
+    "file": "engine-diesel-idle.wav",
+    "edit": "Recorded excerpt 29.000s to 31.000s; mono 32kHz, bounded peak normalization and loop crossfade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "b3652db1c48600462e19949ba8d00728a196663ad9fcae6f331ffa0e342c5b82"
+  },
+  {
+    "source": "https://bigsoundbank.com/truck-engine-s1145.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1145.mp3",
+    "file": "engine-diesel-load.wav",
+    "edit": "Recorded excerpt 13.000s to 15.000s; mono 32kHz, bounded peak normalization and loop crossfade; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "30c7f5c0726cfa331e47ca12b5743608a2bd8bed0f295fa6ac2d98f9189d731c"
+  },
+  {
+    "file": "reload-assaultriflereload1_0.wav",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "original": "https://opengameart.org/sites/default/files/assaultriflereload1_0.wav",
+    "edit": "Recorded excerpt starting 0s, mono 32kHz, edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "9e72100980439d8caea3f8c23930445ca8d0b815416cf0988dce9de257b8ed56"
+  },
+  {
+    "file": "reload-shotguncock_0.wav",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "original": "https://opengameart.org/sites/default/files/shotguncock_0.wav",
+    "edit": "Recorded excerpt starting 0s, mono 32kHz, edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "63e74cc1dd0a90dd30b1005bdd048f1e45e0c4e148dc83a16a2b4c657b582e2f"
+  },
+  {
+    "file": "pain-performance0.wav",
+    "source": "https://bigsoundbank.com/women-fight-s2362.html",
+    "author": "Dorian CLAIR",
+    "license": "CC0-1.0",
+    "original": "https://bigsoundbank.com/UPLOAD/mp3/2362.mp3",
+    "edit": "Recorded excerpt starting 2s, mono 32kHz, edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "11d1fd02ef062b7f8d4a0a0d3739b546b6b148217da54fbe7e9dc101eca05188"
+  },
+  {
+    "file": "pain-performance1.wav",
+    "source": "https://bigsoundbank.com/women-fight-s2362.html",
+    "author": "Dorian CLAIR",
+    "license": "CC0-1.0",
+    "original": "https://bigsoundbank.com/UPLOAD/mp3/2362.mp3",
+    "edit": "Recorded excerpt starting 6s, mono 32kHz, edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "f50c9efa43f6cc0b4e89c6fa13b4ad27ea8788c5ed99f2c412175a2c6ec340b1"
+  },
+  {
+    "file": "pain-performance2.wav",
+    "source": "https://bigsoundbank.com/women-fight-s2362.html",
+    "author": "Dorian CLAIR",
+    "license": "CC0-1.0",
+    "original": "https://bigsoundbank.com/UPLOAD/mp3/2362.mp3",
+    "edit": "Recorded excerpt starting 10s, mono 32kHz, edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "2cb3edf7099e711131f49ab54c7916207f92ed58c70f8a0047abc920a661849d"
+  },
+  {
+    "file": "bellow-excerpt0.wav",
+    "author": "Alexander / Orange Free Sounds",
+    "license": "CC-BY-4.0",
+    "source": "https://orangefreesounds.com/deer-sound/",
+    "original": "https://www.orangefreesounds.com/wp-content/uploads/2016/11/Deer-sound.mp3",
+    "edit": "Different excerpt of same deer call, starting 0.15s, mono 32kHz, edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "f15e672fc29cd9a40b9f514a6b4fc81b9937244c834dce9bd4fd2846a95875fc"
+  },
+  {
+    "file": "bellow-excerpt1.wav",
+    "author": "Alexander / Orange Free Sounds",
+    "license": "CC-BY-4.0",
+    "source": "https://orangefreesounds.com/deer-sound/",
+    "original": "https://www.orangefreesounds.com/wp-content/uploads/2016/11/Deer-sound.mp3",
+    "edit": "Different excerpt of same deer call, starting 1.8s, mono 32kHz, edge fades; peak normalized to -3dBFS, gain capped at 12x, short edge fades",
+    "sha256": "abd651c7cf0fe6cf5ac88706d1d10b2a9e298488ec3afadf100482834717a6b9"
+  },
+  {
+    "source": "https://bigsoundbank.com/ac-cobra-engine-s0534.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0534.mp3",
+    "file": "engine-v8-idle-0.wav",
+    "edit": "Recorded excerpt 7s to 10s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "1ac1382f77f031aa73ecd1493c86ac509db8c5f7025b987e6b0b79f0d21e4da8"
+  },
+  {
+    "source": "https://bigsoundbank.com/ac-cobra-engine-s0534.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0534.mp3",
+    "file": "engine-v8-load-0.wav",
+    "edit": "Recorded excerpt 12s to 15s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "8895bdb18bd9d6588646c64691f0a04de1bf3aca1fc9b773019d36fcbd750287"
+  },
+  {
+    "source": "https://bigsoundbank.com/damaged-muffler-accelerations-parked-car-s0675.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0675.mp3",
+    "file": "exhaustOpen-0.wav",
+    "edit": "Recorded excerpt 10s to 14s; mono 32kHz, bounded peak normalization, loop crossfade; highpass=f=100,lowpass=f=1800",
+    "sha256": "862613451b2b6cbeb3811fa985f9b4a39f62d6a833bcabeee606622479f3cb7b"
+  },
+  {
+    "source": "https://bigsoundbank.com/electric-fan-1-s0078.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0078.mp3",
+    "file": "radiatorFan-0.wav",
+    "edit": "Recorded excerpt 1s to 5s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "afb81d9346592fb05b039bf07da57ac1ef11b6d77bbd636dfbb7d1b1e8924b92"
+  },
+  {
+    "source": "https://bigsoundbank.com/electric-fan-2-s0079.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0079.mp3",
+    "file": "radiatorFan-1.wav",
+    "edit": "Recorded excerpt 1s to 5s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "1cf6dade81e8cf13e09e4dd95daf401fd269ba3fac02958bfb051f66760d5e30"
+  },
+  {
+    "source": "https://bigsoundbank.com/pressure-cooker-s0805.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0805.mp3",
+    "file": "radiatorSteam-0.wav",
+    "edit": "Recorded excerpt 10s to 15s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "ae2e6a2df495da7072e14beb2e008b8aed08273b6de2d933fb173a03f8c09b8d"
+  },
+  {
+    "source": "https://bigsoundbank.com/car-on-a-road-s1286.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1286.mp3",
+    "file": "tireRoad-0.wav",
+    "edit": "Recorded excerpt 28s to 33s; mono 32kHz, bounded peak normalization, loop crossfade; highpass=f=600",
+    "sha256": "e8f9758de7eab3a0040a08cec2e9fe3bb694d310fd18d9693ab082a1af68d819"
+  },
+  {
+    "source": "https://bigsoundbank.com/car-on-a-road-s1286.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1286.mp3",
+    "file": "gearWhine-0.wav",
+    "edit": "Recorded excerpt 40s to 44s; mono 32kHz, bounded peak normalization, loop crossfade; highpass=f=650,lowpass=f=2800",
+    "sha256": "7bb88ee8c9e513246b7bfdab63ecb8851596642dd24613173d6b6063e0dac127"
+  },
+  {
+    "source": "https://bigsoundbank.com/pistol-cocking-1-s1984.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1984.mp3",
+    "file": "weaponRack-0.wav",
+    "edit": "Recorded excerpt 0s to 1.7s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "3892c1798910b96a05f77c8b8f9a44530df51203a61b17242037725c9136fbef"
+  },
+  {
+    "source": "https://bigsoundbank.com/pistol-cocking-2-s1985.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1985.mp3",
+    "file": "weaponRack-1.wav",
+    "edit": "Recorded excerpt 0s to 1.7s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "24fa10062fc38dd4b941d5f870b21c4048a01798e2cadd659b0bce85ee1d48c2"
+  },
+  {
+    "source": "https://bigsoundbank.com/pistol-cocking-3-s1986.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1986.mp3",
+    "file": "weaponRack-2.wav",
+    "edit": "Recorded excerpt 0s to 1.7s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "9ab7e48275d2acf27bb0f3f4fd988997eb3e62d8837342c3214be2a88777bf6e"
+  },
+  {
+    "source": "https://bigsoundbank.com/gun-loading-1-s1988.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1988.mp3",
+    "file": "magIn-0.wav",
+    "edit": "Recorded excerpt 0s to 1.2s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "b2eadd4c31469fcc05a26b83fe365f2040ec9bcd1d884d9df7b9ee291a6a030c"
+  },
+  {
+    "source": "https://bigsoundbank.com/gun-loading-2-s1989.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1989.mp3",
+    "file": "magIn-1.wav",
+    "edit": "Recorded excerpt 0s to 1.2s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "c73934bcf8e13a2bfbf234e0d4d96458168b8fc8714646c57f73d1777a67f37c"
+  },
+  {
+    "source": "https://bigsoundbank.com/gun-loading-4-s1991.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1991.mp3",
+    "file": "magIn-2.wav",
+    "edit": "Recorded excerpt 0s to 1.2s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "5a52a6075fb4132f593f4928c04cde3e9769886dae60f730cfd4e7eeb0d44297"
+  },
+  {
+    "source": "https://bigsoundbank.com/pistol-cocking-hammer-1-s1992.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1992.mp3",
+    "file": "weaponClick-0.wav",
+    "edit": "Recorded excerpt 0s to 1s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "754a5495c09dc0e5d8ecc29bc8d8df6d4c33eef37d9013d811710a8949926ced"
+  },
+  {
+    "source": "https://bigsoundbank.com/pistol-cocking-hammer-2-s1993.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1993.mp3",
+    "file": "weaponClick-1.wav",
+    "edit": "Recorded excerpt 0s to 1s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "80353f728dc815319759ab0dfb0cc5944efa3e0586b1b468de6139844a375f40"
+  },
+  {
+    "source": "https://freesound.org/people/danhelbling/sounds/272394/",
+    "author": "danhelbling",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/272/272394_4783367-hq.mp3",
+    "file": "weaponHandle-0.wav",
+    "edit": "Recorded excerpt 18.37s to 19.02s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "99371ab56e2a42e8bf5940fe181b1fc2bf9b935005e415c3a85fef1d627e460f"
+  },
+  {
+    "source": "https://freesound.org/people/danhelbling/sounds/272394/",
+    "author": "danhelbling",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/272/272394_4783367-hq.mp3",
+    "file": "weaponHandle-1.wav",
+    "edit": "Recorded excerpt 16.720000000000002s to 17.37s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "03d7a12ffdfbd9060ff6a7f193feaa07e173245006005c1bd6ecb090158b94cc"
+  },
+  {
+    "source": "https://freesound.org/people/danhelbling/sounds/272394/",
+    "author": "danhelbling",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/272/272394_4783367-hq.mp3",
+    "file": "weaponHandle-2.wav",
+    "edit": "Recorded excerpt 2.9699999999999998s to 3.6199999999999997s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "0e1a36e78ca623b2bc5939aafbb39ffffeaa1198093e55fb25dff0d8364a06f8"
+  },
+  {
+    "source": "https://freesound.org/people/danhelbling/sounds/272394/",
+    "author": "danhelbling",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/272/272394_4783367-hq.mp3",
+    "file": "weaponHandle-3.wav",
+    "edit": "Recorded excerpt 24.720000000000002s to 25.37s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "ceb09b51e0212788570afeb86929d5a1a26a6983593f78e6ed13a4af7d3c9d00"
+  },
+  {
+    "source": "https://freesound.org/people/danhelbling/sounds/272394/",
+    "author": "danhelbling",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/272/272394_4783367-hq.mp3",
+    "file": "weaponHandle-4.wav",
+    "edit": "Recorded excerpt 20.470000000000002s to 21.12s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "465bf60c24889dfb8b78c7d6d6f93936b229db7f4c956c0b3a7e1a9231dac827"
+  },
+  {
+    "source": "https://freesound.org/people/danhelbling/sounds/272394/",
+    "author": "danhelbling",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/272/272394_4783367-hq.mp3",
+    "file": "weaponHandle-5.wav",
+    "edit": "Recorded excerpt 5.12s to 5.7700000000000005s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "58f5d2568431b62f977e286dbc079e8d139026927a514943b622b987b93e4c68"
+  },
+  {
+    "source": "https://freesound.org/people/UnplugTheFridge/sounds/529222/",
+    "author": "UnplugTheFridge",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/529/529222_1138214-hq.mp3",
+    "file": "gearShift-0.wav",
+    "edit": "Recorded excerpt 28.220000000000002s to 28.770000000000003s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "c8b0cb8ec1cf4f043f2cbda265448cf6d904d67695f2effdbbb19a70b52c18cc"
+  },
+  {
+    "source": "https://freesound.org/people/UnplugTheFridge/sounds/529222/",
+    "author": "UnplugTheFridge",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/529/529222_1138214-hq.mp3",
+    "file": "gearShift-1.wav",
+    "edit": "Recorded excerpt 15.92s to 16.47s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "695ed457140d20a0ef16de00ecc8b1e7b4d7fba7a7f97481a0979bfcbf9ac137"
+  },
+  {
+    "source": "https://freesound.org/people/UnplugTheFridge/sounds/529222/",
+    "author": "UnplugTheFridge",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/529/529222_1138214-hq.mp3",
+    "file": "gearShift-2.wav",
+    "edit": "Recorded excerpt 10.17s to 10.72s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "a887a205795dcf2f72a13f691f95edf15e8c2871dbeb072959b7e4140ffe1924"
+  },
+  {
+    "source": "https://freesound.org/people/UnplugTheFridge/sounds/529222/",
+    "author": "UnplugTheFridge",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/529/529222_1138214-hq.mp3",
+    "file": "gearShift-3.wav",
+    "edit": "Recorded excerpt 26.62s to 27.17s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "d6ffd1d96c8989060cfa082e504eaa13c7ea5930d4df43150c0f520e7b4a00a3"
+  },
+  {
+    "source": "https://freesound.org/people/seth-m/sounds/341069/",
+    "author": "seth-m",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/341/341069_3366749-hq.mp3",
+    "file": "tireGravel-0.wav",
+    "edit": "Recorded excerpt 0.42s to 4.42s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "c4e6344d3b616898217d167bbaa2d94d5caedc3d49278c9afecbdfbe57cf3b13"
+  },
+  {
+    "source": "https://freesound.org/people/kyles/sounds/637161/",
+    "author": "kyles",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/637/637161_612689-hq.mp3",
+    "file": "tireSkidGravel-0.wav",
+    "edit": "Recorded excerpt 0.16999999999999998s to 0.52s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "f9851b5d5e8212d31f81f1f60c4c21fca0979aba51dbe27a6e16b48f500d4ce0"
+  },
+  {
+    "source": "https://freesound.org/people/kyles/sounds/637161/",
+    "author": "kyles",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/637/637161_612689-hq.mp3",
+    "file": "tireSkidGravel-1.wav",
+    "edit": "Recorded excerpt 0.5700000000000001s to 0.92s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "72568680fbde5e59e4d644993ed04413cd3a2fcd537bd5ccf8709388deaff522"
+  },
+  {
+    "source": "https://bigsoundbank.com/air-leak-s1486.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1486.mp3",
+    "file": "tirePuncture-0.wav",
+    "edit": "Recorded excerpt 1s to 2.4s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "d8eb7ffbe59270ec83678cf5f9ffa12abc8ce258d3090426f9ab2032cc8d7171"
+  },
+  {
+    "source": "https://bigsoundbank.com/air-leak-s1486.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1486.mp3",
+    "file": "tirePuncture-1.wav",
+    "edit": "Recorded excerpt 5s to 6.4s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "448d1b8a8dfab6706b530da17fe686895506ff997b8ed37e583354f085d66143"
+  },
+  {
+    "source": "https://bigsoundbank.com/air-leak-s1486.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1486.mp3",
+    "file": "tirePuncture-2.wav",
+    "edit": "Recorded excerpt 10s to 11.4s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "4e5d4991628e9a385ee879a72f93c9c582a68ab49de31e0a113018004096754f"
+  },
+  {
+    "file": "magOut-0.wav",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "original": "gunreload1.wav",
+    "edit": "Recorded excerpt 0.08s to 0.38s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "29cb7ba5f5e5431f2018bee085a544b69789987c8e2a48584cb8b3eae6a84b13"
+  },
+  {
+    "file": "magOut-1.wav",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "original": "https://opengameart.org/sites/default/files/assaultriflereload1_0.wav",
+    "edit": "Recorded excerpt 0.08s to 0.38s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "729844d94d9c318f3e157d8eb1d60813ba09651603709e68b792835b12a51e08"
+  },
+  {
+    "file": "magOut-2.wav",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "original": "https://opengameart.org/sites/default/files/shotguncock_0.wav",
+    "edit": "Recorded excerpt 0.08s to 0.38s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "b9af4b9596e0683c8e921d0e65b5e45569b30eb248f17f366f26bfc91c4cb927"
+  },
+  {
+    "file": "rifleMagIn-0.wav",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "original": "gunreload1.wav",
+    "edit": "Recorded excerpt 0.75s to 1.15s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "a6eb5809389d7e26422ebc134b3886f7fe079b45978be88f7fd06ebc4aa2b487"
+  },
+  {
+    "file": "rifleMagIn-1.wav",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "original": "https://opengameart.org/sites/default/files/assaultriflereload1_0.wav",
+    "edit": "Recorded excerpt 0.75s to 1.15s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "a761506e7af951e389c2a7ce6b939fea323914dd73ae3c67993e8b1155105386"
+  },
+  {
+    "file": "rifleMagIn-2.wav",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "original": "https://opengameart.org/sites/default/files/shotguncock_0.wav",
+    "edit": "Recorded excerpt 0.07384374999999999s to 0.47384375s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "bc0de9079a38a65a8ed5a1803261a222e3b02f0051dff5675a60be45e05fe60f"
+  },
+  {
+    "file": "rifleRack-0.wav",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "original": "gunreload1.wav",
+    "edit": "Recorded excerpt 1.15s to 1.5s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "da7f0f4c201b8a40b0112350add99269105da0de2c0369f74765f84f62c940a3"
+  },
+  {
+    "file": "rifleRack-1.wav",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "original": "https://opengameart.org/sites/default/files/assaultriflereload1_0.wav",
+    "edit": "Recorded excerpt 1.15s to 1.5s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "91029c7744146ad8d9618877435bdf02613dbc63bcd206624ca6d328fbbcb347"
+  },
+  {
+    "file": "rifleRack-2.wav",
+    "source": "https://opengameart.org/content/gun-reload-sounds",
+    "author": "SpringySpringo",
+    "license": "CC0-1.0",
+    "original": "https://opengameart.org/sites/default/files/shotguncock_0.wav",
+    "edit": "Recorded excerpt 0.12384375000000003s to 0.47384375s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "65f0aee8b2fe4887c7a62d5d882a143e7dc22a2709b99cfa0f145993bd5fe552"
+  },
+  {
+    "source": "https://bigsoundbank.com/car-difficult-start-s0872.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0872.mp3",
+    "file": "starterFail-0.wav",
+    "edit": "Recorded excerpt 1s to 2.5s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "beb0fc9ed93126b186d668ecacdd0383fcdc9e388d9c1f9d30c3b038f15c11d3"
+  },
+  {
+    "source": "https://bigsoundbank.com/car-difficult-start-s0872.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0872.mp3",
+    "file": "starterFail-1.wav",
+    "edit": "Recorded excerpt 9s to 10.5s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "2c3bfd6c747ba0e60a14a0640086cefa3842bf5cb677bf9520e79e366f775ced"
+  },
+  {
+    "source": "https://bigsoundbank.com/car-difficult-start-s0872.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0872.mp3",
+    "file": "starterFail-2.wav",
+    "edit": "Recorded excerpt 17s to 18.5s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "60c2aab0788614b07a98cc74c7f19da4b6b7aa800d078784260b13b4d0a83cc8"
+  },
+  {
+    "source": "https://bigsoundbank.com/motorcycle-s0281.html",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0281.mp3",
+    "file": "engineStart-bike-0.wav",
+    "edit": "Recorded excerpt 0s to 2.2s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "741f413aa00fa5e3153db3eea5b99ebb43c877f352ead917541e2814d65ba00b"
+  },
+  {
+    "source": "https://bigsoundbank.com/motorcycle-s0281.html",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0281.mp3",
+    "file": "engineStop-bike-0.wav",
+    "edit": "Recorded excerpt 10.505325s to 13.005325s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "e49031fb5b77dfc9a7a3b20a6c3db56b20372844900ef49b7d644d42d946a498"
+  },
+  {
+    "source": "https://bigsoundbank.com/small-gasoline-engine-s0966.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0966.mp3",
+    "file": "engineStart-car-0.wav",
+    "edit": "Recorded excerpt 0s to 2.2s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "aabb72e7598420164f1f42b7a9cd113777ef84a3c9ba525f5687bcbe5f052f7d"
+  },
+  {
+    "source": "https://bigsoundbank.com/small-gasoline-engine-s0966.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0966.mp3",
+    "file": "engineStop-car-0.wav",
+    "edit": "Recorded excerpt 48.4592s to 50.9592s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "599261a7cf1e4a4b2f7ac3d16253d949fbbeb372ad735b03c4b8ce640666266a"
+  },
+  {
+    "source": "https://bigsoundbank.com/truck-engine-s1145.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1145.mp3",
+    "file": "engineStart-diesel-0.wav",
+    "edit": "Recorded excerpt 0s to 2.2s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "0cb74eedb5bea51f41151bde0415f27cd56524fd6648d315be359dac12e6f8da"
+  },
+  {
+    "source": "https://bigsoundbank.com/truck-engine-s1145.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1145.mp3",
+    "file": "engineStop-diesel-0.wav",
+    "edit": "Recorded excerpt 32.341792s to 34.841792s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "48fc1047371d19a186e460d996bb4df9d525fd169093cd892d59511e707e1f1d"
+  },
+  {
+    "source": "https://bigsoundbank.com/ac-cobra-engine-s0534.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0534.mp3",
+    "file": "engineStart-v8-0.wav",
+    "edit": "Recorded excerpt 0s to 2.2s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "cc9f36350f017bea92e869e0ab5e29775547cff84417684cc6dce1e6ed59dafa"
+  },
+  {
+    "source": "https://bigsoundbank.com/ac-cobra-engine-s0534.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0534.mp3",
+    "file": "engineStop-v8-0.wav",
+    "edit": "Recorded excerpt 22.4192s to 24.9192s; mono 32kHz, bounded peak normalization, edge fades",
+    "sha256": "cee469d2fb29794249aa90634ae87efb5e03c08d5acda316cd78175509d44061"
+  },
+  {
+    "source": "https://bigsoundbank.com/screeching-tires-1-s2368.html",
+    "author": "Dorian CLAIR",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2368.mp3",
+    "file": "tireSqueal-0.wav",
+    "edit": "Recorded excerpt 0s to 2.5s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "7efc50eab43a3530607eaa41ca61d557fffc25a08167103d001bf43c07bc772f"
+  },
+  {
+    "source": "https://bigsoundbank.com/screeching-tires-4-s2371.html",
+    "author": "Dorian CLAIR",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2371.mp3",
+    "file": "tireSqueal-1.wav",
+    "edit": "Recorded excerpt 0s to 2.5s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "2533aadd6a18fcea5265e55472d9341d13dc147d080341a612c2ff3123c1ed63"
+  },
+  {
+    "source": "https://bigsoundbank.com/screeching-tires-3-s2370.html",
+    "author": "Dorian CLAIR",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/2370.mp3",
+    "file": "tireSqueal-2.wav",
+    "edit": "Recorded excerpt 0s to 2.5s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "19cf705c39008ef17e5fd80aea335e35c38776c6bbc862f6ad88525e39d98a31"
+  },
+  {
+    "source": "https://bigsoundbank.com/ac-cobra-engine-s0534.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0534.mp3",
+    "file": "engine-v8-idle-1.wav",
+    "edit": "Recorded excerpt 6s to 8s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "08d3f8b04d128bcfcd4fb36e58aac7152dcbb0db0e3b986802857bf0a3053a7c"
+  },
+  {
+    "source": "https://bigsoundbank.com/ac-cobra-engine-s0534.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0534.mp3",
+    "file": "engine-v8-idle-2.wav",
+    "edit": "Recorded excerpt 8s to 10s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "ad6fb07fba6f5b93603ee2ad0450f3ec8850fdb0a6a82b11df6c49ada7b8a8e0"
+  },
+  {
+    "source": "https://bigsoundbank.com/ac-cobra-engine-s0534.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0534.mp3",
+    "file": "engine-v8-load-1.wav",
+    "edit": "Recorded excerpt 11s to 13s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "dfb28b63b6f21862b4093cc31e344b08be652563c70ede13550db7cd2cb2af05"
+  },
+  {
+    "source": "https://bigsoundbank.com/ac-cobra-engine-s0534.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0534.mp3",
+    "file": "engine-v8-load-2.wav",
+    "edit": "Recorded excerpt 14s to 16s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "c890d8b5c63f12687ff5cdd763f4ed58090a7b171bd6d9d3e53d1cd6c4fe1d65"
+  },
+  {
+    "source": "https://bigsoundbank.com/damaged-muffler-accelerations-parked-car-s0675.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0675.mp3",
+    "file": "exhaustOpen-1.wav",
+    "edit": "Recorded excerpt 5s to 9s; mono 32kHz, bounded peak normalization, loop crossfade; highpass=f=100,lowpass=f=1800",
+    "sha256": "6eb3840e5ad39d4fdfcaced9f36ddbad97e0621e8dbb4c8324b6025815ef2c8e"
+  },
+  {
+    "source": "https://bigsoundbank.com/damaged-muffler-accelerations-parked-car-s0675.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0675.mp3",
+    "file": "exhaustOpen-2.wav",
+    "edit": "Recorded excerpt 16s to 20s; mono 32kHz, bounded peak normalization, loop crossfade; highpass=f=100,lowpass=f=1800",
+    "sha256": "55e793e11488adac8cb71f593aca9479ef6886532b32f9e8adefe1d44b69b81c"
+  },
+  {
+    "source": "https://bigsoundbank.com/electric-fan-1-s0078.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0078.mp3",
+    "file": "radiatorFan-2.wav",
+    "edit": "Recorded excerpt 6s to 10s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "8ba32948063b1945c179940a33644b6c50de41934d63167e9fdf9c5f01a0b335"
+  },
+  {
+    "source": "https://bigsoundbank.com/pressure-cooker-s0805.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0805.mp3",
+    "file": "radiatorSteam-1.wav",
+    "edit": "Recorded excerpt 5s to 9s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "6f827984cd3175fec8973ccf13195d7c3f599c6124ea6926e0819dbe8e8473f4"
+  },
+  {
+    "source": "https://bigsoundbank.com/pressure-cooker-s0805.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0805.mp3",
+    "file": "radiatorSteam-2.wav",
+    "edit": "Recorded excerpt 18s to 22s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "84c88d0e2b0c5fff97ecf923fcbc353ec44710560d62230bbed6dd70e6b193dd"
+  },
+  {
+    "source": "https://bigsoundbank.com/car-on-a-road-s1286.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1286.mp3",
+    "file": "tireRoad-1.wav",
+    "edit": "Recorded excerpt 20s to 24s; mono 32kHz, bounded peak normalization, loop crossfade; highpass=f=600",
+    "sha256": "8f059a39159180ed18febb9d98b4dd7b321f7468c1a290951eb661efd1cbe5f2"
+  },
+  {
+    "source": "https://bigsoundbank.com/car-on-a-road-s1286.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1286.mp3",
+    "file": "tireRoad-2.wav",
+    "edit": "Recorded excerpt 34s to 38s; mono 32kHz, bounded peak normalization, loop crossfade; highpass=f=600",
+    "sha256": "691a45d1560c35df6a4d40f91b56f65be3da3995e8afc42a7d7c5dde875afba5"
+  },
+  {
+    "source": "https://bigsoundbank.com/car-on-a-road-s1286.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1286.mp3",
+    "file": "gearWhine-1.wav",
+    "edit": "Recorded excerpt 30s to 34s; mono 32kHz, bounded peak normalization, loop crossfade; highpass=f=650,lowpass=f=2800",
+    "sha256": "8a7018a6cafad62de98fd907bb81a4c9539f8c25cd47bca224ca40eea063fd1d"
+  },
+  {
+    "source": "https://bigsoundbank.com/car-on-a-road-s1286.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1286.mp3",
+    "file": "gearWhine-2.wav",
+    "edit": "Recorded excerpt 46s to 50s; mono 32kHz, bounded peak normalization, loop crossfade; highpass=f=650,lowpass=f=2800",
+    "sha256": "0bc882a24dc15733b505eec07e4fffc394941b302ef8f9a7ddc93ab615b47d87"
+  },
+  {
+    "source": "https://freesound.org/people/seth-m/sounds/341069/",
+    "author": "seth-m",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/341/341069_3366749-hq.mp3",
+    "file": "tireGravel-1.wav",
+    "edit": "Recorded excerpt 0.2s to 3.2s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "4e4d44692e9d57f87d00c9f1ae6d63503b52594c7e5b889097c7bca867d4fbb5"
+  },
+  {
+    "source": "https://freesound.org/people/seth-m/sounds/341069/",
+    "author": "seth-m",
+    "license": "CC0-1.0",
+    "original": "https://cdn.freesound.org/previews/341/341069_3366749-hq.mp3",
+    "file": "tireGravel-2.wav",
+    "edit": "Recorded excerpt 3s to 6s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "b1fbaf056c22d9e78f9b3fbb2182a4270e7b0abcc75545c4d450f6ce57a969fe"
+  },
+  {
+    "source": "https://bigsoundbank.com/motorcycle-s0281.html",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0281.mp3",
+    "file": "engine-bike-idle-0.wav",
+    "edit": "Recorded excerpt 4.3s to 6.3s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "06bc8087a545fc05c5083ef27082a4f8e0a9130b2e358712a17d9537ddcbfb53"
+  },
+  {
+    "source": "https://bigsoundbank.com/motorcycle-s0281.html",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0281.mp3",
+    "file": "engine-bike-idle-1.wav",
+    "edit": "Recorded excerpt 5.7s to 7.7s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "ba3361bde3e1322cdda7deaaf4caab7514d12d06e5b0d517c3331df6209443a4"
+  },
+  {
+    "source": "https://bigsoundbank.com/motorcycle-s0281.html",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0281.mp3",
+    "file": "engine-bike-load-0.wav",
+    "edit": "Recorded excerpt 2.3s to 4.3s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "11246be45dae9ecc49b3b58aa3a56a906a1afa3d3acb4770456ef5f68d543831"
+  },
+  {
+    "source": "https://bigsoundbank.com/motorcycle-s0281.html",
+    "author": "DenisChardonnet",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0281.mp3",
+    "file": "engine-bike-load-1.wav",
+    "edit": "Recorded excerpt 3.7s to 5.7s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "b3633b919d4d5aa91cacb658b94c214e97f66b67313d7a78d5db6bae89c9634c"
+  },
+  {
+    "source": "https://bigsoundbank.com/small-gasoline-engine-s0966.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0966.mp3",
+    "file": "engine-car-idle-0.wav",
+    "edit": "Recorded excerpt 34.3s to 36.3s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "71101d152fcf475bc7f25af0d9bce6a04ff539c29a2150b7e636af7b4fe96585"
+  },
+  {
+    "source": "https://bigsoundbank.com/small-gasoline-engine-s0966.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0966.mp3",
+    "file": "engine-car-idle-1.wav",
+    "edit": "Recorded excerpt 35.7s to 37.7s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "b95a7ba0b8ea7f74bcc9f09aa2a064510df7a9bb10d7469a83ba28e19cb9ba32"
+  },
+  {
+    "source": "https://bigsoundbank.com/small-gasoline-engine-s0966.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0966.mp3",
+    "file": "engine-car-load-0.wav",
+    "edit": "Recorded excerpt 6.3s to 8.3s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "e8382937d4d8af1cad07d7cb365b75e34ab77ecf3b4d041e074ddaa84f48ec7c"
+  },
+  {
+    "source": "https://bigsoundbank.com/small-gasoline-engine-s0966.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/0966.mp3",
+    "file": "engine-car-load-1.wav",
+    "edit": "Recorded excerpt 7.7s to 9.7s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "7e3ebc41673133930a7d2d8b0c4b7e32ebfe462752be6556d3e22dff8a493698"
+  },
+  {
+    "source": "https://bigsoundbank.com/truck-engine-s1145.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1145.mp3",
+    "file": "engine-diesel-idle-0.wav",
+    "edit": "Recorded excerpt 28.3s to 30.3s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "6370ed8539cf866b1ac280a7bebcc741915ea4bcc0e75f6b172f12658e6625da"
+  },
+  {
+    "source": "https://bigsoundbank.com/truck-engine-s1145.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1145.mp3",
+    "file": "engine-diesel-idle-1.wav",
+    "edit": "Recorded excerpt 29.7s to 31.7s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "80a2885bc762c30d7b53da1548d7e53adae1e2624ccd7cb4c341df6424250b8a"
+  },
+  {
+    "source": "https://bigsoundbank.com/truck-engine-s1145.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1145.mp3",
+    "file": "engine-diesel-load-0.wav",
+    "edit": "Recorded excerpt 12.3s to 14.3s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "0759ced50e9e51f911998804aedeb484c1fb064fa447b290d46dc9d5eb31b993"
+  },
+  {
+    "source": "https://bigsoundbank.com/truck-engine-s1145.html",
+    "author": "Joseph SARDIN",
+    "license": "CC0-1.0",
+    "original": "/UPLOAD/mp3/1145.mp3",
+    "file": "engine-diesel-load-1.wav",
+    "edit": "Recorded excerpt 13.7s to 15.7s; mono 32kHz, bounded peak normalization, loop crossfade",
+    "sha256": "7fbdc7a53d45639227477db31e2b95c09a89de62688ba9c4e2cda627d84b8739"
+  }
+]

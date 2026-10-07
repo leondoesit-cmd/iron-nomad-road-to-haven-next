@@ -3,17 +3,23 @@ import type { DrugId } from '../sim/drugs';
 import { HOST_PROPS, pickupOf, rollItem, rollLoot, specFoot, type ItemSize, type LootContext, type LootSpec, type LootTag } from '../sim/loot';
 import type { CarGrade } from '../sim/cars';
 import { Rng, hash2 } from '../core/rng';
-import { makeTerrainDef, roadX, heightAt, roadSlope, keepOutZ, waterAt, type Site, type TerrainDef } from './terrain';
+import { CHUNK, makeTerrainDef, roadX, heightAt, roadSlope, keepOutZ, waterAt, type Site, type TerrainDef } from './terrain';
 import { SiteBuilder, buildRoadside, buildSite, type RuralBuilding, type SiteContent } from './settlements';
 import { isLakeSite, lakeAt } from './lakes';
 import { delveName, delveSiteKind, type DelveSite } from './delveSites';
 import { planById } from './plans';
 import { districtAt, nearestRoad, type District } from './openWorld';
 import { bridgeTag, courseAt, swampQ } from './hydro';
+import { heritageAabbs, heritageClear, heritageProps, heritageZombies, heritageZone } from './heritage';
+import { bendAabbs, bendBlocks, bendProps, planBends } from './millBend';
+import { YARD_HALF, YARD_SOLIDS, yardBoxes } from './narYard';
+import { floorRect, houseBoxes, houseSolids, plotRect, type HousePlace } from './ududHouse';
 import { GANGS } from '../data';
 import { dressGangCamp, fitSpot, newCampSpec, planFreeCamps, type GangCampSpec } from './gangCamps';
 import type { BuildingRole, CityPlan, Facing, LandmarkKind, PlannedPlace, PlannedStreet } from './cityPlan';
 import type { Look } from './interiors';
+import { melabesEquipment, melabesInterior } from './melabes';
+import { FOOTBRIDGE, footbridgeBlocks, MALL, MALL_SHOPS, shopRect } from './mall';
 
 export type AabbKind = 'building' | 'wall' | 'car' | 'rock' | 'barricade' | 'crate' | 'pillar' | 'tower' | 'partition' | 'furniture' | 'stair' | 'floor' | 'dock' | 'tree';
 
@@ -46,6 +52,8 @@ export interface Aabb {
   pane?: import('../sim/glass').GlassKind;
   /** A pane that is not part of a building's plan (a shopfront): the way it faces, as (x, z) of its outward normal. */
   paneN?: [number, number];
+  /** Up on a tall upper floor (a mall's): nothing on the ground beneath it is in its way, so spawning ignores it. */
+  overhead?: boolean;
 }
 
 export type PropKind =
@@ -102,7 +110,16 @@ export type PropKind =
   | 'floodlight'
   | 'tent'
   | 'campfire'
-  | 'bridge';
+  | 'bridge'
+  | 'concreteHouse'
+  | 'mudHut'
+  | 'oldMill'
+  /** A concrete face of the culverts under the Half Island's causeway (`world/millBend.ts`); `tag` is its length in quarter metres. */
+  | 'culvert'
+  /** Nar's yard, the story's opening (`world/narYard.ts`, drawn by `render/narYardModel.ts`). */
+  | 'narYard'
+  /** Ofer Grand Mall's cable-stayed footbridge over Haim Ozer Street (see `world/mall.ts`). */
+  | 'footbridge';
 
 export interface PropSpawn {
   kind: PropKind;
@@ -118,8 +135,8 @@ export interface PropSpawn {
   dy?: number;
 }
 
-/** What a drawn sign looks like: the bus station's green board, the light rail's red one, the stadium's, a shop's. */
-export type SignTheme = 'bus' | 'rail' | 'stadium' | 'shop' | 'bank' | 'pharmacy' | 'cafe' | 'market';
+/** What a drawn sign looks like: the bus station's green board, the light rail's red one, the stadium's, a shop's, or a brand's own colours. */
+export type SignTheme = 'bus' | 'rail' | 'stadium' | 'shop' | 'bank' | 'pharmacy' | 'cafe' | 'market' | 'brand';
 
 /** A flat panel with a title (usually Hebrew) over a line of English, hung on a wall or canopy. `yaw` is the way it faces. */
 export interface SignSpawn {
@@ -132,13 +149,15 @@ export interface SignSpawn {
   text: string;
   sub?: string;
   theme: SignTheme;
+  /** A 'brand' sign's own colours (CSS): its background and its lettering. */
+  colors?: { bg: string; fg: string };
 }
 
 /**
  * What a loose thing in the world is. Every kind is a specific, named object: there is no loose Scrap, Tech or "Parts" to
  * find (see `world/loot.ts`). `chassis` and `fragment` are the two story items, a bare frame and a radio board.
  */
-export type PickupKind = 'fuel' | 'oil' | 'rations' | 'medicine' | 'medkit' | 'bandage' | 'ammo' | 'fragment' | 'chassis' | 'part' | 'paint' | 'water' | 'gear';
+export type PickupKind = 'fuel' | 'oil' | 'rations' | 'medicine' | 'medkit' | 'bandage' | 'ammo' | 'fragment' | 'chassis' | 'part' | 'paint' | 'water' | 'gear' | 'food';
 
 /** What lets a loose thing lie where it does: the furniture it is on, or the thing it is beside. */
 export interface PickupHost {
@@ -160,6 +179,8 @@ export interface PickupSpawn {
   fuel?: 'petrol' | 'diesel';
   /** For kind 'paint': the colour in the can (`amount` holds the sprays left). Only ever put down by a player or found in a trunk. */
   color?: number;
+  /** For kind 'food': what it is. Only ever put down by a player or by the story. */
+  food?: import('../sim/food').FoodId;
   /** For kind 'gear': a gun (or add-on) on display, the `index`th of `rollGunLoot(context, seed, depth)`. It lies belly down on its rack or counter; taking it is remembered under this pickup's id. */
   gun?: { context: import('../sim/loot').GunStash['context']; seed: number; depth: 0 | 1 | 2; index: number };
   x: number;
@@ -218,7 +239,7 @@ export interface ScavContainer {
 
 export interface ScavZone {
   id: string;
-  kind: 'pharmacy' | 'depot' | 'parking' | 'hospital' | 'house' | 'store' | 'motel' | 'barn' | 'warehouse' | 'shack' | 'garage' | 'dealership' | 'tyreshop' | 'police';
+  kind: 'pharmacy' | 'depot' | 'parking' | 'hospital' | 'house' | 'store' | 'motel' | 'barn' | 'warehouse' | 'shack' | 'garage' | 'dealership' | 'tyreshop' | 'police' | 'mall';
   x: number;
   z: number;
   w: number;
@@ -397,6 +418,10 @@ export class LegLayoutImpl implements LegLayout {
   rural: RuralBuilding[] = [];
   delves: DelveSite[] = [];
   barricades: { z: number; grade: 'flimsy' | 'reinforced' }[] = [];
+  /** Udud and Nuhat's house (`world/ududHouse.ts`), on the open-world leg. */
+  house?: HousePlace;
+  /** Where each footbridge prop stands: the ground under its low end and its piers is not somewhere to put anything. */
+  footbridges: { x: number; z: number }[] = [];
   start = { x: 0, z: 10, yaw: 0 };
   end = { x: 0, z: 0, radius: 40 };
   campSpots: { x: number; z: number }[] = [];
@@ -409,6 +434,11 @@ export class LegLayoutImpl implements LegLayout {
   constructor(leg: LegDef) {
     this.leg = leg;
     this.terrain = makeTerrainDef(leg);
+    // What stands in the rivers' bends (it changes no ground, so it is planned here rather than with the terrain).
+    if (leg.open) {
+      const bs = planBends(this.terrain);
+      if (bs.length) this.terrain.bends = bs;
+    }
     this.rng = new Rng(leg.seed * 7919 + 13);
     this.lootRng = new Rng((leg.seed ^ 0x100f77) >>> 0);
     if (leg.open) {
@@ -502,6 +532,9 @@ export class LegLayoutImpl implements LegLayout {
     this.zombies = this.zombies.filter((q) => !inCamp(q.x, q.z));
     this.buildLakes();
     this.buildWater();
+    this.buildHeritage();
+    this.buildYard();
+    this.buildBends();
     this.cars = this.cars.filter((c) => !waterAt(T, c.x, c.z) && !inCamp(c.x, c.z));
     // Nothing of the desert stands inside a city.
     const outside = (x: number, z: number) => !districtAt(o, x, z);
@@ -513,6 +546,8 @@ export class LegLayoutImpl implements LegLayout {
     this.rural = this.rural.filter((b) => outside((b.aabb.minX + b.aabb.maxX) / 2, (b.aabb.minZ + b.aabb.maxZ) / 2));
     this.mines = this.mines.filter((m) => outside(m.x, m.z));
     for (const d of o.districts) this.absorbDistrict(d);
+    // Udud and Nuhat's house stands just north of the city, so it goes in once the city has.
+    this.buildHouse();
     this.zombies = this.zombies.filter((z) => !this.blockedAt(z.x, z.z, 0.3));
     this.pickups = this.pickups.filter((p) => this.pickupOk(p));
     this.cars = this.cars.filter((c) => !this.carClips(c));
@@ -544,6 +579,7 @@ export class LegLayoutImpl implements LegLayout {
     this.aabbs.push(...sub.aabbs);
     this.delves.push(...sub.delves);
     this.barricades.push(...sub.barricades);
+    this.footbridges.push(...sub.footbridges);
     this.terrain.delves.push(...sub.terrain.delves);
     this.terrain.streets = [...(this.terrain.streets ?? []), ...(sub.terrain.streets ?? [])];
     for (const lot of sub.lots) {
@@ -585,6 +621,7 @@ export class LegLayoutImpl implements LegLayout {
     for (const c of this.cars) c.z += dz;
     for (const q of this.zombies) (q.z += dz), (q.cluster += 100000);
     for (const b of this.barricades) b.z += dz;
+    for (const f of this.footbridges) f.z += dz;
     for (const d of this.delves) d.z += dz;
     for (const d of this.terrain.delves) once(d, (q) => (q.z += dz));
     for (const st of this.terrain.streets ?? []) st.z0 += dz, (st.z1 += dz);
@@ -968,6 +1005,13 @@ export class LegLayoutImpl implements LegLayout {
           pushZombies(this, rng, xAt(20), cz, 1, ['brute'], 3, true, cluster++);
           break;
         }
+        case 'grandMall':
+          this.raiseMall(lot, rng, cluster);
+          cluster += 10;
+          break;
+        case 'mallPlaza':
+          this.mallPlaza(lot, rng, cluster++);
+          break;
         case 'stadium': {
           // The pitch: striped grass between the stands, goals at both ends. The two corners left open are the way in.
           this.pave('pitch', lot.x0 + 17, lot.x0 + 73, lot.z0 + 7, lot.z1 - 7);
@@ -993,6 +1037,7 @@ export class LegLayoutImpl implements LegLayout {
       if (!lot.shop) continue;
       const out = lot.side;
       const cz = (lot.z0 + lot.z1) / 2;
+      if (lot.shop === 'malabes') this.aabbs.push(...melabesEquipment({ minX: lot.x0, maxX: lot.x1, minZ: lot.z0, maxZ: lot.z1 }, newAabbId));
       for (const dz of [-5, 0.5, 6]) {
         this.plainProp('cafeTable', out * 8.75, cz + dz, 0, 1, 1);
         this.plainProp('cafeChair', out * 7.85, cz + dz + 0.1, Math.PI / 2, 1, 1 + Math.round(dz));
@@ -1001,6 +1046,112 @@ export class LegLayoutImpl implements LegLayout {
       // Something to eat, left on the tables outside.
       for (const t of this.props.filter((q) => q.kind === 'cafeTable' && q.x === out * 8.75 && Math.abs(q.z - cz) < 7).slice(0, 2)) this.besideProp(t, 'kitchen', { only: ['food'] });
     }
+  }
+
+  // ---------------------------------------------------------------- Ofer Grand Mall
+
+  /** The mall's footprint corner (see `world/mall.ts`): its lot is the first column on the left of the first block. */
+  private mallCorner(): { x: number; z: number } | null {
+    const lot = this.lots.find((l) => l.landmark === 'grandMall');
+    return lot ? { x: lot.x0 + MALL.inLot.x, z: lot.z0 + MALL.inLot.z } : null;
+  }
+
+  /**
+   * Ofer Grand Mall: a real two-storey building raised through the same `SiteBuilder` as every other walk-in building (so
+   * it has its walls, glass, fittings, loot, stockrooms and dead), its forecourts, its signs inside and out, and the
+   * crowd that was in the court when it ended.
+   */
+  private raiseMall(lot: Lot, rng: Rng, cluster: number) {
+    const c = this.mallCorner()!;
+    const M = MALL;
+    const X = (x: number) => c.x + x;
+    const Z = (z: number) => c.z + z;
+    const cx = X(M.w / 2);
+    const cz = Z(M.d / 2);
+    const site: Site = { kind: 'cityLot', z: cz, side: 1, off: 0, radius: 0, seed: this.leg.seed * 131 + 9001, x: cx };
+    const sb = new SiteBuilder({ def: this.terrain, newId: newAabbId }, site);
+    sb.building(cx, cz, M.w, M.d, M.levels, 'mall', 2, 0xe6dfcf, 'flat', { city: true, door: -1, margin: 0, wear: 0.25 });
+    this.mergeSite(sb.out);
+    // Paved forecourts: the strip along the street, a plaza at each end.
+    const north = this.lots.find((l) => l.side === 1 && l.strip === 0 && l.slot === lot.slot + 1)!;
+    this.pave('paving', lot.x0, X(0), lot.z0, north.z1);
+    this.pave('paving', X(0), lot.x1, lot.z0, Z(0));
+    this.pave('paving', X(0), lot.x1, Z(M.d), north.z1);
+    for (let z = lot.z0 + 6; z < north.z1 - 4; z += 18) this.plainProp('streetlight', lot.x0 + 1.3, z, 0, 1, 1 + this.props.length);
+    for (const [x, z] of [[X(4), lot.z0 + 3], [X(13), lot.z0 + 3.5], [X(22), lot.z0 + 3], [X(6), north.z1 - 4], [X(24), north.z1 - 4]]) this.plainProp('deadTree', x, z, rng.range(0, 6), rng.range(0.8, 1.1), 7);
+    // The two slim columns under the south wing (drawn with the building's roof, see render/mallView.ts).
+    for (const z of [-5, 12]) this.aabbs.push({ id: newAabbId(), minX: X(-1.6) - 0.2, maxX: X(-1.6) + 0.2, minZ: Z(z) - 0.2, maxZ: Z(z) + 0.2, y0: 0, y1: 14, kind: 'pillar', hp: 99999 });
+    this.plainProp('bench', X(9), lot.z0 + 4, Math.PI, 1, 3);
+    this.plainProp('bench', X(18), north.z1 - 4.5, 0, 1, 4);
+    // Signs. Outside: the red board on the raised box over the main doors, the doors' own sign, and the shops that face the
+    // street and the car park. Inside: every shop's name over its front.
+    const red = { bg: '#cf1c24', fg: '#ffffff' };
+    const court = (M.court.z0 + M.court.z1) / 2;
+    this.signs.push({ x: X(0) - 0.08, y: M.levelH * 2 + 2.05, z: Z(court), yaw: -Math.PI / 2, w: 21, h: 2.5, text: 'עופר הקניון הגדול פ״ת', sub: 'OFER GRAND MALL PETAH TIKVA', theme: 'brand', colors: red });
+    this.signs.push({ x: X(0) - 0.08, y: 5.0, z: Z(court), yaw: -Math.PI / 2, w: 7.4, h: 0.8, text: 'כניסה ראשית', sub: 'MAIN ENTRANCE', theme: 'brand', colors: red });
+    this.signs.push({ x: X(M.w) + 0.08, y: 4.4, z: Z(court), yaw: Math.PI / 2, w: 9, h: 1.1, text: 'עופר הקניון הגדול', sub: 'OFER GRAND MALL · PARKING', theme: 'brand', colors: red });
+    const name = (s: (typeof MALL_SHOPS)[number]) => (s.he ? { text: s.he, sub: s.name } : { text: s.name });
+    for (const s of MALL_SHOPS) {
+      const r = shopRect(s);
+      const mid = (s.z0 + s.z1) / 2;
+      const base = s.level * M.levelH;
+      const colors = { bg: s.bg, fg: s.fg };
+      const fy = base + (M.head + M.levelH) / 2;
+      if (s.row === 'anchor') {
+        this.signs.push({ x: X(M.w / 2), y: fy, z: Z(M.anchor) - 0.11, yaw: Math.PI, w: 7, h: 1.2, ...name(s), theme: 'brand', colors });
+      } else {
+        const front = s.row === 'front';
+        this.signs.push({ x: X(front ? M.frontRow : M.backRow) + (front ? 0.11 : -0.11), y: fy, z: Z(mid), yaw: front ? Math.PI / 2 : -Math.PI / 2, w: Math.min(6, s.z1 - s.z0 - 1.6), h: 1.0, ...name(s), theme: 'brand', colors });
+      }
+      // The street side of the building carries the big names: the shops in the front row downstairs, and the anchor on the grey block.
+      if (s.level === 0 && s.row === 'front' && s.z0 >= 10) this.signs.push({ x: X(0) - 0.1, y: 4.35, z: Z(mid), yaw: -Math.PI / 2, w: Math.min(5.6, s.z1 - s.z0 - 2), h: 1.1, ...name(s), theme: 'brand', colors });
+      if (s.id === 'hm') this.signs.push({ x: X(0) - 0.95, y: 10.6, z: Z(108), yaw: -Math.PI / 2, w: 7.5, h: 3.2, text: 'H&M', theme: 'brand', colors });
+      if (s.id === 'superpharm') this.signs.push({ x: X(M.w) + 0.1, y: 4.35, z: Z(mid), yaw: Math.PI / 2, w: 8, h: 1.2, ...name(s), theme: 'brand', colors });
+      void r;
+    }
+    this.signs.push({ x: X(0) - 0.85, y: 6.2, z: Z(110.5), yaw: -Math.PI / 2, w: 9, h: 3.6, text: 'מבצעי סוף עונה', sub: 'END OF SEASON SALE · 50%', theme: 'brand', colors: { bg: '#e9e2d4', fg: '#1a1a1a' } });
+    // The court and the street were full when it ended, and they still are; the anchor stores kept a few of their own.
+    pushZombies(this, rng, X(M.atrium.x), Z(M.atrium.z - 4), 10, ['walker', 'walker', 'walker', 'runner'], 7, true, cluster);
+    pushZombies(this, rng, X(M.atrium.x), Z(20), 5, ['walker', 'walker', 'runner'], 5, true, cluster + 1);
+    pushZombies(this, rng, X(M.atrium.x), Z(108), 4, ['walker', 'runner'], 6, true, cluster + 2);
+    pushZombies(this, rng, X(M.atrium.x + 4), Z(M.atrium.z + 6), 1, ['brute'], 2, true, cluster + 3);
+    pushZombies(this, rng, X(M.atrium.x - 4), Z(M.court.z0 + 4), 1, ['screamer'], 2, true, cluster + 4);
+  }
+
+  /**
+   * Across the street from the mall: the plaza the footbridge comes down into, under its mast, with the Prima Link tower
+   * at its back. The bridge is one prop, drawn whole by the far landscape and solid as its own mesh.
+   */
+  private mallPlaza(lot: Lot, rng: Rng, cluster: number) {
+    const c = this.mallCorner();
+    if (!c) return;
+    const next = this.lots.find((l) => l.side === lot.side && l.strip === lot.strip && l.slot === lot.slot + 1)!;
+    const tower = this.landmarks.find((q) => q.role === 'officeTower' && q.aabb.minZ >= lot.z0 && q.aabb.maxZ <= lot.z1);
+    const ax = c.x;
+    const az = c.z + MALL.bridgeDoor.z;
+    this.props.push({ kind: 'footbridge', x: ax, y: 0, z: az, yaw: 0, scale: 1, seed: 1 });
+    this.footbridges.push({ x: ax, z: az });
+    // Paving everywhere but under the tower.
+    if (tower) {
+      const t = tower.aabb;
+      this.pave('paving', lot.x0, lot.x1, t.maxZ, next.z1);
+      this.pave('paving', t.maxX, lot.x1, lot.z0, t.maxZ);
+      this.pave('paving', lot.x0, t.maxX, lot.z0, t.minZ);
+      this.signs.push({ x: t.maxX + 0.12, y: t.y1 - 2.4, z: (t.minZ + t.maxZ) / 2, yaw: Math.PI / 2, w: 11, h: 2.0, text: 'PRIMA LINK', theme: 'brand', colors: { bg: '#1c2a3a', fg: '#ffffff' } });
+    } else this.pave('paving', lot.x0, lot.x1, lot.z0, next.z1);
+    for (let z = lot.z0 + 8; z < next.z1 - 4; z += 20) this.plainProp('streetlight', lot.x1 - 1.3, z, Math.PI, 1, 1 + this.props.length);
+    // A bus stop on the pavement just short of the bridge, benches and dead trees in the plaza.
+    this.plainProp('busShelter', lot.x1 - 1.2, az + 18, Math.PI / 2, 1, 31);
+    const B = FOOTBRIDGE;
+    const footZ = az - B.radius - B.ramp;
+    for (const [dx, dz] of [[6, -8], [-6, -10], [10, 14], [-10, 26], [8, 40]]) {
+      const x = ax - B.straight - B.radius + dx;
+      const z = footZ + dz;
+      if (x > lot.x0 + 2 && x < lot.x1 - 2 && !this.blockedAt(x, z, 1.5)) this.plainProp('deadTree', x, z, rng.range(0, 6), rng.range(0.8, 1.15), 9);
+    }
+    this.plainProp('bench', ax - B.straight - B.radius + 4.5, footZ - 3, -Math.PI / 2, 1, 5);
+    this.plainProp('bench', ax - B.straight - B.radius - 4.5, footZ - 3, Math.PI / 2, 1, 6);
+    pushZombies(this, rng, ax - B.straight - B.radius, footZ - 6, 5, ['walker', 'walker', 'runner'], 6, true, cluster);
   }
 
   private indexLot(lot: Lot) {
@@ -1019,7 +1170,10 @@ export class LegLayoutImpl implements LegLayout {
       if (arr) {
         for (const l of arr) {
           if (l.kind !== 'building') continue;
-          if (x > l.x0 - r && x < l.x1 + r && z > l.z0 - r && z < l.z1 + r) return true;
+          if (x > l.x0 - r && x < l.x1 + r && z > l.z0 - r && z < l.z1 + r) {
+            if (l.shop === 'malabes' && melabesInterior({ minX: l.x0, maxX: l.x1, minZ: l.z0, maxZ: l.z1 }, x, z, r)) continue;
+            return true;
+          }
         }
       }
     }
@@ -1028,12 +1182,14 @@ export class LegLayoutImpl implements LegLayout {
       if (x > a.minX - r && x < a.maxX + r && z > a.minZ - r && z < a.maxZ + r) return true;
     }
     for (const a of this.aabbs) {
+      if (a.overhead) continue;
       if (x > a.minX - r && x < a.maxX + r && z > a.minZ - r && z < a.maxZ + r) return true;
     }
     for (const c of this.cars) {
       if (Math.abs(c.z - z) > 3.2 + r) continue;
       if (Math.hypot(c.x - x, c.z - z) < 1.7 + r) return true;
     }
+    for (const f of this.footbridges) if (footbridgeBlocks(x - f.x, z - f.z, r)) return true;
     return false;
   }
 
@@ -1417,6 +1573,128 @@ export class LegLayoutImpl implements LegLayout {
    * or onto a causeway, then build what goes with the water: a bridge where a road crosses, a ring of stones round each spring,
    * boulders at the foot of each waterfall.
    */
+  /**
+   * The real buildings set by hand by the water (`world/heritage.ts`): clear whatever the ambient passes dropped on their
+   * pads, then put them up, with what can be searched inside and the dead who sheltered there.
+   */
+  private buildHeritage() {
+    const list = this.terrain.heritage;
+    if (!list?.length) return;
+    const on = (x: number, z: number, pad: number) => heritageClear(list, x, z, pad);
+    this.props = this.props.filter((p) => !on(p.x, p.z, 2));
+    this.pickups = this.pickups.filter((p) => !on(p.x, p.z, 1));
+    this.zombies = this.zombies.filter((z) => !on(z.x, z.z, 1));
+    this.cars = this.cars.filter((c) => !on(c.x, c.z, 4));
+    this.aabbs = this.aabbs.filter((a) => !on((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2, 2));
+    this.mines = this.mines.filter((m) => !on(m.x, m.z, 3));
+    this.rural = this.rural.filter((b) => !on((b.aabb.minX + b.aabb.maxX) / 2, (b.aabb.minZ + b.aabb.maxZ) / 2, 8));
+    for (const h of list) {
+      this.props.push(...heritageProps(h));
+      this.aabbs.push(...heritageAabbs(h, newAabbId));
+      this.zones.push(heritageZone(h, this.terrain.seed, this.reachAt(h.x, h.z)));
+      this.zombies.push(...heritageZombies(h));
+    }
+  }
+
+  /**
+   * Nar's yard on its salt flat (`world/narYard.ts`): nothing the ambient passes dropped stays on it, then the yard itself as
+   * one landmark prop and its solid pieces as boxes. Its parts and its sick man are the story's (`game/story.ts`).
+   */
+  private buildYard() {
+    const p = this.terrain.yard;
+    if (!p) return;
+    const on = (x: number, z: number, pad: number) => Math.abs(x - p.x) < YARD_HALF + pad && Math.abs(z - p.z) < YARD_HALF + pad;
+    this.props = this.props.filter((q) => !on(q.x, q.z, 6));
+    this.pickups = this.pickups.filter((q) => !on(q.x, q.z, 4));
+    this.zombies = this.zombies.filter((q) => !on(q.x, q.z, 30));
+    this.cars = this.cars.filter((c) => !on(c.x, c.z, 8));
+    this.aabbs = this.aabbs.filter((a) => !on((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2, 6));
+    this.mines = this.mines.filter((m) => !on(m.x, m.z, 20));
+    this.rural = this.rural.filter((b) => !on((b.aabb.minX + b.aabb.maxX) / 2, (b.aabb.minZ + b.aabb.maxZ) / 2, 10));
+    this.props.push({ kind: 'narYard', x: p.x, y: p.y, z: p.z, yaw: p.yaw, scale: 1, seed: 1 });
+    for (const b of yardBoxes(p, YARD_SOLIDS)) {
+      // The yard draws itself: its boxes only collide ('partition' and 'furniture' are never drawn as walls).
+      this.aabbs.push({ id: newAabbId(), minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ, y0: p.y - 0.2, y1: p.y + b.h, kind: b.thin ? 'furniture' : 'partition', hp: 99999, mat: 'sheet', ...(b.thin ? { physOnly: true } : {}) });
+    }
+  }
+
+  /**
+   * Udud and Nuhat's house at the north end of Petah Tikva (`world/ududHouse.ts`), where mission two ends: the city lot it
+   * stands on gives up the part the house takes (the apartment block keeps the rest of it, or the lot is left open), the plot
+   * is cleared of whatever the city and the ambient passes put there, floored with a thin slab at the patio's height (so
+   * nothing grows through the lawn and everyone stands on it), and its walls, fence and furniture become boxes. The model,
+   * the people at the party and the mission are `game/partyMission.ts`'s.
+   */
+  private buildHouse() {
+    const p = this.terrain.house;
+    if (!p) return;
+    this.house = p;
+    const r = plotRect(p);
+    const on = (x: number, z: number, pad: number) => x > r.minX - pad && x < r.maxX + pad && z > r.minZ - pad && z < r.maxZ + pad;
+    const mid = (a: Aabb) => on((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2, 1.5) || (a.maxX > r.minX && a.minX < r.maxX && a.maxZ > r.minZ && a.minZ < r.maxZ);
+    // A city lot under the plot keeps the end beyond it for its block (with a gap), if that end is deep enough to build on.
+    const GAP = 2;
+    const MIN = 10;
+    for (const lot of this.lots) {
+      if (lot.fixed || lot.x1 <= r.minX - GAP || lot.x0 >= r.maxX + GAP || lot.z1 <= r.minZ - GAP || lot.z0 >= r.maxZ + GAP) continue;
+      const north = lot.z1 - (r.maxZ + GAP);
+      const south = r.minZ - GAP - lot.z0;
+      if (lot.kind === 'building' && north >= MIN && north >= south) lot.z0 = r.maxZ + GAP;
+      else if (lot.kind === 'building' && south >= MIN) lot.z1 = r.minZ - GAP;
+      else lot.kind = 'open';
+    }
+    this.props = this.props.filter((q) => !on(q.x, q.z, 3));
+    this.pickups = this.pickups.filter((q) => !on(q.x, q.z, 2));
+    this.zombies = this.zombies.filter((q) => !on(q.x, q.z, 45));
+    this.cars = this.cars.filter((c) => !on(c.x, c.z, 6));
+    this.aabbs = this.aabbs.filter((a) => !mid(a));
+    this.mines = this.mines.filter((m) => !on(m.x, m.z, 30));
+    this.rural = this.rural.filter((b) => !mid(b.aabb));
+    this.signs = this.signs.filter((s) => !on(s.x, s.z, 2));
+    // The floor: a slab whose top is the patio, under the plot (short of the road's shoulder), cut at the chunk lines (a chunk takes the boxes whose
+    // middles are in it, and keeps its ground cover off only those).
+    const cuts = (a: number, b: number) => {
+      const out = [a];
+      for (let c = Math.ceil(a / CHUNK) * CHUNK; c < b; c += CHUNK) if (c > a) out.push(c);
+      out.push(b);
+      return out;
+    };
+    const f = floorRect(p);
+    const xs = cuts(f.minX, f.maxX);
+    const zs = cuts(f.minZ, f.maxZ);
+    for (let i = 0; i + 1 < xs.length; i++) for (let j = 0; j + 1 < zs.length; j++) {
+      this.aabbs.push({ id: newAabbId(), minX: xs[i], maxX: xs[i + 1], minZ: zs[j], maxZ: zs[j + 1], y0: p.y - 0.6, y1: p.y, kind: 'furniture', hp: 99999, physOnly: true });
+    }
+    for (const b of houseBoxes(p, houseSolids())) {
+      // 'partition', not 'wall': the chunk draws every 'wall' box as a brick wall, and the house has its own model.
+      this.aabbs.push({ id: newAabbId(), minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ, y0: p.y - 0.1, y1: p.y + b.h, kind: b.thin ? 'furniture' : 'partition', hp: 99999, ...(b.thin ? { physOnly: true } : { mat: 'plaster' as const }) });
+    }
+  }
+
+  /**
+   * The meadows inside the rivers' omega bends (`world/millBend.ts`): nothing the ambient passes dropped stays in the bulb
+   * (the grove is set by hand), then the old gums' feet, the stumps and the fire ring by the landing.
+   */
+  private buildBends() {
+    const list = this.terrain.bends;
+    if (!list?.length) return;
+    for (const b of list) {
+      const lp = b.loop;
+      // Nor in the way in: on its footpath, a tunnel through the cane or the low bridge (the mill's own pieces stay).
+      const her = this.terrain.heritage ?? [];
+      const on = (x: number, z: number, pad: number) => Math.hypot(x - lp.x, z - lp.z) < b.meadow + pad || (bendBlocks(b, x, z, pad / 2 + 0.5) && !heritageClear(her, x, z, 0.01));
+      this.props = this.props.filter((p) => !on(p.x, p.z, 3));
+      this.pickups = this.pickups.filter((p) => !on(p.x, p.z, 1));
+      this.zombies = this.zombies.filter((z) => !on(z.x, z.z, 2));
+      this.cars = this.cars.filter((c) => !on(c.x, c.z, 6));
+      this.aabbs = this.aabbs.filter((a) => !on((a.minX + a.maxX) / 2, (a.minZ + a.maxZ) / 2, 3));
+      this.mines = this.mines.filter((m) => !on(m.x, m.z, 4));
+      this.rural = this.rural.filter((r) => !on((r.aabb.minX + r.aabb.maxX) / 2, (r.aabb.minZ + r.aabb.maxZ) / 2, 10));
+      this.props.push(...bendProps(b));
+      this.aabbs.push(...bendAabbs(b, newAabbId));
+    }
+  }
+
   private buildWater() {
     const T = this.terrain;
     const hy = T.hydro;
@@ -1465,6 +1743,31 @@ export class LegLayoutImpl implements LegLayout {
           const x = r.x[i] - r.dz[i] * side * off + r.dx[i] * rng.range(-3, 3);
           const z = r.z[i] + r.dx[i] * side * off + r.dz[i] * rng.range(-3, 3);
           this.props.push({ kind: 'rock', x, y: heightAt(T, x, z), z, yaw: rng.range(0, 6.28), scale: rng.range(1.2, 2.2), seed: rng.int(0, 9999) });
+        }
+      }
+    }
+    // Grey river stones across each riffle, their backs breaking the surface, and more along the banks beside it.
+    for (const q of hy.riffles) {
+      const r = hy.rivers[q.river];
+      const rr = new Rng((this.leg.seed ^ 0x51f1e) + q.i * 31 + q.river * 977);
+      for (let k = -3; k <= 3; k++) {
+        const i = q.i + k;
+        const across = Math.round(r.half[i] / 1.4);
+        for (let a = -across; a <= across; a++) {
+          if (rr.chance(0.45)) continue;
+          const off = (a / Math.max(1, across)) * r.half[i] * 0.95 + rr.range(-0.4, 0.4);
+          const x = r.x[i] - r.dz[i] * off + r.dx[i] * rr.range(-1, 1);
+          const z = r.z[i] + r.dx[i] * off + r.dz[i] * rr.range(-1, 1);
+          this.props.push({ kind: 'rock', x, y: heightAt(T, x, z) - 0.05, z, yaw: rr.range(0, 6.28), scale: rr.range(0.34, 0.66), seed: rr.int(0, 9999), tag: 1 });
+        }
+      }
+      for (const side of [-1, 1]) {
+        for (let n = 0; n < 4; n++) {
+          const i = q.i + rr.int(-6, 6);
+          const off = r.half[i] + rr.range(-0.2, 1.4);
+          const x = r.x[i] - r.dz[i] * side * off;
+          const z = r.z[i] + r.dx[i] * side * off;
+          this.props.push({ kind: 'rock', x, y: heightAt(T, x, z) - 0.08, z, yaw: rr.range(0, 6.28), scale: rr.range(0.4, 0.8), seed: rr.int(0, 9999), tag: 1 });
         }
       }
     }

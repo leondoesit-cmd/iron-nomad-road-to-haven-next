@@ -110,7 +110,7 @@ export class CampScene extends Scene {
   private structuresBuilt = 0;
   private waveCleared = 0;
   private kills0 = 0;
-  private fires: { x: number; z: number }[] = [];
+  private campFires: { x: number; z: number }[] = [];
   private nightStartedAt = 0;
   private idleYaw = 0;
   /** Cars standing in the camp arena: real vehicles you can strip or claim. */
@@ -158,8 +158,11 @@ export class CampScene extends Scene {
       this.phase = 'ledger';
       this.buildT = 0;
     }
-    // Hot camp: a fire with a glow.
-    if (hot || ledgerOnly) this.fires.push({ x: 0, z: 1.5 });
+    // Hot camp: a fire in the ring that lights the camp round it (and gives it away).
+    if (hot || ledgerOnly) {
+      this.campFires.push({ x: 0, z: 1.5 });
+      this.fires.start({ x: 0, y: 0.04, z: 1.5, r: 0.5, fuel: 'wood', burn: Infinity, heat: 0.7, bed: false });
+    }
     this.R.setLight(lightAt(this.clock.t, this.biome), this.biome);
     for (let i = 0; i < 2; i++) {
       const g = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0x66ff88, transparent: true, opacity: 0.4, depthWrite: false }));
@@ -407,8 +410,8 @@ export class CampScene extends Scene {
     for (const v of this.vehicles) v.update(dt);
     this.cars.update(dt);
     this.P.step();
-    this.fx.fire(0, 0.3, 1.5, 0.9);
-    if (Math.random() < 0.2) this.fx.blackSmoke(0, 0.9, 1.5);
+    // The camp fire keeps burning behind the ledger.
+    this.fires.tick(dt);
   }
 
   // ------------------------------------------------------------------ raid planning
@@ -862,7 +865,7 @@ export class CampScene extends Scene {
     };
     this.zombies.forEachNear(0, 0, 110, (z) => check(z.x, z.z));
     for (const u of this.raiders.units) if (!u.dead) check(u.x, u.z);
-    for (const v of this.vehicles) if (v.faction === 'raider' && !v.wreck) check(v.position.x, v.position.z);
+    for (const v of this.vehicles) if (v.hostile) check(v.position.x, v.position.z);
   }
 
   private updateStructures(dt: number) {
@@ -932,7 +935,7 @@ export class CampScene extends Scene {
       if (Math.hypot(z.x - s.x, z.z - s.z) < trigger) go = true;
     });
     for (const u of this.raiders.units) if (!u.dead && Math.hypot(u.x - s.x, u.z - s.z) < trigger) go = true;
-    for (const v of this.vehicles) if (v.faction === 'raider' && !v.wreck && Math.hypot(v.position.x - s.x, v.position.z - s.z) < trigger + v.def.width / 2) go = true;
+    for (const v of this.vehicles) if (v.hostile && Math.hypot(v.position.x - s.x, v.position.z - s.z) < trigger + v.def.width / 2) go = true;
     if (!go) return;
     const def = s.def;
     this.combat.explode(s.x, 0.6, s.z, def.radius ?? 5, def.damage ?? 150, { side: 'convoy', owner: null });
@@ -984,14 +987,24 @@ export class CampScene extends Scene {
   private updateFire(dt: number) {
     this.fireT += dt;
     if (!this.hot) return;
-    for (const f of this.fires) {
-      this.fx.fire(f.x, 0.3, f.z, 0.9);
-      if (this.fireT > 0.2 && Math.random() < 0.3) this.fx.blackSmoke(f.x, 1.0, f.z);
-    }
+    // The flames, smoke and light are the fire engine's (started with the camp); here only the beat it keeps.
     if (this.fireT > 0.2) this.fireT = 0;
   }
 
   // ------------------------------------------------------------------ dawn
+
+  /** Whether the night can be skipped from the pause menu: only while building or defending, never once dawn has come. */
+  get canSkipNight() {
+    return this.phase === 'build' || this.phase === 'night';
+  }
+
+  /** Sleep through it: no raid is fought, and the morning comes as it would after a quiet night. */
+  skipNight() {
+    if (!this.canSkipNight) return;
+    for (const g of this.ghost) g.visible = false;
+    for (const p of this.players) p.buildMode = false;
+    this.dawn();
+  }
 
   private dawn() {
     if (this.phase === 'dawn') return;
@@ -1177,7 +1190,7 @@ export class CampScene extends Scene {
     }
     if (this.phase === 'night') {
       for (const z of this.zombies.list) if (!z.dead && z.chasing && this.watchers[sectorOf(z.x, z.z)]) pins.push({ x: z.x, z: z.z, kind: 'ambush', label: '' });
-      for (const v of this.vehicles) if (v.faction === 'raider' && !v.wreck && this.watchers[sectorOf(v.position.x, v.position.z)]) pins.push({ x: v.position.x, z: v.position.z, kind: 'ambush', label: '' });
+      for (const v of this.vehicles) if (v.hostile && this.watchers[sectorOf(v.position.x, v.position.z)]) pins.push({ x: v.position.x, z: v.position.z, kind: 'ambush', label: '' });
     }
     return pins;
   }
