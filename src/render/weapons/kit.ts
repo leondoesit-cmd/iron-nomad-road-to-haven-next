@@ -340,6 +340,11 @@ export class WB {
   readonly hi: boolean;
   private wp: number[] = [];
   private part = 0;
+  /**
+   * Put in front of every template key while it is set: add-ons are drawn at each gun's own anchors, so one add-on's
+   * templates differ from gun to gun (see `drawMods`).
+   */
+  prefix = '';
   /** Triangles by part, for the budget tests and tuning. */
   readonly stats = new Map<string, number>();
 
@@ -396,7 +401,7 @@ export class WB {
    * within `crease` radians.
    */
   custom(key: string, make: () => THREE.BufferGeometry, crease = 0.5) {
-    return cached(`u:${key}:${this.lod}`, () => {
+    return cached(`u:${this.prefix}${key}:${this.lod}`, () => {
       const g = make();
       orientOut(g);
       return finishGeo(g, crease, 'box');
@@ -408,7 +413,7 @@ export class WB {
     // A bevel under a millimetre does not show on a flat face: those edges stay sharp, and cost nothing.
     const bevel = bev >= 0.0008 && (hi || bev >= 0.003);
     const cs = this.cs;
-    return cached(`x:${key}:${depth.toFixed(5)}:${bev.toFixed(5)}:${this.lod}`, () => {
+    return cached(`x:${this.prefix}${key}:${depth.toFixed(5)}:${bev.toFixed(5)}:${this.lod}`, () => {
       const segs = bevel ? (hi ? (bev >= 0.0025 ? 3 : bev >= 0.0015 ? 2 : 1) : 1) : 0;
       minFillet = bevel ? bev * 1.2 : 0;
       const sh = make();
@@ -454,7 +459,7 @@ export class WB {
   turn(key: string, prof: [number, number][], x: number, y: number, m: WS, seg?: number, crease = 0.7, z = 0) {
     const rmax = prof.reduce((a, p) => Math.max(a, p[0]), 0);
     const s = seg ?? this.rs(rmax);
-    const g = cached(`l:${key}:${s}`, () => {
+    const g = cached(`l:${this.prefix}${key}:${s}`, () => {
       const lg = new THREE.LatheGeometry(
         prof.map(([r, z]) => new THREE.Vector2(Math.max(0, r), z)),
         s,

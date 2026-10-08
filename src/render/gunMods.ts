@@ -107,6 +107,13 @@ function clamp(w: WB, y: number, z: number, len: number, wide = 0.024) {
 
 /** Add every fitted add-on's solids to a gun being built. */
 export function drawMods(w: WB, model: GunModel, looks: Partial<Record<AttachSlot, string>>) {
+  const was = w.prefix;
+  w.prefix = `${model}:`;
+  drawModsAt(w, model, looks);
+  w.prefix = was;
+}
+
+function drawModsAt(w: WB, model: GunModel, looks: Partial<Record<AttachSlot, string>>) {
   const A = ANCHORS[model];
   const f = FRAMES[model];
   const dbl = (f.dbl ?? 0) / 2;

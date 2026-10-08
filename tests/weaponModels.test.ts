@@ -117,7 +117,10 @@ describe('the weapon models', () => {
 
   it('a suppressor moves the muzzle out to its end', () => {
     expect(muzzleAt('pistol', { muzzle: 'supp_s' }).z).toBeGreaterThan(muzzleAt('pistol', {}).z + 0.1);
-    const g = box(weaponGeometry('ar', 'muzzle:supp_l', 'hi'));
-    expect(Math.abs(g.max.z - muzzleAt('ar', { muzzle: 'supp_l' }).z)).toBeLessThan(0.01);
+    // The same add-on on two guns is drawn at each one's own muzzle (its parts are not shared between them).
+    for (const m of ['ar', 'sniper', 'dmr'] as GunModel[]) {
+      const g = box(weaponGeometry(m, 'muzzle:supp_l', 'hi'));
+      expect(Math.abs(g.max.z - muzzleAt(m, { muzzle: 'supp_l' }).z), m).toBeLessThan(0.01);
+    }
   });
 });
