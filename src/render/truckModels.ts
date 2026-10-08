@@ -391,16 +391,16 @@ function truckBody(b: MeshBuilder, rig: Rig, def: VehicleDef, look: VehicleLook,
     }
   }
   // The gunner's platform and ring mount at the head of the bed: grating on four legs, a step, a ring on posts.
-  const gz = TRUCK_MOUNTS.gun!.z;
+  const ringZ = TRUCK_MOUNTS.gun!.z;
   const py = 1.92;
-  b.box(0, py, gz - 0.12, 1.1, 0.05, 0.86, S.steel(0x3a3c3e, 0.8));
-  for (let i = 0; i < 8; i++) b.box(-0.48 + i * 0.137, py + 0.028, gz - 0.12, 0.02, 0.006, 0.82, m.dark);
-  for (const sx of [1, -1]) for (const dz of [-0.5, 0.26]) b.rod(sx * 0.48, bf, gz + dz, sx * 0.48, py - 0.02, gz + dz, 0.03, m.dark, 6);
-  b.box(0, (bf + py) / 2, gz - 0.62, 0.6, 0.03, 0.2, S.steel(0x5a5d60, 0.8));
-  b.torus(0, py + 0.95, gz, 0.46, 0.035, m.dark, Math.PI / 2, 0, 0, 6, 28);
+  b.box(0, py, ringZ - 0.12, 1.1, 0.05, 0.86, S.steel(0x3a3c3e, 0.8));
+  for (let i = 0; i < 8; i++) b.box(-0.48 + i * 0.137, py + 0.028, ringZ - 0.12, 0.02, 0.006, 0.82, m.dark);
+  for (const sx of [1, -1]) for (const dz of [-0.5, 0.26]) b.rod(sx * 0.48, bf, ringZ + dz, sx * 0.48, py - 0.02, ringZ + dz, 0.03, m.dark, 6);
+  b.box(0, (bf + py) / 2, ringZ - 0.62, 0.6, 0.03, 0.2, S.steel(0x5a5d60, 0.8));
+  b.torus(0, py + 0.95, ringZ, 0.46, 0.035, m.dark, Math.PI / 2, 0, 0, 6, 28);
   for (let i = 0; i < 3; i++) {
     const a = (i / 3) * Math.PI * 2 + 0.5;
-    b.rod(Math.cos(a) * 0.46, py + 0.95, gz + Math.sin(a) * 0.46, Math.cos(a) * 0.4, py + 0.03, gz + Math.sin(a) * 0.4 - 0.1, 0.022, m.dark, 6);
+    b.rod(Math.cos(a) * 0.46, py + 0.95, ringZ + Math.sin(a) * 0.46, Math.cos(a) * 0.4, py + 0.03, ringZ + Math.sin(a) * 0.4 - 0.1, 0.022, m.dark, 6);
   }
   // A spare wheel on the back of the cab, cans in racks on the bed's front corners.
   if (t.spare !== 'none' && !look.fit.rear) {
@@ -698,8 +698,7 @@ function* makeHeavySteps(def: VehicleDef, look: VehicleLook): Generator<void, Sh
   for (const r of (geo.userData.parts ?? []) as PartRange[]) if (r.meta.pivot) r.meta = { ...r.meta, pivot: [r.meta.pivot[0], r.meta.pivot[1] - g0, r.meta.pivot[2]] };
   geo.computeBoundingSphere();
   geo.computeBoundingBox();
-  if (!muzzle) muzzle = [out.smoke[0], out.smoke[1] - g0, out.smoke[2]];
-  return { geo, lamps, tails, muzzle: null, smoke: [out.smoke[0], out.smoke[1] - g0, out.smoke[2]] } as Shell & { smoke: V3 };
+  return { geo, lamps, tails, muzzle, smoke: [out.smoke[0], out.smoke[1] - g0, out.smoke[2]] } as Shell & { smoke: V3 };
 }
 
 /** The trim of a heavy chassis built without one. */

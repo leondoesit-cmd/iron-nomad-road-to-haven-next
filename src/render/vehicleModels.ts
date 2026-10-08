@@ -18,6 +18,9 @@ import { addWheels, addWheelSet, blank, bodyMat, finish, headlamp, liveRig, ride
 import { buildCar, carMounts, prepareCarShell } from './carModels';
 import { attachCabin } from './interior';
 import { TRIKE_MOUNTS, buildTrike } from './trikeModel';
+import { buildHeavy, heavyMounts, isHeavy, prepareHeavyShell } from './truckModels';
+import { rollTrim, type CarTrim } from '../sim/carTrim';
+import { rideLiftOf } from './rideHeight';
 
 export type { VehicleVisual, WheelVisual } from './vehicleKit';
 
@@ -38,6 +41,12 @@ export interface VehicleLook {
   tyres?: number[];
   /** Brake grade: 0 factory, 2 and 3 big discs with painted calipers, -1 stripped. */
   brakeMk?: number;
+  /** The body variant and details the car's seed rolls (found cars and the heavy chassis; see sim/carTrim.ts). */
+  trim?: CarTrim | null;
+  /** A burnt-out wreck: it has lost a wing or a quarter panel as well as its paint. */
+  hulk?: boolean;
+  /** How far the springs fitted stand the body up (+) or drop it (-) over its wheels, metres (see `rideHeight.ts`). */
+  lift?: number;
 }
 
 /** What the engine and radiator look like from outside, for a build. */
@@ -80,6 +89,10 @@ export function lookOf(b: VehicleBuild): VehicleLook {
     panels: b.panels,
     tyres: tyres.some((t) => t !== 0) ? tyres : undefined,
     brakeMk: brakeGrade(def, b.fit),
+    trim: rollTrim(b.chassis, b.seed),
+    // A rolled hulk is left at 5% with its tank and fuel mounts burnt out; a convoy wreck keeps its tank and is only charred.
+    hulk: b.hp <= 0.06 && b.comp.tank <= 0.01,
+    lift: rideLiftOf(b.fit),
     ...powertrainLook(b),
   };
 }
@@ -664,6 +677,9 @@ export function mountsOfChassis(def: VehicleDef): { m: Mounts; g0: number } | nu
     case 'pickup':
     case 'van':
       return carMounts(def);
+    case 'truck':
+    case 'rig':
+      return heavyMounts(def);
     default:
       return null;
   }
@@ -682,6 +698,9 @@ export function buildVehicleVisual(def: VehicleDef, wheelLocal: [number, number,
     case 'pickup':
     case 'van':
       return buildCar(def, wheelLocal, steered, look);
+    case 'truck':
+    case 'rig':
+      return buildHeavy(def, wheelLocal, steered, look);
     default:
       return buildBuggy(def, wheelLocal, steered, look);
   }
@@ -689,8 +708,9 @@ export function buildVehicleVisual(def: VehicleDef, wheelLocal: [number, number,
 
 /**
  * Do the heavy part of a car's model ahead of time, a slice per step. Spawning the car afterwards finds it ready.
- * Only the found-car chassis have anything to prepare; the rest build in one go and nothing is lost by it.
+ * Only the found-car and heavy chassis have anything to prepare; the rest build in one go and nothing is lost by it.
  */
 export function* prepareVehicleVisual(def: VehicleDef, build: VehicleBuild): Generator<void> {
   if (def.id === 'hatch' || def.id === 'sedan' || def.id === 'pickup' || def.id === 'van') yield* prepareCarShell(def, lookOf(build));
+  else if (isHeavy(def.id)) yield* prepareHeavyShell(def, lookOf(build));
 }
