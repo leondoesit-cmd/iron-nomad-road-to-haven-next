@@ -56,6 +56,8 @@ import { disposeTree } from '../render/dispose';
 import type { DelveSite } from '../world/delveSites';
 import { PLAYER_CSS } from '../render/palette';
 import type { MapFrame } from '../ui/mapdata';
+import { mapNavInput } from '../ui/mapnav';
+import type { NavActions } from './navigation';
 import { WeatherSystem } from './weatherSystem';
 import { FireEngine } from './fires';
 
@@ -152,6 +154,11 @@ export abstract class Scene implements Ctx {
   campHook?: Ctx['campHook'];
   openWorkbench?: Ctx['openWorkbench'];
   openInventory?: Ctx['openInventory'];
+  summon?: Ctx['summon'];
+  /** Waypoints and marks, where this scene keeps them (a leg); null where they mean nothing (a delve, a camp). */
+  navActions: NavActions | null = null;
+  /** The big map's cursor, zoom and buttons for whoever has it open. */
+  mapInput: Ctx['mapInput'] = (p, it, dt) => mapNavInput(this, p, it, dt);
   loose?: Ctx['loose'];
   structureHit?: Ctx['structureHit'];
   clock = new DayClock(540, 0.02);
@@ -1214,9 +1221,13 @@ const NO_PATH: { x: number; y: number; z: number }[] = [];
 export interface CompassPin {
   x: number;
   z: number;
-  kind: 'end' | 'encounter' | 'zone' | 'ping' | 'ambush' | 'camp' | 'fragment' | 'chassis' | 'threat' | 'watch' | 'sector' | 'hub' | 'dock' | 'delve' | 'chest' | 'key' | 'lock' | 'exit' | 'part' | 'ride';
+  kind: 'end' | 'encounter' | 'zone' | 'ping' | 'ambush' | 'camp' | 'fragment' | 'chassis' | 'threat' | 'watch' | 'sector' | 'hub' | 'dock' | 'delve' | 'chest' | 'key' | 'lock' | 'exit' | 'part' | 'ride' | 'waypoint' | 'poi';
   label?: string;
   color?: string;
+  /** A player's own mark (`sim/navmarks.ts`): which glyph it is drawn with. */
+  poi?: import('../sim/navmarks').PoiKind;
+  /** Show the distance under it on the compass (a waypoint, a pinned mark, a ride on its way). */
+  dist?: boolean;
 }
 
 export type SceneResult =

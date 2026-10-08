@@ -132,6 +132,10 @@ export interface Ctx {
   openWorkbench?: (p: Player, v: Vehicle) => void;
   /** Open a player's inventory: what they wear, hold and carry (set by the game when a UI is available). */
   openInventory?: (p: Player) => void;
+  /** Call this player's ride to them (`game/summon.ts`); absent where no ride can come. */
+  summon?: (p: Player) => void;
+  /** The open big map takes this player's input for its cursor (`ui/mapnav.ts`); called while `mapMode > 0`. */
+  mapInput?: (p: Player, it: import('../input/intents').PlayerIntent, dt: number) => void;
   /** Remove a barricade (rammed, breached or smashed). */
   breakBarricade(a: Aabb, how: 'ram' | 'charge' | 'smash'): void;
   groundAt(x: number, z: number): number;
