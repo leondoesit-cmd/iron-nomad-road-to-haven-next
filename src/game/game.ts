@@ -121,7 +121,7 @@ export class Game {
     this.hud = new Hud(halves);
     this.hud.setLayout(this.R.layout);
     this.overlays = new Overlays(this);
-    this.input.onEscape = () => this.benchmark ? this.stopBenchmark() : this.inventory ? this.inventory.close() : this.closeCarPanel() || this.closeDrugPicks() ? undefined : this.togglePause(-1);
+    this.input.onEscape = () => this.benchmark ? this.stopBenchmark() : this.inventory ? this.inventory.close() : this.closeCarPanel() || this.closeDrugPicks() ? undefined : this.paused ? this.overlays.pauseFocus.onCancel(-1) : this.togglePause(-1);
     // Mouse aim: click the canvas to capture the pointer. Esc (or alt-tab) releases it, which pauses.
     this.input.attachMouse(canvas);
     this.input.onChange = () => this.saveSettings();
@@ -156,6 +156,11 @@ export class Game {
       this.layout();
     });
     document.addEventListener('visibilitychange', () => {
+      // A hidden tab stops drawing, so it goes quiet too, instead of droning its last engine note in the background.
+      const ctx = this.audio.ctx;
+      if (ctx && document.hidden && ctx.state === 'running') void ctx.suspend();
+      else if (ctx && !document.hidden && ctx.state === 'suspended') void ctx.resume();
+      this.storyVoice.setPaused(this.paused || document.hidden);
       if (this.benchmark && document.hidden) {
         this.benchmark.restartCurrent();
         this.overlays.updateBenchmarkProgress(true);
@@ -342,7 +347,7 @@ export class Game {
     try {
       const raw = localStorage.getItem('ironnomad.settings');
       if (!raw) return;
-      const s = JSON.parse(raw) as { quality?: QualityPreset; ui?: number; layout?: 'horizontal' | 'vertical'; vol?: number; music?: number; gameMusicEnabled?: boolean; userMusicEnabled?: boolean; userMusicVolume?: number; tts?: boolean; god?: boolean; voice?: boolean; mouse?: number; solo?: boolean; nightCamp?: boolean; input?: unknown };
+      const s = JSON.parse(raw) as { quality?: QualityPreset; ui?: number; layout?: 'horizontal' | 'vertical'; vol?: number; music?: number; gameMusicEnabled?: boolean; userMusicEnabled?: boolean; userMusicVolume?: number; tts?: boolean; god?: boolean; voice?: boolean; mouse?: number; solo?: boolean; nightCamp?: boolean; difficulty?: { drain?: unknown; aggro?: unknown; damage?: unknown }; input?: unknown };
       if (s.solo) this.setSolo(true);
       if (s.quality && QUALITY[s.quality]) this.R.setQuality(s.quality);
       if (s.ui) this.hud.setScale(s.ui);
@@ -357,6 +362,11 @@ export class Game {
       if (s.voice !== undefined) this.storyVoice.enabled = s.voice;
       // Settings from before the option have none: they get the new default (off), like everybody else.
       if (typeof s.nightCamp === 'boolean') this.nightCamp = s.nightCamp;
+      if (s.difficulty && typeof s.difficulty === 'object') {
+        const ok = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(2, Math.max(0.25, v)) : 1);
+        this.difficulty = { drain: ok(s.difficulty.drain), aggro: ok(s.difficulty.aggro), damage: ok(s.difficulty.damage) };
+        if (this.campaign) this.campaign.difficulty = { ...this.difficulty };
+      }
       if (s.mouse) this.input.settings.mouseSens = s.mouse;
       // Control settings: bindings, sensitivities, view. Saved since the first version only kept the mouse speed.
       this.input.importSettings(s.input);
@@ -370,7 +380,7 @@ export class Game {
     try {
       localStorage.setItem(
         'ironnomad.settings',
-        JSON.stringify({ quality: this.R.quality, ui: this.hud.uiScale, layout: this.R.layout, vol: this.audio.volume, music: this.audio.musicVolume, gameMusicEnabled: this.audio.gameMusicEnabled, userMusicEnabled: this.audio.userMusicEnabled, userMusicVolume: this.audio.userMusicVolume, tts: this.audio.ttsEnabled, god: this.godMode, voice: this.storyVoice.enabled, mouse: this.input.settings.mouseSens, solo: this.solo, nightCamp: this.nightCamp, input: this.input.exportSettings() }),
+        JSON.stringify({ quality: this.R.quality, ui: this.hud.uiScale, layout: this.R.layout, vol: this.audio.volume, music: this.audio.musicVolume, gameMusicEnabled: this.audio.gameMusicEnabled, userMusicEnabled: this.audio.userMusicEnabled, userMusicVolume: this.audio.userMusicVolume, tts: this.audio.ttsEnabled, god: this.godMode, voice: this.storyVoice.enabled, mouse: this.input.settings.mouseSens, solo: this.solo, nightCamp: this.nightCamp, difficulty: this.difficulty, input: this.input.exportSettings() }),
       );
     } catch {
       /* ignore */
@@ -416,11 +426,18 @@ export class Game {
   /** The open world's memory: kept from one dawn to the next, saved at each Ledger. */
   world: WorldMemory | null = null;
 
+  /**
+   * The difficulty sliders as set in Settings, kept on the Game (and in the saved settings) so a run started from the title
+   * gets them: on the title the campaign is only the demo's, rebuilt every loop.
+   */
+  difficulty = { drain: 1, aggro: 1, damage: 1 };
+
   newCampaign() {
     this.world = null;
     this.setSolo(this.solo);
     this.campaign = new Campaign(this.overlays.heroes(), this.solo);
     this.campaign.seed = (Math.random() * 1e6) | 0;
+    this.campaign.difficulty = { ...this.difficulty };
     if (this.godMode) grantAllWeapons(this.campaign);
   }
 
@@ -520,6 +537,7 @@ export class Game {
     this.setSolo(this.solo);
     this.campaign = new Campaign(this.overlays.heroes(), this.solo);
     this.campaign.seed = 4242;
+    this.campaign.difficulty = { ...this.difficulty };
     this.campaign.flags.training = true;
     const leg = legById('W');
     this.R.resize();
@@ -882,6 +900,7 @@ export class Game {
     this.disposeScene();
     this.setSolo(this.solo);
     const c = new Campaign(this.overlays.heroes(), this.solo);
+    c.difficulty = { ...this.difficulty };
     for (const [i, chassis] of (this.solo ? [[0, 'buggy']] : [[0, 'buggy'], [1, 'quad']]) as readonly (readonly [0 | 1, string])[]) {
       const b = newBuild(chassis, { paint: PLAYER_PAINT[i], seed: 40 + i });
       c.addVehicle(b, i);
@@ -890,6 +909,7 @@ export class Game {
     this.campaign = c;
     const svc = this.services();
     svc.onRadio = () => {};
+    svc.quietRadio = true;
     svc.onTip = () => {};
     // The demo drives the open world's highway; one shared layout, so the demo can loop without rebuilding the map.
     this.attractWorld ??= new WorldMemory();
@@ -962,6 +982,7 @@ export class Game {
     this.benchmarkRng = new Rng(4242);
     const svc = this.services();
     svc.onRadio = () => {};
+    svc.quietRadio = true;
     svc.onTip = () => {};
     svc.onBanner = () => {};
     const sc = new LegScene(svc, legById(test.scenario.leg));
@@ -1026,6 +1047,10 @@ export class Game {
     if (on === this.paused) return;
     this.paused = on;
     this.pausedBy = by;
+    // The engines would hold their last note under the menu; they come back with the next sound update.
+    if (on) this.audio.silenceEngines();
+    // The press that resumed (fire on a keyboard's Resume) must not also fire a shot.
+    else this.resumeLock = Math.max(this.resumeLock, 0.2);
     if (on) this.overlays.showPause(by);
     else this.overlays.hidePause();
   }
@@ -1291,9 +1316,11 @@ export class Game {
         this.stillAcc = 0;
         this.stillFrames++;
       } else this.stillFrames = 0;
-      sc.renderFrame(this.paused ? 0 : alpha, dt);
+      // Paused, the world holds still in the picture too: no particles, critters or trip drifting on, and no dt for
+      // anything that counts time in frames (the party's blessing landed under the pause menu).
+      sc.renderFrame(this.paused ? 0 : alpha, this.paused ? 0 : dt);
       this.applyPhoto();
-      if (!this.attract) sc.updateAudio(dt);
+      if (!this.attract && !this.paused) sc.updateAudio(dt);
       // Cheap frames behind a menu say nothing about what play costs: they would push the resolution up.
       if (!this.benchmark && !still) this.R.adapt(this.frameMs);
       // Particles scale with the viewport.
@@ -1305,7 +1332,8 @@ export class Game {
         };
       }
       this.R.render(this.time);
-      if (!this.attract && !this.benchmark) this.hud.update(sc, dt, this.input.slots, { legProgress: () => null });
+      // Paused, the subtitles, tips and banners wait too (a story line used to run out behind the pause menu).
+      if (!this.attract && !this.benchmark) this.hud.update(sc, this.paused ? 0 : dt, this.input.slots, { legProgress: () => null });
     } else {
       // Title: slow orbit around an empty ground plane is not needed; clear to the sky colour.
       this.R.gl.setScissorTest(false);

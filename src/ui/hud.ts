@@ -364,7 +364,11 @@ export class Hud {
   private lastFrame: MapFrame | null = null;
   private lastScene: Scene | null = null;
 
+  /** This tick's seats, for prompts that name the other player's buttons. */
+  private slotsNow: (Slot | null)[] = [];
+
   update(scene: Scene | null, dt: number, slots: (Slot | null)[], extras: HudExtras = {}) {
+    this.slotsNow = slots;
     this.subTimer -= dt;
     this.tipTimer -= dt;
     this.bannerTimer -= dt;
@@ -540,7 +544,7 @@ export class Hud {
     if (scene.mode === 'camp') {
       const camp = scene as CampScene;
       h.setText('clock', camp.phase === 'build' ? formatClock(camp.buildSecondsLeft) : '');
-      h.setText('daytag', camp.phase === 'build' ? 'BUILD · HOLD B WHEN READY' : camp.phase === 'night' ? 'NIGHT RAID' : camp.phase === 'dawn' ? 'DAWN' : 'LEDGER');
+      h.setText('daytag', camp.phase === 'build' ? `BUILD · HOLD ${btnLabel(slot, 'B').toUpperCase()} WHEN READY` : camp.phase === 'night' ? 'NIGHT RAID' : camp.phase === 'dawn' ? 'DAWN' : 'LEDGER');
       const html = camp.buildHud(p);
       h.setStyle('build', 'display', html ? 'flex' : 'none');
       h.setHtml('build', html);
@@ -574,7 +578,7 @@ export class Hud {
       // A small gear letter beside the speed and a thin rev bar under it, from the real drivetrain.
       const dr = v.powertrain ? v.drive : null;
       const gear = !dr || dr.redline <= 0 || !v.engineOn ? '' : dr.gear < 0 ? 'R' : dr.cvt ? 'D' : String(dr.gear);
-      h.el('speed').innerHTML = `${Math.round(Math.abs(v.speed) * 3.6)}<small>km/h</small>${gear ? `<small class="gear">${gear}</small>` : ''}`;
+      h.setHtml('speed', `${Math.round(Math.abs(v.speed) * 3.6)}<small>km/h</small>${gear ? `<small class="gear">${gear}</small>` : ''}`);
       h.setStyle('tach', 'display', gear ? '' : 'none');
       if (gear) {
         h.setStyle('tachfill', 'width', `${Math.round(Math.min(1, dr!.rpmFrac) * 100)}%`);
@@ -639,22 +643,22 @@ export class Hud {
     if (p.state === 'driving' && v) {
       if (v.def.weapon === 'frontLMG') {
         h.setText('wname', 'FRONT LMG');
-        h.el('ammo').innerHTML = `${camp.ammo}<small> rds</small>`;
+        h.setHtml('ammo', `${camp.ammo}<small> rds</small>`);
       } else if (v.def.weapon === 'bedMG') {
         h.setText('wname', 'BED MG · PARTNER GUNS');
-        h.el('ammo').innerHTML = `${camp.ammo}<small> rds</small>`;
+        h.setHtml('ammo', `${camp.ammo}<small> rds</small>`);
       } else {
         h.setText('wname', 'NO WEAPON');
-        h.el('ammo').innerHTML = '';
+        h.setHtml('ammo', '');
       }
       h.setHtml('equip', `<span class="on">${btnLabel(slot, 'X')} HORN</span><span>${btnLabel(slot, 'B')} LIGHTS</span>`);
     } else if (p.state === 'gunner' && v) {
       h.setText('wname', 'BED MG');
-      h.el('ammo').innerHTML = `${camp.ammo}<small> rds</small>`;
+      h.setHtml('ammo', `${camp.ammo}<small> rds</small>`);
       h.setHtml('equip', '');
     } else if (p.carry) {
       h.setText('wname', 'CARRYING');
-      h.el('ammo').innerHTML = `<small>${escapeHtml(carriedName(p.carry))}</small>`;
+      h.setHtml('ammo', `<small>${escapeHtml(carriedName(p.carry))}</small>`);
       h.setHtml('equip', `<span class="on">HANDS FULL</span>`);
     } else {
       const eq = p.equip;
@@ -662,13 +666,13 @@ export class Hud {
       const worn = eq === 'gun' || eq === 'melee' ? heldItem(p.gear) : null;
       const cond = worn && wearOf(worn.cond) < 0.6 ? `<small class="${wearOf(worn.cond) < 0.3 ? 'bad' : 'warn'}"> ${wearLabel(worn.cond).toUpperCase()}</small>` : '';
       const bowHeld = eq === 'gun' && !!worn && !!gearDef(worn.id).gun?.draw;
-      if (bowHeld) h.el('ammo').innerHTML = `${p.mag}<small>/${camp.items.arrow} ARROWS</small>${cond}`;
-      else if (eq === 'gun') h.el('ammo').innerHTML = `${p.mag}<small>/${camp.ammo}</small>${cond}`;
-      else if (eq === 'melee') h.el('ammo').innerHTML = `<small>${Math.round(p.meleeDamage())} DMG</small>${cond}`;
-      else if (eq === 'wrench') h.el('ammo').innerHTML = `<small>${whole(camp.stocks.scrap)} SCRAP · ${whole(camp.stocks.parts)} PARTS</small>`;
-      else if (eq === 'crowbar') h.el('ammo').innerHTML = `<small>${camp.inventory.length}/${camp.inventoryCap} PARTS</small>`;
-      else if (eq === 'jerrycan') h.el('ammo').innerHTML = `<small>${camp.stocks.fuel.toFixed(1)} FU PETROL · ${camp.items.diesel.toFixed(1)} DIESEL · ${(camp.items.oil * 3).toFixed(1)} L OIL · ${camp.items.water.toFixed(0)} L WATER</small>`;
-      else h.el('ammo').innerHTML = `<small>${p.utility === 'horn' ? '∞' : camp.items[p.utility as 'flare']}</small>`;
+      if (bowHeld) h.setHtml('ammo', `${p.mag}<small>/${camp.items.arrow} ARROWS</small>${cond}`);
+      else if (eq === 'gun') h.setHtml('ammo', `${p.mag}<small>/${camp.ammo}</small>${cond}`);
+      else if (eq === 'melee') h.setHtml('ammo', `<small>${Math.round(p.meleeDamage())} DMG</small>${cond}`);
+      else if (eq === 'wrench') h.setHtml('ammo', `<small>${whole(camp.stocks.scrap)} SCRAP · ${whole(camp.stocks.parts)} PARTS</small>`);
+      else if (eq === 'crowbar') h.setHtml('ammo', `<small>${camp.inventory.length}/${camp.inventoryCap} PARTS</small>`);
+      else if (eq === 'jerrycan') h.setHtml('ammo', `<small>${camp.stocks.fuel.toFixed(1)} FU PETROL · ${camp.items.diesel.toFixed(1)} DIESEL · ${(camp.items.oil * 3).toFixed(1)} L OIL · ${camp.items.water.toFixed(0)} L WATER</small>`);
+      else h.setHtml('ammo', `<small>${p.utility === 'horn' ? '∞' : camp.items[p.utility as 'flare']}</small>`);
       // The belt: what is in each hand slot, with the one in hand lit, then the throwable.
       const belt = p.gear.belt.map((it, i) => (it ? `<span class="${eq !== 'utility' && p.gear.sel === i ? 'on' : ''}">${gearDef(it.id).short}</span>` : '')).join('');
       h.setHtml('equip', `${belt}<span class="${eq === 'utility' ? 'on' : ''}">${p.utility.toUpperCase()}</span>`);
@@ -741,7 +745,8 @@ export class Hud {
     if (p.state === 'downed') {
       h.setStyle('cmsg', 'display', 'block');
       h.setText('cbig', 'YOU ARE DOWN');
-      h.setText('csmall', `Partner: hold ${btnLabel(slot === null ? null : null, 'A')} next to you to revive`);
+      // The partner's button, on the partner's own device.
+      h.setText('csmall', `Partner: hold ${btnLabel(this.slotsNow[1 - p.index] ?? null, 'A')} next to you to revive`);
     } else if (p.pinned >= 2 && p.state === 'foot') {
       h.setStyle('cmsg', 'display', 'block');
       h.setText('cbig', 'PINNED');

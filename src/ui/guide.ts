@@ -250,6 +250,8 @@ export class Guide {
     fc.onTick = (input) => {
       for (let s = 0; s < (g.solo ? 1 : 2); s++) {
         const it = input.intents[s];
+        // A keyboard's fire key drives RB and RT at once, and RT already pressed the focused button: no extra page turn.
+        if (it.device === 'keyboard' && wasPressed(it, Btn.RT)) continue;
         if (wasPressed(it, Btn.LB)) go(-1);
         else if (wasPressed(it, Btn.RB)) go(1);
       }

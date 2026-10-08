@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { Game } from '../src/game/game';
 import { InputManager } from '../src/input/input';
 import { defaultBindings, importBindings, isReservedKey } from '../src/input/bindings';
 import { Btn, wasPressed } from '../src/input/intents';
@@ -139,5 +140,45 @@ describe('saves', () => {
     expect(back.stocks).not.toBe(c.stocks);
     // And loading twice never hands out the same objects either.
     expect(loadCampaign()!.stocks).not.toBe(back.stocks);
+  });
+});
+
+describe('settings', () => {
+  it('difficulty set in Settings is kept on the game and in the saved settings, and new runs start with it', () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) });
+    const noop = () => {};
+    const make = () => {
+      const g = Object.create(Game.prototype) as Game;
+      Object.assign(g, {
+        benchmark: null,
+        godMode: false,
+        nightCamp: false,
+        solo: false,
+        difficulty: { drain: 1, aggro: 1, damage: 1 },
+        campaign: new Campaign(),
+        R: { quality: 'medium', layout: 'vertical', setQuality: noop, setLayout: noop },
+        hud: { uiScale: 1, setScale: noop },
+        audio: { volume: 1, musicVolume: 1, gameMusicEnabled: true, userMusicEnabled: true, userMusicVolume: 1, ttsEnabled: false, setVolume: noop, setMusicVolume: noop, setGameMusicEnabled: noop, setUserMusicEnabled: noop, setUserMusicVolume: noop, setTtsEnabled: noop },
+        storyVoice: { enabled: true },
+        input: { settings: { mouseSens: 1 }, exportSettings: () => ({}), importSettings: noop },
+        setGodMode(on: boolean) { (this as { godMode: boolean }).godMode = on; },
+        setSolo: noop,
+      });
+      return g;
+    };
+    const a = make();
+    a.difficulty = { drain: 0.5, aggro: 1.75, damage: 0.25 };
+    a.saveSettings();
+    const b = make();
+    b.applySettings();
+    expect(b.difficulty).toEqual({ drain: 0.5, aggro: 1.75, damage: 0.25 });
+    expect(b.campaign.difficulty).toEqual(b.difficulty);
+    // Junk in the saved file is clamped or dropped, never trusted.
+    store.set('ironnomad.settings', JSON.stringify({ difficulty: { drain: 99, aggro: 'x', damage: -3 } }));
+    const c = make();
+    c.applySettings();
+    expect(c.difficulty).toEqual({ drain: 2, aggro: 1, damage: 0.25 });
+    vi.unstubAllGlobals();
   });
 });
