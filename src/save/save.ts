@@ -32,8 +32,14 @@ function openDb(): Promise<IDBDatabase | null> {
   });
 }
 
-/** Load whatever save exists into memory so Continue can be a synchronous call. */
-export async function initSave(): Promise<void> {
+let reading: Promise<void> | null = null;
+
+/** Load whatever save exists into memory so Continue can be a synchronous call. Reads once per page. */
+export function initSave(): Promise<void> {
+  return (reading ??= readSave());
+}
+
+async function readSave(): Promise<void> {
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) mem = migrate(JSON.parse(raw));

@@ -21,6 +21,7 @@ import type { Game } from '../game/game';
 import type { CampScene } from '../game/campScene';
 import type { QualityPreset } from '../render/renderer';
 import { BENCHMARK_CASES, BENCHMARK_SCENARIOS } from '../game/benchmark';
+import { initPhysics } from '../physics/physics';
 
 export class Overlays {
   root = document.getElementById('overlay')!;
@@ -135,14 +136,15 @@ export class Overlays {
       { el: el('mode'), press: () => this.titleLock <= 0 && this.toggleSolo() },
       { el: el('name0'), press: () => this.titleLock <= 0 && this.cycleName(0) },
       ...(solo ? [] : [{ el: el('name1'), press: () => this.titleLock <= 0 && this.cycleName(1) }]),
-      { el: el('story'), press: () => this.titleLock <= 0 && g.startStory() },
-      { el: el('new'), press: () => this.titleLock <= 0 && g.startNewGame() },
-      { el: el('cont'), press: () => this.titleLock <= 0 && g.continueGame(), disabled: !hasSave() },
+      // Each starts behind a loading veil, so the press answers at once (`Game.load`).
+      { el: el('story'), press: () => this.titleLock <= 0 && g.load('Story', () => g.startStory()) },
+      { el: el('new'), press: () => this.titleLock <= 0 && g.load('New convoy', () => g.startNewGame()) },
+      { el: el('cont'), press: () => this.titleLock <= 0 && g.load('Continue', () => g.continueGame()), disabled: !hasSave() },
       { el: el('set'), press: () => this.titleLock <= 0 && this.showSettings(() => this.showTitle()) },
       { el: el('ctl'), press: () => this.titleLock <= 0 && this.showControlSettings(() => this.showTitle()) },
       { el: el('how'), press: () => this.titleLock <= 0 && this.showControls(() => this.showTitle()) },
-      { el: el('learn'), press: () => this.titleLock <= 0 && this.showGuide(() => this.showTitle(), () => g.startTraining()) },
-      { el: el('train'), press: () => this.titleLock <= 0 && g.startTraining() },
+      { el: el('learn'), press: () => this.titleLock <= 0 && this.showGuide(() => this.showTitle(), () => g.load('Training', () => g.startTraining())) },
+      { el: el('train'), press: () => this.titleLock <= 0 && g.load('Training', () => g.startTraining()) },
       { el: el('garden'), press: () => { if (this.titleLock <= 0) location.href = '/garden.html'; } },
       { el: el('bench'), press: () => this.titleLock <= 0 && this.showBenchmark() },
     ];
@@ -194,7 +196,7 @@ export class Overlays {
     }
     // Start button anywhere starts a new game.
     for (let p = 0; p < 2; p++) {
-      if (this.titleLock <= 0 && wasPressed(this.game.input.intents[p], Btn.Start) && this.game.input.slots[p]) this.game.startNewGame();
+      if (this.titleLock <= 0 && wasPressed(this.game.input.intents[p], Btn.Start) && this.game.input.slots[p]) this.game.load('New convoy', () => this.game.startNewGame());
     }
   }
 
@@ -220,7 +222,8 @@ export class Overlays {
     const el = (id: string) => this.root.querySelector<HTMLElement>(`[data-fid="${id}"]`)!;
     g.focus.setItems([
       { el: el('duration'), press: () => { this.benchmarkDuration = this.benchmarkDuration === 'standard' ? 'quick' : 'standard'; this.showBenchmark(); } },
-      { el: el('run'), press: () => g.startBenchmark(this.benchmarkDuration) },
+      // The title is up before Rapier has loaded; a run needs it.
+      { el: el('run'), press: () => void initPhysics().then(() => g.startBenchmark(this.benchmarkDuration)) },
       ...(report ? [{ el: el('download'), press: () => {
         const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
         const a = document.createElement('a');
@@ -886,7 +889,7 @@ export class Overlays {
     const q = (k: string) => this.root.querySelector<HTMLElement>(`[data-fid="${k}"]`)!;
     g.focus.setItems([
       { el: q('retry'), press: () => retry(), disabled: !hasSave() },
-      { el: q('new'), press: () => g.startNewGame() },
+      { el: q('new'), press: () => g.load('New convoy', () => g.startNewGame()) },
       { el: q('quit'), press: () => quit() },
     ]);
     g.focus.cursor = [hasSave() ? 0 : 1, hasSave() ? 0 : 1];
@@ -904,9 +907,9 @@ export class Overlays {
     this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));
     const q = (k: string) => this.root.querySelector<HTMLElement>(`[data-fid="${k}"]`)!;
     g.focus.setItems([
-      { el: q('new'), press: () => g.startNewGame() },
+      { el: q('new'), press: () => g.load('New convoy', () => g.startNewGame()) },
       { el: q('guide'), press: () => this.showGuide(() => this.showTrainingDone(lessons), undefined, 7) },
-      { el: q('again'), press: () => g.startTraining() },
+      { el: q('again'), press: () => g.load('Training', () => g.startTraining()) },
       { el: q('quit'), press: () => g.toTitle() },
     ]);
     g.focus.cursor = [0, 0];
@@ -935,8 +938,8 @@ export class Overlays {
     this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));
     const q = (k: string) => this.root.querySelector<HTMLElement>(`[data-fid="${k}"]`)!;
     g.focus.setItems([
-      { el: q('led'), press: () => camp && this.showLedger(camp, (next) => (legById(c.legId).open ? this.game.rollOut(next) : undefined)) },
-      { el: q('new'), press: () => g.startNewGame() },
+      { el: q('led'), press: () => camp && this.showLedger(camp, (next) => (legById(c.legId).open ? this.game.load(legById(next).name, () => this.game.rollOut(next)) : undefined)) },
+      { el: q('new'), press: () => g.load('New convoy', () => g.startNewGame()) },
       { el: q('quit'), press: () => g.toTitle() },
     ]);
     g.focus.active = true;
