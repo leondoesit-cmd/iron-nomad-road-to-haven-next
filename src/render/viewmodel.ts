@@ -52,6 +52,11 @@ const ARM_SWING = 0.55;
 const POLE_R = new THREE.Vector3(1, -0.75, 0.1).normalize();
 const POLE_L = new THREE.Vector3(-1, -0.75, 0.1).normalize();
 /**
+ * The support elbow under a long gun's fore-end hangs down, a little out: out to the side, a short gun's fore-end (held close
+ * in) would be reached for level across the frame.
+ */
+const POLE_FORE = new THREE.Vector3(-0.5, -1, 0.1).normalize();
+/**
  * Working the weapon over (a drill), the elbows are tucked down by the ribs: held out, a raised gun lifts the upper arms into
  * the bottom corners of the frame, where the lens cuts them open.
  */
@@ -79,11 +84,31 @@ interface Grip {
   p: V3;
   a: V3;
   n: V3;
-  /** Where the thumb goes: round over the fingers, or straight ahead along the far side or the near side of the grip. */
+  /**
+   * Where the thumb goes: round over the fingers, straight ahead along the far side or the near side of the grip, or
+   * forward along the side of a fore-end lying slantwise in the palm.
+   */
   thumb: Thumb;
+  /** How the hand holds on, where it differs from a hand round a grip (see `Hold`). */
+  hold?: Partial<Hold>;
 }
 
-type Thumb = 'wrap' | 'far' | 'near';
+type Thumb = 'wrap' | 'far' | 'near' | 'fore';
+
+/**
+ * How a hand holds what it closes round: how far it may roll round it toward the forearm, how far the wrist then bends
+ * before the forearm swings, and how far the line slants across the palm (radians). A slant turns the hand about its palm,
+ * the wrist back toward the shoulder: a fore-end held from below lies across the palm from the heel of the hand to the root
+ * of the index finger, so the forearm comes up from behind it instead of square across it.
+ */
+interface Hold {
+  roll: number;
+  bend: number;
+  skew: number;
+}
+
+/** The slant of a fore-end across the support hand's palm (radians), which its fingers are drawn closed round. */
+const FORE_SKEW = 0.7;
 
 interface Spec {
   /** Where the right hand's grip sits, camera space, at the hip (or at rest for a weapon with no sights). */
@@ -102,11 +127,13 @@ interface Spec {
 
 // Grips are read off each gun's frame (`sim/gunFrames.ts`), which its model in `render/weapons` is drawn to.
 // The firing hand closes round the grip from its right side, palm onto it and a little forward, the thumb laid along the far
-// side; on a handgun the support hand wraps over it from the left, its thumb along the near side under the first; a fore-end
-// is held from the left and below, the back of the hand showing.
+// side; on a handgun the support hand wraps over it from the left, its thumb along the near side under the first. A fore-end
+// (or a pump) is cupped from below, the palm under it, lying slantwise across the palm with the fingers up its right side
+// and the thumb forward along its left; the wrist is cocked back, so the forearm comes up from low on the left behind it.
+// The hand rolls round the fore-end toward the forearm only a little: further, the palm would come round onto its right.
 const GRIP_R = (p: V3, a: V3): Grip => ({ p, a, n: [1, 0, 0.35], thumb: 'far' });
 const SUPPORT_HANDGUN = (p: V3, a: V3): Grip => ({ p, a, n: [-1, 0, 0.2], thumb: 'near' });
-const FORE_END = (p: V3): Grip => ({ p, a: [0, 0, 1], n: [-1, 0.6, 0], thumb: 'near' });
+const FORE_END = (p: V3): Grip => ({ p, a: [0, 0, 1], n: [-0.27, 1, 0], thumb: 'fore', hold: { roll: 0.35, bend: 0.8, skew: FORE_SKEW } });
 const HANDLE = (z: number, n: V3 = [1, 0, 0]): Grip => ({ p: [0, 0, z], a: [0, 0, 1], n, thumb: 'wrap' });
 const MELEE_REST: V3 = [1.05, 0.3, 0.12];
 const HANDGUNS: GunModel[] = ['pistol', 'compact', 'mp', 'revolver', 'cannon'];
@@ -246,6 +273,8 @@ const THUMBS: Record<Thumb, { x: number[]; yz: [number, number][] }> = {
   far: { x: [0.62, 0.95, 1.05, 1.05], yz: [[0.03, -0.028], [0.034, 0.004], [0.006, 0.025], [-0.02, 0.031]] },
   // Straight ahead along the near side, under the other hand's thumb.
   near: { x: [0.62, 0.92, 1.02, 1.02], yz: [[0.036, -0.03], [0.012, -0.026], [-0.02, -0.019], [-0.046, -0.015]] },
+  // Up out of the palm and forward along the side of a fore-end lying slantwise in the hand (`FORE_SKEW`), clear of it.
+  fore: { x: [0.62, 0.72, 1.27, 1.71], yz: [[0.036, -0.03], [0.0176, -0.004], [-0.0017, -0.002], [-0.0171, 0]] },
   // Round the back of the handle and over the first two fingers.
   wrap: { x: [0.62, 0.9, 0.82, 0.62], yz: [[0.036, -0.03], [0.04, 0.004], [0.012, 0.036], [-0.012, 0.038]] },
 };
@@ -286,6 +315,9 @@ function drawViewHand(b: MeshBuilder, glove: Surf, fingers: Surf, side: number, 
     b.rbox(0, 0.008, -0.053, 0.066, 0.05, 0.01, 0.004, S.metal(0x5a5e62, 0.4));
     for (const f of FINGERS) b.sphereAt(sx * f.x, -0.031 - f.k, -0.05, 0.007, S.metal(0x5a5e62, 0.4));
   }
+  // A fore-end lying slantwise in the palm crosses each finger at a different place: out by the index finger's root, back
+  // in the heel of the hand by the little finger. Each finger closes round it where it crosses.
+  const slant = thumb === 'fore' && !open && !bird ? Math.tan(FORE_SKEW) : 0;
   // Fingers, index to little, each in three tapering bones.
   for (let i = 0; i < 4; i++) {
     const f = FINGERS[i];
@@ -293,6 +325,7 @@ function drawViewHand(b: MeshBuilder, glove: Surf, fingers: Surf, side: number, 
     // Spread a little when open, the way a hand relaxes.
     const j = fingerJoints(tpl, sx * f.x * (open ? 1.12 : 1), f.k, f.l);
     if (tpl === TRIGGER_FINGER) for (let n = 0; n < j.length; n++) j[n][0] += sx * TRIGGER_RISE[n];
+    for (let n = 1; n < j.length; n++) j[n][1] -= j[0][0] * slant;
     b.limb(j[0][0], j[0][1], j[0][2], j[1][0], j[1][1], j[1][2], f.r * 1.08, f.r, i === 0 ? glove : fingers, 10);
     b.limb(j[1][0], j[1][1], j[1][2], j[2][0], j[2][1], j[2][2], f.r, f.r * 0.93, fingers, 10);
     b.limb(j[2][0], j[2][1], j[2][2], j[3][0], j[3][1], j[3][2], f.r * 0.93, f.r * 0.84, fingers, 10);
@@ -334,6 +367,7 @@ function viewArms(pal: Palette): ArmGeo {
     wrap: mk((b) => drawViewHand(b, glove, fingers, side, 'wrap', padded)),
     far: mk((b) => drawViewHand(b, glove, fingers, side, 'far', padded)),
     near: mk((b) => drawViewHand(b, glove, fingers, side, 'near', padded)),
+    fore: mk((b) => drawViewHand(b, glove, fingers, side, 'fore', padded)),
   });
   const out: ArmGeo = {
     upperR: upper(false),
@@ -404,6 +438,22 @@ const DOWN = new THREE.Vector3(0, -1, 0);
 const UP = new THREE.Vector3(0, 1, 0);
 const AHEAD = new THREE.Vector3(0, 0, -1);
 const BASE = new THREE.Quaternion().setFromAxisAngle(UP, Math.PI);
+const _kx = new THREE.Vector3();
+const _ky = new THREE.Vector3();
+
+/** A hand round a grip: it rolls and bends so far, and the grip runs square across the palm. */
+const HOLD: Hold = { roll: HAND_ROLL, bend: WRIST_BEND, skew: 0 };
+const _hold: Hold = { ...HOLD };
+
+/** How a hand holds on to `grip`, `on` of the way from the plain hold (0: off it, holding something else). */
+function holdOf(grip: Grip, on: number): Hold {
+  const g = grip.hold;
+  if (!g) return HOLD;
+  _hold.roll = lerp(HOLD.roll, g.roll ?? HOLD.roll, on);
+  _hold.bend = lerp(HOLD.bend, g.bend ?? HOLD.bend, on);
+  _hold.skew = lerp(HOLD.skew, g.skew ?? HOLD.skew, on);
+  return _hold;
+}
 
 export class ViewModel {
   /** Placed on the camera for the owner's view, hidden otherwise. */
@@ -686,7 +736,8 @@ export class ViewModel {
       rp = [lerp(rp[0], -0.045, k), lerp(rp[1], 0.05, k), lerp(rp[2], 0.12 - gp.rack * 0.09, k)];
     }
     const poleR = dp ? _pr.copy(POLE_R).lerp(POLE_TUCK_R, dw).normalize() : POLE_R;
-    const poleL = dp ? _pl.copy(POLE_L).lerp(POLE_TUCK_L, dw).normalize() : POLE_L;
+    const pole0 = spec.long && spec.l ? POLE_FORE : POLE_L;
+    const poleL = dp ? _pl.copy(pole0).lerp(POLE_TUCK_L, dw).normalize() : pole0;
     this.handOn(rp, spec.r, 'r', this.handR, SHOULDER_R, poleR, this.upperR, this.foreR, 0, dhR);
     // Left hand: on the support grip unless a reload has it at the belt or it is racking the slide; or a loose guard.
     if (spec.l) {
@@ -768,7 +819,9 @@ export class ViewModel {
       n.lerp(_v.set(1, 0, 0), down).normalize();
     }
     hand.geometry = dh ? this.drillReach(dh, side, t, a, n, p, grip) : this.geo.hand[side][grip.thumb];
-    solveArm(shoulder, t, a, n, pole, hand, upper, fore);
+    // Off its grip (down at the belt, or away at work in a drill) the hand holds on the plain way.
+    const on = (1 - clamp01(down)) * (dh ? 1 - dh.w * (1 - this.gripOn) : 1);
+    solveArm(shoulder, t, a, n, pole, hand, upper, fore, holdOf(grip, on));
   }
 
   /** The free hand of a one-handed weapon: low on the left, a loose fist, barely in frame; it comes up for balance in a swing. */
@@ -811,10 +864,13 @@ export class ViewModel {
     a.lerp(_h0.a, dh.w).normalize();
     n.lerp(_h0.n, dh.w).normalize();
     const open = at.open * dh.w;
-    const onGrip = (fromOn ? 1 - at.k : 0) + (toOn ? at.k : 0) > 0.5;
+    this.gripOn = (fromOn ? 1 - at.k : 0) + (toOn ? at.k : 0);
     if (open > 0.5) return this.geo.open[side];
-    return onGrip && grip ? this.geo.hand[side][grip.thumb] : this.geo.hand[side].wrap;
+    return this.gripOn > 0.5 && grip ? this.geo.hand[side][grip.thumb] : this.geo.hand[side].wrap;
   }
+
+  /** How much of the hand `drillReach` last placed is on its own grip (or a shift on it), 0 to 1. */
+  private gripOn = 1;
 
   /** A drill's spot in camera space, into `out`; true if it is the hand's own grip (or a shift on it). */
   private spotAt(d: Drill, name: string, p: V3 | null, grip: Grip | null, rp: THREE.Vector3, ra: THREE.Vector3, rn: THREE.Vector3, out: typeof _h0): boolean {
@@ -891,10 +947,11 @@ export class ViewModel {
  * Close a hand round the line `a` through `t` with the palm facing `n`, then bend the arm from `shoulder` to its wrist: the
  * elbow toward `pole`. Past arm's reach the shoulder comes forward (it is out of frame), so the hand never leaves the grip.
  * A wrist only bends so far, so the hand first rolls round the grip toward the forearm (its fingers stay closed on it),
- * and then the forearm swings toward the line of the hand for what is left, the shoulder following.
+ * and then the forearm swings toward the line of the hand for what is left, the shoulder following. `hold` says how far
+ * each goes, and how far the line slants across the palm.
  */
-function solveArm(shoulder: THREE.Vector3, t: THREE.Vector3, a: THREE.Vector3, n: THREE.Vector3, pole: THREE.Vector3, hand: THREE.Mesh, upper: THREE.Mesh, fore: THREE.Mesh) {
-  // The hand's frame: along the grip, the palm onto it, and the wrist toward the shoulder, so the forearm comes from there.
+function solveArm(shoulder: THREE.Vector3, t: THREE.Vector3, a: THREE.Vector3, n: THREE.Vector3, pole: THREE.Vector3, hand: THREE.Mesh, upper: THREE.Mesh, fore: THREE.Mesh, hold: Hold = HOLD) {
+  // The grip's frame: along the grip, the palm onto it, and the wrist toward the shoulder, so the forearm comes from there.
   const x = a.normalize();
   const z = _hz.copy(n).addScaledVector(x, -n.dot(x));
   if (z.lengthSq() < 1e-6) z.set(0, 0, 1).addScaledVector(x, -x.z);
@@ -904,11 +961,19 @@ function solveArm(shoulder: THREE.Vector3, t: THREE.Vector3, a: THREE.Vector3, n
     x.negate();
     y.negate();
   }
+  // The hand's own frame is the grip's turned about the palm by the slant, the wrist leaning back toward the shoulder.
+  const skew = x.dot(_v.copy(shoulder).sub(t)) < 0 ? hold.skew : -hold.skew;
+  const cs = Math.cos(skew);
+  const sn = Math.sin(skew);
+  const hx = _kx;
+  const hy = _ky;
   const sh = _el.copy(shoulder);
   const elbow = _x;
   const wrist = _wr;
   const place = () => {
-    _m.makeBasis(x, y, z);
+    hx.copy(x).multiplyScalar(cs).addScaledVector(y, sn);
+    hy.copy(y).multiplyScalar(cs).addScaledVector(x, -sn);
+    _m.makeBasis(hx, hy, z);
     hand.quaternion.setFromRotationMatrix(_m);
     wrist.copy(WRIST).applyQuaternion(hand.quaternion).add(t);
     reachArm(sh.copy(shoulder), wrist, pole, elbow);
@@ -917,20 +982,20 @@ function solveArm(shoulder: THREE.Vector3, t: THREE.Vector3, a: THREE.Vector3, n
   // Roll round the grip toward where the forearm comes from.
   const fd = _fd.copy(elbow).sub(wrist).normalize();
   const fp = _ax.copy(fd).addScaledVector(x, -fd.dot(x));
-  if (fp.lengthSq() > 1e-6) {
+  if (fp.lengthSq() > 1e-6 && hold.roll > 0) {
     fp.normalize();
-    const roll = clamp(Math.atan2(_v.copy(y).cross(fp).dot(x), y.dot(fp)), -HAND_ROLL, HAND_ROLL);
+    const roll = clamp(Math.atan2(_v.copy(y).cross(fp).dot(x), y.dot(fp)), -hold.roll, hold.roll);
     y.applyAxisAngle(x, roll);
     z.applyAxisAngle(x, roll);
     place();
   }
   // Then swing the forearm toward the line of the hand, so far.
   fd.copy(elbow).sub(wrist).normalize();
-  const bend = Math.acos(clamp(fd.dot(y), -1, 1));
-  if (bend > WRIST_BEND) {
-    const ax = _ax.copy(fd).cross(y);
+  const bend = Math.acos(clamp(fd.dot(hy), -1, 1));
+  if (bend > hold.bend) {
+    const ax = _ax.copy(fd).cross(hy);
     if (ax.lengthSq() > 1e-8) {
-      fd.applyAxisAngle(ax.normalize(), Math.min(bend - WRIST_BEND, ARM_SWING));
+      fd.applyAxisAngle(ax.normalize(), Math.min(bend - hold.bend, ARM_SWING));
       elbow.copy(wrist).addScaledVector(fd, FORE);
       sh.sub(elbow).normalize().multiplyScalar(UPPER).add(elbow);
     }
