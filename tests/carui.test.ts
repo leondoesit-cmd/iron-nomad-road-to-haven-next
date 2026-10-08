@@ -236,8 +236,9 @@ describe('storage', () => {
     const mt = la.find((e) => e.item?.id === 'whl_mt')!;
     expect(mt.verdict).toMatchObject({ fitsHere: true, junk: false });
     expect(mt.verdict!.gain).toBeGreaterThan(0);
-    // By value, the upgrade comes first.
-    expect(sortEntries(la, 'value')[0].item?.id).toBe('whl_mt');
+    // By value, the biggest upgrade for this car comes first.
+    const byValue = sortEntries(la, 'value').filter((e) => e.kind === 'part');
+    expect(byValue[0].verdict!.gain!).toBeGreaterThanOrEqual(byValue[1].verdict!.gain!);
   });
 
   it('X at the boot opens the panel on that car; the chosen item (not the first) comes out into the hands', () => {

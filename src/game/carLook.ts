@@ -304,7 +304,7 @@ function actionsFor(p: Player, L: CarLook, cand: Cand | null): CardModel['action
   const v = L.v;
   const out: CardModel['actions'] = [];
   const key = (b: string) => keyName(p, b);
-  const aboutCar = cand && (cand.target === v || (typeof cand.target === 'string' && cand.target.startsWith(`${v.id}:`)) || cand.kind === 'unbolt' || cand.kind === 'pry' || cand.kind === 'panel' || cand.kind === 'cuthood');
+  const aboutCar = candAbout(cand, v, L.part);
   if (cand && aboutCar) out.push({ key: `Hold ${key('A')}`, text: shortPrompt(cand.prompt), ok: cand.ok });
   if (p.promptAlt?.button === 'X') out.push({ key: key('X'), text: shortPrompt(p.promptAlt.text), ok: p.promptAlt.ok });
   else if (!p.prompt && p.promptAlt === null && L.part?.slot === 'boot') out.push({ key: key('X'), text: 'Storage', ok: true });
@@ -313,6 +313,22 @@ function actionsFor(p: Player, L: CarLook, cand: Cand | null): CardModel['action
   if (s && s !== 'boot' && p.equip !== 'wrench' && p.equip !== 'crowbar' && idAt(v, s, L.part!.index) && !aboutCar) out.push({ key: key('LB'), text: 'Wrench out to unbolt it', ok: true });
   out.push({ key: `Hold ${sheetKey(p)}`, text: 'Details', ok: true });
   return out;
+}
+
+/**
+ * Is what holding interact would do about the part being read? A job on that very mount (one wheel of four, or all of them
+ * for a set of tyres), the panel in front of it (the bonnet over the engine, a door before a seat), or the whole car.
+ */
+function candAbout(cand: Cand | null, v: Vehicle, part: LookPart | null): boolean {
+  if (!cand || !part) return false;
+  const t = cand.target;
+  if (t === v) return true;
+  if (typeof t !== 'string' || !t.startsWith(`${v.id}:`)) return false;
+  const [, what, idx] = t.split(':');
+  if (part.slot === 'boot') return what === 'trunk';
+  if (what === part.slot) return part.slot !== 'wheels' || idx === undefined || Number(idx) === part.index || cand.kind === 'unbolt';
+  if (cand.kind === 'panel' || cand.kind === 'cuthood') return ((what === 'hood' || what === 'cuthood') && (part.slot === 'engine' || part.slot === 'cooling' || part.slot === 'hood')) || ((what === 'doorL' || what === 'doorR') && (isInteriorSlot(part.slot) || part.slot === `glass${what.slice(4)}`));
+  return false;
 }
 
 /** The first clause of a prompt, for a short action line. */
