@@ -426,6 +426,8 @@ export class MapPainter {
     // A copy, so the drawing helpers can use this.proj without moving the nav's own.
     const PP = this.proj.set(P.cx, P.cz, P.heading, P.scale, P.px, P.py);
     P.worldBox(bx, by, bx + bw, by + bh, this.box);
+    // The close-up tiles for what is on screen, asked for every frame (the cached picture is only redrawn now and then).
+    for (const T of f.tiles) if (PP.scale >= T.minScale) T.want(this.box);
     if (PP.scale !== this.lastScale) {
       this.lastScale = PP.scale;
       this.scaleAt = now;
@@ -501,7 +503,9 @@ export class MapPainter {
     const cw = Math.round(bw + MARGIN * 2);
     const ch = Math.round(bh + MARGIN * 2);
     const key = `${f.staticVersion}|${f.labels.length}|${overview ? 1 : 0}|${f.title}`;
-    const bake = `${f.base?.version ?? 0}|${f.under?.version ?? 0}|${f.tiles?.version ?? 0}`;
+    let tv = 0;
+    for (const T of f.tiles) tv += T.version;
+    const bake = `${f.base?.version ?? 0}|${f.under?.version ?? 0}|${tv}`;
     let c = this.cache;
     let redraw = !c || c.w !== cw || c.h !== ch || c.dpr !== dpr || c.heading !== P.heading || c.key !== key;
     if (c && !redraw) {
@@ -593,8 +597,8 @@ export class MapPainter {
     g.drawImage(c, 0, 0);
     g.restore();
     // Up close, the finer tiles over it (asked for here, baked by the scene a little each frame).
-    const T = f.tiles;
-    if (T && P.scale >= T.minScale) {
+    for (const T of f.tiles) {
+      if (P.scale < T.minScale) continue;
       T.want(this.box);
       T.forEach(this.box, (t) => {
         if (!t.canvas) return;
@@ -811,15 +815,15 @@ export class MapPainter {
     for (const l of order) {
       const x = P.x(l.x, l.z);
       const y = P.y(l.x, l.z);
-      const size = l.kind === 'district' ? 17 : l.kind === 'hub' ? 13 : l.kind === 'town' ? 12 : 11;
+      const size = l.kind === 'district' ? 14 : l.kind === 'hub' ? 13 : l.kind === 'town' ? 12 : 11;
       g.font = LABEL_FONT(size, l.kind === 'place' ? 500 : 700);
-      const text = l.kind === 'place' ? l.text : l.text.toUpperCase().split('').join(l.kind === 'district' ? ' ' : '');
+      const text = l.kind === 'place' ? l.text : l.text.toUpperCase();
       const tw = g.measureText(text).width;
       if (!this.claim(x - tw / 2 - 3, y - size * 0.7, x + tw / 2 + 3, y + size * 0.7)) continue;
       g.lineWidth = 3.5;
       g.strokeStyle = 'rgba(10,8,6,0.8)';
       g.strokeText(text, x, y);
-      g.fillStyle = l.kind === 'district' ? 'rgba(244,232,206,0.92)' : l.kind === 'hub' ? '#ffe08a' : l.kind === 'town' ? PAPER : 'rgba(233,223,199,0.82)';
+      g.fillStyle = l.kind === 'district' ? 'rgba(244,232,206,0.8)' : l.kind === 'hub' ? '#ffe08a' : l.kind === 'town' ? PAPER : 'rgba(233,223,199,0.82)';
       g.fillText(text, x, y);
     }
     g.restore();
@@ -1005,10 +1009,13 @@ export class MapPainter {
         }
       }
       drawWaypointGlyph(g, x, y, edge ? 4.2 : 5.6 * o.u, w.color);
-      if (edge || (o.labels && w.seat === v.seat)) {
-        const text = o.labels ? `WAYPOINT · ${distLabel(dist)}` : distLabel(dist);
-        this.smallLabel(g, text, x, y + 8, w.color);
-      }
+      if (edge) {
+        // On the rim the distance sits inside the circle, toward the middle, so the frame never cuts it.
+        const dx = P.px - x;
+        const dy = P.py - y;
+        const dl = Math.hypot(dx, dy) || 1;
+        this.smallLabel(g, distLabel(dist), x + (dx / dl) * 16, y + (dy / dl) * 16 - 5, w.color);
+      } else if (o.labels && w.seat === v.seat) this.smallLabel(g, `WAYPOINT · ${distLabel(dist)}`, x, y + 8, w.color);
       consider({ kind: 'waypoint', label: w.seat === v.seat ? 'Your waypoint' : 'Partner waypoint', id: w.seat, x: w.x, z: w.z }, x, y, 3);
     }
     if (nav) nav.hover = best;

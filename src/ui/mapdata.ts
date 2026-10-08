@@ -211,8 +211,8 @@ export interface MapFrame {
   labels: MapLabel[];
   /** Building footprints, drawn as outlines once zoomed in close enough to tell one from the next. */
   buildings: MapBuildings | null;
-  /** The finer ground near the view, where the scene bakes one. */
-  tiles: TileSource | null;
+  /** The finer ground near the view, coarser levels first, where the scene bakes them. */
+  tiles: TileSource[];
   /** Waypoints, routes and the players' own marks. */
   nav: NavLayer;
   /** Bumped when anything drawn into a cached picture of the map changes (roads, labels, buildings, hazards). */
@@ -239,7 +239,7 @@ export function newFrame(mode: MapFrame['mode']): MapFrame {
     overview: false,
     labels: [],
     buildings: null,
-    tiles: null,
+    tiles: [],
     nav: newNavLayer(),
     staticVersion: 0,
   };
@@ -370,9 +370,10 @@ const PALETTE: Record<NonNullable<TerrainDef['theme']>, { lo: Rgb; hi: Rgb }> = 
 /** The green country of the open world: grass and meadow, and the darker woods. */
 const MEADOW: Rgb = [112, 132, 70];
 const WOOD: Rgb = [50, 76, 42];
-const CITY_GROUND: Rgb = [36, 33, 30];
-const CITY_BLOCK: Rgb = [92, 84, 74];
-const CITY_ZONE: Rgb = [128, 104, 58];
+/** A city: grey street ground, blocks a shade lighter (their buildings are drawn over them as footprints up close). */
+const CITY_GROUND: Rgb = [62, 60, 56];
+const CITY_BLOCK: Rgb = [104, 98, 88];
+const CITY_ZONE: Rgb = [132, 110, 66];
 const ROOF: Rgb = [62, 50, 40];
 
 const hex = (n: number): Rgb => [(n >> 16) & 255, (n >> 8) & 255, n & 255];
@@ -394,6 +395,22 @@ function fillRow(base: MapBase, r: MapRect, j: number, c: Rgb) {
   const i0 = Math.max(0, Math.floor((r.x0 - base.x0) / base.cell));
   const i1 = Math.min(base.w - 1, Math.floor((r.x1 - base.x0) / base.cell));
   for (let i = i0; i <= i1; i++) put(base, i, j, c);
+}
+
+/** A flat patch painted over the shaded ground: a building's roof, a city district's ground, a block or a zone. */
+export interface CoverRect extends MapRect {
+  rgb: [number, number, number];
+}
+
+/** What is painted over the shaded ground, in the order it is painted: roofs, then a district's ground, then its blocks. */
+export function groundCover(def: TerrainDef, layout: Pick<LegLayout, 'lots' | 'rural'>): CoverRect[] {
+  const out: CoverRect[] = layout.rural.map((r) => ({ x0: r.aabb.minX, x1: r.aabb.maxX, z0: r.aabb.minZ, z1: r.aabb.maxZ, rgb: ROOF }));
+  // A city district of the open world: its ground, blocks and zones, drawn as a city leg's map is.
+  if (def.open) {
+    for (const d of def.open.districts) out.push({ x0: d.x0, x1: d.x1, z0: d.z0, z1: d.z1, rgb: CITY_GROUND });
+    for (const lot of layout.lots) if (lot.kind !== 'open') out.push({ x0: lot.x0, x1: lot.x1, z0: lot.z0, z1: lot.z1, rgb: lot.kind === 'zone' ? CITY_ZONE : CITY_BLOCK });
+  }
+  return out;
 }
 
 /**
@@ -482,7 +499,7 @@ export function shadeGround(o: Uint8ClampedArray, off: number, s: GroundShade, h
     const cn = Math.floor(hu / I);
     if (ce !== c0 || cn !== c0) {
       const lvl = Math.max(c0, ce, cn);
-      k *= lvl % 5 === 0 ? 0.8 : 0.9;
+      k *= lvl % 5 === 0 ? 0.84 : 0.93;
     }
   }
   o[off] = r * k;
@@ -591,6 +608,8 @@ export class LegMapBaker {
   coarse: MapBase | null = null;
   /** Height range and colouring, fixed by the coarse pass so the bands agree whichever order they are baked in. */
   shade: GroundShade | null = null;
+  /** The same for the base itself, without contour lines: at 8 to 12 m a pixel they come out as jagged blots (the tiles have them). */
+  private baseShade: GroundShade | null = null;
   private def: TerrainDef | null;
   private layout: BakeLayout | null;
   private stage: 'coarse' | 'fine' | 'done' = 'coarse';
@@ -744,7 +763,7 @@ export class LegMapBaker {
     // A little headroom: the fine pass finds peaks and hollows the coarse one stepped over.
     const pad = (this.hMax - this.hMin) * 0.04 + 0.5;
     this.shade = groundShade(this.def!, this.hMin - pad, this.hMax + pad);
-    const s = { ...this.shade, interval: 0 };
+    const s = (this.baseShade = { ...this.shade, interval: 0 });
     const c = this.coarse!;
     const cw = c.w;
     const ch = c.h;
@@ -862,7 +881,7 @@ export class LegMapBaker {
 
   private shadeChunk(j: number) {
     const b = this.base;
-    const s = this.shade!;
+    const s = this.baseShade!;
     const hs = this.heights!;
     const [i0, i1] = this.span(j);
     const z = b.z0 + (j + 0.5) * b.cell;
@@ -899,14 +918,10 @@ export class LegMapBaker {
   /** What sits on the ground in row j: buildings, and a city district's ground, blocks and zones. */
   private overlays(j: number) {
     const b = this.base;
-    const L = this.layout!;
-    for (const r of L.rural) fillRow(b, { x0: r.aabb.minX, x1: r.aabb.maxX, z0: r.aabb.minZ, z1: r.aabb.maxZ }, j, ROOF);
-    // A city district of the open world: its ground, blocks and zones, drawn as a city leg's map is.
-    if (this.def!.open) {
-      for (const d of this.def!.open.districts) fillRow(b, d, j, CITY_GROUND);
-      for (const lot of L.lots) if (lot.kind !== 'open') fillRow(b, lot, j, lot.kind === 'zone' ? CITY_ZONE : CITY_BLOCK);
-    }
+    this.cover ??= groundCover(this.def!, this.layout!);
+    for (const r of this.cover) fillRow(b, r, j, r.rgb);
   }
+  private cover: CoverRect[] | null = null;
 
   private finishFine() {
     this.heights = null;

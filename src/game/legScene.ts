@@ -40,7 +40,7 @@ import { newDelveRecord, type DelveRecord, type PlayerCarry } from './delveScene
 import { districtMask } from '../world/openWorld';
 import { GangCamps } from './gangCamps';
 import type { WorldMemory, WorldPose } from './worldMemory';
-import { LegMapBaker, SITE_LABEL, legBaker, mapBuildings, minefieldOutline, newFrame, openRoadLines, roadLine, waterLines, type MapFrame, type MapLabel } from '../ui/mapdata';
+import { LegMapBaker, SITE_LABEL, groundCover, legBaker, mapBuildings, minefieldOutline, newFrame, openRoadLines, roadLine, waterLines, type MapFrame, type MapLabel } from '../ui/mapdata';
 import { MapTiles } from '../ui/mapTiles';
 import { Navigation } from './navigation';
 import { Summoner } from './summon';
@@ -2419,7 +2419,7 @@ export class LegScene extends Scene {
   mapModes = 3;
   private mapBaker!: LegMapBaker;
   /** The finer ground near whatever a map is looking at (not for a city leg, whose blocks are baked fine already). */
-  mapTiles: MapTiles | null = null;
+  mapTiles: MapTiles[] = [];
   /** Waypoints, routes and marks (`game/navigation.ts`), and calling the ride (`game/summon.ts`). */
   navigation!: Navigation;
   summoner!: Summoner;
@@ -2436,7 +2436,15 @@ export class LegScene extends Scene {
     this.mapBaker = legBaker(`${leg.id}:${leg.seed}`, T, this.src.layout);
     this.mapBaker.focus(startZ);
     this.mapBaker.step(MAP_PRIME_MS);
-    if (leg.biome !== 'city') this.mapTiles = new MapTiles(T, () => this.mapBaker.shade, this.mapBaker.bounds, 4, this.mapBaker.base.cell);
+    // Two levels over the open world's 12 m ground (6 m, then 3 m up close), one over a corridor's 8 m; each drawn once a
+    // pixel of what is under it would be three or four screen pixels across.
+    const shade = () => this.mapBaker.shade;
+    const bounds = this.mapBaker.bounds;
+    if (leg.biome !== 'city') {
+      const cover = groundCover(T, this.src.layout);
+      if (this.mapBaker.base.cell >= 12) this.mapTiles.push(new MapTiles(T, shade, bounds, 6, 0.25, cover));
+      this.mapTiles.push(new MapTiles(T, shade, bounds, 3, this.mapBaker.base.cell >= 12 ? 0.75 : 0.4, cover));
+    }
     const lines: RoadLine[] = T.open ? openRoadLines(T).map((r) => ({ pts: r.pts, kind: r.kind, half: r.half })) : [{ pts: roadLine(T), kind: 'highway', half: T.roadHalf }];
     this.navigation = new Navigation(this, leg.id, lines);
     this.navActions = this.navigation;
@@ -2464,20 +2472,29 @@ export class LegScene extends Scene {
     this.summon = (p) => this.summoner.request(p);
   }
 
-  /** Spend up to `ms` on the map: the whole-leg bake first, then the close-up tiles a map is asking for. */
+  /**
+   * Spend up to `ms` on the map: the close-up tiles an open map is asking for take most of it (that is what is being looked
+   * at), the whole-leg bake the rest (and all of it when no tile is wanted).
+   */
   bakeMap(ms: number) {
     const b = this.mapBaker;
     const t0 = performance.now();
+    // The finest level that is wanted first: it is what is under the cursor.
+    const share = b.base.done ? ms : ms * 0.6;
+    for (let i = this.mapTiles.length - 1; i >= 0; i--) {
+      const T = this.mapTiles[i];
+      const room = share - (performance.now() - t0);
+      T.step(T.pending && b.usable && room > 0.1 ? room : 0);
+    }
     if (!b.base.done) {
       if ((this.bakeFocusT -= 1) <= 0) {
         // Bake the rows the convoy is in first.
         this.bakeFocusT = 60;
         b.focus(this.leadPlayerPos().z);
       }
-      b.step(ms);
+      const left = ms - (performance.now() - t0);
+      if (left > 0.1) b.step(left);
     }
-    const left = ms - (performance.now() - t0);
-    if (this.mapTiles && left > 0.2) this.mapTiles.step(left);
   }
 
   /** Leave the ride waiting by a delve's way out, for when its players climb back up (`game.ts` wires this to the delve). */
@@ -2521,7 +2538,8 @@ export class LegScene extends Scene {
     f.pins.length = 0;
     // Waypoints and marks are drawn from the nav layer, with their own glyphs.
     for (const p of pins) if (p.kind !== 'dock' && p.kind !== 'delve' && p.kind !== 'waypoint' && p.kind !== 'poi') f.pins.push({ x: p.x, z: p.z, kind: p.kind, label: p.label });
-    for (const s of T.sites) if (this.mapSeen.has(`s${s.x}:${s.z}`)) f.pins.push({ x: s.x, z: s.z, kind: 'site', label: SITE_LABEL[s.kind] });
+    // A hub's name is set in the map's own type (`mapLabels`): its pin needs none of its own.
+    for (const s of T.sites) if (this.mapSeen.has(`s${s.x}:${s.z}`)) f.pins.push({ x: s.x, z: s.z, kind: 'site', label: T.open && s.kind.startsWith('hub') ? '' : SITE_LABEL[s.kind] });
     for (const l of T.lakes) if (l.dock && this.mapSeen.has(`l${l.id}`)) f.pins.push({ x: l.dock.shoreX, z: l.dock.shoreZ, kind: 'dock', label: 'DOCK' });
     for (const d of this.src.layout.delves) {
       if (this.mapSeen.has(`d${d.id}`)) f.pins.push({ x: d.x, z: d.z, kind: 'delve', label: d.theme === 'cave' ? 'CAVE' : d.theme === 'mine' ? 'MINE' : d.theme === 'bunker' ? 'BUNKER' : 'METRO' });
@@ -2560,9 +2578,8 @@ export class LegScene extends Scene {
     const o = T.open;
     if (o) {
       for (const d of o.districts) out.push({ x: (d.x0 + d.x1) / 2, z: (d.z0 + d.z1) / 2, text: legById(d.legId).name, kind: 'district', min: 0, max: 1.4 });
-      // A hub's name stands just north of its pin.
+      // A hub's name stands just north of its pin (Haven is the destination pin's own label).
       for (const h of o.hubs) out.push({ x: h.x, z: h.z + 70, text: h.id, kind: 'hub', min: 0, max: 99 });
-      out.push({ x: o.haven.x, z: o.haven.z + 70, text: 'Haven', kind: 'hub', min: 0, max: 99 });
     }
     for (const p of this.src.layout.places) out.push({ x: p.x, z: p.z, text: p.name, kind: 'place', min: 0.9, max: 99 });
     return out;
@@ -2579,7 +2596,7 @@ export class LegScene extends Scene {
   dispose() {
     this.navigation.dispose();
     this.summoner.dispose();
-    this.mapTiles?.dispose();
+    for (const T of this.mapTiles) T.dispose();
     this.story?.dispose();
     this.party?.dispose();
     this.party = null;

@@ -237,7 +237,10 @@ class PlayerHud {
         g.globalAlpha = edge ? 0.7 : 1;
         g.fillStyle = pin.color ?? PIN_COLOR[pin.kind];
         g.font = `${Math.round(10 * scale)}px Share Tech Mono, monospace`;
-        g.fillText(distLabel(d), x, 25);
+        // Kept whole at the ends of the strip, where an edge pin sits.
+        const text = distLabel(d);
+        const tw = g.measureText(text).width;
+        g.fillText(text, clamp(x, tw / 2 + 2, W - tw / 2 - 2), 25);
         g.font = `${Math.round(13 * scale)}px Oswald, sans-serif`;
         g.globalAlpha = 1;
       } else if (pin.label && d < 900 && !edge) {
