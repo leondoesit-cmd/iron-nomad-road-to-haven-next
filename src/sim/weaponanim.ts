@@ -158,6 +158,16 @@ const POINTS_BASE: Record<BaseGun, GunPoints> = {
 };
 export const GUN_POINTS = forGuns(POINTS_BASE);
 /**
+ * Every model's own points: the models in `render/weapons` are drawn to these (the sights' notch and post, the bore at the
+ * crown, the ejection port on the gun's right, the mouth of the magazine well). A test holds the models to them.
+ */
+const POINTS_MODEL: Partial<Record<GunModel, GunPoints>> = {
+  pistol: { rear: [0, 0.0605, 0.0055], front: [0, 0.0605, 0.171], muzzle: [0, 0.035, 0.183], port: [-0.013, 0.046, 0.08], well: [0, -0.088, -0.012] },
+  compact: { rear: [0, 0.0595, 0.0055], front: [0, 0.0595, 0.141], muzzle: [0, 0.034, 0.153], port: [-0.013, 0.045, 0.08], well: [0, -0.054, 0] },
+  mp: { rear: [0, 0.0605, 0.0055], front: [0, 0.0605, 0.171], muzzle: [0, 0.035, 0.183], port: [-0.013, 0.046, 0.08], well: [0, -0.125, -0.024] },
+};
+for (const m of Object.keys(POINTS_MODEL) as GunModel[]) GUN_POINTS[m] = POINTS_MODEL[m]!;
+/**
  * A bow's frame has its origin in the bow hand's grip, the limbs up and down y, and the arrow along +z on the shelf to the
  * left of the grip: it leaves from the shelf ("muzzle") and is sighted along its shaft back to the nock at full draw ("rear").
  */

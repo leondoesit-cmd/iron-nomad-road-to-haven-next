@@ -8,6 +8,7 @@ import { drillPose, newDrillPose, offGrip, type Drill } from '../sim/gunDrills';
 import { shared } from './dispose';
 import { applyKit, kitMaterial } from './materials';
 import { drawMods, muzzleAt } from './gunMods';
+import { buildModel, weaponMaterial, type Lod } from './weapons';
 import { parseLooks } from '../sim/gunmods';
 import { GUN_MODELS, type GunModel, type MeleeModel } from '../data/gear';
 import type { HeroId } from '../data/heroes';
@@ -43,6 +44,8 @@ import {
 } from './outfit';
 
 const mat = kitMaterial();
+/** Every weapon model is drawn with the weapon material: the kit plus wood grain, stippling, parkerizing and worn edges. */
+const weaponMat = weaponMaterial();
 /**
  * A hero's body: the kit material without its dents and casting texture, which made cloth and skin look like clay, and
  * without the grime map's tone shift where there is no grime (it mottled clean cloth, and changed from one body part to
@@ -395,12 +398,23 @@ const _bm = new THREE.Matrix4();
 const _be = new THREE.Euler();
 const _dp = newDrillPose();
 
-/** A weapon's solids. `mods` is the fitted add-ons' look key (`lookKey` in `sim/gunmods.ts`), empty for a bare gun; each different set is its own cached geometry. */
-export function weaponGeometry(kind: Exclude<Held, 'none'>, mods = ''): THREE.BufferGeometry {
-  const ck = mods ? `${kind}|${mods}` : kind;
+/**
+ * A weapon's solids. `mods` is the fitted add-ons' look key (`lookKey` in `sim/gunmods.ts`), empty for a bare gun; each
+ * different set is its own cached geometry. `lod` 'hi' is the close-up model for the first-person view, 'lo' the light one
+ * for a gun in someone's hands or lying in the street (see `render/weapons`).
+ */
+export function weaponGeometry(kind: Exclude<Held, 'none'>, mods = '', lod: Lod = 'lo'): THREE.BufferGeometry {
+  const ck = `${kind}|${mods}|${lod}`;
   const hit = weaponCache.get(ck);
   if (hit) return hit;
   const looks = parseLooks(mods);
+  const wb = buildModel(kind, lod);
+  if (wb) {
+    if (mods) wb.raw({ c: 0xffffff, f: 0 }, (mb) => drawMods(mb, kind as GunModel, looks));
+    const g = shared(wb.build());
+    weaponCache.set(ck, g);
+    return g;
+  }
   const b = new MeshBuilder();
   b.jitter = 0.02;
   const gun = S.metal(0x232426, 0.35);
@@ -1049,7 +1063,7 @@ export class Humanoid {
       const tip = muzzleAt(kind as GunModel, parseLooks(mods));
       this.flash.group.position.set(0, tip.y, tip.z + 0.02);
     } else this.flash.group.position.set(0, 0.03, 0.32);
-    const m = new THREE.Mesh(weaponGeometry(kind, mods), mat);
+    const m = new THREE.Mesh(weaponGeometry(kind, mods), weaponMat);
     m.castShadow = true;
     this.hand.add(m);
     this.weapon = m;
@@ -1661,8 +1675,8 @@ export class Humanoid {
 }
 
 /** A weapon or tool as its own mesh, as held in the hand, for models that lie about the world (`render/gearModels.ts`). Geometry is shared and cached. */
-export function weaponMesh(kind: Exclude<Held, 'none'>, mods = ''): THREE.Mesh {
-  const m = new THREE.Mesh(weaponGeometry(kind, mods), mat);
+export function weaponMesh(kind: Exclude<Held, 'none'>, mods = '', lod: Lod = 'lo'): THREE.Mesh {
+  const m = new THREE.Mesh(weaponGeometry(kind, mods, lod), weaponMat);
   m.castShadow = true;
   return m;
 }
