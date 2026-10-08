@@ -406,9 +406,10 @@ export class LegScene extends Scene {
     // Pieces still lying in the road with a part in them are kept as pickups; so is anything set down on the ground.
     const drops: WorldMemory['drops'] = [];
     for (const p of this.debris.pieces) {
-      if (!p.item) continue;
+      // A can or a ration that fell off a car is kept as surely as a part.
+      if (!p.item && !p.carried) continue;
       const t = p.body.translation();
-      drops.push({ x: t.x, z: t.z, carried: { kind: 'part', item: p.item } });
+      drops.push({ x: t.x, z: t.z, carried: p.item ? { kind: 'part', item: p.item } : p.carried! });
     }
     for (const [id, e] of this.pickups) if (id.startsWith('drop') && e.loose) drops.push({ x: e.spawn.x, z: e.spawn.z, carried: e.loose });
     m.drops = drops;
@@ -932,6 +933,13 @@ export class LegScene extends Scene {
         if (c.equip === 'gun') p.equipGun();
       }
       if (reason === 'rescue') bind(p.bleed);
+      // A partner left down (or dead) below comes up the same way: the climb out is not a revive.
+      else if (c?.state === 'downed' || c?.state === 'dead') {
+        p.hp = 0;
+        p.state = c.state;
+        p.downT = c.downT ?? 0;
+        p.respawnT = c.respawnT ?? 8;
+      }
       p.invuln = 1.5;
     });
     if (reason === 'rescue') {

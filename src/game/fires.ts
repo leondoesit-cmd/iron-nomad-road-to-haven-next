@@ -641,8 +641,9 @@ export class FireEngine {
     const w = sc.weather;
     const rain = w.active ? w.rain : 0;
     this.haze = (0.0025 + 0.004 * sc.night + 0.016 * rain + 0.02 * sc.storm) * (sc.mode === 'delve' ? 2 : 1);
-    // The eye adapts: by a big fire at night the dark beyond it goes darker.
-    let lit = 0;
+    // The eye adapts: by a big fire at night the dark beyond it goes darker. The exposure is shared by both halves of a
+    // split screen, so it follows the eye that sees the least fire: one player's burning wreck must not black out the other.
+    let lit = Infinity;
     for (const c of cams) {
       let e = 0;
       for (let i = 0; i < this.nCand; i++) {
@@ -650,8 +651,9 @@ export class FireEngine {
         const d2 = (q.x - c.x) ** 2 + (q.y - c.y) ** 2 + (q.z - c.z) ** 2;
         e += q.power / (d2 + q.r * q.r);
       }
-      lit = Math.max(lit, e);
+      lit = Math.min(lit, e);
     }
+    if (!Number.isFinite(lit)) lit = 0;
     this.eye += (lit - this.eye) * Math.min(1, dt * (lit > this.eye ? 2 : 0.7));
   }
 
@@ -756,7 +758,8 @@ export class FireEngine {
       // Many fires crowded together light their surroundings less than their sum: they shade each other, and the eye
       // takes in a wall of flame as bright, not as a hundred campfires.
       const raw = c.raw + power;
-      const k = raw / (1 + raw / 900) / Math.max(1e-6, c.power);
+      // The summed colour stands for the cluster's old power plus this flame's; scale it to the compressed total.
+      const k = raw / (1 + raw / 900) / Math.max(1e-6, c.power + power);
       c.cr = (c.cr + cr) * k;
       c.cg = (c.cg + cg) * k;
       c.cb = (c.cb + cb) * k;
