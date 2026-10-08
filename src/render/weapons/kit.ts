@@ -289,6 +289,7 @@ function cached(key: string, make: () => THREE.BufferGeometry): THREE.BufferGeom
   let g = tpl.get(key);
   if (!g) {
     g = shared(make());
+    g.userData.key = key;
     tpl.set(key, g);
   }
   return g;
@@ -307,6 +308,8 @@ export class WB {
   readonly hi: boolean;
   private wp: number[] = [];
   private part = 0;
+  /** Triangles by part, for the budget tests and tuning. */
+  readonly stats = new Map<string, number>();
 
   constructor(readonly lod: Lod) {
     this.hi = lod === 'hi';
@@ -316,12 +319,12 @@ export class WB {
 
   /** Curve segments for an outline's fillets. */
   get cs() {
-    return this.hi ? 5 : 2;
+    return this.hi ? 4 : 1;
   }
 
   /** Segments round a lathe of radius `r` (a fat barrel gets more than a pin). */
   rs(r: number) {
-    if (!this.hi) return r > 0.012 ? 10 : r > 0.004 ? 8 : 6;
+    if (!this.hi) return r > 0.012 ? 8 : 6;
     return r > 0.02 ? 32 : r > 0.009 ? 24 : r > 0.004 ? 16 : 10;
   }
 
@@ -336,23 +339,28 @@ export class WB {
     const v0 = this.b.vertexCount;
     this.b.geo(g, px, py, pz, sx, sy, sz, m, rx, ry, rz);
     this.tag(v0, m.f, g.attributes.edge as THREE.BufferAttribute);
+    const k = String(g.userData.key ?? 'geo').split(':').slice(0, 2).join(':');
+    this.stats.set(k, (this.stats.get(k) ?? 0) + (g.index ? g.index.count : g.attributes.position.count) / 3);
     return this;
   }
 
   /** Whatever `fn` adds with the plain builder, tagged with the finish (and no edges). */
   raw(m: WS, fn: (b: MeshBuilder) => void, edge = 0) {
     const v0 = this.b.vertexCount;
+    const i0 = this.b.idx.length;
     fn(this.b);
     this.tag(v0, m.f, undefined, edge);
+    this.stats.set('raw', (this.stats.get('raw') ?? 0) + (this.b.idx.length - i0) / 3);
     return this;
   }
 
   private extrudeTpl(key: string, make: () => THREE.Shape, depth: number, bev: number) {
     const hi = this.hi;
-    const bevel = bev > 0 && (hi || bev >= 0.0012);
+    // A bevel under a millimetre does not show on a flat face: those edges stay sharp, and cost nothing.
+    const bevel = bev >= 0.0008 && (hi || bev >= 0.003);
     const cs = this.cs;
     return cached(`x:${key}:${depth.toFixed(5)}:${bev.toFixed(5)}:${this.lod}`, () => {
-      const segs = bevel ? (hi ? (bev >= 0.002 ? 3 : 2) : 1) : 0;
+      const segs = bevel ? (hi ? (bev >= 0.0025 ? 3 : bev >= 0.0015 ? 2 : 1) : 1) : 0;
       minFillet = bevel ? bev * 1.2 : 0;
       const sh = make();
       minFillet = 0;
@@ -450,7 +458,7 @@ export class WB {
     const d = Math.min(depth, L * 0.9);
     this.turn(`bored:${r}:${bore}:${L.toFixed(5)}:${d}`, [[0, 0], [r - c, 0], [r, c], [r, L - c], [r - c * 0.5, L], [bore + 0.0006, L], [bore, L - 0.0006], [bore, L - d], [0, L - d]], x, y, m, undefined, 0.7, z0);
     // The bore itself, a dark sleeve just inside so the hole reads black from any angle.
-    this.turn(`bore:${bore}:${d}`, [[bore * 0.98, 0], [bore * 0.98, d - 0.0007], [0, d - 0.0007]], x, y, M.hole(), this.hi ? 12 : 6, 0.7, z1 - d + 0.0002);
+    if (this.hi) this.turn(`bore:${bore}:${d}`, [[bore * 0.98, 0], [bore * 0.98, d - 0.0007], [0, d - 0.0007]], x, y, M.hole(), this.hi ? 12 : 6, 0.7, z1 - d + 0.0002);
     return this;
   }
 
@@ -461,7 +469,9 @@ export class WB {
     sz = Math.abs(sz);
     const rr = Math.min(r, sx / 2 - 1e-5, sy / 2 - 1e-5, sz / 2 - 1e-5);
     if (rr <= 0.00015) return this.raw(m, (b) => b.box(x, y, z, sx, sy, sz, m, rx, ry, rz));
-    const seg = this.hi ? 2 : 1;
+    // Small rounds get one bevel segment (a chamfer), and in the light model they are plain boxes.
+    if (!this.hi && rr < 0.003) return this.raw(m, (b) => b.box(x, y, z, sx, sy, sz, m, rx, ry, rz));
+    const seg = this.hi && rr >= 0.002 ? 2 : 1;
     const g = cached(`rb:${sx.toFixed(5)}:${sy.toFixed(5)}:${sz.toFixed(5)}:${rr.toFixed(5)}:${seg}`, () => {
       const rb = new RoundedBoxGeometry(sx, sy, sz, seg, rr);
       rb.deleteAttribute('uv');
@@ -547,8 +557,7 @@ export class WB {
   rail(key: string, x: number, y: number, z0: number, z1: number, m: WS, rot = 0) {
     const W = 0.0212;
     const base = (): THREE.Shape => shape([[-0.0105, 0], [0.0105, 0], [0.0105, 0.003], [0.0078, 0.0045], [-0.0078, 0.0045], [-0.0105, 0.003]]);
-    const crest = (): THREE.Shape =>
-      shape([[-0.0078, 0.0044], [0.0078, 0.0044], [W / 2, 0.0068, 0.0004], [W / 2, 0.0082, 0.0003], [0.0085, 0.0095, 0.0005], [-0.0085, 0.0095, 0.0005], [-W / 2, 0.0082, 0.0003], [-W / 2, 0.0068, 0.0004]]);
+    const crest = (): THREE.Shape => shape([[-0.0078, 0.0044], [0.0078, 0.0044], [W / 2, 0.0068], [W / 2, 0.0082], [0.0088, 0.0095], [-0.0088, 0.0095], [-W / 2, 0.0082], [-W / 2, 0.0068]]);
     const put = (g: THREE.BufferGeometry, z: number) => this.put(g, x, y, z, m, 0, 0, rot);
     const L = z1 - z0;
     put(this.extrudeTpl(`rail.base:${key}`, base, L, 0.0006), (z0 + z1) / 2);
@@ -558,7 +567,7 @@ export class WB {
     }
     const n = Math.max(1, Math.floor((L + 0.0048) / 0.01));
     const off = z0 + (L - (n * 0.01 - 0.0048)) / 2;
-    const tooth = this.extrudeTpl('rail.tooth', crest, 0.0052, 0.0005);
+    const tooth = this.extrudeTpl('rail.tooth', crest, 0.0052, 0);
     for (let i = 0; i < n; i++) put(tooth, off + i * 0.01 + 0.0026);
     return this;
   }

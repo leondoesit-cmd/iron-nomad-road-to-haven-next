@@ -1,6 +1,9 @@
 import type { Held } from '../humanoid';
 import { WB, type Lod } from './kit';
 import { COMPACT, MACHINE, PISTOL, CANNON, REVOLVER, polymerPistol, revolver } from './handguns';
+import { ar, br, carbine, crossbow, dmr, lever, lmg, rifle, sniper } from './rifles';
+import { policeSmg, scrapSmg } from './smgs';
+import { coach, combat, pump, sawn } from './shotguns';
 
 export { WB, type Lod } from './kit';
 export { weaponMaterial } from './material';
@@ -14,6 +17,21 @@ const MODELS: Partial<Record<Kind, (w: WB) => void>> = {
   mp: (w) => polymerPistol(w, MACHINE),
   revolver: (w) => revolver(w, REVOLVER),
   cannon: (w) => revolver(w, CANNON),
+  ar,
+  dmr,
+  br,
+  rifle: (w) => rifle(w),
+  sniper: (w) => sniper(w),
+  carbine,
+  lever,
+  lmg,
+  crossbow,
+  smg: scrapSmg,
+  smg2: policeSmg,
+  sawn,
+  coach,
+  pump,
+  combat,
 };
 
 /** Whether `kind` has a model of its own here. */
