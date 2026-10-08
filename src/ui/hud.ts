@@ -80,6 +80,7 @@ class PlayerHud {
       <div class="corner bl">
         <div class="pane vitals">
           <div class="vhead"><span data-k="vname">ON FOOT</span><div class="speed" data-k="speed">0<small>km/h</small></div></div>
+          <div class="tach" data-k="tach"><div class="fill" data-k="tachfill"></div></div>
           <div class="gauge hp" data-k="hprow"><span class="gl" data-k="hplabel">HEALTH</span><div class="bar" data-k="hpbar"><div class="fill" data-k="hpfill"></div></div><span class="val" data-k="hpval"></span></div>
           <div class="gauge stamina" data-k="stamrow"><span class="gl">STAMINA</span><div class="bar stam" data-k="stambar"><div class="fill" data-k="stamfill"></div></div><span class="val" data-k="stamval"></span></div>
           <div class="gauge breath" data-k="breathrow"><span class="gl">BREATH</span><div class="bar air" data-k="airbar"><div class="fill" data-k="airfill"></div></div><span class="val" data-k="airval"></span></div>
@@ -558,7 +559,15 @@ export class Hud {
       this.waterGauge(h, v);
       this.tempGauge(h, v);
       h.setStyle('speed', 'display', '');
-      h.el('speed').innerHTML = `${Math.round(Math.abs(v.speed) * 3.6)}<small>km/h</small>`;
+      // A small gear letter beside the speed and a thin rev bar under it, from the real drivetrain.
+      const dr = v.powertrain ? v.drive : null;
+      const gear = !dr || dr.redline <= 0 || !v.engineOn ? '' : dr.gear < 0 ? 'R' : dr.cvt ? 'D' : String(dr.gear);
+      h.el('speed').innerHTML = `${Math.round(Math.abs(v.speed) * 3.6)}<small>km/h</small>${gear ? `<small class="gear">${gear}</small>` : ''}`;
+      h.setStyle('tach', 'display', gear ? '' : 'none');
+      if (gear) {
+        h.setStyle('tachfill', 'width', `${Math.round(Math.min(1, dr!.rpmFrac) * 100)}%`);
+        h.setClass('tach', dr!.rpmFrac > 0.93 ? 'tach red' : 'tach');
+      }
       // Only what is broken is listed, in words, so a healthy vehicle has a quiet corner.
       const c = v.health.comp;
       const faults: string[] = [];
@@ -604,6 +613,7 @@ export class Hud {
       this.waterGauge(h, cur && !cur.wreck ? cur : null);
       this.tempGauge(h, cur && !cur.wreck ? cur : null);
       h.setStyle('speed', 'display', 'none');
+      h.setStyle('tach', 'display', 'none');
       h.setHtml('comp', '');
     } else {
       this.oilGauge(h, null);
