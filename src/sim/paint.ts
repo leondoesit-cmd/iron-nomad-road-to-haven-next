@@ -27,8 +27,8 @@ export const SPRAY_CHARGES = 6;
 
 /** Which panels a chassis has: a bike or quad has a front and a rear; everything with a cab has all six. */
 export function panelsOf(def: VehicleDef): PanelId[] {
-  // Boats, and the beta trucks that have no body model yet, have no panels to spray.
-  if (def.physics.kind === 'boat' || def.beta) return [];
+  // Boats have no panels to spray. (The war truck and rig have body models now: their cab, bonnet and bed take paint.)
+  if (def.physics.kind === 'boat') return [];
   return (def.slots ?? []).includes('roof') ? PANELS : ['front', 'rear'];
 }
 

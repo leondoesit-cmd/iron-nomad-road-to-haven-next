@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
-import { crate, jerryCan, plate, rivets, spareTyre, strap, heavyGun } from './parts';
+import { crate, jerryCan, plate, rivets, signPlate, spareTyre, strap, heavyGun } from './parts';
 import { partDef } from '../data';
 import { PANEL_TAG, partMeta, partTag } from './bodyParts';
 import { basketOn, bedKitOn, cageOn, isHolderModel } from './cargoParts';
@@ -45,7 +45,8 @@ export interface Mounts {
 
 /** Lamps are registered through the rig so cached shells can replay them onto each instance. */
 export interface Rig {
-  lamp(x: number, y: number, z: number, r: number, bucket?: boolean): void;
+  /** A headlamp: round of radius `r` in a chrome bucket, or with `w` and `h` a rectangular lens whose housing the caller draws. */
+  lamp(x: number, y: number, z: number, r: number, bucket?: boolean, w?: number, h?: number): void;
   tail(x: number, y: number, z: number, w?: number, h?: number, amber?: boolean): void;
   /** Where a fixed gun's muzzle flash appears. */
   muzzle(x: number, y: number, z: number): void;
@@ -122,28 +123,86 @@ const mkOf = (fit: Fit, slot: keyof Fit) => (fit[slot] ? partDef(fit[slot]!.id).
 
 // ---------------------------------------------------------------- performance parts
 
-/** Plates welded over the doors, bonnet and roof. More plate at each quality. */
+/**
+ * Ceramic composite tiles in a grid over a rectangle on a flank (`sx` the side, the tiles facing out): square tiles with a
+ * gap between, a bolt at each corner, alternate ones a shade off so the grid reads.
+ */
+function tiles(b: MeshBuilder, x: number, sx: number, y0: number, y1: number, z0: number, z1: number, t: number) {
+  const s = 0.2;
+  const nz = Math.max(1, Math.round((z1 - z0) / s));
+  const ny = Math.max(1, Math.round((y1 - y0) / s));
+  const tz = (z1 - z0) / nz;
+  const ty = (y1 - y0) / ny;
+  const a = S.paint(0xb4ac90, 0.4);
+  const c = S.paint(0xa49c80, 0.45);
+  const bolt = S.steel(0x3a3c3e, 0.6);
+  b.box(x - sx * t * 0.3, (y0 + y1) / 2, (z0 + z1) / 2, t * 0.5, y1 - y0, z1 - z0, S.steel(0x2a2c2e, 0.7));
+  for (let i = 0; i < nz; i++) {
+    for (let j = 0; j < ny; j++) {
+      const zz = z0 + (i + 0.5) * tz;
+      const yy = y0 + (j + 0.5) * ty;
+      b.box(x + sx * t * 0.25, yy, zz, t, ty - 0.012, tz - 0.012, (i + j) % 2 ? a : c);
+      b.add('ico', x + sx * t * 0.8, yy + ty * 0.36, zz + tz * 0.36, 0.022, 0.022, 0.022, bolt);
+    }
+  }
+}
+
+/**
+ * Plates over the doors, bonnet and roof, and what they are made of says what grade they are. Mk1 is scrap: a mismatched
+ * patchwork of rusty sheet, a road sign and a panel off another car, hung crooked on bolts and wire. Mk2 is a workshop's
+ * welded plate: square-cut sheets in grey primer with a weld bead round each and rivets down the seams, the bonnet plated
+ * too. Mk3 is military: bolted ceramic tiles in a grid on the doors and a course along the sill, plate on the bonnet and
+ * roof, slat bars over the side glass.
+ */
 function armorKit(b: MeshBuilder, m: Mounts, mk: number, look: KitLook) {
   const sideH = Math.max(0.2, m.side.y1 - m.side.y0);
   const zc = (m.side.z0 + m.side.z1) / 2;
+  const yc = (m.side.y0 + m.side.y1) / 2;
   const len = m.side.z1 - m.side.z0;
-  const col = mk >= 3 ? S.paint(0xaeb2ae, 0.45) : mk === 2 ? S.steel(0x4d5154, 0.75) : S.steel(0x6e7276, 0.8);
+  const primer = S.paint(0x6a6c68, 0.55);
   const rust = S.rust(0x6a3a22);
   const thick = 0.02 + mk * 0.008;
   const armorId = look.fit.armor?.id;
+  const r = rnd(look.seed + 3);
   for (const sx of [1, -1]) {
     const x = sx * (m.hw + thick / 2 + 0.005);
-    b.mark(partTag('slot', `armor:${sx}`), partMeta({ kind: 'slot', id: armorId, slot: 'armor', mk, side: sx as 1 | -1, pivot: [x, (m.side.y0 + m.side.y1) / 2, zc] }));
-    // Door plates, split in two so they read as separate sheets.
-    plate(b, x, (m.side.y0 + m.side.y1) / 2, zc + len * 0.24, len * 0.46, sideH, thick, col, 0, sx * Math.PI / 2, 0);
-    plate(b, x, (m.side.y0 + m.side.y1) / 2, zc - len * 0.25, len * 0.44, sideH * 0.94, thick, mk === 1 ? rust : col, 0, sx * Math.PI / 2, 0);
-    if (mk >= 3 && !m.narrow) {
-      // A second ceramic course along the sill.
-      plate(b, x + sx * 0.012, m.side.y0 - 0.05, zc, len * 0.9, 0.16, thick, S.paint(0x9a9e9a, 0.5), 0, sx * Math.PI / 2, 0);
+    b.mark(partTag('slot', `armor:${sx}`), partMeta({ kind: 'slot', id: armorId, slot: 'armor', mk, side: sx as 1 | -1, pivot: [x, yc, zc] }));
+    if (mk <= 1) {
+      // Scrap: three sheets of whatever was lying about, overlapping and out of true, wired and bolted on.
+      const SHEETS = [rust, S.steel(0x7a7e82, 0.85), S.paint(0x4d6a82, 0.85), S.paint(0xc9b084, 0.9), S.paint(0x8c2e26, 0.85)];
+      for (let i = 0; i < 3; i++) {
+        // Sizes rounded to 4 cm, so the plate outlines are shared between cars rather than made new for each.
+        const w = Math.round((len * (0.36 + r() * 0.12)) / 0.04) * 0.04;
+        const z = m.side.z0 + len * (0.18 + i * 0.32) + (r() - 0.5) * 0.06;
+        const sheet = SHEETS[Math.floor(r() * SHEETS.length)];
+        const tilt = (r() - 0.5) * 0.12;
+        if (i === 1 && r() < 0.5 && !m.narrow) signPlate(b, x + sx * 0.012, yc + (r() - 0.5) * 0.04, z, w, sideH * 0.86, [0xe8c030, 0xc2402e, 0x2a5a9a][Math.floor(r() * 3)], 0, sx * Math.PI / 2, tilt);
+        else plate(b, x + sx * i * 0.006, yc + (r() - 0.5) * 0.05, z, w, Math.round((sideH * (0.8 + r() * 0.16)) / 0.04) * 0.04, thick, sheet, 0, sx * Math.PI / 2, tilt, false);
+        rivets(b, [x + sx * (thick + 0.008), yc + sideH * 0.3, z - w * 0.35], [x + sx * (thick + 0.008), yc + sideH * 0.3, z + w * 0.35], 2, 0.016, S.steel(0x2a2c2e));
+      }
+      // Wire twisted round the frame where a bolt would not hold.
+      for (const z of [m.side.z0 + len * 0.3, m.side.z0 + len * 0.66]) b.rod(x + sx * (thick + 0.006), yc - sideH * 0.45, z, x + sx * (thick + 0.006), yc + sideH * 0.45, z + 0.02, 0.004, S.steel(0x8a8e92, 0.5), 4);
+    } else if (mk === 2) {
+      // Workshop plate: two square sheets per side in primer, a weld bead round each, rivets along the joint.
+      for (const [dz, w] of [[0.24, 0.47], [-0.25, 0.45]] as [number, number][]) {
+        const z = zc + len * dz;
+        plate(b, x, yc, z, len * w, sideH, thick, primer, 0, sx * Math.PI / 2, 0, false);
+        const bx = x + sx * (thick / 2 + 0.004);
+        const bead = S.metal(0x5a524a, 0.7);
+        b.box(bx, yc + sideH / 2 - 0.01, z, 0.008, 0.012, len * w - 0.02, bead);
+        b.box(bx, yc - sideH / 2 + 0.01, z, 0.008, 0.012, len * w - 0.02, bead);
+      }
+      rivets(b, [x + sx * (thick / 2 + 0.006), yc - sideH * 0.42, zc], [x + sx * (thick / 2 + 0.006), yc + sideH * 0.42, zc], 5);
+      rivets(b, [x + sx * (thick / 2 + 0.006), yc + sideH * 0.42, m.side.z0 + 0.05], [x + sx * (thick / 2 + 0.006), yc + sideH * 0.42, m.side.z1 - 0.05], 8);
+    } else {
+      // Military: a grid of ceramic tiles on the door, a second course along the sill.
+      tiles(b, x, sx, m.side.y0, m.side.y1, m.side.z0 + 0.03, m.side.z1 - 0.03, thick);
+      if (!m.narrow) tiles(b, x + sx * 0.014, sx, m.side.y0 - 0.14, m.side.y0 - 0.01, m.side.z0 - 0.1, m.side.z1 + 0.1, thick);
     }
     b.end();
   }
   if (m.narrow) return;
+  const col = mk >= 3 ? S.paint(0xaeb2ae, 0.45) : primer;
   if (mk >= 2 && m.hood) {
     b.mark(partTag('slot', 'armor:hood'), partMeta({ kind: 'slot', id: armorId, slot: 'armor', mk, pivot: [0, m.hood.y, m.hood.z0] }));
     plate(b, 0, m.hood.y + 0.018, (m.hood.z0 + m.hood.z1) / 2, m.hood.hw * 1.55, m.hood.z1 - m.hood.z0 - 0.1, thick, col, -Math.PI / 2, 0, 0);
@@ -153,7 +212,6 @@ function armorKit(b: MeshBuilder, m: Mounts, mk: number, look: KitLook) {
     b.mark(partTag('slot', 'armor:roof'), partMeta({ kind: 'slot', id: armorId, slot: 'armor', mk, pivot: [0, m.roof.y, (m.roof.z0 + m.roof.z1) / 2] }));
     plate(b, 0, m.roof.y + 0.02, (m.roof.z0 + m.roof.z1) / 2, m.roof.hw * 1.5, m.roof.z1 - m.roof.z0 - 0.08, thick, col, -Math.PI / 2, 0, 0);
     // Slatted window armour: bars across the glass line.
-    const r = rnd(look.seed + 3);
     for (let i = 0; i < 5; i++) {
       const z = m.roof.z1 - 0.1 - i * ((m.roof.z1 - m.roof.z0 - 0.2) / 5);
       for (const sx of [1, -1]) b.box(sx * (m.hw - 0.01), m.side.y1 + 0.18 + r() * 0.02, z, 0.025, 0.05, 0.22, dark());
@@ -281,7 +339,54 @@ function engineKit(b: MeshBuilder, m: Mounts, e: EngineLook, look: KitLook, hood
     for (let i = 0; i < 4; i++) b.box(0, h.y + 0.01 + bulge + 0.002, pl.z - len * 0.3 + i * len * 0.2, w * 0.6, 0.006, 0.02, S.plastic(0x0c0c0c));
     b.end();
   }
+  // A blown petrol engine's supercharger stands up through a hole cut in a factory bonnet, its bug-catcher scoop on top; an
+  // aftermarket turbo diesel breathes through a scoop raised over its intake.
+  const hp = bodyPart(look.fit, 'hood');
+  if ((!hp || hp.stock) && e.hood === 'closed' && bulge === 0) {
+    const pl = enginePlacement(m, e);
+    if (pl && e.blown && !e.diesel) blowerKit(b, m, pl, look);
+    else if (pl && e.blown && e.diesel && e.mk >= 2) intakeScoop(b, m, pl, look);
+  }
   if (e.diesel && e.swapped) dieselStack(b, m);
+}
+
+/** A roots blower through the bonnet: the hole's chrome ring, the ribbed case, the belt snout, and a bug-catcher on top. */
+function blowerKit(b: MeshBuilder, m: Mounts, pl: { z: number; dims: Dims }, look: KitLook) {
+  const h = m.hood!;
+  const w = Math.min(h.hw * 0.9, Math.max(0.26, pl.dims.w * 0.5));
+  const l = Math.min(h.z1 - h.z0 - 0.2, Math.max(0.34, pl.dims.l * 0.48));
+  const z = Math.min(h.z1 - l / 2 - 0.08, pl.z);
+  const y = h.y + 0.01;
+  const alu = S.metal(0xc4c8cc, 0.3);
+  const chrome = chromeMat();
+  markHood(b, m);
+  b.box(0, y + 0.002, z, w + 0.08, 0.004, l + 0.08, S.metal(0x0a0a0a, 0.2));
+  b.rbox(0, y + 0.012, z, w + 0.1, 0.02, l + 0.1, 0.008, chrome);
+  b.rbox(0, y + 0.1, z, w, 0.18, l, 0.03, alu);
+  for (let i = 0; i < 5; i++) for (const sx of [1, -1]) b.box(sx * (w / 2 + 0.006), y + 0.06 + i * 0.025, z, 0.01, 0.012, l * 0.86, S.metal(0x8a8e92, 0.4));
+  b.cyl(0, y + 0.1, z + l / 2 + 0.05, 0.14, 0.1, 0.14, S.steel(0x1c1e20), Math.PI / 2, 0, 0, 14);
+  b.cyl(0, y + 0.1, z + l / 2 + 0.11, 0.12, 0.02, 0.12, chrome, Math.PI / 2, 0, 0, 14);
+  // The bug-catcher: a chrome box with its mouth to the wind and two butterflies in it.
+  const sy = y + 0.25;
+  b.rbox(0, sy, z + 0.02, w * 0.86, 0.13, l * 0.6, 0.02, chrome, -0.08, 0, 0);
+  b.box(0, sy + 0.005, z + 0.02 + l * 0.3 + 0.004, w * 0.72, 0.09, 0.008, S.metal(0x050505, 0.2));
+  for (const sx of [1, -1]) b.box(sx * w * 0.18, sy + 0.005, z + 0.02 + l * 0.3 + 0.01, 0.006, 0.07, 0.02, alu, 0, 0.6, 0);
+  b.end();
+  void look;
+}
+
+/** A raised intake scoop over a turbo diesel's air box, in the body colour, with a mesh in its mouth. */
+function intakeScoop(b: MeshBuilder, m: Mounts, pl: { z: number; dims: Dims }, look: KitLook) {
+  const h = m.hood!;
+  const w = Math.min(h.hw * 1.1, Math.max(0.3, pl.dims.w * 0.6));
+  const l = Math.min(h.z1 - h.z0 - 0.2, 0.42);
+  const z = Math.min(h.z1 - l / 2 - 0.1, pl.z + 0.05);
+  const body = S.paint(look.paint, Math.min(1, look.wear + 0.1));
+  markHood(b, m);
+  b.rbox(0, h.y + 0.05, z, w, 0.1, l, 0.03, body, -0.06, 0, 0);
+  b.box(0, h.y + 0.06, z + l / 2 + 0.006, w * 0.84, 0.06, 0.008, S.metal(0x050505, 0.2));
+  for (let i = 0; i < 6; i++) b.box(-w * 0.36 + i * (w * 0.72) / 5, h.y + 0.06, z + l / 2 + 0.012, 0.006, 0.06, 0.006, S.steel(0x3a3c3e));
+  b.end();
 }
 
 /**

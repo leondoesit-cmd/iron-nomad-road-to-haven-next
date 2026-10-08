@@ -154,7 +154,7 @@ export interface Surface {
   name: string;
 }
 
-const BED: Record<string, { units: number; max: Size }> = { pickup: { units: 14, max: 4 }, buggy: { units: 8, max: 2 } };
+const BED: Record<string, { units: number; max: Size }> = { pickup: { units: 14, max: 4 }, buggy: { units: 8, max: 2 }, truck: { units: 24, max: 4 }, rig: { units: 30, max: 4 } };
 /** Bare roofs hold a few things lying on them (a holder inside that is smaller leaves the rest loose). */
 const ROOF_UNITS = 10;
 

@@ -6,36 +6,18 @@ import { cabinPartModel } from './cabinModels';
 import { drawEngine } from './engineModels';
 import { holderPartModel, isHolderModel } from './cargoParts';
 import { drawLiftKit, drawRickshawCab, drawTrikeWheel } from './trikeModel';
+import { armourPart, brakePart, doorPart, exhaustPart, gearboxPart, hoodPart, radiatorPart, springPart, wheelPart } from './gearParts';
 
 /**
  * What a vehicle part looks like off the car: the thing you lift, carry, hover over its mount and bolt on. One shape per
  * part, so an engine is an engine block and tyres are tyres rather than every part being the same crate. Model origin is
- * the middle of the base, +Z forward, and each is about half a metre to a metre across so it reads in the arms.
+ * the middle of the base, +Z forward. The running gear and panels (render/gearParts.ts) are drawn at their real size from
+ * the part's own numbers; `partCarryScale` shrinks the big ones to something that can be held.
  */
 
 const steel = (c = 0x6a6e72, w = 0.6) => S.steel(c, w);
 const dark = () => S.steel(0x2c2f31, 0.6);
 const brass = () => S.metal(0xb89a52, 0.45);
-
-function wheels(b: MeshBuilder, mk: number) {
-  // A pair of tyres, one standing and one leant against it. The better the set, the fatter and knobblier.
-  const r = 0.34 + mk * 0.02;
-  const w = 0.22 + mk * 0.05;
-  spareTyre(b, 0, r, 0, r, w, 0, Math.PI / 2);
-  spareTyre(b, -0.04, r * 0.9 + 0.2, -0.34, r * 0.95, w, -0.35, Math.PI / 2);
-  if (mk >= 3) {
-    // Beadlock ring bolts around the rim.
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2;
-      b.cyl(w * 0.5 + 0.03, r + Math.sin(a) * r * 0.62, Math.cos(a) * r * 0.62, 0.035, 0.03, 0.035, S.chrome(), 0, 0, Math.PI / 2, 6);
-    }
-  } else if (mk === 2) {
-    for (let i = 0; i < 5; i++) {
-      const a = (i / 5) * Math.PI * 2;
-      b.rod(w * 0.5 + 0.02, r, 0, w * 0.5 + 0.02, r + Math.sin(a) * r * 0.62, Math.cos(a) * r * 0.62, 0.016, steel(0x2a2a2a), 6);
-    }
-  }
-}
 
 function armour(b: MeshBuilder, mk: number) {
   const col = mk >= 3 ? S.paint(0xaeb2ae, 0.45) : mk === 2 ? S.steel(0x4d5154, 0.75) : S.steel(0x6e7276, 0.8);
@@ -209,8 +191,16 @@ export function buildPartModel(b: MeshBuilder, id: string) {
   if (isHolderModel(id)) return holderPartModel(b, id);
   switch (d.slot) {
     case 'engine': return void drawEngine(b, id);
-    case 'wheels': return wheels(b, d.mk);
-    case 'armor': return armour(b, d.mk);
+    case 'wheels': return wheelPart(b, id);
+    case 'cooling': return radiatorPart(b, id);
+    case 'gearbox': return gearboxPart(b, id);
+    case 'suspension': return springPart(b, id);
+    case 'brakes': return brakePart(b, id);
+    case 'exhaust': return exhaustPart(b, id);
+    case 'hood': return hoodPart(b, id);
+    case 'doorL':
+    case 'doorR': return doorPart(b, id);
+    case 'armor': return d.id === 'arm_sheet' || d.id === 'arm_weld' || d.id === 'arm_ceramic' ? armourPart(b, id) : armour(b, d.mk);
     case 'weapon': return weapon(b, d.mk);
     case 'utility': return utility(b, d.mk);
     case 'front': return front(b, id);
@@ -219,4 +209,30 @@ export function buildPartModel(b: MeshBuilder, id: string) {
     case 'side': return side(b, id);
   }
   crate(b, 0, 0.15, 0, 0.5, 0.3, 0.4);
+}
+
+const CARRY = new Map<string, number>();
+
+/**
+ * How much a part's model is scaled in the arms: true size for anything up to about a metre, smaller for a truck tyre or a
+ * rig's radiator, so it can be held in front of you at all. Engines have their own rule (`engineCarryScale` in props.ts).
+ */
+export function partCarryScale(id: string): number {
+  let k = CARRY.get(id);
+  if (k === undefined) {
+    const b = new MeshBuilder();
+    buildPartModel(b, id);
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < b.pos.length; i += 3) {
+      for (let a = 0; a < 3; a++) {
+        lo[a] = Math.min(lo[a], b.pos[i + a]);
+        hi[a] = Math.max(hi[a], b.pos[i + a]);
+      }
+    }
+    const size = Math.max(0.05, ...hi.map((h, a) => h - lo[a]));
+    k = Math.min(1.05, 0.95 / size);
+    CARRY.set(id, k);
+  }
+  return k;
 }

@@ -94,6 +94,15 @@ describe.each(CARS)('%s drives', (id) => {
   });
 });
 
+describe.each(['truck', 'rig'])('the %s model', (id) => {
+  it('sits on the ground: the predicted rest height matches the physics', () => {
+    const def = chassisDef(id);
+    const { v } = run(id, 5, () => ({}));
+    // The truck and rig bodies are built on the ground and shifted down by restHeight, like the cars'.
+    expect(Math.abs(v.position.y - restHeight(def))).toBeLessThan(0.012);
+  });
+});
+
 describe('cars are balanced against the signature tiers', () => {
   it('road cars are faster than the buggy but fragile off-road; the pickup is the sturdiest', () => {
     const buggy = chassisDef('buggy');

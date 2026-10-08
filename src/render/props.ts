@@ -1,4 +1,4 @@
-import { buildPartModel } from './partModels';
+import { buildPartModel, partCarryScale } from './partModels';
 import { drawFood } from './foodModels';
 import type { FoodId } from '../sim/carry';
 import * as THREE from 'three';
@@ -1245,7 +1245,7 @@ export function makeCarryModel(kind: string): THREE.Group {
   m.castShadow = true;
   // The trike's own parts are carried at their true size: they are the very pieces that bolt on.
   const trueSize = kind === 'part:rr_rickshaw' || kind === 'part:tyre_trike' || kind === 'part:tyre_trike_r' || kind === 'part:sus_lift';
-  m.scale.setScalar(/^(part|engine|radiator|tyre|gear|spring|brake|pipe|hood|door)\d$/.test(kind) ? 0.9 : kind.startsWith('part:eng_') ? engineCarryScale(kind.slice(5)) : trueSize ? 1 : 1.1);
+  m.scale.setScalar(/^(part|engine|radiator|tyre|gear|spring|brake|pipe|hood|door)\d$/.test(kind) ? 0.9 : kind.startsWith('part:eng_') ? engineCarryScale(kind.slice(5)) : trueSize ? 1 : kind.startsWith('part:') ? partCarryScale(kind.slice(5)) : 1.1);
   g.add(m);
   return g;
 }

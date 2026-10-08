@@ -166,6 +166,8 @@ export class Vehicle {
   private driveView = { rpm: 0, gear: 0, rpmFrac: 0, load: 0, shifting: false, limiter: false, idle: 0, redline: 0, cvt: false };
   /** Water: engine drowned (wheeled vehicles), seconds spent out of the water since, and the spray timer. */
   flooded = false;
+  /** Picks a raider car's look (paint, scrap, spikes, banner) from where it was spawned, so no two in a war party match. */
+  private visSeed = 0;
   dryT = 0;
   splashT = 0;
 
@@ -187,6 +189,7 @@ export class Vehicle {
     this.body = def.physics.kind === 'boat' ? new BoatBody(ctx.P, def, o.x, o.y ?? gy + def.physics.halfExtents[1] + 0.6, o.z, o.yaw, (x, z) => ctx.waterAt(x, z)) : new VehicleBody(ctx.P, def, o.x, gy + gOff + 0.25, o.z, o.yaw);
     const isRaider = o.faction === 'raider';
     const color = o.color ?? (this.ownerIndex >= 0 ? PLAYER_COLORS[this.ownerIndex] : 0x6b8a5a);
+    this.visSeed = (Math.imul(Math.round(o.x * 8) | 0, 73856093) ^ Math.imul(Math.round(o.z * 8) | 0, 19349663)) >>> 0;
     this.visual = this.makeVisual(color);
     this.group.add(this.visual.root);
     this.shadowCasters(this.visual.root);
@@ -280,8 +283,8 @@ export class Vehicle {
   private makeVisual(color: number): VehicleVisual {
     const w = this.body.wheelLocal;
     const st = this.body.steered;
-    if (this.kind === 'raiderBuggy') return buildRaiderBuggy(this.def, w, st);
-    if (this.kind === 'wagon') return buildWagon(this.def, w, st);
+    if (this.kind === 'raiderBuggy') return buildRaiderBuggy(this.def, w, st, this.visSeed);
+    if (this.kind === 'wagon') return buildWagon(this.def, w, st, this.visSeed);
     if (this.def.physics.kind === 'boat') return buildBoatVisual(this.def, color);
     const look = this.build ? lookOf(this.build) : defaultLook(color);
     return buildVehicleVisual(this.def, w, st, look);
@@ -1162,7 +1165,7 @@ export class Vehicle {
       const flat = !w.bare && this.health.comp.tires[i] <= 0.001;
       w.flatK = damp(w.flatK, flat ? 1 : 0, 10, dt);
       w.pivot.scale.y = 1 - 0.22 * w.flatK;
-      w.pivot.position.y = (this.body.wheelLocal[i]?.[1] ?? this.def.physics.hardY) - susp - w.radius * 0.22 * w.flatK;
+      w.pivot.position.y = (this.body.wheelLocal[i]?.[1] ?? this.def.physics.hardY) - susp - w.radius * 0.22 * w.flatK - (v.rideLift ?? 0);
       w.pivot.rotation.y = w.steered ? this.body.steerAngle : 0;
       this.spin[i] += (sp * dt) / w.radius;
       w.spin.rotation.x = this.spin[i];
@@ -1214,6 +1217,13 @@ export class Vehicle {
       const rp = v.root.position;
       v.interior.visible = !!this.driver || !!this.passenger || this.ctx.players.some((pl) => pl.cam.pos.distanceToSquared(rp) < CABIN_LOD * CABIN_LOD);
       if (v.steerWheel) v.steerWheel.visible = v.interior.visible;
+    }
+    // Far from every camera the wheels drop their tread blocks and bolts (see `addWheelSet`).
+    if (v.setDetail) {
+      const rp = v.root.position;
+      let d2 = Infinity;
+      for (const pl of this.ctx.players) d2 = Math.min(d2, pl.cam.pos.distanceToSquared(rp));
+      v.setDetail(d2);
     }
     // The wheel turns with the steering, a good deal more than the road wheels do.
     if (v.steerWheel) v.steerWheel.rotation.z = clamp(this.body.steerAngle * -6, -3.2, 3.2);

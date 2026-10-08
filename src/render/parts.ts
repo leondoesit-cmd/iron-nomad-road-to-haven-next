@@ -74,11 +74,14 @@ export function drum(b: MeshBuilder, x: number, y: number, z: number, color: num
   b.appendMatrix(t, new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(tipped, 0, 0)), new THREE.Vector3(1, 1, 1)));
 }
 
-/** A row of rivet heads from a to b. */
+/**
+ * A row of rivet heads from a to b. Each head is an icosahedron (20 triangles): at a centimetre across it reads as a dome,
+ * and an armoured truck carries hundreds of them, so a smooth sphere (80) would be most of its triangle budget.
+ */
 export function rivets(b: MeshBuilder, a: V3, c: V3, n: number, r = 0.012, color: ColorIn = S.steel(0x5a5d60, 0.7)) {
   for (let i = 0; i < n; i++) {
     const t = n === 1 ? 0.5 : i / (n - 1);
-    b.add('sphere', a[0] + (c[0] - a[0]) * t, a[1] + (c[1] - a[1]) * t, a[2] + (c[2] - a[2]) * t, r * 2, r * 2, r * 2, color);
+    b.add('ico', a[0] + (c[0] - a[0]) * t, a[1] + (c[1] - a[1]) * t, a[2] + (c[2] - a[2]) * t, r * 2, r * 2, r * 2, color);
   }
 }
 
@@ -131,15 +134,19 @@ export function shock(b: MeshBuilder, a: V3, c: V3, springColor: number, r = 0.0
   const u = new THREE.Vector3().crossVectors(dir, up).normalize();
   const v = new THREE.Vector3().crossVectors(dir, u).normalize();
   const turns = Math.max(4, Math.round(len / 0.045));
-  const pts: V3[] = [];
   const seg = turns * 6;
+  // The coil as short rods end to end: the joints are hidden by the overlap, so no ball at each (a pipe's joints would
+  // cost a sphere per segment, sixty of them per spring).
+  const coil = S.paint(springColor, 0.4);
+  const p = new THREE.Vector3();
+  const q = new THREE.Vector3();
   for (let i = 0; i <= seg; i++) {
     const t = i / seg;
     const ang = t * turns * Math.PI * 2;
-    const p = new THREE.Vector3(a[0], a[1], a[2]).addScaledVector(dir, len * (0.08 + t * 0.84)).addScaledVector(u, Math.cos(ang) * r).addScaledVector(v, Math.sin(ang) * r);
-    pts.push([p.x, p.y, p.z]);
+    q.copy(p);
+    p.set(a[0], a[1], a[2]).addScaledVector(dir, len * (0.08 + t * 0.84)).addScaledVector(u, Math.cos(ang) * r).addScaledVector(v, Math.sin(ang) * r);
+    if (i > 0) b.rod(q.x, q.y, q.z, p.x, p.y, p.z, r * 0.16, coil, 5);
   }
-  b.pipe(pts, r * 0.16, S.paint(springColor, 0.4), 6);
   b.cyl(a[0] + dx * 0.06, a[1] + dy * 0.06, a[2] + dz * 0.06, r * 2.6, 0.02, r * 2.6, S.steel(), 0, 0, 0, 10);
 }
 

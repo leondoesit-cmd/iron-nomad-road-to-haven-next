@@ -61,6 +61,9 @@ export function partModelKey(id: string): string {
   if (d.slot === 'engine') return `part:${id}`;
   // The trike's whole wheels and the lift kit have models of their own (`render/trikeModel.ts`).
   if (id === 'tyre_trike' || id === 'tyre_trike_r' || id === 'sus_lift' || id === 'rr_rickshaw') return `part:${id}`;
+  // So does the running gear and every panel: a radiator, gearbox, spring, brake, exhaust, tyre, bonnet or door is drawn
+  // at its own size from its own numbers (`render/gearParts.ts`), not as one model per grade.
+  if (['cooling', 'wheels', 'gearbox', 'suspension', 'brakes', 'exhaust', 'hood', 'doorL', 'doorR'].includes(d.slot)) return `part:${id}`;
   const mk = Math.min(3, Math.max(1, d.stock ? 1 : d.mk));
   const KEY: Partial<Record<PartSlot, string>> = {
     engine: 'engine',
