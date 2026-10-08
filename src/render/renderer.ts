@@ -12,6 +12,7 @@ import { SkyDome } from './sky';
 import { BREATH, installBreath, newTripView, resetCamera, shiftHue, tripCamera, tripTempo, lookActive, type TripView } from './trip';
 import type { Look } from '../sim/drugs';
 import { FACE_TRIP, faceStrength } from './faceGums';
+import { DEPTH, DEPTH_UNIFORMS, fixReversedPolygonOffset, pullStep } from './depth';
 
 // Fog chunks must be replaced before the first material compiles.
 installAtmosphere();
@@ -112,6 +113,11 @@ export function firstPersonFov(aspect: number, layout: SplitLayout, hfovDeg: num
   return layout === 'vertical' ? Math.min(v, 85) : v;
 }
 
+/** `?depth=classic` in the address asks for the conventional depth buffer (to compare, or for a driver that gets reversed depth wrong). */
+function classicDepth(): boolean {
+  return typeof location !== 'undefined' && /[?&]depth=classic\b/.test(location.search);
+}
+
 /** Longest view any preset gets, metres; each view's far plane follows the fog inside it (see fitFar). */
 const VIEW_FAR = 3400;
 
@@ -189,7 +195,13 @@ export class GameRenderer {
   };
 
   constructor(public canvas: HTMLCanvasElement) {
-    this.gl = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance', stencil: false });
+    // Reversed depth (1 at the near plane, 0 at the far) where EXT_clip_control is there: with the float depth of the scene
+    // target it keeps surfaces a fraction of a millimetre apart from flickering through each other a kilometre out (see depth.ts).
+    this.gl = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance', stencil: false, reversedDepthBuffer: !classicDepth() });
+    DEPTH.reversed = this.gl.capabilities.reversedDepthBuffer;
+    DEPTH.float = DEPTH.reversed;
+    DEPTH_UNIFORMS.uPullStep.value = pullStep(DEPTH.reversed);
+    if (DEPTH.reversed) fixReversedPolygonOffset(this.gl.getContext());
     this.baseDpr = Math.min(window.devicePixelRatio || 1, 1.75);
     this.outDpr = Math.min(window.devicePixelRatio || 1, 2);
     this.floatOk = this.gl.extensions.has('EXT_color_buffer_float') || this.gl.extensions.has('EXT_color_buffer_half_float');
@@ -214,7 +226,8 @@ export class GameRenderer {
     sc.bottom = -SHADOW_HALF;
     sc.near = 1;
     sc.far = 320;
-    this.sun.shadow.bias = -0.00025;
+    // three adds the bias to the receiver's depth before comparing; reversed, nearer the sun is larger, so the bias flips.
+    this.sun.shadow.bias = DEPTH.reversed ? 0.00025 : -0.00025;
     this.sun.shadow.normalBias = 0.35;
     this.applyQuality();
 

@@ -3,6 +3,7 @@ import { MeshBuilder, S } from './builder';
 import { GLOBALS, kitMaterial } from './materials';
 import { bushTexture, caneTexture, fernTexture, flowerTexture, grassTexture, hornwortTexture, irisTexture, lilyTexture, oleanderTexture, papyrusTexture, pondweedTexture, reedTexture, siltTexture, tapeTexture, weedTexture } from './proctex';
 import { shared } from './dispose';
+import { COPLANAR, coplanarOffset } from './depth';
 import { wetGround } from './groundMix';
 import { hash2, noise2 } from '../core/rng';
 import { CELL, CELLS, CHUNK, corridorHalf, heightAt, normalAt, roadX, surfaceAt, waterAt, type TerrainDef } from '../world/terrain';
@@ -366,9 +367,7 @@ function cardMaterial(kind: CardKind): THREE.MeshStandardMaterial {
   m.userData.scatterFadeEnd = k.fade[1];
   // Pads float on swamp water: drawn a hair above it. Silt lies on the bed the same way.
   if (kind === 'pad' || kind === 'silt') {
-    m.polygonOffset = true;
-    m.polygonOffsetFactor = -2;
-    m.polygonOffsetUnits = -2;
+    coplanarOffset(m, COPLANAR.ground);
     m.roughness = 0.6;
   }
   const fade = new THREE.Vector2(k.fade[0], k.fade[1]);

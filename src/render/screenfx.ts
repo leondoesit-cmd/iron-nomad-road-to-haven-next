@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import { FIRE_PARS, fireUniforms } from './fireLight';
+import { DEPTH_GLSL } from './depth';
 
 /**
  * Screen-space lighting for the HDR scene target. Each player view runs these right after it has been drawn, while that view's
@@ -33,8 +34,9 @@ uniform vec2 uProjXY;
 uniform vec2 uNearFar;
 uniform vec2 uPix;
 varying vec2 vUv;
+${DEPTH_GLSL}
 float linZ( float d ) {
-  return ( uNearFar.x * uNearFar.y ) / ( ( uNearFar.y - uNearFar.x ) * d - uNearFar.y );
+  return depthViewZ( d, uNearFar );
 }
 vec2 gUv( vec2 l ) {
   return uRect.xy + clamp( l, vec2( 0.0005 ), vec2( 0.9995 ) ) * uRect.zw;
@@ -167,7 +169,7 @@ vec3 shafts( vec2 l, float d, float z, float jit ) {
   // uVol2: x anisotropy, y wind time, z unused, w unused
   vec2 ndc = l * 2.0 - 1.0;
   vec3 dirV = vec3( ndc * uProjXY, -1.0 );
-  float zEnd = d >= 1.0 ? uVol.w : min( - z, uVol.w );
+  float zEnd = depthIsSky( d ) ? uVol.w : min( - z, uVol.w );
   float lenV = length( dirV );
   vec3 rd = normalize( uCamRot * dirV );
   float g = uVol2.x;
@@ -190,7 +192,12 @@ vec3 shafts( vec2 l, float d, float z, float jit ) {
     vec2 edge = min( suv.xy, 1.0 - suv.xy );
     float inBox = smoothstep( 0.0, 0.14, min( edge.x, edge.y ) ) * step( 0.0, suv.z ) * step( suv.z, 1.0 );
     float vis = 1.0;
+    // The bias leans toward lit: nearer the sun is smaller in a conventional shadow map and larger in a reversed one.
+#ifdef USE_REVERSED_DEPTH_BUFFER
+    if ( inBox > 0.0 ) vis = texture( tShadow, vec3( suv.xy, suv.z + uShadowBias ) );
+#else
     if ( inBox > 0.0 ) vis = texture( tShadow, vec3( suv.xy, suv.z - uShadowBias ) );
+#endif
     float seg = dens * ds * lenV;
     acc += T * seg * vis * inBox;
     T *= exp( - seg * 0.6 );
@@ -217,7 +224,7 @@ vec3 radial( vec2 l, float jit ) {
     float dd = dAt( suv );
     vec2 q = ( suv - uSunUv ) * vec2( uAspect, 1.0 );
     float glow = exp( - dot( q, q ) * uRad.y );
-    acc += step( 0.99999, dd ) * glow * illum;
+    acc += ( depthNearFar( dd ) ? 1.0 : 0.0 ) * glow * illum;
     illum *= 0.94;
   }
   return uSunLight * ( ( acc / float( RAD_STEPS ) ) * uRad.x * radWeight * 0.4 );
@@ -229,14 +236,14 @@ void main() {
   float z = linZ( d );
   float jit = ign( gl_FragCoord.xy + vec2( 17.0, 3.0 ) );
   float ao = 1.0;
-  if ( uAo.z > 0.5 && d < 1.0 ) ao = gtao( l, z, viewPos( l, z ) );
+  if ( uAo.z > 0.5 && ! depthIsSky( d ) ) ao = gtao( l, z, viewPos( l, z ) );
   vec3 light = vec3( 0.0 );
   if ( uVol.x > 0.0 ) light += shafts( l, d, z, jit );
   if ( uRad.x > 0.0 && uRad.z > 0.5 ) light += radial( l, jit );
   // Firelight caught in the haze, the rain and the smoke between the eye and the surface: a glow round every fire.
   if ( fireLightInfo.x > 0.5 && fireLightInfo.y > 0.0 ) {
     vec3 dirV = vec3( ( l * 2.0 - 1.0 ) * uProjXY, -1.0 );
-    float len = d >= 1.0 ? 600.0 : - z * length( dirV );
+    float len = depthIsSky( d ) ? 600.0 : - z * length( dirV );
     light += fireScatter( uCamPos, normalize( uCamRot * dirV ), len );
   }
   gl_FragColor = vec4( min( light, vec3( 16.0 ) ), ao );
@@ -284,7 +291,7 @@ void main() {
   float R = clamp( 1.0 - hd.a, 0.0, 1.0 );
   if ( R < 0.004 ) return;
   float d = dAt( l );
-  if ( d >= 1.0 ) return;
+  if ( depthIsSky( d ) ) return;
   // Opaque surfaces never write above 0.95; the water sheet writes alpha 0 (R of 1).
   bool water = R > 0.97;
   float sm = water ? 1.0 : clamp( R / 0.03, 0.0, 1.0 );
@@ -335,7 +342,7 @@ void main() {
     float rz = mix( z0, z1, t ) / k;
     float sz = zAt( uv );
     float diff = sz - rz;
-    if ( diff > 0.01 + 0.004 * ( - z ) && diff < thick && dAt( uv ) < 1.0 ) {
+    if ( diff > 0.01 + 0.004 * ( - z ) && diff < thick && ! depthIsSky( dAt( uv ) ) ) {
       tHit = t;
       break;
     }

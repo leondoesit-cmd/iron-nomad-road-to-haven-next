@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLOBALS, WET_PARS } from './materials';
 import { macroTexture, meadowTexture, roadTextures, terrainTextures } from './proctex';
+import { COPLANAR, DEPTH_UNIFORMS, PULL, coplanarOffset, depthPullGlsl } from './depth';
 
 /**
  * Ground shading: four detail materials (wind-rippled sand, cracked earth, layered rock, gravel) blended
@@ -264,6 +265,9 @@ export function makeTerrainMaterial(biome: 'wasteland' | 'city', lod?: TerrainUn
 
 const ROAD_VERT_PARS = /* glsl */ `
 attribute vec3 rtan;
+// Open-world roads: how many roads this one crosses over (see roadLayer). Missing elsewhere: 0 by the material's default.
+attribute float rlayer;
+uniform float uPullStep;
 varying vec2 vRUv;
 varying vec3 vRTan;
 varying vec3 vRWPos;
@@ -274,6 +278,29 @@ vRUv = uv;
 vRTan = rtan;
 vRWPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
 `;
+
+/**
+ * After project_vertex: the road is drawn a hair nearer the eye than it lies, and each road crossing over others nearer
+ * again, in proportion to the distance (see depth.ts): the ground and the roads under it never show through, however far.
+ */
+const ROAD_VERT_PULL = depthPullGlsl(`${PULL.road.toFixed(1)} + rlayer`);
+
+/**
+ * A value for an attribute a geometry does not carry. Left unset, a missing attribute reads whatever another program last
+ * left in that slot (three only fills in defaults it is given).
+ */
+function setDefaultAttribute(m: THREE.Material, name: string, v: number) {
+  const d = m as THREE.Material & { defaultAttributeValues?: Record<string, number[]> };
+  d.defaultAttributeValues = { ...d.defaultAttributeValues, [name]: [v] };
+}
+
+/** Hook the road's own vertex code into a standard material's shader. */
+function roadVertex(shader: { vertexShader: string; uniforms: Record<string, THREE.IUniform> }) {
+  shader.uniforms.uPullStep = DEPTH_UNIFORMS.uPullStep;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>\n${ROAD_VERT_PARS}`)
+    .replace('#include <project_vertex>', `${ROAD_VERT_MAIN}\n#include <project_vertex>\n${ROAD_VERT_PULL}`);
+}
 
 const ROAD_FRAG_PARS = /* glsl */ `
 varying vec2 vRUv;
@@ -344,7 +371,7 @@ const ROAD_LOD = /* glsl */ `
 /** Road material for a biome. `lod` makes the far variant, which is cut away over chunks drawn in detail. */
 export function makeRoadMaterial(biome: 'wasteland' | 'city', lod?: TerrainUniforms): THREE.MeshStandardMaterial {
   const rt = roadTextures(biome);
-  const m = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+  const m = coplanarOffset(new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 }), COPLANAR.ground);
   const uniforms = {
     tRoad: { value: rt.map },
     tRoadS: { value: rt.surface },
@@ -354,12 +381,11 @@ export function makeRoadMaterial(biome: 'wasteland' | 'city', lod?: TerrainUnifo
     uWet: GLOBALS.uWet,
     uPuddle: GLOBALS.uPuddle,
   };
+  setDefaultAttribute(m, 'rlayer', 0);
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     if (lod) Object.assign(shader.uniforms, lod);
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\n${ROAD_VERT_PARS}`)
-      .replace('#include <project_vertex>', `${ROAD_VERT_MAIN}\n#include <project_vertex>`);
+    roadVertex(shader);
     shader.fragmentShader = (lod ? '#define TERRAIN_LOD\n' : '') +
       shader.fragmentShader
         .replace('#include <common>', `#include <common>\n${ROAD_FRAG_PARS}`)
@@ -402,7 +428,7 @@ vec4 rSrf = vec4( 0.5, 0.5, 0.88 - pJ * 0.1 - smoothstep( 0.7, 0.85, pMac.b ) * 
 /** Concrete sidewalk slabs (1.5 m), with joints, per-slab tone, grime and damp patches. */
 export function makePavingMaterial(): THREE.MeshStandardMaterial {
   const rt = roadTextures('city');
-  const m = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+  const m = coplanarOffset(new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 }), COPLANAR.ground);
   const uniforms = {
     tRoad: { value: rt.surface },
     tRoadS: { value: rt.surface },
@@ -412,11 +438,10 @@ export function makePavingMaterial(): THREE.MeshStandardMaterial {
     uWet: GLOBALS.uWet,
     uPuddle: GLOBALS.uPuddle,
   };
+  setDefaultAttribute(m, 'rlayer', 0);
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\n${ROAD_VERT_PARS}`)
-      .replace('#include <project_vertex>', `${ROAD_VERT_MAIN}\n#include <project_vertex>`);
+    roadVertex(shader);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${ROAD_FRAG_PARS}`)
       .replace('#include <color_fragment>', PAVE_FRAG)

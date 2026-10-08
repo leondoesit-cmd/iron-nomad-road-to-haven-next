@@ -4,6 +4,7 @@ import { clamp } from '../core/math';
 import { ScreenFX, type FxView } from './screenfx';
 import { lookActive, type TripView } from './trip';
 import { FIRE_HAZE } from './fireLight';
+import { DEPTH, DEPTH_GLSL } from './depth';
 
 /**
  * HDR post chain for the split screen: both views render into one multisampled half-float target, then
@@ -185,8 +186,9 @@ vec3 sceneSharp( vec2 uv ) {
   // The negative lobes can ring below black next to a very bright pixel.
   return max( c / w, vec3( 0.0 ) );
 }
+${DEPTH_GLSL}
 float linZ( float d ) {
-  return ( uNearFar.x * uNearFar.y ) / ( ( uNearFar.y - uNearFar.x ) * d - uNearFar.y );
+  return depthViewZ( d, uNearFar );
 }
 // Depth at the middle of the depth pixel under uv. The buffer is not filtered, and the half-resolution samples below fall
 // exactly between two of its pixels: left to rounding, which one is read flips in bands across the screen.
@@ -478,7 +480,8 @@ export class PostFX {
     const opts = { type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, magFilter: THREE.LinearFilter, minFilter: THREE.LinearFilter, generateMipmaps: false };
     this.depth = new THREE.DepthTexture(4, 4);
     this.depth.format = THREE.DepthFormat;
-    this.depth.type = THREE.UnsignedIntType;
+    // Float depth with the reversed buffer: precision then holds out to the far plane (see depth.ts).
+    this.depth.type = DEPTH.float ? THREE.FloatType : THREE.UnsignedIntType;
     this.depth.minFilter = THREE.NearestFilter;
     this.depth.magFilter = THREE.NearestFilter;
     this.hdr = new THREE.WebGLRenderTarget(4, 4, { ...opts, depthBuffer: true, samples, depthTexture: this.depth });

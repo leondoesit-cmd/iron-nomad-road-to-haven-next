@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { shared } from './dispose';
+import { COPLANAR, coplanarOffset } from './depth';
 import { hash2 } from '../core/rng';
 import type { SignSpawn, SignTheme } from '../world/layout';
 
@@ -54,7 +55,7 @@ export function signMaterial(s: Pick<SignSpawn, 'theme' | 'text' | 'sub' | 'w' |
     const tex = shared(new THREE.CanvasTexture(draw(s, look)));
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 4;
-    m = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.2, roughness: 0.8, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+    m = coplanarOffset(new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.2, roughness: 0.8, metalness: 0 }), COPLANAR.detail);
   } catch {
     // No real canvas (a test run in Node): a flat panel in the sign's colour.
     m = new THREE.MeshStandardMaterial({ color: look.bg, roughness: 0.8 });
