@@ -95,7 +95,10 @@ export class WeatherSystem {
 
   constructor(private sc: Scene) {
     this.fire = new Wildfire(sc);
-    this.fire.hooks.onIgnite = (f) => this.onIgnite(f.tree);
+    // Only a bolt is news as lightning: a molotov or a burning car that set the grass and then a tree going is not.
+    this.fire.hooks.onIgnite = (f, cause) => {
+      if (cause === 'strike') this.onIgnite(f.tree);
+    };
     sc.root.add(this.rainFx.mesh);
     sc.root.add(this.bolts.group);
   }
@@ -238,7 +241,7 @@ export class WeatherSystem {
       const d = Math.hypot((pl.vehicle?.position.x ?? pl.pos.x) - x, (pl.vehicle?.position.z ?? pl.pos.z) - z);
       if (d < 120) pl.cam.addShake(0.5 * (1 - d / 120));
     }
-    if (tree) this.fire.ignite(tree, catchChance(fireDanger(this.wet, this.rain, sc.heat)));
+    if (tree) this.fire.ignite(tree, catchChance(fireDanger(this.wet, this.rain, sc.heat)), 'strike');
   }
 
   /** A bolt on the horizon under a far thunderhead, and a rumble long after it. */

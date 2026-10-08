@@ -41,10 +41,23 @@ export interface PlayerCarry {
   utility: Utility;
   /** The belt slot in hand. The gear itself lives in the campaign, so only the selection needs to cross over. */
   sel: number;
+  /** Down (and how long for) or dead (and how long to the respawn): climbing out is no cure. */
+  state?: 'foot' | 'downed' | 'dead';
+  downT?: number;
+  respawnT?: number;
 }
 
 /** A tool in hand goes back to the gun on the way down, as it always has. */
-export const carryOf = (p: Player): PlayerCarry => ({ hp: p.hp, mag: p.mag, equip: p.equip === 'gun' || p.equip === 'melee' || p.equip === 'utility' ? p.equip : 'gun', utility: p.utility, sel: p.gear.sel });
+export const carryOf = (p: Player): PlayerCarry => ({
+  hp: p.hp,
+  mag: p.mag,
+  equip: p.equip === 'gun' || p.equip === 'melee' || p.equip === 'utility' ? p.equip : 'gun',
+  utility: p.utility,
+  sel: p.gear.sel,
+  state: p.state === 'downed' || p.state === 'dead' ? p.state : 'foot',
+  downT: p.downT,
+  respawnT: p.respawnT,
+});
 
 /** Footprints (width, depth, height) of decor that blocks the way. */
 const FOOT: Partial<Record<DelveDecor, [number, number, number]>> = {

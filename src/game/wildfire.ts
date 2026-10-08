@@ -45,7 +45,7 @@ export interface FireHooks {
   /** Darken a tree to its char (0 green, 1 a black snag). */
   charTree(t: TreeSpot, char: number): void;
   /** Told when a fire takes, for the radio. */
-  onIgnite?(f: Fire): void;
+  onIgnite?(f: Fire, cause: 'strike' | 'spread'): void;
 }
 
 const NO_TREES: TreeSpot[] = [];
@@ -59,7 +59,7 @@ export class Wildfire {
   constructor(private ctx: Ctx) {}
 
   /** Try to set a tree alight. `chance` is the odds it takes (1 always does). Returns the fire if it did. */
-  ignite(t: TreeSpot, chance = 1): Fire | null {
+  ignite(t: TreeSpot, chance = 1, cause: 'strike' | 'spread' = 'spread'): Fire | null {
     const key = treeKey(t);
     if (this.fires.some((f) => f.key === key)) return null;
     // A tree that has burned out has nothing left to burn.
@@ -68,7 +68,7 @@ export class Wildfire {
     const d = TREE_DIMS[TREE_SPECIES[t.sp]];
     const f: Fire = { key, tree: t, top: t.y + d.h * t.s, r: Math.max(2, d.crown * t.s * 0.75), heat: 0.05, fuel: 45 + Math.random() * 40, char: this.burnt.get(key) ?? 0, tick: 0, sparkT: 4 + Math.random() * 6 };
     this.fires.push(f);
-    this.hooks.onIgnite?.(f);
+    this.hooks.onIgnite?.(f, cause);
     return f;
   }
 
