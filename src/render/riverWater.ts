@@ -5,7 +5,7 @@ import { DrawnGround } from './drawnGround';
 import type { TerrainUniforms } from './terrainMaterial';
 import { lakeColors, lakeWater } from '../world/lakes';
 import { heightAt, type TerrainDef } from '../world/terrain';
-import { nearestRoad } from '../world/openWorld';
+import { nearestRoad, ROAD_REACH } from '../world/openWorld';
 import { coursesNear, FLOOD_REACH, RIFFLE_HALF, riseTaper, swampQ, type Hydro, type River, type Waterfall } from '../world/hydro';
 import { clamp, lerp, smoothstep } from '../core/math';
 
@@ -119,7 +119,8 @@ function coverAt(def: TerrainDef, hy: Hydro, r: River, i: number, x: number, z: 
   if (r.spring >= 0 && i < 40) {
     const sp = hy.springs[r.spring];
     const d = Math.hypot(x - sp.x, z - sp.z);
-    if (d < sp.r + 1.2) c = smoothstep(0.02, 0.12, sp.level - heightAt(def, x, z)) * (1 - smoothstep(sp.r + 0.4, sp.r + 1.2, d));
+    // The pool's disc reaches 1.2 m past its rim (`springGeometry`), and shows wherever there is water under it.
+    if (d < sp.r + 1.2) c = smoothstep(0.02, 0.12, sp.level - heightAt(def, x, z));
   }
   if (i < r.end - 14) return c;
   if (r.into.kind === 'lake') {
@@ -237,6 +238,9 @@ export function riverRibbonGeometry(def: TerrainDef): RibbonData | null {
         for (let q = 0; q < SIDE; q++) us[base + q] = offs[q] * side;
       }
       us[0] = 0;
+      // A paved road within reach of the cross-section? (The road index finds every road within ROAD_REACH of a point.)
+      const reachOut = Math.max(Math.abs(us[SIDE]), Math.abs(us[2 * SIDE])) + 5;
+      const roadNear = !!o && (reachOut > ROAD_REACH || nearestRoad(o, r.x[i], r.z[i]).edge < reachOut);
       for (let q = 0; q < NX; q++) {
         const u = us[q];
         const x = r.x[i] + nx * u;
@@ -244,7 +248,7 @@ export function riverRibbonGeometry(def: TerrainDef): RibbonData | null {
         xs[q] = x;
         zs[q] = z;
         // Where a road crosses on its causeway the water runs on underneath, in the channel's own shape (the causeway hides it).
-        const rd = o ? nearestRoad(o, x, z) : null;
+        const rd = roadNear ? nearestRoad(o!, x, z) : null;
         if (rd?.road && rd.road.kind !== 'track' && rd.edge < 5) {
           const a = Math.abs(u) / h;
           depth[q] = a < 1 ? r.depth[i] * Math.pow(1 - a * a, 0.7) : -(Math.abs(u) - h) * 0.4;
@@ -286,7 +290,7 @@ export function riverRibbonGeometry(def: TerrainDef): RibbonData | null {
         const q = slot < SIDE ? SIDE + SIDE - slot : slot === SIDE ? 0 : slot - SIDE;
         const cover = coverAt(def, hy, r, i, xs[q], zs[q]);
         pos[v * 3] = xs[q];
-        pos[v * 3 + 1] = level - SINK * cover;
+        pos[v * 3 + 1] = level - SINK * Math.min(1, cover * 4);
         pos[v * 3 + 2] = zs[q];
         flow[v * 4] = us[q];
         flow[v * 4 + 1] = tau;

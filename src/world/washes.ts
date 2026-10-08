@@ -35,6 +35,8 @@ export const PAN_POOL = 0.6;
 const PAN_OUT = 1.5;
 /** The fall of a wash's bed, at the least. */
 const MIN_SLOPE = 0.0035;
+/** How far a wash's bed lies under the lowest land beside it, at the least (metres). */
+const MIN_CUT = 0.75;
 
 export interface Wash {
   id: number;
@@ -211,6 +213,17 @@ function washCut(h: WashHit, x: number, z: number, ground: number, ramp: number)
   return lerp(h.bed + 0.08, ground, ramp > h.bank ? smoothstep(0, 1, t) : Math.pow(smoothstep(0, 1, t), 0.65));
 }
 
+/**
+ * A road keeps an easy grade down into a wash's bed and out again: the banks lie back for a car either side of it. How far
+ * they lie back at a point (metres of bank), 0 away from roads.
+ */
+export function roadRamp(def: TerrainDef, x: number, z: number): number {
+  const o = def.open;
+  if (!o) return 0;
+  const rd = nearestRoad(o, x, z);
+  return rd.road && rd.edge < 14 ? lerp(rd.road.kind === 'track' ? 14 : 26, 0, smoothstep(3, 14, rd.edge)) : 0;
+}
+
 /** The terrain `h` at (x, z) with every pan and wash cut into it. Called by `heightAt` last. */
 export function washAdjust(def: TerrainDef, net: WashNet, x: number, z: number, h: number): number {
   if (!net.ready) return h;
@@ -220,13 +233,7 @@ export function washAdjust(def: TerrainDef, net: WashNet, x: number, z: number, 
     if (q < PAN_OUT) out = panGround(p, x, z, q, out);
   }
   if (!net.grid.has(cellKey(Math.floor(x / GRID), Math.floor(z / GRID)))) return out;
-  // A road keeps an easy grade down into the bed and out again: the banks lie back for a car either side of it.
-  let ramp = 0;
-  const o = def.open;
-  if (o) {
-    const rd = nearestRoad(o, x, z);
-    if (rd.road && rd.edge < 14) ramp = lerp(rd.road.kind === 'track' ? 14 : 26, 0, smoothstep(3, 14, rd.edge));
-  }
+  const ramp = roadRamp(def, x, z);
   const hits = washesNear(net, x, z, ramp);
   if (!hits.length) return out;
   const ground = out;
@@ -241,14 +248,14 @@ export function washAdjust(def: TerrainDef, net: WashNet, x: number, z: number, 
 }
 
 /**
- * 1 on a wash's bed and the foot of its banks (where a flood runs), 0 up on the land. With `hydroCalm` it keeps the visual
+ * 1 on a wash's bed and its banks (as high as a flood can run), 0 out on the land. With `hydroCalm` it keeps the visual
  * crags of the cliffs out of the gorges the washes come down through, so a flood is never hidden under rock that is not there.
  */
 export function washCalm(net: WashNet | undefined, x: number, z: number): number {
   if (!net?.ready) return 0;
   const c = washAt(net, x, z, 4);
   if (!c) return 0;
-  return 1 - smoothstep(c.half + c.bank * 0.35, c.half + c.bank * 0.8 + 2, c.d);
+  return 1 - smoothstep(c.half + c.bank, c.half + c.bank + 3, c.d);
 }
 
 /** How calm the drawn ground must lie at a point for the water there: running water, its banks, a wash and its flood. */
@@ -298,8 +305,9 @@ export function panLevel(p: Pan, fill: number): number {
  */
 export function floodAt(def: TerrainDef, net: WashNet, x: number, z: number, t: number, hy: Hydrograph, panFill: (p: Pan) => number): WaterHit | null {
   if (!net.ready) return null;
-  const c = washAt(net, x, z);
-  if (c && c.d < c.half + c.bank) {
+  const ramp = roadRamp(def, x, z);
+  const c = washAt(net, x, z, ramp);
+  if (c && c.d < c.half + Math.max(c.bank, ramp)) {
     const stage = floodStage(net, c.wash, c.s, t, hy);
     if (stage > 0.02) {
       const level = c.bed + stage;
@@ -563,8 +571,9 @@ function freeBed(def: TerrainDef, w: Wash, ws: WashSpec): Float32Array {
   lb[n - 1] = lt[n - 1];
   for (let i = n - 2; i >= 0; i--) lb[i] = Math.max(lb[i + 1] + MIN_SLOPE * (w.s[i + 1] - w.s[i]), lt[i]);
   const out = new Float32Array(n);
-  // Never less than most of its depth under the land, though: a wash is a cut, not a ditch on a bank.
-  for (let i = 0; i < n; i++) out[i] = Math.min(0.5 * (lf[i] + lb[i]), lt[i] + 0.4 * cut[i]);
+  // Never less than most of its depth under the land, though: a wash is a cut, not a ditch on a bank. And never less than a
+  // little under the lowest land right beside it, so it always has banks to hold a flood (`Wash.cap`).
+  for (let i = 0; i < n; i++) out[i] = Math.min(0.5 * (lf[i] + lb[i]), lt[i] + 0.4 * cut[i], g[i] - MIN_CUT);
   for (let i = 1; i < n; i++) out[i] = Math.min(out[i], out[i - 1] - MIN_SLOPE * (w.s[i] - w.s[i - 1]));
   return out;
 }
@@ -606,21 +615,16 @@ function settleBed(def: TerrainDef, net: WashNet, w: Wash, bed: Float32Array) {
     }
     w.bank[i] = Math.max(b[i] * 0.7, acc / k);
   }
-  // The deepest a flood may run: a freeboard under the lower of the two banks' tops (the land the wash is cut into, before
-  // it is cut: the washes are not carved yet), the least of it over a few samples either way.
+  // The deepest a flood may run: a freeboard under the land at the top of the lower bank, where the cut ends (the land the
+  // wash is cut into: the washes are not carved yet), the least of it over a few samples either way. A road ramping down
+  // into the bed stands the bank back, and the flood runs out over the dip in the road as far as that.
   const top = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const nx = -w.dz[i];
     const nz = w.dx[i];
+    const reach = w.half[i] + Math.max(w.bank[i], roadRamp(def, w.x[i], w.z[i]));
     let lo = Infinity;
-    for (const side of [-1, 1]) {
-      let hi = -Infinity;
-      for (const k of [0.5, 0.75, 1]) {
-        const d = (w.half[i] + w.bank[i] * k) * side;
-        hi = Math.max(hi, heightAt(def, w.x[i] + nx * d, w.z[i] + nz * d));
-      }
-      lo = Math.min(lo, hi);
-    }
+    for (const side of [-1, 1]) lo = Math.min(lo, heightAt(def, w.x[i] + nx * reach * side, w.z[i] + nz * reach * side));
     top[i] = Math.max(0, lo - bed[i] - FLOOD_FREEBOARD);
   }
   for (let i = 0; i < n; i++) {

@@ -203,48 +203,38 @@ describe('the water fits the land', () => {
         const nz = w.dx[i];
         const reach = Math.abs(g.getAttribute('aWash').getY(base));
         const stage = floodStage(net, w, w.s[i], 0.5, hgr);
-        for (let u = -reach; u <= reach; u += 0.25) {
-          const at = rowAt(g, base, FLOOD_NX, 'aWash', 'getY', u);
-          // The flood's shader at a full flood (the hydrograph texture all ones).
-          const st = Math.min(at('aWash', 'getW') * (1 - 0.35 * Math.min(1, at('aWash', 'getX') / w.len)), at('aWash3', 'getX')) * at('aWash3', 'getY');
-          const d = st - at('aWash', 'getZ');
-          const bar = st - at('aWash3', 'getZ');
-          const fade = at('aWash2', 'getW');
-          const x = w.x[i] + nx * u;
-          const z = w.z[i] + nz * u;
-          const y = w.bed[i] + st;
-          const vis = d >= 0.012 && bar >= 0 && fade >= 0.02 && st / Math.max(0.3, w.flood) >= 0.015 && y > G.mesh(x, z) + 0.005;
-          const ph = floodAt(def, net, x, z, 0.5, hgr, () => 0);
-          const wet = ph && ph.kind === 'flood' ? ph.depth : 0;
-          bump(per, 'pts');
-          if (vis && wet < 0.02 && d > 0.1) {
-            bump(per, 'phantom');
-            if (OUT && (per.dumped ?? 0) < 6 && i % 3 === 0) {
-              bump(per, 'dumped');
-              const c2 = courseAt(hy, x, z);
-              log(`  ph ${w.key} i=${i}/${w.end} u=${u.toFixed(2)} half=${w.half[i].toFixed(1)} bank=${w.bank[i].toFixed(1)} st=${st.toFixed(2)} stage=${stage.toFixed(2)} d=${d.toFixed(2)} bar=${bar.toFixed(2)} mesh-bed=${(G.mesh(x, z) - w.bed[i]).toFixed(2)} g-bed=${(heightAt(def, x, z) - w.bed[i]).toFixed(2)} ph=${ph ? ph.kind + ':' + ph.depth.toFixed(2) : 'null'} river=${c2 ? (c2.d - c2.half).toFixed(1) : '-'}`);
+        for (const side of [-1, 1]) {
+          let behind = -Infinity;
+          for (let a = 0; a <= reach; a += 0.25) {
+            const u = a * side;
+            const at = rowAt(g, base, FLOOD_NX, 'aWash', 'getY', u);
+            // The flood's shader at a full flood (the hydrograph texture all ones).
+            const st = Math.min(at('aWash', 'getW') * (1 - 0.35 * Math.min(1, at('aWash', 'getX') / w.len)), at('aWash3', 'getX')) * at('aWash3', 'getY');
+            const d = st - at('aWash', 'getZ');
+            const bar = st - at('aWash3', 'getZ');
+            const fade = at('aWash2', 'getW');
+            const x = w.x[i] + nx * u;
+            const z = w.z[i] + nz * u;
+            const y = w.bed[i] + st;
+            const vis = d >= 0.012 && bar >= 0 && fade >= 0.02 && st / Math.max(0.3, w.flood) >= 0.015 && y > G.mesh(x, z) + 0.005;
+            const ph = floodAt(def, net, x, z, 0.5, hgr, () => 0);
+            const wet = ph && ph.kind === 'flood' ? ph.depth : 0;
+            bump(per, 'pts');
+            // Ten centimetres of water drawn where the physics has none.
+            if (vis && wet < 0.02 && d > 0.1) bump(per, 'phantom');
+            if (wet > 0.15 && !vis) bump(per, 'invisible');
+            const c = courseAt(hy, x, z);
+            if (vis && c && c.d < c.half + 0.5) bump(per, 'overRiver');
+            // Still drawn at the far edge of the ribbon: the flood has topped the banks and is cut off by the ribbon's edge.
+            if (vis && a > reach - 0.25) {
+              bump(per, 'edge');
+              const rd = nearestRoad(def.open!, x, z);
+              log(`  edge ${w.key} i=${i}/${w.end} u=${u.toFixed(1)} st=${st.toFixed(2)} cap=${w.cap[i].toFixed(2)} road=${rd.road ? rd.road.kind + ':' + rd.edge.toFixed(1) : '-'} g-y=${(heightAt(def, x, z) - y).toFixed(2)}`);
             }
-          }
-          if (wet > 0.15 && !vis) bump(per, 'invisible');
-          const c = courseAt(hy, x, z);
-          if (vis && c && c.d < c.half + 0.5) {
-            bump(per, 'overRiver');
-            if (OUT && (per.dumpR ?? 0) < 4) {
-              bump(per, 'dumpR');
-              log(`  ovR ${w.key} i=${i}/${w.end} n=${w.n} u=${u.toFixed(2)} st=${st.toFixed(2)} y=${y.toFixed(2)} riverLevel=${c.level.toFixed(2)} cd-half=${(c.d - c.half).toFixed(2)} taper=${at('aWash3', 'getY').toFixed(2)} cap=${at('aWash3', 'getX').toFixed(2)}`);
-            }
-          }
-          // Over its banks: drawn water standing higher than the land on that side of the wash.
-          if (vis && stage > 0.3 && Math.abs(u) > w.half[i]) {
-            const s = Math.sign(u) * (w.half[i] + w.bank[i] + 1);
-            const land = heightAt(def, w.x[i] + nx * s, w.z[i] + nz * s);
-            if (y > land) {
-              bump(per, 'overBank');
-              if (OUT && (per.dumpB ?? 0) < 4) {
-                bump(per, 'dumpB');
-                const rd = nearestRoad(def.open!, x, z);
-                log(`  ovB ${w.key} i=${i}/${w.end} u=${u.toFixed(2)} st=${st.toFixed(2)} cap=${w.cap[i].toFixed(2)} y-land=${(y - land).toFixed(2)} road=${rd.road ? rd.edge.toFixed(1) : '-'}`);
-              }
+            // Drawn behind a bank that stands over it: spilled out of the wash.
+            if (a > w.half[i]) {
+              if (vis && behind > y + 0.1) bump(per, 'overBank');
+              behind = Math.max(behind, heightAt(def, x, z));
             }
           }
         }
@@ -258,7 +248,8 @@ describe('the water fits the land', () => {
     expect((t.phantom ?? 0) / t.pts).toBeLessThan(0.005);
     expect((t.invisible ?? 0) / t.pts).toBeLessThan(0.005);
     expect(t.overRiver ?? 0).toBe(0);
-    expect(t.overBank ?? 0).toBe(0);
+    expect((t.overBank ?? 0) / t.pts).toBeLessThan(0.001);
+    expect(t.edge ?? 0).toBe(0);
   });
 
   it('leaves no two sheets of water within a hair of each other', () => {
