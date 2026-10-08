@@ -10,7 +10,6 @@ import { courseAt, FLOOD_REACH, riseTaper, spillDepth, swampQ, type River } from
 import { lakeWater } from '../src/world/lakes';
 import { riverFloodRise } from '../src/game/weatherSystem';
 import { DrawnGround } from '../src/render/drawnGround';
-import { nearestRoad } from '../src/world/openWorld';
 import { bump, plainSample, type Tally } from './helpers/waterScan';
 
 /**
@@ -28,7 +27,6 @@ const log = (s: string) => OUT && appendFileSync(OUT, s + '\n');
 
 let def: TerrainDef;
 let G: DrawnGround;
-const HIST: Tally = {};
 beforeAll(() => {
   if (OUT) writeFileSync(OUT, '');
   def = makeTerrainDef(legById('W'));
@@ -143,11 +141,9 @@ function scanRivers(risen: boolean): RiverScan {
           // over ground standing clearly above it counts.)
           if (vis && wet < 0.02 && a > h && heightAt(def, x, z) > L + 0.12) {
             bump(per, 'phantom');
-            if (OUT && !risen) bump(HIST, `ph ${(Math.round((a - h) * 2) / 2).toFixed(1)}`);
           }
           if (wet > 0.15 && !vis && !sheetOver(x, z)) {
             bump(per, 'invisible');
-            if (OUT && !risen) bump(HIST, `inv ${(Math.round((a - h) * 2) / 2).toFixed(1)} ${rD < 0.015 ? 'shallow' : bar < 0 ? 'bar' : fade < 0.01 ? 'fade' : y <= m + 0.005 ? 'mesh' : 'alpha'}`);
           }
           // From afar the far mesh stands in for the ground; the water rides over it by its lift.
           const fm = G.far(x, z);
@@ -156,14 +152,14 @@ function scanRivers(risen: boolean): RiverScan {
           if (drawn && a > h && !connected && lifted > fm) bump(per, 'farSpill');
         }
         t.sides++;
-        if (!risen && crest - r.level[i] < 0.25) bump(per, 'lowBank');
+        // (Not in the last stretch, where the banks open into what the course runs into.)
+        if (!risen && i < r.end - 6 && crest - r.level[i] < 0.25) bump(per, 'lowBank');
       }
     }
     log(`${risen ? 'risen ' : ''}${r.key} ${JSON.stringify(per)}`);
     for (const k of ['spill', 'phantom', 'invisible', 'farHidden', 'farSpill', 'lowBank'] as const) t[k] += per[k] ?? 0;
   }
   log(`${risen ? 'risen ' : ''}ALL ${JSON.stringify(t)}`);
-  if (!risen) log(`HIST ${JSON.stringify(Object.entries(HIST).sort((p, q) => q[1] - p[1]).slice(0, 30))}`);
   return t;
 }
 
@@ -226,11 +222,7 @@ describe('the water fits the land', () => {
             const c = courseAt(hy, x, z);
             if (vis && c && c.d < c.half + 0.5) bump(per, 'overRiver');
             // Still drawn at the far edge of the ribbon: the flood has topped the banks and is cut off by the ribbon's edge.
-            if (vis && a > reach - 0.25) {
-              bump(per, 'edge');
-              const rd = nearestRoad(def.open!, x, z);
-              log(`  edge ${w.key} i=${i}/${w.end} u=${u.toFixed(1)} st=${st.toFixed(2)} cap=${w.cap[i].toFixed(2)} road=${rd.road ? rd.road.kind + ':' + rd.edge.toFixed(1) : '-'} g-y=${(heightAt(def, x, z) - y).toFixed(2)}`);
-            }
+            if (vis && a > reach - 0.25) bump(per, 'edge');
             // Drawn behind a bank that stands over it: spilled out of the wash.
             if (a > w.half[i]) {
               if (vis && behind > y + 0.1) bump(per, 'overBank');
