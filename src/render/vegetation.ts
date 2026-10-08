@@ -192,6 +192,9 @@ export function clipHull(v: Float32Array, c: number, above: boolean): Float32Arr
   return out.length >= 12 ? Float32Array.from(out) : null;
 }
 
+/** Bodies of fallen trees and snapped tops, by physics world: ground cover does not drag on them. */
+const LOGS = new WeakMap<PhysicsWorld, Set<number>>();
+
 /** A tree's wood as the weapons see it: notched while it stands, chipped once it is a stump or a fallen top. */
 class TreeWood implements TreeTarget {
   constructor(private veg: Vegetation, private p: VegetationPlant, readonly wood: WoodKind, readonly standing: boolean, private part: 'tree' | 'stump' | 'top') {}
@@ -446,10 +449,14 @@ export class Vegetation {
   private touch(dt: number) {
     if (!this.plants.length) return;
     const touching = new Map<VegetationPlant, Set<number>>();
+    const logs = LOGS.get(this.physics);
     for (const source of this.physics.moving) {
       // Motion is sampled once by PhysicsWorld, shared by all streamed vegetation chunks.
       const { sweepVelocity: velocity, speed, edgeSpeed } = source;
       if (speed + edgeSpeed < 0.08) continue;
+      // A tree coming down is not held back by the grass it falls through (and two dozen pieces of it sweeping the ground
+      // cover every step would cost more than the fall).
+      if (logs?.has(source.body.handle)) continue;
       const reach = source.radius + speed * dt + 10;
       this.near(source.position.x, source.position.z, reach, (p) => {
         if (p.record.broken || (!p.shape && !p.shapeSource) || p.body === source.body) return;
@@ -531,6 +538,7 @@ export class Vegetation {
     const pos = saved ? { x: saved[0], y: saved[1], z: saved[2] } : p.position;
     p.body = this.physics.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y + (saved ? 0 : 0.08), pos.z)
       .setRotation(q).setLinearDamping(0.25).setAngularDamping(0.4).setCcdEnabled(true).setSleeping(!!saved));
+    this.logs().add(p.body.handle);
     const log = new TreeWood(this, p, p.wood ?? 'snag', false, 'top');
     for (const hull of p.woodHulls!) {
       const desc = RAPIER.ColliderDesc.convexHull(hull.map((v, i) => v * [p.scale.x, p.scale.y, p.scale.z][i % 3]));
@@ -561,6 +569,12 @@ export class Vegetation {
   }
 
   // ------------------------------------------------------------------ gunfire in the wood
+
+  private logs(): Set<number> {
+    let s = LOGS.get(this.physics);
+    if (!s) LOGS.set(this.physics, (s = new Set()));
+    return s;
+  }
 
   private stemsOf(p: VegetationPlant): StemSeg[] {
     return (p.stems ??= p.woodHulls ? stemSegments(p.woodHulls) : []);
@@ -759,8 +773,9 @@ export class Vegetation {
     const body = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(saved ? saved[0] : p.position.x, saved ? saved[1] : p.position.y, saved ? saved[2] : p.position.z)
       .setRotation(saved ? { x: saved[3], y: saved[4], z: saved[5], w: saved[6] } : p.rotation)
-      .setLinearDamping(0.2).setAngularDamping(0.35).setCcdEnabled(true).setSleeping(!!saved));
+      .setLinearDamping(0.1).setAngularDamping(0.15).setCcdEnabled(true).setSleeping(!!saved));
     p.body = body;
+    this.logs().add(body.handle);
     const topWood = new TreeWood(this, p, p.wood!, false, 'top');
     // Only the trunk and the main limbs are solid: twigs and thin boughs would snag the top in its neighbours' branches.
     const thin = Math.max(0.05, r * 0.3) * sx;
@@ -787,11 +802,11 @@ export class Vegetation {
       const local = V.set(dir[0], 0, dir[1]).applyQuaternion(Q2.copy(p.rotation).invert());
       const ll = Math.hypot(local.x, local.z) || 1;
       const lx = local.x / ll, lz = local.z / ll;
-      const anchor = { x: cx * sx + lx * r * sx * 0.85, y: yCut, z: cz * sz + lz * r * sz * 0.85 };
+      const anchor = { x: cx * sx + lx * r * sx * 0.6, y: yCut, z: cz * sz + lz * r * sz * 0.6 };
       const joint = world.createImpulseJoint(RAPIER.JointData.revolute(anchor, anchor, { x: lz, y: 0, z: -lx }), stump, body, true);
       joint.setContactsEnabled(false);
       p.hinge = joint;
-      body.setAngvel({ x: dir[1] * 0.5, y: 0, z: -dir[0] * 0.5 }, true);
+      body.setAngvel({ x: dir[1] * 0.8, y: 0, z: -dir[0] * 0.8 }, true);
       // The trunk from the break to its highest wood, for whatever it comes down on.
       let tip: StemSeg | null = null;
       for (const g of this.stemsOf(p)) if (!tip || g.yb > tip.yb) tip = g;
@@ -1125,6 +1140,7 @@ export class Vegetation {
       if (p.sensor?.isValid()) this.physics.removeCollider(p.sensor);
       for (const c of p.colliders) if (c.isValid()) this.physics.removeCollider(c);
       // Removing a body takes the hinge joined to it.
+      if (p.body) LOGS.get(this.physics)?.delete(p.body.handle);
       if (p.body?.isValid()) this.physics.world.removeRigidBody(p.body);
       if (p.stump) {
         for (const c of p.stump.colliders) if (c.isValid()) this.physics.removeCollider(c);
