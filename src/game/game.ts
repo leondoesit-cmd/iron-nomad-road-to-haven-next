@@ -244,6 +244,8 @@ export class Game {
     this.hud.setSeats(n);
     this.focus.seats = n;
     this.overlays.pauseFocus.seats = n;
+    // One listener on one centred bus; otherwise every sound leans to player one's side of the stereo field.
+    this.audio.setSolo(solo);
   }
 
   private attractWorld: WorldMemory | null = null;

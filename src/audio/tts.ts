@@ -227,6 +227,9 @@ export class TTSEngine {
 
   cancel() {
     if (!this.hasSupport) return;
+    // The browser has one speech queue for the whole page: cancelling it when this engine is not speaking would cut off
+    // whoever is (the story voice reading a mission line), so only stop speech this engine started.
+    if (!this.activeUtterance) return;
     this.activeUtterance = null;
     try {
       window.speechSynthesis.cancel();

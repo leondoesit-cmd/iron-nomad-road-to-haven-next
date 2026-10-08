@@ -147,7 +147,7 @@ const KB_DEFAULT: [KeyMap, KeyMap] = [
   {
     moveUp: 'ArrowUp', moveDown: 'ArrowDown', moveLeft: 'ArrowLeft', moveRight: 'ArrowRight',
     turnLeft: 'BracketLeft', turnRight: 'BracketRight', fire: 'ShiftRight', interact: 'Slash', jump: 'KeyO', vehicle: 'Enter', crouch: 'Period',
-    sprint: 'ControlRight', wheel: 'Backspace', reload: 'Comma', horn: 'KeyM', swap: 'KeyN', prevBuild: 'Semicolon', nextBuild: 'Quote',
+    sprint: 'KeyJ', wheel: 'Backspace', reload: 'Comma', horn: 'KeyM', swap: 'KeyN', prevBuild: 'Semicolon', nextBuild: 'Quote',
     view: 'KeyP', camera: 'KeyL', sheet: 'Backslash', map: 'KeyK', inventory: 'KeyI', use: 'KeyU', eat: 'Digit9', drink: 'Digit0', piss: 'Minus', shit: 'Equal',
   },
 ];
@@ -170,7 +170,9 @@ export const PAD_BUTTONS = [Btn.A, Btn.B, Btn.X, Btn.Y, Btn.LB, Btn.RB, Btn.LT, 
 
 /** Keys the game keeps for itself or that would fight the browser. */
 export function isReservedKey(code: string): boolean {
-  return code === 'Escape' || /^F\d+$/.test(code) || code === 'MetaLeft' || code === 'MetaRight' || code === 'ContextMenu' || code === 'AltLeft' || code === 'AltRight' || code === 'CapsLock' || code === 'NumLock';
+  // Ctrl turns the other player's keys into browser shortcuts (Ctrl+W closes the tab) and Ctrl+arrows switch desktops on a
+  // Mac; Apple keyboards have no right Ctrl at all.
+  return code === 'Escape' || code === 'ControlLeft' || code === 'ControlRight' || /^F\d+$/.test(code) || code === 'MetaLeft' || code === 'MetaRight' || code === 'ContextMenu' || code === 'AltLeft' || code === 'AltRight' || code === 'CapsLock' || code === 'NumLock';
 }
 
 /** The physical button an action reads from a pad, following a shared view binding to the sheet button. */

@@ -33,12 +33,13 @@ describe('dynamic recorded playback', () => {
   });
   it('moves an existing sound with listener position and heading, fades at range, and muffles obstacles', () => {
     const spatial = new SpatialAudioEngine(context());
+    // Facing +z, +x is on the listener's LEFT (screen right is -x), so the sound pans hard left; turned round, hard right.
     const route = spatial.createSpatialRoute(10,0,{x:0,z:0},0,new Node() as unknown as AudioNode)!;
-    expect((route.panner as StereoPannerNode).pan.value).toBe(1);
+    expect((route.panner as StereoPannerNode).pan.value).toBe(-1);
     const near = route.attenuation, bright = route.filter.frequency.value;
     spatial.setOcclusionTester(() => .8);
     spatial.updateSpatialRoute(route,10,0,{x:0,z:0,yaw:Math.PI});
-    expect((route.panner as StereoPannerNode).pan.value).toBe(-1);
+    expect((route.panner as StereoPannerNode).pan.value).toBe(1);
     expect(route.filter.frequency.value).toBeLessThan(bright);
     expect(route.attenuation).toBeLessThan(near);
     spatial.updateSpatialRoute(route,10,0,{x:200,z:0});

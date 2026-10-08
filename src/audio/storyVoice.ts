@@ -52,8 +52,15 @@ export class StoryVoice {
   }
 
   stop() {
+    // Lines go straight to the browser's queue (not through the TTS engine), so cancel it here, and only when a line of
+    // ours is queued: the queue is shared with the radio voice.
+    if (!this.queued.size || !this.tts.hasSupport) return;
     this.queued.clear();
-    this.tts.cancel();
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      /* ignore */
+    }
   }
 }
 

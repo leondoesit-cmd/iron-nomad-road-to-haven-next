@@ -368,11 +368,12 @@ describe('Hybrid Sample-Based Foley & Directional HRTF Audio Engine', () => {
       expect(voice.routes.size).toBe(2);
       const a = voice.routes.get(0), b = voice.routes.get(1);
       expect(a.attenuation).toBeGreaterThan(b.attenuation);
-      expect(a.panner.positionX.value).toBeGreaterThan(0);
-      expect(b.panner.positionX.value).toBeLessThan(0);
+      // Both listeners face +z, whose right hand is -x: the engine is on the first one's left and the second one's right.
+      expect(a.panner.positionX.value).toBeLessThan(0);
+      expect(b.panner.positionX.value).toBeGreaterThan(0);
       expect(a.panner.rolloffFactor).toBe(0);
       vehicle.updateEngines([{...engine,x:12}],.1,[{x:0,z:0},{x:50,z:0}],[mockCtx.createGain(),mockCtx.createGain()],false);
-      expect(a.panner.positionX.value).toBe(12);
+      expect(a.panner.positionX.value).toBe(-12);
       vehicle.silenceEngines();
     });
 
@@ -562,7 +563,7 @@ describe('Hybrid Sample-Based Foley & Directional HRTF Audio Engine', () => {
       expect(voices[0].source.buffer).toBe(voices[1].source.buffer);
       expect(voices[0].source.playbackRate.value).toBe(voices[1].source.playbackRate.value);
       engine.setListeners([{x:0,z:0,yaw:Math.PI},{x:20,z:0}]);
-      expect(voices[0].route.panner.positionX.value).toBeLessThan(0);
+      expect(voices[0].route.panner.positionX.value).toBeGreaterThan(0);
       voices.forEach(v => v.source.onended({}));
       expect((engine as any).active.size).toBe(0);
     });
