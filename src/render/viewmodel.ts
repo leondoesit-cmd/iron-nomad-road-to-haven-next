@@ -70,6 +70,9 @@ const POLE_TUCK_R = new THREE.Vector3(0.45, -1, 0.15).normalize();
  * right of the frame so close to the eye that the lens cuts the sleeve open.
  */
 const POLE_R_ADS = new THREE.Vector3(0.25, -1, -0.15).normalize();
+/** The same for a handgun's support elbow: out to the left, its forearm would reach in level from the edge of the frame. */
+const POLE_L_ADS = new THREE.Vector3(-0.25, -1, -0.15).normalize();
+const _pb = new THREE.Vector3();
 const _pa = new THREE.Vector3();
 const POLE_TUCK_L = new THREE.Vector3(-0.45, -1, 0.15).normalize();
 const _pr = new THREE.Vector3();
@@ -168,9 +171,12 @@ const carryOf = (m: GunModel) => (HANDGUNS.includes(m) ? CARRY.handgun : m === '
  */
 const GRIP_CLEAR = 0.3;
 const ADS_FAR = 0.5;
+/** A handgun's arms run straight back from the grip at both bottom corners, so its grip is held a little further out still. */
+const GRIP_CLEAR_HANDGUN = 0.34;
 const adsOf = (m: GunModel) => {
   const f = FRAMES[m];
-  return clamp(f.rear[2] - f.grip.p[2] + GRIP_CLEAR, carryOf(m).ads, ADS_FAR);
+  const clear = HANDGUNS.includes(m) ? GRIP_CLEAR_HANDGUN : GRIP_CLEAR;
+  return clamp(f.rear[2] - f.grip.p[2] + clear, carryOf(m).ads, ADS_FAR);
 };
 
 const SPECS = {} as Record<Exclude<Held, 'none'>, Spec>;
@@ -760,7 +766,7 @@ export class ViewModel {
     }
     const poleR0 = ads > 0 ? _pa.copy(POLE_R).lerp(POLE_R_ADS, ads).normalize() : POLE_R;
     const poleR = dp ? _pr.copy(poleR0).lerp(POLE_TUCK_R, dw).normalize() : poleR0;
-    const pole0 = spec.long && spec.l ? POLE_FORE : POLE_L;
+    const pole0 = spec.long && spec.l ? POLE_FORE : ads > 0 ? _pb.copy(POLE_L).lerp(POLE_L_ADS, ads).normalize() : POLE_L;
     const poleL = dp ? _pl.copy(pole0).lerp(POLE_TUCK_L, dw).normalize() : pole0;
     this.handOn(rp, spec.r, 'r', this.handR, SHOULDER_R, poleR, this.upperR, this.foreR, 0, dhR);
     // Left hand: on the support grip unless a reload has it at the belt or it is racking the slide; or a loose guard.

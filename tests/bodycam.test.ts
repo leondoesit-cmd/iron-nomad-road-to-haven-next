@@ -938,6 +938,16 @@ describe('aiming down the sights', () => {
       // The elbow well below the hand: the forearm runs back and down out of the frame, not across it.
       expect(local(r.handR).y - local(r.foreR).y, m).toBeGreaterThan(0.1);
     }
+    // A handgun's support arm too: both forearms rise steeply from the bottom corners, not in level from the sides.
+    for (const m of ['pistol', 'compact', 'mp', 'revolver', 'cannon'] as const) {
+      const { vm, cam } = posed(m, 1);
+      const r = vm as unknown as { handL: THREE.Mesh; foreL: THREE.Mesh; handR: THREE.Mesh; foreR: THREE.Mesh };
+      for (const [hand, fore] of [[r.handL, r.foreL], [r.handR, r.foreR]] as const) {
+        const elbow = fore.getWorldPosition(new THREE.Vector3()).project(cam);
+        const wrist = hand.localToWorld(new THREE.Vector3(0, 0.06, -0.036)).project(cam);
+        expect(Math.atan2(wrist.y - elbow.y, Math.abs(wrist.x - elbow.x) * cam.aspect), m).toBeGreaterThan(0.7);
+      }
+    }
   });
 
   it('looking up or down, the sights stay on the line', () => {
