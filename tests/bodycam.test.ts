@@ -920,9 +920,9 @@ describe('aiming down the sights', () => {
       expect(r.rear, m).toBeLessThan(0.002);
       expect(r.front, m).toBeLessThan(0.004);
       expect(r.angle, m).toBeLessThan(0.01);
-      // Close in front of the eye, as a body camera sees it: not at arm's full stretch, and clear of the near plane.
-      expect(r.distance, m).toBeGreaterThan(0.24);
-      expect(r.distance, m).toBeLessThan(0.45);
+      // In front of the eye, out far enough that the gun leaves most of the view clear, but not at arm's full stretch.
+      expect(r.distance, m).toBeGreaterThan(0.33);
+      expect(r.distance, m).toBeLessThan(0.5);
     }
   });
 
@@ -934,9 +934,10 @@ describe('aiming down the sights', () => {
       const local = (o: THREE.Object3D) => cam.worldToLocal(o.getWorldPosition(new THREE.Vector3()));
       // The grip a hand's breadth beyond the 0.2 m near plane (a lever gun's far-forward rear sight is held further out).
       expect(-local(r.handR).z, m).toBeGreaterThan(0.24);
-      expect(sighted(m as (typeof GUNS)[number], 1).distance, m).toBeLessThan(0.51);
-      // The elbow well below the hand: the forearm runs back and down out of the frame, not across it.
-      expect(local(r.handR).y - local(r.foreR).y, m).toBeGreaterThan(0.1);
+      expect(sighted(m as (typeof GUNS)[number], 1).distance, m).toBeLessThan(0.6);
+      // On a long gun the elbow is well below the hand: the forearm runs back and down out of the frame, not across it. (A
+      // handgun is held out on near-straight arms; its forearms' slant on screen is checked below.)
+      if (!['pistol', 'compact', 'mp', 'revolver', 'cannon'].includes(m)) expect(local(r.handR).y - local(r.foreR).y, m).toBeGreaterThan(0.06);
     }
     // A handgun's support arm too: both forearms rise steeply from the bottom corners, not in level from the sides.
     for (const m of ['pistol', 'compact', 'mp', 'revolver', 'cannon'] as const) {
@@ -948,6 +949,27 @@ describe('aiming down the sights', () => {
         expect(Math.atan2(wrist.y - elbow.y, Math.abs(wrist.x - elbow.x) * cam.aspect), m).toBeGreaterThan(0.7);
       }
     }
+  });
+
+  it('an optic\'s zoom magnifies the world, not the gun and the arms in front of it', () => {
+    const { vm, cam } = posed('rifle', 1);
+    const w = vm.weaponMesh!;
+    const span = (c: THREE.PerspectiveCamera) => {
+      const a = w.localToWorld(new THREE.Vector3(...GUN_POINTS.rifle.rear)).project(c);
+      const b = w.localToWorld(new THREE.Vector3(0, -0.05, -0.02)).project(c);
+      return { size: Math.hypot(a.x - b.x, a.y - b.y), rear: Math.hypot(a.x, a.y) };
+    };
+    const plain = span(cam);
+    // A 4x optic narrows the view four times over.
+    const zoomed = cam.clone();
+    zoomed.fov = (2 * Math.atan(Math.tan((cam.fov * Math.PI) / 360) / 4) * 180) / Math.PI;
+    zoomed.updateProjectionMatrix();
+    vm.zoom = 4;
+    vm.place(zoomed);
+    const z = span(zoomed);
+    expect(z.size).toBeCloseTo(plain.size, 3);
+    // The sights stay on the line.
+    expect(z.rear).toBeLessThan(0.01);
   });
 
   it('looking up or down, the sights stay on the line', () => {
@@ -1075,7 +1097,7 @@ describe('the first-person arms are whole and hold the weapon', () => {
         expect(wrist.x, tag).toBeGreaterThan(elbow.x);
         expect(Math.atan2(wrist.y - elbow.y, (wrist.x - elbow.x) * cam.aspect), tag).toBeGreaterThan(0.75);
         // The elbow is out of the picture or low in it.
-        expect(elbow.y, tag).toBeLessThan(-0.7);
+        expect(elbow.y, tag).toBeLessThan(-0.6);
       }
     }
   });

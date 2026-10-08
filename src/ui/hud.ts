@@ -13,7 +13,7 @@ import { COOLANT_CRITICAL, COOLANT_LOW } from '../sim/fluids';
 import { T_HOT, T_MAX, T_OVERHEAT } from '../sim/thermal';
 import { fuelMismatch } from '../sim/fuel';
 import { carriedName } from '../sim/carry';
-import { formatClock, wrapAngle, clamp } from '../core/math';
+import { formatClock, wrapAngle, clamp, clamp01 } from '../core/math';
 import { PLAYER_CSS } from '../render/palette';
 import type { Scene, CompassPin } from '../game/scene';
 import type { LegScene } from '../game/legScene';
@@ -724,8 +724,10 @@ export class Hud {
     const hints = p.state === 'foot' ? p.handHints : [];
     h.setStyle('hands', 'display', hints.length ? 'block' : 'none');
     if (hints.length) h.setHtml('hands', hints.map((x) => `<div>${escapeHtml(x.text)}: <b>${escapeHtml(x.key)}</b></div>`).join(''));
-    h.setStyle('reticle', 'display', showRet ? 'block' : 'none');
-    h.setStyle('reticle', 'opacity', driveRet ? '0.5' : '1');
+    // Sights up in first person, the sights or the scope are the mark: the crosshair fades out (a bow keeps it, for the draw).
+    const sighted = p.state === 'foot' && p.firstPerson && p.human.heldKind !== 'bow' ? clamp01((p.ads - 0.35) / 0.45) : 0;
+    h.setStyle('reticle', 'display', showRet && sighted < 0.99 ? 'block' : 'none');
+    h.setStyle('reticle', 'opacity', ((driveRet ? 0.5 : 1) * (1 - sighted)).toFixed(2));
     // A bow's reticle closes as the string comes back, and a ring round it fills with the draw: gold at full, red once the arm shakes.
     const draw = showRet && p.state === 'foot' ? p.bowDraw : 0;
     h.setStyle('reticle', 'transform', `scale(${((1 + (1 - Math.max(p.ads, draw)) * 0.4) * (1 + p.bloom * 0.5)).toFixed(3)})`);

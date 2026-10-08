@@ -213,12 +213,12 @@ const HANDGUNS: GunModel[] = ['pistol', 'compact', 'mp', 'revolver', 'cannon'];
 /** How each kind of gun is carried and aimed (hip, sight distance, shouldered); the hands come from the gun's frame. */
 const CARRY: Record<'handgun' | 'smg' | 'sawn' | 'pump' | 'rifle' | 'crossbow', Pick<Spec, 'hip' | 'ads' | 'long'>> = {
   // Shouldered, but the grip held a little further out: the bolt is seated with the hand over the rail.
-  crossbow: { hip: [0.11, -0.26, -0.26], ads: 0.3, long: true },
-  handgun: { hip: [0.075, -0.18, -0.33], ads: 0.38 },
-  smg: { hip: [0.1, -0.24, -0.28], ads: 0.27, long: true },
-  sawn: { hip: [0.1, -0.24, -0.27], ads: 0.28, long: true },
-  pump: { hip: [0.11, -0.26, -0.23], ads: 0.27, long: true },
-  rifle: { hip: [0.11, -0.26, -0.22], ads: 0.27, long: true },
+  crossbow: { hip: [0.11, -0.26, -0.26], ads: 0.38, long: true },
+  handgun: { hip: [0.075, -0.18, -0.33], ads: 0.42 },
+  smg: { hip: [0.1, -0.24, -0.28], ads: 0.35, long: true },
+  sawn: { hip: [0.1, -0.24, -0.27], ads: 0.36, long: true },
+  pump: { hip: [0.11, -0.26, -0.23], ads: 0.35, long: true },
+  rifle: { hip: [0.11, -0.26, -0.22], ads: 0.35, long: true },
 };
 /** Which way each gun is carried: by its base gun, except the shouldered crossbow and the two-handed machine pistol. */
 const carryOf = (m: GunModel) => (HANDGUNS.includes(m) ? CARRY.handgun : m === 'crossbow' ? CARRY.crossbow : CARRY[GUN_BASE[m] === 'pistol' || GUN_BASE[m] === 'revolver' ? 'handgun' : (GUN_BASE[m] as 'smg' | 'sawn' | 'pump' | 'rifle')]);
@@ -228,10 +228,10 @@ const carryOf = (m: GunModel) => (HANDGUNS.includes(m) ? CARRY.handgun : m === '
  * its wrist: a gun whose rear sight sits far up the barrel from the grip (a lever gun's buckhorn, a double's rib) is held
  * further out, up to `ADS_FAR`.
  */
-const GRIP_CLEAR = 0.3;
-const ADS_FAR = 0.5;
+const GRIP_CLEAR = 0.34;
+const ADS_FAR = 0.58;
 /** A handgun's arms run straight back from the grip at both bottom corners, so its grip is held a little further out still. */
-const GRIP_CLEAR_HANDGUN = 0.34;
+const GRIP_CLEAR_HANDGUN = 0.37;
 const adsOf = (m: GunModel) => {
   const f = FRAMES[m];
   const clear = HANDGUNS.includes(m) ? GRIP_CLEAR_HANDGUN : GRIP_CLEAR;
@@ -1000,8 +1000,16 @@ export class ViewModel {
   /** Move onto the camera for its view. */
   place(cam: THREE.Camera) {
     cam.matrixWorld.decompose(this.root.position, this.root.quaternion, _v);
+    // An optic's zoom narrows the view, which would blow the gun and the arms up with the world until they filled it: drawn
+    // that much smaller across the view (not in depth), they keep the size they have without it, and only the world through
+    // the sights is magnified.
+    const z = Math.max(1, this.zoom);
+    this.root.scale.set(1 / z, 1 / z, 1);
     this.root.updateMatrixWorld(true);
   }
+
+  /** The zoom the owner's view is drawn with this frame (an optic's magnification with the sights up; 1 without). */
+  zoom = 1;
 
   /** The muzzle flash: how much of it is left this frame (the rig's own flash decides when). */
   muzzle(k: number) {
@@ -1014,6 +1022,9 @@ export class ViewModel {
     if (!this.weapon || !isGun(this.held)) return;
     const g = GUN_POINTS[this.held];
     const w = this.weapon;
+    // Where the gun really is, not where the zoom draws it.
+    const sx = this.root.scale.x;
+    this.root.scale.set(1, 1, 1);
     w.updateWorldMatrix(true, false);
     w.localToWorld(this.held === 'bow' ? out.muzzle.set(g.muzzle[0], g.muzzle[1], g.muzzle[2]) : out.muzzle.copy(this.tip));
     w.localToWorld(out.port.set(g.port[0], g.port[1], g.port[2]));
@@ -1021,6 +1032,8 @@ export class ViewModel {
     w.localToWorld(_v.set(g.rear[0], g.rear[1], g.rear[2]));
     out.dir.copy(out.muzzle).sub(_v).normalize();
     out.valid = true;
+    this.root.scale.set(sx, sx, 1);
+    this.root.updateMatrixWorld(true);
   }
 
   /** The weapon mesh, for tests. */

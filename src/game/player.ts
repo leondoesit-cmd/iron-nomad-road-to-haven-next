@@ -3616,6 +3616,7 @@ export class Player implements Pilot {
           this.cam.apply(this._ownCam);
           cam.updateMatrixWorld();
         }
+        this.view.zoom = this.ctx.R.views?.[this.index]?.zoom ?? 1;
         this.view.place(cam);
         this.view.root.visible = true;
         this.view.muzzle(this.human.flash.amount);
