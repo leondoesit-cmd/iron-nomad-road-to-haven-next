@@ -26,6 +26,7 @@ import type { MapFrame } from './mapdata';
 import { MapPainter, PIN_COLOR } from './minimap';
 import { heatLabel, stormLabel, stormMapRadius, windAt } from '../sim/weather';
 import { STALK } from '../sim/hunting';
+import { wildSlot } from '../game/wildShrooms';
 
 /** The key or button a prompt names, as this seat has it bound. */
 export function btnLabel(slot: Slot | null, btn: string): string {
@@ -412,11 +413,11 @@ export class Hud {
     if (p.state === 'foot' || p.state === 'driving' || p.state === 'gunner') for (const c of needChips(p.needs)) chips.push(`<span class="chip ${c.kind}">${c.text}</span>`);
     const qsel = p.quickSel;
     // The body's chores are on the belt but not worth a standing chip: the need chips above say when one is due.
-    const qn = isNeedAct(qsel) ? 0 : scene.campaign.items[qsel];
+    const qn = isNeedAct(qsel) ? 0 : qsel === 'wild' ? wildSlot(p).n : scene.campaign.items[qsel];
     // A dressing is worth showing while hurt; a drug only while you have one.
     const dressing = qsel === 'bandage' || qsel === 'medkit';
     if ((p.state === 'foot' || p.state === 'driving') && !p.beltOpen && qn > 0 && (!dressing || p.hp < p.maxHp - 0.5 || p.bleed.level > 0)) {
-      chips.push(`<span class="chip${dressing && p.bleed.level > 0 ? ' good' : ''}">${btnLabel(slot, 'Down')} ${quickName(qsel).toUpperCase()} ×${qn}</span>`);
+      chips.push(`<span class="chip${dressing && p.bleed.level > 0 ? ' good' : ''}">${btnLabel(slot, 'Down')} ${(qsel === 'wild' ? wildSlot(p).chip : quickName(qsel)).toUpperCase()} ×${qn}</span>`);
     }
     h.setHtml('chips', chips.join(''));
     // The story's objective: a heading, a checklist ticking off as it is done, and a line of advice.
@@ -818,11 +819,11 @@ export class Hud {
     }
     const sel = p.quickSel;
     const slots = QUICK.map((id) => {
-      const q = quickDef(id);
+      const q = quickDef(id, p);
       const n = quickCount(id, p, scene.campaign);
       return `<div class="slot${id === sel ? ' sel' : ''}${n.none ? ' none' : ''}" style="--dc:${q.color}"><b>${q.glyph}</b><i>${n.slot}</i></div>`;
     }).join('');
-    const def = quickDef(sel);
+    const def = quickDef(sel, p);
     const hint = p.state === 'driving' ? `hold to cycle · release, then tap ${btnLabel(slot, 'Down')} to take` : `◀ ▶ to choose · release to close · tap ${btnLabel(slot, 'Down')} to take`;
     h.setHtml('belt', `<div class="slots">${slots}</div><div class="slotname" style="color:${def.color}">${def.name} ${quickCount(sel, p, scene.campaign).label}</div><div class="slotblurb">${def.blurb}</div><div class="slothint">${hint}</div>`);
     h.setStyle('belt', 'display', 'flex');
@@ -872,7 +873,8 @@ export function escapeHtml(s: string) {
 void t;
 
 /** What a quick-belt slot shows: the body's chores and the dressings are ours, everything else is a drug. */
-function quickDef(id: QuickId): { name: string; glyph: string; color: string; blurb: string } {
+function quickDef(id: QuickId, p?: Player): { name: string; glyph: string; color: string; blurb: string } {
+  if (id === 'wild') return p ? wildSlot(p) : { name: 'Wild mushrooms', glyph: '🍄', color: '#c9a36a', blurb: '' };
   if (id === 'eat') return { name: 'Eat', glyph: '🍖', color: '#d6a45a', blurb: 'Eat a ration from the stores: fills you up by half. Hungry slows your recovery, starving hurts. Your hands are busy for a moment.' };
   if (id === 'drink') return { name: 'Drink', glyph: '🚰', color: '#5fb6e8', blurb: 'Drink three quarters of a litre from the water reserve, or from the lake if you stand at one: free, but raw water can upset your stomach.' };
   if (id === 'piss') return { name: 'Piss', glyph: '💦', color: '#e6d34a', blurb: 'Empty your bladder. A few seconds standing still: walk off, fire or take a hit and it stops. Keys: see the Control settings.' };
@@ -884,7 +886,7 @@ function quickDef(id: QuickId): { name: string; glyph: string; color: string; bl
 /** What a belt slot counts: doses in the stores, or for the body's chores, a share of the stores or of the need. */
 function quickCount(id: QuickId, p: Player, c: Campaign): { slot: string; label: string; none: boolean } {
   if (!isNeedAct(id)) {
-    const n = c.items[id];
+    const n = id === 'wild' ? wildSlot(p).n : c.items[id];
     return { slot: String(n), label: `×${n}`, none: n <= 0 };
   }
   const act: NeedAct = id;

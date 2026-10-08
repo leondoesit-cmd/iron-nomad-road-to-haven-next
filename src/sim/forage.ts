@@ -10,9 +10,12 @@ import type { Needs } from './needs';
  * convoy (rations, medicine, a dressing). Thorns and spines tear bare hands: gloves are worth wearing for it, and a blade
  * cuts herbs quicker.
  *
- * Mushrooms are the gamble. Three kinds grow in the woods and look much alike to someone who has never learned them: field
- * mushrooms (food), liberty caps (a trip), and death caps (a day of being very sick). A person learns a kind by eating it
- * (or, slowly, by looking it over), and once they know it they pick it for what it is. What each person knows is theirs.
+ * Mushrooms are the gamble. Three kinds grow in the woods: field mushrooms (food), liberty caps (a trip), and death caps (a
+ * day of being very sick). Someone who has never learned a kind can tell the kinds apart by their look (white buttons,
+ * little pointed brown caps, pale olive caps) but not what they do: they pick them all the same and keep them, by look, in
+ * the convoy's stash (`items.wild*`). Eating one from the quick belt is the gamble that teaches it; now and then a careful
+ * look while picking does. Once someone knows a kind they pick it for what it is, and the stash of it is sorted: liberty caps
+ * go on the belt with the drugs, field mushrooms into the stores, death caps on the ground. What each person knows is theirs.
  */
 
 export type ForageKind = 'fig' | 'bramble' | 'sabra' | 'zaatar' | 'yarrow' | 'mushroom';
@@ -21,6 +24,14 @@ export const FORAGE_KINDS: ForageKind[] = ['fig', 'bramble', 'sabra', 'zaatar', 
 export type Shroom = 'field' | 'liberty' | 'deathcap';
 export const SHROOMS: Shroom[] = ['field', 'liberty', 'deathcap'];
 export const SHROOM_NAME: Record<Shroom, string> = { field: 'field mushrooms', liberty: 'liberty caps', deathcap: 'death caps' };
+/** What a kind is called by someone who has never learned it: only what it looks like. */
+export const SHROOM_LOOK: Record<Shroom, string> = { field: 'white button caps', liberty: 'little pointed brown caps', deathcap: 'pale olive caps' };
+/**
+ * The stash of mushrooms picked by someone who did not know them, by what they really are: keys of the convoy's `items`,
+ * saved with them. Only the look is ever shown for a kind nobody knows.
+ */
+export const WILD_ITEM = { field: 'wildField', liberty: 'wildLiberty', deathcap: 'wildDeathcap' } as const satisfies Record<Shroom, string>;
+export type WildItem = (typeof WILD_ITEM)[Shroom];
 
 /** What a handful puts by in the convoy's stores. */
 export interface ForageBank {
@@ -29,6 +40,8 @@ export interface ForageBank {
   bandage?: number;
   /** Liberty caps, counted with the drugs (`items.mushrooms`). */
   mushrooms?: number;
+  /** One handful of mushrooms nobody here knows, kept in the stash by what they really are (`WILD_ITEM`). */
+  wild?: Shroom;
 }
 
 export interface ForageDef {
@@ -89,8 +102,8 @@ export const FORAGE: Record<ForageKind, ForageDef> = {
 export const FORAGE_RULES = {
   /** Below this belly (or, for juicy fruit, this water) a forager eats what they pick instead of putting it by. */
   grazeBelow: 0.78,
-  /** Share of a hold's time that looking over an unknown mushroom takes, and the chance it tells you what it is. */
-  studyChance: 0.45,
+  /** The chance a careful look while picking an unknown mushroom tells you what it is. */
+  studyChance: 0.2,
   /** Mushrooms fruit on a dry day in this share of patches; after rain (`wet` 1), in all of them. */
   shroomDry: 0.35,
   /** Reach (m) at which a plant can be picked. */
@@ -186,7 +199,7 @@ const blank = (): PickOutcome => ({ took: true, ate: { food: 0, water: 0 }, bank
 
 function scale(b: ForageBank, k: number): ForageBank {
   const o: ForageBank = {};
-  for (const [id, v] of Object.entries(b)) o[id as keyof ForageBank] = (v as number) * k;
+  for (const [id, v] of Object.entries(b)) if (typeof v === 'number') o[id as Exclude<keyof ForageBank, 'wild'>] = v * k;
   return o;
 }
 
@@ -224,28 +237,54 @@ export function pickHandful(kind: ForageKind, i: PickInput): PickOutcome {
 
 function pickShroom(i: PickInput, o: PickOutcome): PickOutcome {
   const s = i.shroom ?? 'field';
-  const known = i.known?.has(s) ?? false;
+  let known = i.known?.has(s) ?? false;
   const d = FORAGE.mushroom;
+  // A careful look while picking now and then tells you what they are.
+  const study = !known && i.roll < FORAGE_RULES.studyChance;
+  if (study) {
+    o.learn = s;
+    known = true;
+  }
   if (known) {
-    if (s === 'deathcap') return { ...o, took: false, note: 'Death caps: you know better than to touch them', tone: 'warn' };
-    if (s === 'liberty') return { ...o, bank: { mushrooms: 1 }, note: 'Picked liberty caps (on the belt with the other drugs)', tone: 'good' };
-    if (wantsToEat(i.needs, 'mushroom')) return { ...o, ate: { food: Math.min(d.food, 1 - i.needs.food), water: 0 }, note: 'Ate a handful of field mushrooms' };
-    return { ...o, bank: scale(d.bank, 1), note: 'Picked field mushrooms for the stores' };
+    if (s === 'deathcap') return { ...o, took: false, note: study ? 'Pale olive cap, white gills, a skirt and a cup at the foot: death caps. You leave them' : 'Death caps: you know better than to touch them', tone: 'warn' };
+    if (s === 'liberty') return { ...o, bank: { mushrooms: 1 }, note: study ? 'Little pointed caps with a nipple on top, the stems bruising blue: liberty caps. On the quick belt with the drugs' : 'Picked liberty caps (on the quick belt with the drugs)', tone: 'good' };
+    if (wantsToEat(i.needs, 'mushroom')) return { ...o, ate: { food: Math.min(d.food, 1 - i.needs.food), water: 0 }, note: study ? 'Field mushrooms, you are sure of it. You eat a handful' : 'Ate a handful of field mushrooms' };
+    return { ...o, bank: scale(d.bank, 1), note: study ? 'Field mushrooms, you are sure of it. Picked them for the stores' : 'Picked field mushrooms for the stores' };
   }
-  // Unknown. Hungry, you eat them and find out; fed, you turn one over and maybe learn what it is.
-  if (wantsToEat(i.needs, 'mushroom')) {
-    o.learn = s;
-    if (s === 'field') return { ...o, ate: { food: Math.min(d.food, 1 - i.needs.food), water: 0 }, note: 'You ate them: field mushrooms, and good ones. Now you know them' };
-    if (s === 'liberty') return { ...o, trip: true, note: 'You ate them. Liberty caps: the colours are starting to move', tone: 'warn' };
-    return { ...o, poison: true, note: 'You ate them. They tasted fine', tone: 'info' };
-  }
-  if (i.roll < FORAGE_RULES.studyChance) {
-    o.learn = s;
-    if (s === 'deathcap') return { ...o, took: false, note: 'Pale green cap, white gills, a cup at the foot: death caps. You leave them', tone: 'warn' };
-    if (s === 'liberty') return { ...o, bank: { mushrooms: 1 }, note: 'Little pointed caps: liberty caps. Picked them (on the belt)', tone: 'good' };
-    return { ...o, bank: scale(d.bank, 1), note: 'Field mushrooms, you are sure of it. Picked them for the stores' };
-  }
-  return { ...o, took: false, note: "You can't tell what these are. Leave them, or eat one when you're hungry and find out", tone: 'info' };
+  // Unknown: picked all the same and kept by their look, hungry or not. Eating one is a choice, not an accident.
+  return { ...o, bank: { wild: s }, note: `Picked ${SHROOM_LOOK[s]} (unknown)`, tone: 'info' };
+}
+
+// ------------------------------------------------------------------ the stash of unknown mushrooms
+
+export interface EatWild {
+  /** Belly filled. */
+  food: number;
+  /** A liberty cap: dose the eater. A death cap: poison them (they learn what it was when it starts). */
+  trip: boolean;
+  poison: boolean;
+  /** The kind the eater knows from now on (death caps: not until the cramps). */
+  learn?: Shroom;
+  note: string;
+  tone: 'good' | 'info' | 'warn' | 'bad';
+}
+
+/** Eat one handful of a stashed mushroom nobody here knew. Pure: the caller doses, poisons, feeds and teaches. */
+export function eatWild(s: Shroom, needs: Needs): EatWild {
+  const food = Math.min(FORAGE.mushroom.food, 1 - needs.food);
+  const look = SHROOM_LOOK[s];
+  if (s === 'liberty') return { food: 0, trip: true, poison: false, learn: 'liberty', note: `You chew the ${look}: bitter, earthy. Liberty caps. Give it half a minute`, tone: 'warn' };
+  if (s === 'field') return { food, trip: false, poison: false, learn: 'field', note: `You eat the ${look}: field mushrooms, and good ones. Now you know them`, tone: 'good' };
+  // A death cap tastes good: nothing tells you, yet.
+  return { food, trip: false, poison: true, note: `You eat the ${look}. Nutty, quite pleasant`, tone: 'info' };
+}
+
+/** What a stash of `n` unknown mushrooms of one kind becomes once someone in the convoy knows the kind. */
+export function sortWild(s: Shroom, n: number): { mushrooms: number; rations: number; dropped: number } {
+  if (n <= 0) return { mushrooms: 0, rations: 0, dropped: 0 };
+  if (s === 'liberty') return { mushrooms: n, rations: 0, dropped: 0 };
+  if (s === 'field') return { mushrooms: 0, rations: n * (FORAGE.mushroom.bank.rations ?? 0), dropped: 0 };
+  return { mushrooms: 0, rations: 0, dropped: n };
 }
 
 // ------------------------------------------------------------------ death cap
