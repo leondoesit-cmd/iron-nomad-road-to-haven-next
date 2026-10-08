@@ -1079,7 +1079,7 @@ export class Vehicle {
       const flat = !w.bare && this.health.comp.tires[i] <= 0.001;
       w.flatK = damp(w.flatK, flat ? 1 : 0, 10, dt);
       w.pivot.scale.y = 1 - 0.22 * w.flatK;
-      w.pivot.position.y = (this.body.wheelLocal[i]?.[1] ?? this.def.physics.hardY) - susp - w.radius * 0.22 * w.flatK;
+      w.pivot.position.y = (this.body.wheelLocal[i]?.[1] ?? this.def.physics.hardY) - susp - w.radius * 0.22 * w.flatK - (v.rideLift ?? 0);
       w.pivot.rotation.y = w.steered ? this.body.steerAngle : 0;
       this.spin[i] += (sp * dt) / w.radius;
       w.spin.rotation.x = this.spin[i];

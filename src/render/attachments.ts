@@ -45,7 +45,8 @@ export interface Mounts {
 
 /** Lamps are registered through the rig so cached shells can replay them onto each instance. */
 export interface Rig {
-  lamp(x: number, y: number, z: number, r: number, bucket?: boolean): void;
+  /** A headlamp: round of radius `r` in a chrome bucket, or with `w` and `h` a rectangular lens whose housing the caller draws. */
+  lamp(x: number, y: number, z: number, r: number, bucket?: boolean, w?: number, h?: number): void;
   tail(x: number, y: number, z: number, w?: number, h?: number, amber?: boolean): void;
   /** Where a fixed gun's muzzle flash appears. */
   muzzle(x: number, y: number, z: number): void;

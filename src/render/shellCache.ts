@@ -6,6 +6,9 @@ export interface LampSpec {
   z: number;
   r: number;
   bucket: boolean;
+  /** A rectangular lens of this width and height (no bucket). */
+  w?: number;
+  h?: number;
 }
 export interface TailSpec {
   x: number;
