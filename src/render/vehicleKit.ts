@@ -110,7 +110,7 @@ function rimFrac(st: WheelStyle): number {
  * from across the road: a road tyre's ribs and sipes, an all-terrain's staggered blocks, a mud-terrain's open chevrons with
  * shoulder lugs down the sidewall, a crawler's huge blocks, a truck's directional bars, a sand tyre's paddles.
  */
-function tyre(b: MeshBuilder, key: string, R: number, rimR: number, cx: number, width: number, st: WheelStyle) {
+function tyre(b: MeshBuilder, key: string, R: number, rimR: number, cx: number, width: number, st: WheelStyle, plain = false) {
   const hw = width / 2;
   const moto = st.tread === 'moto';
   const off = st.tread !== 'road';
@@ -120,6 +120,8 @@ function tyre(b: MeshBuilder, key: string, R: number, rimR: number, cx: number, 
     ? [[rimR, -hw * 0.7], [R * 0.86, -hw], [tread * 0.99, -hw * 0.75], [tread, -hw * 0.35], [tread, hw * 0.35], [tread * 0.99, hw * 0.75], [R * 0.86, hw], [rimR, hw * 0.7]]
     : [[rimR, -hw * 0.82], [R * 0.82, -hw], [tread * 0.985, -hw * 0.94], [tread, -hw * 0.7], [tread, hw * 0.7], [tread * 0.985, hw * 0.94], [R * 0.82, hw], [rimR, hw * 0.82]];
   b.lathe(`tyre:${key}`, prof, cx, 0, 0, S.rubber(0x1c1c1e), 0, 0, Math.PI / 2, 28);
+  // The inner tyre of a twin is hidden behind the outer one: its carcass is enough.
+  if (plain) return;
   const rubber = S.rubber(0x161618);
   // A lug as a short prism lying on the crown from (x0, angle a0) to (x1, angle a1).
   const lug = (x0: number, a0: number, x1: number, a1: number, r: number, h: number) => {
@@ -164,10 +166,10 @@ function tyre(b: MeshBuilder, key: string, R: number, rimR: number, cx: number, 
     }
   } else if (st.tread === 'truck') {
     // Directional bars: two angled lugs meeting off-centre, alternating, the pattern of a military or drive tyre.
-    const n = Math.round((Math.PI * 2 * R) / 0.1);
+    const n = Math.round((Math.PI * 2 * R) / 0.13);
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2;
-      const d = 0.07 / R;
+      const d = 0.08 / R;
       const mid = (i % 2 ? 1 : -1) * hw * 0.12;
       lug(-hw * 0.86, a, mid, a + d, width * 0.05, 0.026);
       lug(hw * 0.86, a, mid, a + d, width * 0.05, 0.026);
@@ -210,7 +212,7 @@ export function wheelGeometry(radius: number, width: number, st: WheelStyle): TH
     if (st.dual) {
       // Two tyres with a hand's width between them; the outer one carries the rim face.
       tyre(b, `${key}:o`, R, rimR, hw * 0.5, width * 0.47, st);
-      tyre(b, `${key}:o`, R, rimR, -hw * 0.5, width * 0.47, st);
+      tyre(b, `${key}:o`, R, rimR, -hw * 0.5, width * 0.47, st, true);
     } else tyre(b, key, R, rimR, 0, width, st);
   }
   // Rim: barrel and face.

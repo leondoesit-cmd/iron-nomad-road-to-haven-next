@@ -173,8 +173,7 @@ export function bumpers(c: TrimCtx) {
     }
     b.end();
     if (style === 'bull' && end > 0) {
-      // A tube bull bar over the bumper: two uprights, a top hoop and a grille guard in front of the lamps.
-      b.rbox(0, y, out(0.06), sp.W + 0.02, 0.22, 0.16, 0.06, plastic);
+      // A tube bull bar over the (plastic) bumper: two uprights, a top hoop and a grille guard in front of the lamps.
       b.mark(partTag('bullbar'), partMeta({ kind: 'bullbar', pivot: [0, y, out(0.1)] }));
       const tube = S.steel(0x26282a, 0.65);
       const bh = sp.hood - 0.08 - y;

@@ -5,6 +5,7 @@ import { chassisDef } from '../src/data';
 import { newBuild } from '../src/sim/garage';
 import { newPart, type Fit } from '../src/sim/parts';
 import { buildVehicleVisual, lookOf } from '../src/render/vehicleModels';
+import { rollTrim } from '../src/sim/carTrim';
 import { BodyMesh } from '../src/render/deform';
 import { groupParts } from '../src/render/bodyParts';
 import { applyKit } from '../src/render/materials';
@@ -232,7 +233,10 @@ describe('part tags in the models', () => {
   const tags = (v: ReturnType<typeof model>) => groupParts(v.body.geometry.userData.parts).map((g) => g.tag);
 
   it.each(['hatch', 'sedan', 'pickup', 'van'])('a %s has doors, mirrors and bumpers that can come off', (id) => {
-    const t = tags(model(id));
+    // Bumpers are part of the trim now (some cars lost theirs long ago): take a car of this model that still has both.
+    let seed = 31;
+    while (rollTrim(id, seed)!.bumperF === 'none' || rollTrim(id, seed)!.bumperR === 'none' || rollTrim(id, seed)!.bumperF === 'bull') seed++;
+    const t = tags(model(id, {}, seed));
     for (const want of ['door:1', 'door:-1', 'mirror:1', 'mirror:-1', 'bumper:front', 'bumper:rear']) expect(t).toContain(want);
   });
 
