@@ -30,6 +30,7 @@ import { keyLabel, live } from '../input/bindings';
 import { heatLabel, stormLabel, stormMapRadius, windAt } from '../sim/weather';
 import { STALK } from '../sim/hunting';
 import { wildSlot } from '../game/wildShrooms';
+import { glanceExtras, glanceVehicle, updateCarHud, type CarHudState } from './carCard';
 
 /** The key or button a prompt names, as this seat has it bound. */
 export function btnLabel(slot: Slot | null, btn: string): string {
@@ -109,6 +110,9 @@ class PlayerHud {
       <div class="handdot" data-k="handdot"></div>
       <div class="lookinfo" data-k="look"></div>
       <div class="handhints" data-k="hands"></div>
+      <div class="carcard" data-k="carcard"></div>
+      <div class="trunk" data-k="trunk"></div>
+      <div class="carbk" data-k="carbk"></div>
       <div class="mapfull" data-k="mapfull"><canvas data-k="mapcv"></canvas></div>
       <div class="msgs"><div class="sub" data-k="sub"></div><div class="tipbox" data-k="tip"></div></div>
       <div class="banner" data-k="banner"></div>
@@ -672,14 +676,16 @@ export class Hud {
         supply('PARTS', String(whole(camp.stocks.parts))),
     );
 
+    // The car screens (the part card, the storage panel, the breakdown) and what they take the place of.
+    const car = updateCarHud(h, p);
     // The vehicle you are standing next to: what it is and what is wrong with it.
-    h.setHtml('vread', this.vehicleReadout(p, scene));
+    h.setHtml('vread', car.card || car.panel || car.details ? '' : this.vehicleReadout(p, scene));
 
     // Notes
     h.setHtml('notes', p.notes.slice(-3).map((n) => `<div class="note ${n.kind}">${escapeHtml(n.text)}</div>`).join(''));
 
     // Prompt
-    const pr = p.prompt;
+    const pr = car.panel ? null : p.prompt;
     if (pr) {
       h.setStyle('prompt', 'display', 'flex');
       h.setText('ptext', pr.text);
@@ -748,7 +754,7 @@ export class Hud {
     h.setStyle('tether', 'display', p.tetherWarn ? 'block' : 'none');
     h.setClass('disc', this.disconnected[p.index] ? 'on' : '');
     this.updateWheel(h, p, slot);
-    this.updateSheet(h, p, scene, leg);
+    this.updateSheet(h, p, scene, leg, car);
   }
 
   private wrongFuel(v: Vehicle): boolean {
@@ -797,7 +803,8 @@ export class Hud {
   /** A card for the nearest vehicle when on foot: name, owner, and condition chips so it is clear what needs doing. */
   private vehicleReadout(p: Player, scene: Scene): string {
     if (p.state !== 'foot' || p.buildMode || p.action) return '';
-    const v = p.nearestVehicle(6.5, (q) => q.kind !== 'crew' && !q.hostile);
+    // The car under the crosshair, from a glance away; failing that, the nearest.
+    const v = glanceVehicle(p) ?? p.nearestVehicle(6.5, (q) => q.kind !== 'crew' && !q.hostile);
     if (!v) return '';
     const c = v.health.comp;
     const tag = scene.cars.describe(v);
@@ -849,7 +856,7 @@ export class Hud {
     }
     const fitted = v.build ? Object.keys(v.build.fit).length : 0;
     if (fitted) chip(`${fitted} PART${fitted > 1 ? 'S' : ''} FITTED`);
-    return `<div class="vcard"><b>${escapeHtml(v.def.name.toUpperCase())}</b> <em>${tag}</em></div><div class="chips">${parts.join('')}</div>`;
+    return `<div class="vcard"><b>${escapeHtml(v.def.name.toUpperCase())}</b> <em>${tag}</em></div><div class="chips">${parts.join('')}</div>${glanceExtras(p, v)}`;
   }
 
   private updateWheel(h: PlayerHud, p: Player, slot: Slot | null) {
@@ -903,8 +910,8 @@ export class Hud {
     h.setStyle('belt', 'display', 'flex');
   }
 
-  private updateSheet(h: PlayerHud, p: Player, scene: Scene, leg: LegScene | null) {
-    if (!p.sheet) {
+  private updateSheet(h: PlayerHud, p: Player, scene: Scene, leg: LegScene | null, car?: CarHudState) {
+    if (!p.sheet || car?.details) {
       h.setStyle('sheet', 'display', 'none');
       return;
     }

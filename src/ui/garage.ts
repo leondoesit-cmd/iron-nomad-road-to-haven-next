@@ -17,6 +17,7 @@ import type { Game } from '../game/game';
 import type { Vehicle } from '../game/vehicle';
 import { placeFor } from '../game/access';
 import { needText } from '../sim/access';
+import { breakdownCar, breakdownHtml, type Focus } from './breakdown';
 
 type Act = (player: number) => void;
 
@@ -77,6 +78,12 @@ export class GarageView {
   private target: Record<number, PanelId | 'all'> = {};
   /** The last colour picked, per column: what a spray can is filled with. */
   private lastColor: Record<number, number> = {};
+  /** Another car of the convoy to measure each column's car against in the breakdown (a build uid), or none. */
+  compare: Record<number, string | null> = {};
+  /** The mount under the mouse or a cursor: what the breakdown opens up. */
+  hover: { i: number; slot: PartSlot; wheel?: number } | null = null;
+  /** The host draws the breakdown itself, outside the scrolling page (the docked workbench keeps it in view at its foot). */
+  detachedDetail = false;
 
   constructor(private h: GarageHost) {}
 
@@ -89,7 +96,84 @@ export class GarageView {
 
   html(): string {
     const cols = this.h.players.map((i) => this.vehicleCard(i)).join('');
-    return `<div class="gtop">${cols}</div><div class="gfoot">${this.pickerHtml()}${this.stockHtml()}${this.field ? '' : this.yardHtml()}</div>`;
+    return `<div class="gtop">${cols}</div><div class="gfoot">${this.pickerHtml()}${this.detachedDetail ? '' : this.detailPane()}${this.stockHtml()}${this.field ? '' : this.yardHtml()}</div>`;
+  }
+
+  /** The breakdown's pane, for wherever the host puts it. */
+  detailPane(): string {
+    return `<div class="gpanel gdetail" data-gdetail>${this.detailHtml()}</div>`;
+  }
+
+  // ------------------------------------------------------------------ breakdown
+
+  /** The car of a column as the breakdown reads it: the live wear when it is on the road. */
+  private bdCar(i: number) {
+    const b = this.h.build(i);
+    const live = this.h.vehicle?.(i);
+    return breakdownCar(b, `${this.c.players[i]?.name ?? ''}'s ${defOf(b).name}`, live?.health.comp);
+  }
+
+  /** The breakdown of the mount being looked at (or picked), against the car chosen to compare with. */
+  detailHtml(): string {
+    const f = this.hover ?? this.sel ?? { i: this.h.players[0], slot: undefined as unknown as PartSlot };
+    const i = this.h.players.includes(f.i) ? f.i : this.h.players[0];
+    const focus: Focus | null = f.slot ? { slot: f.slot, wheel: f.wheel } : null;
+    const other = this.compare[i] ? this.c.buildByUid(this.compare[i]!) : undefined;
+    const compare = other && other.uid !== this.h.build(i).uid ? breakdownCar(other, defOf(other).name) : null;
+    return breakdownHtml(this.bdCar(i), { focus, compare, only: true, title: `Breakdown · ${defOf(this.h.build(i)).name}` });
+  }
+
+  /** The other cars of the convoy as chips: pick one to measure this car against. */
+  private compareHtml(i: number): string {
+    const me = this.h.build(i).uid;
+    const others = this.c.garage.filter((b) => b.uid !== me);
+    if (!others.length) return '';
+    const cur = this.compare[i] ?? null;
+    const chips = others.map((b) => this.h.btn(`cmp${i}-${b.uid}`, escapeHtml(defOf(b).name), () => this.setCompare(i, cur === b.uid ? null : b.uid), true, 'Compare in the breakdown').replace('<button', `<button class="chipbtn${cur === b.uid ? ' on' : ''}"`));
+    return `<div class="compare-chips"><small class="gh">Compare with</small>${chips.join('')}</div>`;
+  }
+
+  private setCompare(i: number, uid: string | null) {
+    this.compare[i] = uid;
+    this.h.rerender();
+  }
+
+  /**
+   * Keep the breakdown on the mount under the mouse or under a player's cursor, without rebuilding the page: hosts call
+   * this once after each render with the element the page went into.
+   */
+  bindDetail(root: HTMLElement) {
+    const pane = () => root.querySelector<HTMLElement>('[data-gdetail]');
+    const show = (el: HTMLElement | null) => {
+      const tag = el?.closest<HTMLElement>('[data-slot]')?.dataset.slot;
+      if (!tag) return;
+      const [i, slot, wheel] = tag.split(':');
+      const next = { i: Number(i), slot: slot as PartSlot, wheel: wheel !== undefined ? Number(wheel) : undefined };
+      if (this.hover && this.hover.i === next.i && this.hover.slot === next.slot && this.hover.wheel === next.wheel) return;
+      this.hover = next;
+      const p = pane();
+      if (p) p.innerHTML = this.detailHtml();
+    };
+    const old = (root as { _gd?: { mo: MutationObserver; mv: (e: Event) => void } })._gd;
+    if (old) {
+      old.mo.disconnect();
+      root.removeEventListener('mouseover', old.mv);
+    }
+    const mv = (e: Event) => show(e.target as HTMLElement);
+    root.addEventListener('mouseover', mv);
+    // A pad or keys move a focus ring (the f0 / f1 classes, repainted every tick): follow it when it moves to a new button,
+    // so a mouse over another mount is not snatched back on the next repaint.
+    const last: (Element | null)[] = [null, null];
+    const mo = new MutationObserver(() => {
+      for (let k = 0; k < 2; k++) {
+        const el = root.querySelector<HTMLElement>(`.f${k}`);
+        if (!el || el === last[k]) continue;
+        last[k] = el;
+        show(el);
+      }
+    });
+    mo.observe(root, { subtree: true, attributes: true, attributeFilter: ['class'] });
+    (root as { _gd?: unknown })._gd = { mo, mv };
   }
 
   // ------------------------------------------------------------------ vehicle card
@@ -110,6 +194,7 @@ export class GarageView {
       `<div class="sub2">HP ${Math.round(b.hp * maxHpOf(b))}/${Math.round(maxHpOf(b))} · ARMOUR ${Math.round(st.armor * 100)}% · TANK ${st.tank.toFixed(0)} FU · TOP ${Math.round(def.topSpeedKmh * st.topSpeedMult)} km/h · CARGO ${Math.round(st.cargo)} · <span class="${b.comp.oil < OIL_LOW ? 'bad' : ''}">OIL ${Math.round(b.comp.oil * 100)}%</span></div>`,
       `<div class="sub2">${escapeHtml(conditionSummary(b)).toUpperCase()}${st.weapon ? ' · ARMED' : ''}</div>`,
     );
+    lines.push(this.compareHtml(i));
     lines.push(...this.powertrainLines(i, b));
     const slotBtn = (slot: PartSlot) => {
       const it = b.fit[slot];
@@ -131,7 +216,7 @@ export class GarageView {
       const mk = it && !partDef(it.id).stock ? partDef(it.id).mk : 0;
       return this.h
         .btn(`slot${i}-${slot}`, `<small>${PARTS.labels[slot]}${mk ? this.pips(mk) : ''}</small><b>${main}</b>${note}`, () => this.pick(i, slot), true)
-        .replace('<button', `<button class="slotbtn${sel ? ' sel' : ''}${it && !factory && !empty ? ' fitted' : ''}${empty ? ' emptymount' : ''}"`);
+        .replace('<button', `<button data-slot="${i}:${slot}" class="slotbtn${sel ? ' sel' : ''}${it && !factory && !empty ? ' fitted' : ''}${empty ? ' emptymount' : ''}"`);
     };
     // Slots in groups, so an engine is not lost among forty buttons. A chassis only shows the mounts it has.
     for (const grp of SLOT_GROUPS) {
@@ -200,7 +285,7 @@ export class GarageView {
       const note = id ? ` <em class="${cond < 0.35 ? 'bad' : cond < 0.7 ? 'mid' : ''}">${Math.round(cond * 100)}%</em>` : '';
       return this.h
         .btn(`slot${i}-wheels${n}`, `<small>${wheelName(n, count)}${mk ? this.pips(mk) : ''}</small><b>${main}</b>${note}`, () => this.pickWheel(i, n), true)
-        .replace('<button', `<button class="slotbtn${sel ? ' sel' : ''}${fitted ? ' fitted' : ''}${id ? '' : ' emptymount'}"`);
+        .replace('<button', `<button data-slot="${i}:wheels:${n}" class="slotbtn${sel ? ' sel' : ''}${fitted ? ' fitted' : ''}${id ? '' : ' emptymount'}"`);
     });
     const all = this.sel?.i === i && this.sel.slot === 'wheels' && this.sel.wheel === -1;
     const set = this.h.btn(`slot${i}-wheelsall`, '<small>Tyres</small><b>Whole set</b>', () => this.pickWheel(i, -1), true).replace('<button', `<button class="slotbtn${all ? ' sel' : ''}"`);
@@ -575,7 +660,8 @@ export class GarageView {
 
 /**
  * The field workbench: opens next to one of your vehicles mid-leg, pauses the game, and lets you fit and paint it.
- * Fabrication, the yard and full services wait for camp.
+ * Fabrication, the yard and full services wait for camp. It docks to one side of the opener's half and their view shrinks to
+ * the other side, so the car stays in sight beside the bench; the breakdown follows the mount under the cursor.
  */
 export class Workbench {
   private acts = new Map<string, Act>();
@@ -637,8 +723,13 @@ export class Workbench {
     this.owner = owner;
     // Edit the build directly, starting from the vehicle's live condition.
     v.commit();
-    this.view.sel = null;
+    // The bench remembers where you were on this car.
+    const last = v.build ? Workbench.last.get(v.build.uid) : undefined;
+    this.view.sel = last ? { ...last, i: owner } : null;
+    this.view.hover = null;
+    this.view.detachedDetail = true;
     this.msg = '';
+    this.dock(true);
     this.game.focus.active = true;
     this.game.focus.owner = owner;
     this.game.focus.onCancel = () => this.close();
@@ -650,7 +741,51 @@ export class Workbench {
     this.render();
   }
 
+  /** Which mount was last picked on each car, so reopening the bench lands on it. */
+  private static last = new Map<string, { i: number; slot: PartSlot; wheel?: number }>();
+
+  /**
+   * Beside the car: the opener's view shrinks to the outer part of their own half (the whole screen's left half when solo)
+   * and the bench takes the rest, so the car stays in sight. `false` puts the views back.
+   */
+  private dock(on: boolean) {
+    const R = this.game.R;
+    // The opener's HUD stands still with the game: the parts of it over their view strip step aside while the bench is open.
+    this.game.hud?.huds[this.owner]?.root.classList.toggle('benched', on);
+    if (!on) return R.resize?.();
+    const W = R.width;
+    const H = R.height;
+    if (!W || !H || !R.views) return;
+    const d = 4;
+    const solo = this.game.campaign.solo;
+    const first = this.owner === 0;
+    let rect: { x: number; y: number; w: number; h: number };
+    if (solo) rect = { x: 0, y: 0, w: Math.floor(W * 0.5), h: H };
+    else if (R.layout === 'horizontal') {
+      const hh = Math.floor((H - d) / 2);
+      rect = first ? { x: 0, y: 0, w: Math.floor(W * 0.45), h: hh } : { x: 0, y: hh + d, w: Math.floor(W * 0.45), h: H - hh - d };
+    } else {
+      const sw = Math.floor(W * 0.22);
+      rect = first ? { x: 0, y: 0, w: sw, h: H } : { x: W - sw, y: 0, w: sw, h: H };
+    }
+    const view = R.views[this.owner];
+    view.rect = rect;
+    view.camera.aspect = rect.w / rect.h;
+    view.camera.updateProjectionMatrix();
+  }
+
+  /** Where the docked bench sits, as a CSS inset: the part of the opener's half their view gave up. */
+  private placeCss(): string {
+    const g = this.game;
+    if (g.campaign.solo) return 'inset:2% 1.2% 2% 50.6%';
+    const first = this.owner === 0;
+    if (g.R.layout === 'horizontal') return first ? 'inset:1% 1% 50.6% 45.4%' : 'inset:50.6% 1% 1% 45.4%';
+    return first ? 'inset:2% 50.4% 2% 22.4%' : 'inset:2% 22.4% 2% 50.4%';
+  }
+
   close() {
+    if (this.v?.build && this.view.sel) Workbench.last.set(this.v.build.uid, this.view.sel);
+    this.dock(false);
     this.game.focus.clear();
     this.game.focus.active = false;
     this.game.focus.owner = null;
@@ -668,15 +803,13 @@ export class Workbench {
     this.acts.clear();
     const body = this.view.html();
     this.root.classList.add('on');
-    // Split screen: keep the bench inside the opener's own half so the other player's view stays visible.
-    let place = '';
-    if (!g.campaign.solo) {
-      const first = this.owner === 0;
-      place = g.R.layout === 'horizontal' ? (first ? 'inset:2% 12% 52% 12%' : 'inset:52% 12% 2% 12%') : first ? 'inset:3% 52% 3% 2%' : 'inset:3% 2% 3% 52%';
-    }
-    this.root.innerHTML = `<div class="ledger panel paper bench" style="${place}">
+    // Docked beside the car, inside the opener's own half, so the other player's view stays visible too.
+    const place = this.placeCss();
+    const short = !g.campaign.solo && g.R.layout === 'horizontal';
+    this.root.innerHTML = `<div class="ledger panel paper bench docked${short ? ' short' : ''}" style="${place}">
       <h2><span>Workbench · ${escapeHtml(v.def.name)}</span><small>${escapeHtml(g.campaign.players[this.owner].name.toUpperCase())} · THE GAME IS PAUSED</small></h2>
       <div class="gbody">${body}</div>
+      ${this.view.detailPane()}
       <div class="benchfoot"><span class="mutedtxt">${escapeHtml(this.msg)}</span>${this.btnHtml('benchdone', 'Back to the road', () => this.close())}</div>
     </div>`;
     this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));
@@ -687,6 +820,7 @@ export class Workbench {
     });
     g.focus.setItems(items, keys);
     g.focus.active = true;
+    this.view.bindDetail(this.root);
   }
 
   private btnHtml(id: string, label: string, act: Act) {

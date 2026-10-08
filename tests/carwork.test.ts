@@ -9,6 +9,7 @@ import { installPart, newBuild } from '../src/sim/garage';
 import { newPart } from '../src/sim/parts';
 import { fakeServices } from './helpers/sim';
 import type { Vehicle } from '../src/game/vehicle';
+import { storageOf } from '../src/game/storage';
 
 // Working on a car with your hands: mounts light up, the wrench unbolts what is fitted, spares sit on the deck.
 vi.setConfig({ testTimeout: 90000 });
@@ -206,7 +207,7 @@ describe('the wrench takes parts off by hand', () => {
 });
 
 describe('the boot', () => {
-  it('a part stowed on a car rides on that car, and comes out again with X at an open boot', () => {
+  it('a part stowed on a car rides on that car, and comes out again through its storage (X at the boot, then A)', () => {
     const { h, sc, c } = leg();
     const v = ownCar(sc);
     const p = sc.players[0];
@@ -219,11 +220,14 @@ describe('the boot', () => {
     run(sc, 1);
     const spots = v.deckSpots();
     expect(spots.filter((s) => s.kind === 'part').map((s) => s.id)).toEqual(['whl_bl']);
-    // At the boot, hands empty: the prompt offers to take it out, and X does.
+    // At the boot, hands empty: the prompt offers the storage, X opens it with the part picked, and A takes it out.
     standAt(sc, v, 'trunk');
     run(sc, 0.2);
-    expect(p.promptAlt?.text).toMatch(/Take .* out of the/);
+    expect(p.promptAlt?.text ?? p.prompt?.text).toMatch(/Storage · 1 item/);
     tap(h, sc, 0, Btn.X);
+    expect(storageOf(p)?.current?.item?.id).toBe('whl_bl');
+    tap(h, sc, 0, Btn.A);
+    expect(storageOf(p)).toBeNull();
     expect(p.carry).toMatchObject({ kind: 'part' });
     expect(c.inventory.length).toBe(0);
     run(sc, 1);
