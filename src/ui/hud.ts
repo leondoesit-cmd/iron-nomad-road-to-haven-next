@@ -417,7 +417,7 @@ export class Hud {
     // A dressing is worth showing while hurt; a drug only while you have one.
     const dressing = qsel === 'bandage' || qsel === 'medkit';
     if ((p.state === 'foot' || p.state === 'driving') && !p.beltOpen && qn > 0 && (!dressing || p.hp < p.maxHp - 0.5 || p.bleed.level > 0)) {
-      chips.push(`<span class="chip${dressing && p.bleed.level > 0 ? ' good' : ''}">${btnLabel(slot, 'Down')} ${(qsel === 'wild' ? wildSlot(p).name : quickName(qsel)).toUpperCase()} ×${qn}</span>`);
+      chips.push(`<span class="chip${dressing && p.bleed.level > 0 ? ' good' : ''}">${btnLabel(slot, 'Down')} ${(qsel === 'wild' ? wildSlot(p).chip : quickName(qsel)).toUpperCase()} ×${qn}</span>`);
     }
     h.setHtml('chips', chips.join(''));
     // The story's objective: a heading, a checklist ticking off as it is done, and a line of advice.
