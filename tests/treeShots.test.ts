@@ -23,12 +23,15 @@ function chunks(sc: LegScene): Map<number, ChunkView> {
   return (sc as unknown as { chunks: Map<number, ChunkView> }).chunks;
 }
 
-/** The nearest standing tree of a species to a point, in the loaded chunks, with its view and index. */
-function nearest(sc: LegScene, x: number, z: number, sp: string) {
+/** The nearest standing tree of a species to a point, in the loaded chunks, with no other within `room` m. */
+function nearest(sc: LegScene, x: number, z: number, sp: string, room = 0) {
+  const all: TreeSpot[] = [];
+  for (const view of chunks(sc).values()) all.push(...view.data.trees);
   let best: { view: ChunkView; i: number; t: TreeSpot; d: number } | null = null;
   for (const view of chunks(sc).values()) {
     view.data.trees.forEach((t, i) => {
       if (TREE_SPECIES[t.sp] !== sp || view.vegetation.treeBroken(i)) return;
+      if (room && all.some((o) => o !== t && Math.hypot(o.x - t.x, o.z - t.z) < room)) return;
       const d = Math.hypot(t.x - x, t.z - z);
       if (!best || d < best.d) best = { view, i, t, d };
     });
@@ -45,7 +48,8 @@ describe('shooting a tree down in a wood', () => {
     const p = sc.players[0];
     if (p.vehicle) p.exitVehicle(false);
     run(sc, 0.5);
-    const { view, i, t } = nearest(sc, -1700, 1300, 'pine');
+    // A pine standing on its own at the edge of the wood, so its top comes down clear of its neighbours.
+    const { view, i, t } = nearest(sc, -1700, 1300, 'pine', 10);
     const plant = view.vegetation.plants.find((q) => q.treeIndex === i)!;
     const ty = sc.groundAt(t.x, t.z);
     // From a few metres off, square on to the trunk at chest height.
@@ -80,7 +84,16 @@ describe('shooting a tree down in a wood', () => {
     expect(box.y1).toBeLessThan(ty + 2.6);
     expect(box.y1).toBeGreaterThan(ty + 0.8);
     expect(sc.treesNear(t.x, t.z, 1).includes(t)).toBe(false);
+    // A walker standing where it comes down is crushed under it.
+    const d = plant.record.direction!;
+    sc.zombies.spawn('walker', t.x + d[0] * 7, t.z + d[1] * 7, true);
+    const walker = sc.zombies.list[sc.zombies.list.length - 1];
+    const hp = walker.hp;
     run(sc, 6);
+    expect(walker.dead || walker.hp < hp).toBe(true);
+    // Down on the ground, not hung up.
+    const r = plant.body!.rotation();
+    expect(1 - 2 * (r.x * r.x + r.z * r.z)).toBeLessThan(0.5);
     expect(sc.gore.timber.landings).toBe(1);
     // The world remembers the stump and where the top lies, for the next time this chunk is drawn.
     sc.capture(memory);

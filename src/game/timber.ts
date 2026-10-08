@@ -37,6 +37,8 @@ const rand = (a: number, b: number) => a + Math.random() * (b - a);
 export class Timber implements TreeEvents {
   readonly chips: WoodChips;
   private falls: Falling[] = [];
+  /** Where and when the wood last knocked, so a shell of buckshot is one knock and not nine. */
+  private knock = { x: 0, z: 0, t: -1 };
   /** Snaps and landings since the scene began, for tests. */
   snaps = 0;
   landings = 0;
@@ -138,7 +140,13 @@ export class Timber implements TreeEvents {
     this.dust(t.wood, x + nx * 0.06, y + ny * 0.06, z + nz * 0.06, nx, ny, nz, Math.min(1, left * WOOD_BITE[ammo]));
     if (!t.moving()) this.scar(t, x, y, z, nx, ny, nz, fx.scar * rand(0.9, 1.25));
     if (t.standing) this.shake(t, fx.leaves);
-    ctx.audio.play('treeHit', x, z, fx.loud, { pitch: fx.pitch * rand(0.92, 1.08), intensity: Math.min(1, left) });
+    const k = this.knock;
+    if (ctx.time - k.t > 0.035 || Math.abs(x - k.x) + Math.abs(z - k.z) > 2) {
+      ctx.audio.play('treeHit', x, z, fx.loud, { pitch: fx.pitch * rand(0.92, 1.08), intensity: Math.min(1, left) });
+      k.x = x;
+      k.z = z;
+      k.t = ctx.time;
+    }
   }
 
   /** Where it came out the far side: splinters blown on ahead with it, and a ragged scar. */
