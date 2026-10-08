@@ -37,6 +37,8 @@ export interface GunFrame {
   r: number;
   /** Two barrels side by side, `dbl` apart. */
   dbl?: number;
+  /** Where a replacement stock fits on (the end of the receiver or its buffer tube), on guns whose stock comes off. */
+  tail?: { y: number; z: number };
   /** Named spots on the action the drills work: a slide, a charging handle, a bolt knob, a lever's loop, a feed cover. */
   spots?: Record<string, V3>;
 }
@@ -54,19 +56,19 @@ export const FRAMES: Record<GunModel, GunFrame> = {
   pistol: {
     bore: 0.035, muzzle: 0.183, rear: [0, 0.0605, 0.0055], front: [0, 0.0605, 0.171], port: [-0.013, 0.046, 0.08], well: [0, -0.088, -0.012],
     grip: { p: [0, -0.0306, 0.0069], a: RAKE.pistol }, support: [0.013, -0.044, 0.002],
-    top: { y: 0.0515, z: 0.11 }, under: { y: 0.007, z: 0.15 }, mag: { y: -0.093, z: -0.012 }, stock: { y: 0.0, z: -0.012 }, side: [0.013, 0.0, 0.15], r: 0.0066,
+    top: { y: 0.0515, z: 0.04 }, under: { y: 0.007, z: 0.15 }, mag: { y: -0.093, z: -0.012 }, stock: { y: 0.0, z: -0.012 }, side: [0.013, 0.0, 0.15], r: 0.0066,
     spots: { slide: [0, 0.035, 0.03], floor: [0, -0.094, -0.012] },
   },
   compact: {
     bore: 0.034, muzzle: 0.153, rear: [0, 0.0595, 0.0055], front: [0, 0.0595, 0.141], port: [-0.013, 0.045, 0.08], well: [0, -0.054, 0],
     grip: { p: [0, -0.0296, 0.0069], a: RAKE.pistol }, support: [0.013, -0.043, 0.002],
-    top: { y: 0.0505, z: 0.1 }, under: { y: 0.006, z: 0.13 }, mag: { y: -0.059, z: 0.0 }, stock: { y: 0.0, z: -0.012 }, side: [0.013, 0.0, 0.13], r: 0.0066,
+    top: { y: 0.0505, z: 0.04 }, under: { y: 0.006, z: 0.13 }, mag: { y: -0.059, z: 0.0 }, stock: { y: 0.0, z: -0.012 }, side: [0.013, 0.0, 0.13], r: 0.0066,
     spots: { slide: [0, 0.034, 0.03], floor: [0, -0.06, 0.0] },
   },
   mp: {
     bore: 0.035, muzzle: 0.183, rear: [0, 0.0605, 0.0055], front: [0, 0.0605, 0.171], port: [-0.013, 0.046, 0.08], well: [0, -0.125, -0.024],
     grip: { p: [0, -0.0306, 0.0069], a: RAKE.pistol }, support: [0.013, -0.044, 0.002],
-    top: { y: 0.0515, z: 0.11 }, under: { y: 0.007, z: 0.15 }, mag: { y: -0.178, z: -0.04 }, stock: { y: 0.0, z: -0.012 }, side: [0.013, 0.0, 0.15], r: 0.0066,
+    top: { y: 0.0515, z: 0.04 }, under: { y: 0.007, z: 0.15 }, mag: { y: -0.178, z: -0.04 }, stock: { y: 0.0, z: -0.012 }, side: [0.013, 0.0, 0.15], r: 0.0066,
     spots: { slide: [0, 0.035, 0.03], floor: [0, -0.18, -0.042] },
   },
   revolver: {
@@ -87,12 +89,14 @@ export const FRAMES: Record<GunModel, GunFrame> = {
     grip: { p: [0, -0.04, -0.021], a: RAKE.polymer }, support: [0.02, 0.012, 0.225],
     top: { y: 0.056, z: -0.01 }, under: { y: 0.018, z: 0.24 }, mag: { y: -0.184, z: 0.118 }, stock: { y: 0.0, z: -0.33 }, side: [0.02, 0.035, 0.25], r: 0.008,
     spots: { handle: [0.03, 0.035, 0.07], handleBack: [0.03, 0.035, -0.015], floor: [0, -0.188, 0.118] },
+    tail: { y: 0.035, z: -0.106 },
   },
   smg2: {
     bore: 0.023, muzzle: 0.34, rear: [0, 0.081, -0.058], front: [0, 0.081, 0.316], port: [-0.021, 0.035, 0.075], well: [0, 0.0, 0.103],
     grip: { p: [0, -0.042, -0.026], a: RAKE.polymer }, support: [0.026, -0.012, 0.23],
     top: { y: 0.0705, z: 0.03 }, under: { y: -0.012, z: 0.245 }, mag: { y: -0.172, z: 0.136 }, stock: { y: 0.03, z: -0.335 }, side: [0.027, 0.016, 0.25], r: 0.0075,
     spots: { tube: [0.034, 0.05, 0.245], floor: [0, -0.176, 0.136] },
+    tail: { y: 0.033, z: -0.1 },
   },
   // ------------------------------------------------------------------ shotguns
   sawn: {
@@ -143,30 +147,35 @@ export const FRAMES: Record<GunModel, GunFrame> = {
     grip: { p: [0, -0.056, -0.02], a: RAKE.sporter }, support: [0.025, 0.004, 0.32],
     top: { y: 0.0525, z: 0.1 }, under: { y: 0.012, z: 0.33 }, mag: { y: -0.19, z: 0.185 }, stock: { y: -0.05, z: -0.29 }, side: [0.022, 0.035, 0.34], r: 0.0095,
     spots: { handle: [-0.036, 0.035, 0.17], handleBack: [-0.036, 0.035, 0.09], floor: [0, -0.195, 0.185] },
+    tail: { y: 0.025, z: -0.07 },
   },
   ar: {
     bore: 0.03, muzzle: 0.525, rear: [0, 0.093, -0.012], front: [0, 0.093, 0.43], port: [-0.015, 0.032, 0.065], well: [0, -0.04, 0.1],
     grip: { p: [0, -0.041, -0.021], a: RAKE.ar }, support: [0.026, 0.0, 0.3],
     top: { y: 0.06, z: 0.03 }, under: { y: 0.009, z: 0.33 }, mag: { y: -0.186, z: 0.13 }, stock: { y: 0.01, z: -0.285 }, side: [0.026, 0.03, 0.35], r: 0.011,
     spots: { handle: [0, 0.046, -0.054], handleBack: [0, 0.046, -0.11], floor: [0, -0.19, 0.13] },
+    tail: { y: 0.03, z: -0.12 },
   },
   br: {
     bore: 0.035, muzzle: 0.8, rear: [0, 0.095, -0.03], front: [0, 0.095, 0.48], port: [-0.018, 0.035, 0.08], well: [0, -0.03, 0.12],
     grip: { p: [0, -0.038, -0.002], a: RAKE.polymer }, support: [0.025, -0.016, 0.33],
     top: { y: 0.062, z: 0.05 }, under: { y: 0.007, z: 0.35 }, mag: { y: -0.145, z: 0.127 }, stock: { y: 0.0, z: -0.4 }, side: [0.025, 0.03, 0.38], r: 0.011,
     spots: { handle: [0.03, 0.046, 0.29], handleBack: [0.03, 0.046, 0.17], floor: [0, -0.148, 0.127] },
+    tail: { y: 0.035, z: -0.056 },
   },
   dmr: {
     bore: 0.032, muzzle: 0.69, rear: [0, 0.098, -0.02], front: [0, 0.098, 0.51], port: [-0.017, 0.034, 0.07], well: [0, -0.042, 0.115],
     grip: { p: [0, -0.043, -0.017], a: RAKE.ar }, support: [0.026, 0.0, 0.33],
     top: { y: 0.0635, z: 0.04 }, under: { y: 0.009, z: 0.36 }, mag: { y: -0.155, z: 0.125 }, stock: { y: 0.01, z: -0.36 }, side: [0.027, 0.032, 0.4], r: 0.0132,
     spots: { handle: [0, 0.049, -0.06], handleBack: [0, 0.049, -0.115], floor: [0, -0.158, 0.13] },
+    tail: { y: 0.032, z: -0.12 },
   },
   lmg: {
     bore: 0.035, muzzle: 0.73, rear: [0, 0.105, -0.01], front: [0, 0.105, 0.56], port: [-0.018, -0.005, 0.1], well: [0.03, 0.04, 0.115],
     grip: { p: [0, -0.052, -0.021], a: RAKE.polymer }, support: [0.026, -0.044, 0.26],
     top: { y: 0.0795, z: 0.06 }, under: { y: -0.008, z: 0.3 }, mag: { y: -0.13, z: 0.115 }, stock: { y: 0.0, z: -0.4 }, side: [0.03, 0.035, 0.42], r: 0.012,
     spots: { handle: [-0.04, 0.022, 0.24], handleBack: [-0.04, 0.022, 0.11], cover: [0, 0.07, 0.08], box: [0.064, -0.07, 0.115] },
+    tail: { y: 0.03, z: -0.106 },
   },
   crossbow: {
     bore: 0.045, muzzle: 0.55, rear: [0, 0.09, 0.08], front: [0, 0.09, 0.47], port: [0, 0.05, 0.1], well: [0, 0.05, 0.1],
