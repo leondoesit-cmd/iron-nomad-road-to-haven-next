@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { C } from './palette';
-import { Humanoid } from './humanoid';
 import type { VehicleDef } from '../data';
 import type { VehicleBuild } from '../sim/garage';
 import type { Fit, PartItem } from '../sim/parts';
@@ -14,13 +13,13 @@ import { bayFit, engineDef, hoodState, radiatorDef } from '../sim/engines';
 import { defOf } from '../sim/garage';
 import { paintPanels } from './paintJob';
 import type { PanelPaint } from '../sim/paint';
-import { addWheels, addWheelSet, blank, bodyMat, finish, headlamp, liveRig, rider, taillight, wheelSpec, wheelSpecs, type VehicleVisual } from './vehicleKit';
+import { addWheelSet, blank, bodyMat, finish, headlamp, liveRig, rider, taillight, wheelSpec, wheelSpecs, type VehicleVisual } from './vehicleKit';
 import { buildCar, carMounts, prepareCarShell } from './carModels';
 import { attachCabin } from './interior';
 import { TRIKE_MOUNTS, buildTrike } from './trikeModel';
 import { buildHeavy, heavyMounts, isHeavy, prepareHeavyShell } from './truckModels';
 import { rollTrim, type CarTrim } from '../sim/carTrim';
-import { rideLiftOf } from './rideHeight';
+import { applyRideLift, rideLiftOf } from './rideHeight';
 
 export type { VehicleVisual, WheelVisual } from './vehicleKit';
 
@@ -333,7 +332,9 @@ export function buildQuad(def: VehicleDef, wheelLocal: [number, number, number][
   v.driver = r;
   v.smoke.position.set(0.24, 0.12, -1.1);
   v.inner.add(v.smoke);
-  return finish(v, bodyGeo);
+  const out = finish(v, bodyGeo);
+  applyRideLift(out, look.lift ?? 0);
+  return out;
 }
 
 // ----------------------------------------------------------------------------------------- tier 3
@@ -497,169 +498,14 @@ export function buildBuggy(def: VehicleDef, wheelLocal: [number, number, number]
   const out = finish(v, bodyGeo);
   // The engine bay under the bonnet, for when someone lifts it (the engine stands on the body block).
   attachBay(out, def.id, BUGGY_MOUNTS, look, 0.285, 0);
+  applyRideLift(out, look.lift ?? 0);
   return out;
 }
 
 // ----------------------------------------------------------------------------------------- raiders
 
-/** Raider dune buggy: exposed tube frame, rear engine, red war paint, spikes and a pennant. */
-export function buildRaiderBuggy(def: VehicleDef, wheelLocal: [number, number, number][], steered: boolean[]): VehicleVisual {
-  const v = blank(def);
-  const b = new MeshBuilder();
-  b.jitter = 0.04;
-  b.roundSeg = 2;
-  b.seed(44);
-  const red = S.paint(C.raiderRed, 0.8);
-  const black = S.paint(0x1a1a1a, 0.6);
-  const tube = S.paint(0x3a2a22, 0.8);
-  const wy = wheelLocal[0][1] - def.physics.suspension.rest;
-  const wx = Math.abs(wheelLocal[0][0]);
-  const fz = wheelLocal[0][2];
-  const rz = wheelLocal[2][2];
-  // Pan and nose cone.
-  b.box(0, -0.25, 0, 1.0, 0.06, 2.4, S.steel(0x3a3c3e, 0.8));
-  b.extrude('raiderNose', () => {
-    const s = new THREE.Shape();
-    s.moveTo(-0.55, -0.15);
-    s.lineTo(0.55, -0.15);
-    s.lineTo(0.4, 0.22);
-    s.lineTo(-0.4, 0.22);
-    s.closePath();
-    return s;
-  }, 1.0, 0.03, 0, -0.05, 0.95, red, 0, 0, 0);
-  b.rbox(0, 0.18, 0.95, 0.82, 0.04, 0.95, 0.015, black);
-  // Skull-white teeth painted on the nose.
-  for (let i = 0; i < 6; i++) b.add('cone6', -0.3 + i * 0.12, -0.02, 1.46, 0.06, 0.12, 0.02, S.paint(0xe8e2d0, 0.7), Math.PI, 0, 0);
-  // Tube frame and roll cage.
-  for (const sx of [1, -1]) {
-    b.pipe([[sx * 0.5, -0.22, 1.4], [sx * 0.55, 0.15, 0.55], [sx * 0.6, 1.15, 0.2], [sx * 0.6, 1.15, -0.55], [sx * 0.55, -0.2, -0.9]], 0.035, tube, 8);
-    b.rod(sx * 0.55, 0.15, 0.55, sx * 0.55, 0.2, -0.85, 0.03, tube, 8);
-    for (const wz of [fz, rz]) shock(b, [sx * (wx - 0.12), wy + 0.04, wz], [sx * 0.5, 0.2, wz + (wz > 0 ? -0.1 : 0.1)], 0x2a2a2a, 0.05);
-  }
-  b.rod(0.6, 1.15, 0.2, -0.6, 1.15, 0.2, 0.035, tube, 8);
-  b.rod(0.6, 1.15, -0.55, -0.6, 1.15, -0.55, 0.035, tube, 8);
-  b.rod(0.6, 1.15, -0.55, -0.6, 1.15, 0.2, 0.03, tube, 8);
-  // Bucket seat and wheel.
-  b.rbox(0, 0.0, 0.0, 0.5, 0.12, 0.5, 0.05, S.leather(0x1c1a18, 0.5));
-  b.rbox(0, 0.35, -0.24, 0.5, 0.6, 0.1, 0.05, S.leather(0x1c1a18, 0.5), 0.2, 0, 0);
-  b.torus(0, 0.45, 0.42, 0.15, 0.016, S.leather(0x111111), -0.9, 0, 0, 8, 18);
-  // Exposed rear engine with stacks.
-  b.rbox(0, 0.08, -0.95, 0.6, 0.42, 0.55, 0.05, S.metal(0x55524d, 0.75));
-  for (let i = 0; i < 4; i++) b.cyl(-0.18 + i * 0.12, 0.34, -0.95, 0.07, 0.12, 0.07, S.metal(0x8a8478, 0.6), 0, 0, 0, 10);
-  for (const sx of [1, -1]) exhaust(b, [[sx * 0.2, 0.1, -1.1], [sx * 0.3, 0.2, -1.3], [sx * 0.32, 0.65, -1.35]], 0.03, 0.05);
-  // Spikes on the front and the wheel hubs.
-  for (let i = 0; i < 5; i++) b.add('cone12', -0.5 + i * 0.25, -0.12, 1.6, 0.07, 0.3, 0.07, S.steel(0x8a8e92, 0.6), Math.PI / 2, 0, 0);
-  // Pennant pole: red-orange flag reads as raiders at a glance.
-  b.rod(-0.5, 0.2, -0.85, -0.5, 2.5, -0.9, 0.018, S.metal(0x2a2a2a), 6);
-  b.extrude('raiderFlag', () => {
-    const s = new THREE.Shape();
-    s.moveTo(0, 0);
-    s.lineTo(0.75, -0.12);
-    s.lineTo(0.62, -0.28);
-    s.lineTo(0.78, -0.48);
-    s.lineTo(0, -0.55);
-    s.closePath();
-    return s;
-  }, 0.015, 0, -0.5, 2.48, -0.9, S.cloth(C.raiderFlag, 0.6), 0, -0.15, 0);
-  b.box(-0.18, 2.24, -0.94, 0.14, 0.14, 0.02, S.cloth(0x1c1c1c, 0.4), 0, -0.15, 0);
-  // Mounted MG on the cage.
-  const gun = new MeshBuilder();
-  heavyGun(gun, 0.85, false);
-  b.appendMatrix(gun, new THREE.Matrix4().compose(new THREE.Vector3(0, 1.32, 0.12), new THREE.Quaternion(), new THREE.Vector3(0.8, 0.8, 0.8)));
-  headlamp(v, b, 0.38, 0.22, 1.42, 0.07);
-  headlamp(v, b, -0.38, 0.22, 1.42, 0.07);
-  taillight(v, 0.3, 0.1, -1.24);
-  taillight(v, -0.3, 0.1, -1.24);
-  const bodyGeo = b.build();
-  addWheels(v, def, wheelLocal, steered, 0.3, { tread: 'knobby', rim: 'steel', rimColor: 0x7a1c14 });
-  const driver = new Humanoid({ jacket: C.raiderRed, trim: 0x1a1a1a, helmet: 0x111111, mask: true });
-  driver.root.position.set(0, -0.15, 0.05);
-  v.inner.add(driver.root);
-  v.driver = driver;
-  v.muzzle.position.set(0, 1.32, 0.86);
-  v.inner.add(v.muzzle);
-  v.smoke.position.set(0.32, 0.65, -1.35);
-  v.inner.add(v.smoke);
-  return finish(v, bodyGeo);
-}
-
-/** Spiked battle-wagon: an armour-plated truck with a ram, side spikes, a smokestack and a war banner. */
-export function buildWagon(def: VehicleDef, wheelLocal: [number, number, number][], steered: boolean[]): VehicleVisual {
-  const v = blank(def);
-  const b = new MeshBuilder();
-  b.jitter = 0.04;
-  b.roundSeg = 2;
-  b.seed(55);
-  const armour = S.steel(0x4e4c48, 0.9);
-  const rust = S.rust(C.rust2);
-  const red = S.paint(C.raiderRed, 0.9);
-  const wy = wheelLocal[0][1] - def.physics.suspension.rest;
-  const wx = Math.abs(wheelLocal[0][0]);
-  // Chassis and hull.
-  for (const sx of [1, -1]) b.rbox(sx * 0.7, -0.35, 0, 0.16, 0.22, 4.6, 0.02, S.steel(0x2e3032));
-  b.rbox(0, 0.32, 0.1, 2.2, 1.05, 3.4, 0.06, rust);
-  // Overlapping armour plates along each flank, riveted.
-  for (const sx of [1, -1]) {
-    for (let i = 0; i < 4; i++) {
-      b.mark(partTag('sign', `${sx}:${i}`), partMeta({ kind: 'sign', side: sx as 1 | -1, pivot: [sx * 1.1, 0.35, -1.25 + i * 0.85] }));
-      plate(b, sx * 1.13, 0.35, -1.25 + i * 0.85, 0.95, 0.85, 0.05, i % 2 ? armour : rust, 0, sx * Math.PI / 2, 0);
-      b.end();
-    }
-    // Spikes along the hull.
-    for (let i = 0; i < 6; i++) b.add('cone12', sx * 1.32, 0.48 + (i % 2) * 0.22, -1.6 + i * 0.66, 0.12, 0.6, 0.12, S.steel(0x8a8e92, 0.5), 0, 0, -sx * Math.PI / 2);
-    // Wheel arches.
-    for (const wz of [wheelLocal[0][2], wheelLocal[2][2]]) {
-      b.extrude('wagonArch', () => {
-        const s = new THREE.Shape();
-        s.absarc(0, 0, 0.72, 0.05, Math.PI - 0.05, false);
-        s.absarc(0, 0, 0.64, Math.PI - 0.05, 0.05, true);
-        s.closePath();
-        return s;
-      }, 0.5, 0.02, sx * (wx + 0.02), wy, wz, armour, 0, Math.PI / 2, 0);
-    }
-  }
-  // Cab with slit visors.
-  b.rbox(0, 1.1, 0.75, 2.0, 0.6, 1.5, 0.08, armour);
-  b.box(0, 1.2, 1.51, 1.6, 0.08, 0.02, S.glass(0x0c0f12));
-  b.box(0, 1.05, 1.51, 1.6, 0.06, 0.02, S.glass(0x0c0f12));
-  plate(b, 0, 1.12, 1.53, 1.9, 0.5, 0.04, rust, -0.1, 0, 0);
-  // Ram: angled plow with teeth.
-  plate(b, 0, 0.35, 2.12, 2.3, 0.75, 0.06, S.steel(0x6a6e72, 0.8), -0.45, 0, 0);
-  for (let i = 0; i < 7; i++) b.add('cone12', -1.05 + i * 0.35, 0.05, 2.38, 0.14, 0.55, 0.14, S.steel(0x9a9ea2, 0.4), Math.PI / 2, 0, 0);
-  // Smokestack, roof cage, banner pole.
-  exhaust(b, [[0.8, 0.9, 0.2], [0.8, 1.6, 0.15], [0.8, 2.2, 0.1]], 0.08, 0.1);
-  b.pipe([[0.9, 1.4, -0.2], [0.9, 1.75, -0.5], [-0.9, 1.75, -0.5], [-0.9, 1.4, -0.2]], 0.04, S.steel(0x2a2c2e), 8);
-  b.rod(-0.2, 1.4, -0.4, -0.2, 3.3, -0.45, 0.025, S.metal(0x2a2a2a), 6);
-  b.extrude('wagonBanner', () => {
-    const s = new THREE.Shape();
-    s.moveTo(0, 0);
-    s.lineTo(1.0, -0.1);
-    s.lineTo(0.85, -0.38);
-    s.lineTo(1.05, -0.7);
-    s.lineTo(0, -0.8);
-    s.closePath();
-    return s;
-  }, 0.02, 0, -0.2, 3.28, -0.45, S.cloth(C.raiderFlag, 0.7), 0, -0.1, 0);
-  // Painted red war stripe and skull plate on the cab.
-  b.box(0, 0.75, 1.52, 2.0, 0.12, 0.02, red);
-  b.add('sphere16', 0, 0.62, 1.58, 0.3, 0.3, 0.12, S.paint(0xe2dccb, 0.6));
-  b.box(0, 0.5, 1.6, 0.18, 0.1, 0.06, S.paint(0xe2dccb, 0.6));
-  // Rear deck with barrels and a ladder.
-  b.box(0, 0.88, -1.2, 2.0, 0.08, 1.4, S.steel(0x3a3c3e));
-  b.cyl(0.6, 1.25, -1.3, 0.55, 0.75, 0.55, S.paint(0x3a5f8a, 0.9), 0, 0, 0, 16);
-  b.cyl(0.0, 1.25, -1.4, 0.55, 0.75, 0.55, S.paint(C.rust, 0.9), 0, 0, 0, 16);
-  headlamp(v, b, 0.8, 0.8, 1.56, 0.12);
-  headlamp(v, b, -0.8, 0.8, 1.56, 0.12);
-  taillight(v, 0.8, 0.2, -1.62, 0.16, 0.1);
-  taillight(v, -0.8, 0.2, -1.62, 0.16, 0.1);
-  const bodyGeo = b.build();
-  addWheels(v, def, wheelLocal, steered, 0.5, { tread: 'knobby', rim: 'steel', rimColor: 0x3a3a3a });
-  v.muzzle.position.set(0, 1.6, 1.6);
-  v.inner.add(v.muzzle);
-  v.smoke.position.set(0.8, 2.2, 0.1);
-  v.inner.add(v.smoke);
-  return finish(v, bodyGeo);
-}
+// The raider dune buggy and battle-wagon, each rolled from its own seed (render/raiderModels.ts).
+export { buildRaiderBuggy, buildWagon } from './raiderModels';
 
 /** Mount points of a drivable chassis and the ground offset to take them into the chassis frame, or null (boats, raiders). */
 export function mountsOfChassis(def: VehicleDef): { m: Mounts; g0: number } | null {
