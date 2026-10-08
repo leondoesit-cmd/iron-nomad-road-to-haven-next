@@ -253,7 +253,7 @@ const STEPS: Step[] = [
   {
     id: 'map',
     title: 'Map and pings',
-    body: 'Tap {map} to open the map: tap again for the whole country, once more to close. Tap {wheel} to ping the spot you are aiming at for your partner.',
+    body: 'Tap {map} to open the map: tap again for the whole country, once more to close. While it is open your feet stay put and {interact} drops a waypoint to follow. Tap {wheel} to ping the spot you are aiming at for your partner.',
     goals: [
       { id: 'map', label: 'Open the map', test: ({ p, m }) => (p.mapMode > 0 ? (m.o = 1) : (m.o ?? 0)) > 0 },
       {

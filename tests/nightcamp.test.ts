@@ -212,6 +212,8 @@ function flowGame(nightCamp = false) {
     resting: null,
     startLock: 0,
     resumeLock: 0,
+    // The loading veil (async in the game: paint, prepare, build, compile) builds at once here, as tests and tooling expect.
+    load: (_label: string, work: () => void) => (work(), true),
   });
   g.beginLeg('W');
   return { g, h, ui, tickRest: (s: number) => (g as unknown as { tickRest(s: number): void }).tickRest(s) };
