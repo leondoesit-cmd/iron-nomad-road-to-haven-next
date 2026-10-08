@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DEPTH_UNIFORMS, PULL, depthPullGlsl } from './depth';
+import { COPLANAR, DEPTH_UNIFORMS, PULL, coplanarOffset, depthPullGlsl } from './depth';
 import type { MarkStyle } from '../sim/bodywork';
 
 /**
@@ -153,7 +153,7 @@ export class TrackMarks {
     g.setIndex(new THREE.BufferAttribute(idx, 1));
     g.setDrawRange(0, 0);
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
-    const m = new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, depthWrite: false, roughness: 0.92, metalness: 0, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+    const m = coplanarOffset(new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, depthWrite: false, roughness: 0.92, metalness: 0 }), COPLANAR.mark);
     const tex = markTexture();
     m.onBeforeCompile = (shader) => {
       shader.uniforms.tMark = { value: tex };
