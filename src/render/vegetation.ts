@@ -1,8 +1,10 @@
 import * as THREE from 'three';
-import { RAPIER, GROUPS, type Collider, type PhysicsWorld, type PhysicsImpact, type RigidBody } from '../physics/physics';
-import { TREE_SPECIES, type TreeSpot } from '../world/flora';
-import { coverage, crushShare, flatten, newBend, PLANT_MECHANICS, setAngle, stepBend, treeMechanics, vegetationKey, type BendState, type PlantKind, type VegetationMaterial, type VegetationMemory, type VegetationRecord } from '../sim/vegetation';
-import { treeGeometry, treeInstances, type TreeSet } from './trees';
+import { RAPIER, G, GROUPS, groups, type Collider, type PhysicsWorld, type PhysicsImpact, type RigidBody, type TreeFall, type TreeShot, type TreeTarget } from '../physics/physics';
+import { TREE_DIMS, TREE_SPECIES, type TreeSpot } from '../world/flora';
+import { coverage, crushShare, flatten, newBend, PLANT_MECHANICS, setAngle, stepBend, TREE_MECHANICS, treeMechanics, vegetationKey, type BendState, type PlantKind, type VegetationMaterial, type VegetationMemory, type VegetationRecord } from '../sim/vegetation';
+import { AMMO } from '../sim/ballistics';
+import { addNotch, bandMid, BUSH_LEAF, deepest, leafTear, NOTCH, notchGain, shredShare, snapShare, WOOD, type NotchHit, type WoodKind } from '../sim/treeDamage';
+import { addTreeSlot, setTreeNotch, treeGeometry, treeInstances, type TreeSet } from './trees';
 import type { ScatterSet } from './scatter';
 
 interface ShapeMesh { vertices: Float32Array; indices: Uint32Array }
@@ -93,10 +95,109 @@ export interface VegetationPlant {
   contacts: Set<number>;
   sensor?: Collider;
   sensorLife?: number;
+  /** What a tree's wood is, for weapons (`physics.trees`). */
+  wood?: WoodKind;
+  /** Upright stretches of its stems, model units, worked out the first time a round needs them. */
+  stems?: StemSeg[];
+  /** The stem a notch was cut in (model centre x, z and radius), for drawing it. */
+  notchStem?: [number, number, number];
+  /** A snapped tree's stump: its fixed body (with the wood below the break) and the extra instance that draws it. */
+  stump?: { body: RigidBody; colliders: Collider[]; ref?: { mesh: THREE.InstancedMesh; index: number } };
+  /** The hinge of uncut wood the top swings over on as it goes, until it tears. */
+  hinge?: RAPIER.ImpulseJoint;
+  /** The top coming down, until it has landed and settled. */
+  fall?: TreeFall & { t: number; tipVy: number; landedAt: number };
 }
+
+/** An upright stretch of a stem between two of its rings, model units: heights, ring centres (x, z) and radii. */
+interface StemSeg { ya: number; yb: number; ax: number; az: number; bx: number; bz: number; ra: number; rb: number }
+
+/**
+ * Height (model units) below which a species' stem is one trunk a notch can be cut in: up to where its limbs part (an
+ * acacia's fork stems are still taken, a gum's tall stems up to a good way up). Shots higher only chip and shake leaves.
+ */
+const NOTCH_TOP: Record<WoodKind, number> = { oak: 2.9, pine: 4, willow: 2.3, poplar: 2, palm: 6, acacia: 1.6, cypress: 4, snag: 3.5, eucalyptus: 5, deadTree: 2 };
+/** A falling top passes through people (it hurts and throws them instead, see `game/timber.ts`) until it has landed. */
+const FALLING = groups(G.LOOSE, G.STATIC | G.ROAD | G.VEHICLE | G.FURN | G.BUILD | G.LOOSE);
+
+/** The rings of each tube piece of a model's wood as stem stretches: only those standing more upright than not. */
+function stemSegments(hulls: Float32Array[]): StemSeg[] {
+  const out: StemSeg[] = [];
+  for (const v of hulls) {
+    const n = v.length / 3;
+    if (n < 6 || n % 2) continue;
+    const h = n / 2;
+    let ax = 0, ay = 0, az = 0, bx = 0, by = 0, bz = 0;
+    for (let i = 0; i < h; i++) {
+      ax += v[i * 3]; ay += v[i * 3 + 1]; az += v[i * 3 + 2];
+      bx += v[(i + h) * 3]; by += v[(i + h) * 3 + 1]; bz += v[(i + h) * 3 + 2];
+    }
+    ax /= h; ay /= h; az /= h; bx /= h; by /= h; bz /= h;
+    let ra = 0, rb = 0;
+    for (let i = 0; i < h; i++) {
+      ra += Math.hypot(v[i * 3] - ax, v[i * 3 + 1] - ay, v[i * 3 + 2] - az);
+      rb += Math.hypot(v[(i + h) * 3] - bx, v[(i + h) * 3 + 1] - by, v[(i + h) * 3 + 2] - bz);
+    }
+    const L = Math.hypot(bx - ax, by - ay, bz - az);
+    if (L < 1e-4 || Math.abs(by - ay) / L < 0.55) continue;
+    if (ay <= by) out.push({ ya: ay, yb: by, ax, az, bx, bz, ra: ra / h, rb: rb / h });
+    else out.push({ ya: by, yb: ay, ax: bx, az: bz, bx: ax, bz: az, ra: rb / h, rb: ra / h });
+  }
+  return out;
+}
+
+/**
+ * The part of a convex piece (x, y, z triples) above (or below) the plane y = c, as points whose hull is exactly that part:
+ * its own points on that side and where every segment between points on either side crosses the plane. Null if too little
+ * is left to make a solid.
+ */
+export function clipHull(v: Float32Array, c: number, above: boolean): Float32Array | null {
+  const n = v.length / 3;
+  const out: number[] = [];
+  let kept = 0;
+  for (let i = 0; i < n; i++) {
+    const y = v[i * 3 + 1];
+    if (above ? y >= c : y <= c) { out.push(v[i * 3], y, v[i * 3 + 2]); kept++; }
+  }
+  if (kept === n) return v;
+  if (!kept) return null;
+  for (let i = 0; i < n; i++) {
+    const yi = v[i * 3 + 1];
+    for (let j = i + 1; j < n; j++) {
+      const yj = v[j * 3 + 1];
+      if ((yi - c) * (yj - c) >= 0) continue;
+      const t = (c - yi) / (yj - yi);
+      out.push(v[i * 3] + (v[j * 3] - v[i * 3]) * t, c, v[i * 3 + 2] + (v[j * 3 + 2] - v[i * 3 + 2]) * t);
+    }
+  }
+  return out.length >= 12 ? Float32Array.from(out) : null;
+}
+
+/** A tree's wood as the weapons see it: notched while it stands, chipped once it is a stump or a fallen top. */
+class TreeWood implements TreeTarget {
+  constructor(private veg: Vegetation, private p: VegetationPlant, readonly wood: WoodKind, readonly standing: boolean, private part: 'tree' | 'stump' | 'top') {}
+  moving() {
+    const b = this.part === 'top' ? this.p.body : undefined;
+    if (!b || b.isSleeping()) return false;
+    const v = b.linvel(), w = b.angvel();
+    return Math.hypot(v.x, v.y, v.z) + Math.hypot(w.x, w.y, w.z) > 0.15;
+  }
+  stemRadius(x: number, y: number, z: number) { return this.part === 'top' ? 0 : this.veg.stemRadius(this.p, x, y, z); }
+  crown() { return this.part === 'tree' ? this.veg.crownOf(this.p) : null; }
+  hardness() { return this.veg.hardness(this.p); }
+  shot(s: TreeShot) { return this.part === 'tree' ? this.veg.shootTree(this.p, s) : 0; }
+}
+
 const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), V = new THREE.Vector3();
+const Q2 = new THREE.Quaternion(), V2 = new THREE.Vector3(), C = new THREE.Color();
 const ZERO = { x: 0, y: 0, z: 0 };
 const CELL = 8;
+const NOTCH_STEP = NOTCH.step;
+/** Scratch for one round's sums: no allocation per hit. */
+const SEC = { area: 0, cx: 0, cz: 0, r: 0 };
+const STEMS = new Float32Array(16 * 3);
+const CROWN = { x: 0, y: 0, z: 0, r: 0, h: 0 };
+const HIT: NotchHit = { ammo: 'pistol', speed: 0, work: 0, section: 0, diameter: 0, done: 0, hard: 1 };
 
 /**
  * Plants a person can hide in, and how thick each is: the share of a sight line it lets through falls off as
@@ -133,8 +234,14 @@ export class Vegetation {
   private after = (dt: number) => this.update(dt);
   private area = (hit: PhysicsImpact) => this.hitArea(hit);
   private ray = (hit: PhysicsImpact, distance: number) => this.hitRay(hit, distance);
+  /** Tops of snapped trees on their way down. */
+  private falling = new Set<VegetationPlant>();
 
-  constructor(private physics: PhysicsWorld, readonly memory: VegetationMemory = new Map(), private onTreeBreak?: (index: number) => void) {
+  /**
+   * `onTreeBreak` is told when one of `addTrees`' trees goes down: with the height (world y) of its stump's top when gunfire
+   * snapped it, or nothing when it went over whole.
+   */
+  constructor(private physics: PhysicsWorld, readonly memory: VegetationMemory = new Map(), private onTreeBreak?: (index: number, stumpTop?: number) => void) {
     physics.beforeStep.add(this.before);
     physics.afterStep.add(this.after);
     physics.areaImpactHandlers.add(this.area);
@@ -176,10 +283,15 @@ export class Vegetation {
         woodHulls: (treeGeometry(t.sp).userData.woodHulls as { variant: number; vertices: Float32Array }[]).filter((h) => h.variant === t.v).map((h) => h.vertices),
       };
       this.physics.impactHandlers.set(solid.handle, (hit) => this.hit(p, hit));
+      p.wood = TREE_SPECIES[t.sp];
+      this.physics.trees.set(solid.handle, new TreeWood(this, p, p.wood, true, 'tree'));
       this.trees.push(p);
       this.treeByCollider.set(solid.handle, p);
       this.add(p);
-      if (p.record.broken) this.fall(p, p.record.direction ?? [1, 0]);
+      if (p.record.broken) {
+        if (p.record.cut !== undefined) this.snap(p, p.record.cut, p.record.direction ?? [1, 0]);
+        else this.fall(p, p.record.direction ?? [1, 0]);
+      }
     });
   }
 
@@ -198,6 +310,7 @@ export class Vegetation {
         p.refs.push({ mesh: set.far, index: p.treeIndex!, base: M.clone() });
       }
       this.draw(p);
+      this.wound(p);
     }
   }
 
@@ -270,6 +383,8 @@ export class Vegetation {
     p.colliders.push(p.solid);
     this.treeByCollider.set(p.solid.handle, p);
     this.physics.impactHandlers.set(p.solid.handle, (hit) => this.hit(p, hit));
+    p.wood = 'deadTree';
+    this.physics.trees.set(p.solid.handle, new TreeWood(this, p, 'deadTree', true, 'tree'));
     if (p.record.broken) { this.fall(p, p.record.direction ?? [1, 0]); this.draw(p); }
     return p;
   }
@@ -361,8 +476,9 @@ export class Vegetation {
     const inertia = Math.max(0.001, p.material.mass * p.height * p.height / 3);
     p.bend.vx += hit.dz * hit.impulse * lever / inertia;
     p.bend.vz -= hit.dx * hit.impulse * lever / inertia;
-    // Deformation takes more work near the roots than at a high lever arm. Bullets mainly make local holes.
-    const work = Math.max(0, hit.energy) * (hit.kind === 'bullet' ? 0.12 : 1) * (p.woodHulls ? Math.max(0.3, lever / (p.height * 0.2)) : 1);
+    // Deformation takes more work near the roots than at a high lever arm. Bullets only make local holes: in wood they cut
+    // a notch instead (`shootTree`), and never loosen the roots.
+    const work = Math.max(0, hit.energy) * (hit.kind === 'bullet' ? (p.woodHulls ? 0 : hit.ammo ? 1 : 0.12) : 1) * (p.woodHulls ? Math.max(0.3, lever / (p.height * 0.2)) : 1);
     const gained = work / p.material.strength;
     if (gained > 0 && Math.hypot(hit.dx, hit.dz) > 1e-4) {
       // The permanent lean follows the damage-weighted direction of every blow, not just the last one.
@@ -396,11 +512,13 @@ export class Vegetation {
     const pos = saved ? { x: saved[0], y: saved[1], z: saved[2] } : p.position;
     p.body = this.physics.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y + (saved ? 0 : 0.08), pos.z)
       .setRotation(q).setLinearDamping(0.25).setAngularDamping(0.4).setCcdEnabled(true).setSleeping(!!saved));
+    const log = new TreeWood(this, p, p.wood ?? 'snag', false, 'top');
     for (const hull of p.woodHulls!) {
       const desc = RAPIER.ColliderDesc.convexHull(hull.map((v, i) => v * [p.scale.x, p.scale.y, p.scale.z][i % 3]));
       if (!desc) continue;
       const c = this.physics.world.createCollider(desc.setDensity(650).setCollisionGroups(GROUPS.loose).setFriction(0.85).setRestitution(0.02), p.body);
       this.physics.tag(c, 'wood');
+      this.physics.trees.set(c.handle, log);
       p.colliders.push(c);
     }
     p.body.recomputeMassPropertiesFromColliders();
@@ -423,6 +541,317 @@ export class Vegetation {
     this.savePose(p);
   }
 
+  // ------------------------------------------------------------------ gunfire in the wood
+
+  private stemsOf(p: VegetationPlant): StemSeg[] {
+    return (p.stems ??= p.woodHulls ? stemSegments(p.woodHulls) : []);
+  }
+
+  /** A world point in a plant's model frame (its own units, before its scale), into `out`. */
+  private toModel(p: VegetationPlant, x: number, y: number, z: number, out: THREE.Vector3) {
+    out.set(x - p.position.x, y - p.position.y, z - p.position.z).applyQuaternion(Q2.copy(p.rotation).invert());
+    return out.set(out.x / p.scale.x, out.y / p.scale.y, out.z / p.scale.z);
+  }
+
+  /**
+   * The wood's cross-section at model height `y`, into `SEC`: its area (m², every stem there, each counted once: a gum's
+   * rough sleeve and the stem inside it are one), and the stem nearest the model point (mx, mz), its centre and radius in
+   * model units. False where no upright stem is.
+   */
+  private section(p: VegetationPlant, y: number, mx: number, mz: number): boolean {
+    if (!p.tree) {
+      // A desert dead tree's trunk (`render/props.ts`): one stem a little over a third of a metre through.
+      if (p.kind !== 'deadTree') return false;
+      SEC.cx = 0; SEC.cz = 0; SEC.r = 0.17;
+      SEC.area = Math.PI * 0.17 * 0.17 * p.scale.x * p.scale.z;
+      return true;
+    }
+    let n = 0;
+    for (const s of this.stemsOf(p)) {
+      if (y < s.ya || y > s.yb) continue;
+      const t = (y - s.ya) / Math.max(1e-6, s.yb - s.ya);
+      const cx = s.ax + (s.bx - s.ax) * t, cz = s.az + (s.bz - s.az) * t, r = s.ra + (s.rb - s.ra) * t;
+      let same = -1;
+      for (let k = 0; k < n; k++) if (Math.hypot(STEMS[k * 3] - cx, STEMS[k * 3 + 1] - cz) < Math.max(r, STEMS[k * 3 + 2]) * 0.6) { same = k; break; }
+      if (same >= 0) {
+        if (r > STEMS[same * 3 + 2]) { STEMS[same * 3] = cx; STEMS[same * 3 + 1] = cz; STEMS[same * 3 + 2] = r; }
+        continue;
+      }
+      if (n >= STEMS.length / 3) continue;
+      STEMS[n * 3] = cx; STEMS[n * 3 + 1] = cz; STEMS[n * 3 + 2] = r;
+      n++;
+    }
+    if (!n) return false;
+    let area = 0, best = 0, bestD = Infinity;
+    for (let k = 0; k < n; k++) {
+      const r = STEMS[k * 3 + 2];
+      area += Math.PI * r * r * p.scale.x * p.scale.z;
+      const d = Math.hypot(STEMS[k * 3] - mx, STEMS[k * 3 + 1] - mz) - r;
+      if (d < bestD) { bestD = d; best = k; }
+    }
+    SEC.area = area;
+    SEC.cx = STEMS[best * 3];
+    SEC.cz = STEMS[best * 3 + 1];
+    SEC.r = STEMS[best * 3 + 2];
+    return true;
+  }
+
+  /** Radius (m) of the stem at a world point, for the size of a mark; 0 where there is none. */
+  stemRadius(p: VegetationPlant, x: number, y: number, z: number): number {
+    const m = this.toModel(p, x, y, z, V2);
+    return this.section(p, Math.max(0.05, m.y), m.x, m.z) ? SEC.r * p.scale.x : 0;
+  }
+
+  /** A tree's crown: centre, half width and half height (m), for leaves shaken out of it. Null for bare wood. */
+  crownOf(p: VegetationPlant): { x: number; y: number; z: number; r: number; h: number } | null {
+    if (!p.tree || !p.wood || p.wood === 'deadTree' || !WOOD[p.wood].leaf) return null;
+    const d = TREE_DIMS[p.wood];
+    V2.set(0, (d.bole + d.h) * 0.5 * p.scale.y, 0).applyQuaternion(p.rotation).add(p.position);
+    CROWN.x = V2.x; CROWN.y = V2.y; CROWN.z = V2.z;
+    CROWN.r = d.crown * p.scale.x * 0.8;
+    CROWN.h = (d.h - d.bole) * 0.5 * p.scale.y;
+    return CROWN;
+  }
+
+  /** How hard a tree's wood is now: its species', less as fire has charred it. */
+  hardness(p: VegetationPlant): number {
+    const w = WOOD[p.wood ?? 'snag'];
+    if (!p.tree) return w.hard;
+    const base = TREE_MECHANICS[TREE_SPECIES[p.tree.sp]].strength * p.tree.s ** 3;
+    return w.hard * Math.max(0.35, Math.min(1, p.material.strength / base));
+  }
+
+  /** How far a plant's stem leans from upright, radians. */
+  private leanOf(p: VegetationPlant) {
+    return Math.acos(Math.min(1, V2.set(0, 1, 0).applyQuaternion(p.rotation).y));
+  }
+
+  /**
+   * A round has gone into a tree's wood (`TreeTarget.shot`): it takes its share of the section at that height out of the
+   * notch bands there, and if that has eaten enough of the section the tree snaps at the notch. Returns the share gone there.
+   */
+  shootTree(p: VegetationPlant, s: TreeShot): number {
+    if (p.record.broken || p.body || !p.woodHulls || !p.wood) return 0;
+    const m = this.toModel(p, s.x, s.y, s.z, V2);
+    const sy = p.scale.y;
+    const h = m.y * sy;
+    if (!this.section(p, m.y, m.x, m.z)) return 0;
+    const spec = AMMO[s.ammo];
+    const bands = (p.record.notch ??= []);
+    const j1 = Math.floor(h / NOTCH_STEP);
+    let done = 0;
+    for (let j = Math.max(0, j1 - 1); j <= j1 && j < bands.length; j++) done = Math.max(done, bands[j]);
+    HIT.ammo = s.ammo;
+    HIT.speed = s.speed;
+    HIT.work = 0.5 * spec.mass * Math.max(0, s.speed * s.speed - s.exit * s.exit);
+    HIT.section = SEC.area;
+    HIT.diameter = 2 * Math.sqrt(SEC.area / Math.PI);
+    HIT.done = done;
+    HIT.hard = this.hardness(p);
+    const gain = notchGain(HIT);
+    const j = addNotch(bands, h, gain, NOTCH_TOP[p.wood] * sy);
+    if (j < 0) return 0;
+    for (let k = Math.max(0, j1 - 1); k <= j1 && k < bands.length; k++) bands[k] = Math.round(bands[k] * 1e4) / 1e4;
+    // Which way the rounds have been going, weighted by what each took: the notch faces back along it.
+    const l = Math.hypot(s.dx, s.dz) || 1;
+    const was = p.record.notchDir;
+    const w = Math.min(1, done * 4);
+    const nx = (was ? was[0] * w : 0) + (s.dx / l) * (gain + 0.01), nz = (was ? was[1] * w : 0) + (s.dz / l) * (gain + 0.01);
+    const nl = Math.hypot(nx, nz) || 1;
+    if (was) { was[0] = nx / nl; was[1] = nz / nl; } else p.record.notchDir = [nx / nl, nz / nl];
+    if (!p.notchStem) p.notchStem = [SEC.cx, SEC.cz, SEC.r];
+    else if (bands[j] <= gain + 1e-6 || done < 0.05) { p.notchStem[0] = SEC.cx; p.notchStem[1] = SEC.cz; p.notchStem[2] = SEC.r; }
+    this.memory.set(p.key, p.record);
+    this.wound(p);
+    if (bands[j] >= snapShare(this.leanOf(p))) this.snap(p, bandMid(j) / sy, this.fallWay(p, s), s);
+    return bands[j];
+  }
+
+  /**
+   * Which way a snapped tree goes over: away from the guns that cut it, unless it already leans hard (a gum over the river
+   * goes the way it leans), and a little either side as the hinge tears.
+   */
+  private fallWay(p: VegetationPlant, s: TreeShot): [number, number] {
+    const d = p.record.notchDir ?? [s.dx, s.dz];
+    const up = V2.set(0, 1, 0).applyQuaternion(p.rotation);
+    let x = d[0] * 0.6 + up.x * 8;
+    let z = d[1] * 0.6 + up.z * 8;
+    const k = Math.sin(p.position.x * 12.9898 + p.position.z * 78.233) * 43758.5453;
+    const a = (k - Math.floor(k) - 0.5) * 0.7;
+    const c = Math.cos(a), sn = Math.sin(a);
+    [x, z] = [x * c - z * sn, x * sn + z * c];
+    const l = Math.hypot(x, z) || 1;
+    return [x / l, z / l];
+  }
+
+  /**
+   * The tree snaps at model height `cut`: a stump stays rooted with the wood below the break (a fixed body, still solid,
+   * still wood to a round), and the top becomes one rigid body of the wood above it, swinging over on a hinge of the uncut
+   * wood on the side it falls to and tearing free part-way down. Its fall throws people aside and its landing is heard
+   * (`TreeEvents`). With a saved pose (a reload) the top is simply put back where it lay. A desert dead tree goes over whole.
+   */
+  private snap(p: VegetationPlant, cut: number, dir: [number, number], s?: TreeShot) {
+    if (p.body || !p.woodHulls) return;
+    const rec = p.record;
+    if (!p.tree) {
+      rec.broken = true;
+      rec.damage = Math.max(1, rec.damage);
+      rec.direction = dir;
+      this.memory.set(p.key, rec);
+      this.fall(p, dir, s && { x: s.x, y: s.y, z: s.z, dx: s.dx, dy: s.dy, dz: s.dz, impulse: AMMO[s.ammo].mass * s.speed * 30, energy: 0, kind: 'bullet' });
+      this.draw(p);
+      return;
+    }
+    rec.broken = true;
+    rec.cut = cut;
+    rec.direction = dir;
+    this.memory.set(p.key, rec);
+    if (!p.notchStem) p.notchStem = this.section(p, cut, 0, 0) ? [SEC.cx, SEC.cz, SEC.r] : [0, 0, 0.3];
+    const [cx, cz, r] = p.notchStem;
+    const sx = p.scale.x, sy = p.scale.y, sz = p.scale.z;
+    const yCut = cut * sy;
+    if (p.treeIndex !== undefined) this.onTreeBreak?.(p.treeIndex, p.position.y + yCut + r * sx * 0.5);
+    for (const c of p.colliders) { this.treeByCollider.delete(c.handle); this.physics.removeCollider(c); }
+    p.colliders = [];
+    p.solid = undefined;
+    p.bend = newBend();
+    const world = this.physics.world;
+    const scaled = (hull: Float32Array) => hull.map((v, i) => v * (i % 3 === 0 ? sx : i % 3 === 1 ? sy : sz));
+    // The stump: the wood below the break stays where it grew.
+    const stump = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(p.position.x, p.position.y, p.position.z).setRotation(p.rotation));
+    const stumpWood = new TreeWood(this, p, p.wood!, false, 'stump');
+    const stumpColliders: Collider[] = [];
+    const pieces = p.woodHulls.map(scaled);
+    let stumpMass = 0;
+    for (const v of pieces) {
+      const below = clipHull(v, yCut, false);
+      const desc = below && RAPIER.ColliderDesc.convexHull(below);
+      if (!desc) continue;
+      const c = world.createCollider(desc.setDensity(650).setCollisionGroups(GROUPS.furn).setFriction(0.8), stump);
+      this.physics.tag(c, 'wood');
+      this.physics.trees.set(c.handle, stumpWood);
+      stumpMass += c.mass();
+      stumpColliders.push(c);
+    }
+    p.stump = { body: stump, colliders: stumpColliders };
+    // The top: everything above the break, one rigid body carrying its share of the tree's weight.
+    const saved = rec.pose;
+    const body = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(saved ? saved[0] : p.position.x, saved ? saved[1] : p.position.y, saved ? saved[2] : p.position.z)
+      .setRotation(saved ? { x: saved[3], y: saved[4], z: saved[5], w: saved[6] } : p.rotation)
+      .setLinearDamping(0.2).setAngularDamping(0.35).setCcdEnabled(true).setSleeping(!!saved));
+    p.body = body;
+    const topWood = new TreeWood(this, p, p.wood!, false, 'top');
+    for (const v of pieces) {
+      const above = clipHull(v, yCut, true);
+      const desc = above && RAPIER.ColliderDesc.convexHull(above);
+      if (!desc) continue;
+      const c = world.createCollider(desc.setDensity(650).setCollisionGroups(saved ? GROUPS.loose : FALLING).setFriction(0.85).setRestitution(0.02), body);
+      this.physics.tag(c, 'wood');
+      this.physics.trees.set(c.handle, topWood);
+      p.colliders.push(c);
+    }
+    body.recomputeMassPropertiesFromColliders();
+    const topMass = body.mass();
+    const mass = p.material.mass * (topMass / Math.max(1e-6, topMass + stumpMass));
+    if (topMass > 0) {
+      for (const c of p.colliders) c.setMass((c.mass() * mass) / topMass);
+      body.recomputeMassPropertiesFromColliders();
+    }
+    this.active.add(p);
+    if (!saved && p.colliders.length) {
+      // It goes over on the hinge of uncut wood at the far edge of the notch, the side it falls to.
+      const local = V.set(dir[0], 0, dir[1]).applyQuaternion(Q2.copy(p.rotation).invert());
+      const ll = Math.hypot(local.x, local.z) || 1;
+      const lx = local.x / ll, lz = local.z / ll;
+      const anchor = { x: cx * sx + lx * r * sx * 0.85, y: yCut, z: cz * sz + lz * r * sz * 0.85 };
+      const joint = world.createImpulseJoint(RAPIER.JointData.revolute(anchor, anchor, { x: lz, y: 0, z: -lx }), stump, body, true);
+      joint.setContactsEnabled(false);
+      p.hinge = joint;
+      body.setAngvel({ x: dir[1] * 0.5, y: 0, z: -dir[0] * 0.5 }, true);
+      // The trunk from the break to its highest wood, for whatever it comes down on.
+      let tip: StemSeg | null = null;
+      for (const g of this.stemsOf(p)) if (!tip || g.yb > tip.yb) tip = g;
+      V.set(cx * sx, yCut, cz * sz).applyQuaternion(p.rotation).add(p.position);
+      p.fall = {
+        wood: p.wood!, body, butt: [cx * sx, yCut, cz * sz], tip: tip ? [tip.bx * sx, tip.yb * sy, tip.bz * sz] : [cx * sx, p.height, cz * sz],
+        radius: r * sx, crown: TREE_DIMS[p.wood as keyof typeof TREE_DIMS].crown * sx, mass, x: V.x, y: V.y, z: V.z, dx: dir[0], dz: dir[1],
+        by: s?.by ?? -1, t: 0, tipVy: 0, landedAt: -1,
+      };
+      this.falling.add(p);
+      this.physics.treeEvents?.snapped(p.fall);
+    }
+    this.savePose(p);
+    this.wound(p);
+  }
+
+  /**
+   * A snapped top on its way down: the hinge tears once it has gone a third of the way over (or after a few seconds hung up
+   * in its neighbours), and the moment its tip stops coming down fast it has landed. Once it has lain still a moment people
+   * collide with it again.
+   */
+  private follow(p: VegetationPlant, dt: number) {
+    const f = p.fall, b = p.body;
+    if (!f || !b || !b.isValid()) { this.falling.delete(p); return; }
+    f.t += dt;
+    const r = b.rotation();
+    Q.set(r.x, r.y, r.z, r.w);
+    if (p.hinge) {
+      const up = V.set(0, 1, 0).applyQuaternion(Q).dot(V2.set(0, 1, 0).applyQuaternion(p.rotation));
+      if (up < 0.85 || f.t > 5) {
+        if (p.hinge.isValid()) this.physics.world.removeImpulseJoint(p.hinge, true);
+        p.hinge = undefined;
+      }
+    }
+    const t = b.translation();
+    V.set(f.tip[0], f.tip[1], f.tip[2]).applyQuaternion(Q).add(V2.set(t.x, t.y, t.z));
+    const v = b.velocityAtPoint({ x: V.x, y: V.y, z: V.z });
+    if (f.landedAt < 0) {
+      if ((f.tipVy < -3.5 && v.y > f.tipVy * 0.35) || f.t > 9) {
+        f.landedAt = f.t;
+        V.set(f.butt[0] + (f.tip[0] - f.butt[0]) * 0.75, f.butt[1] + (f.tip[1] - f.butt[1]) * 0.75, f.butt[2] + (f.tip[2] - f.butt[2]) * 0.75)
+          .applyQuaternion(Q).add(V2.set(t.x, t.y, t.z));
+        this.physics.treeEvents?.landed(f, V.x, V.y, V.z, -f.tipVy);
+      }
+      f.tipVy = v.y;
+    } else if (f.t - f.landedAt > 1.5 || b.isSleeping()) {
+      for (const c of p.colliders) if (c.isValid()) c.setCollisionGroups(GROUPS.loose);
+      this.falling.delete(p);
+    }
+  }
+
+  /** Draw a tree's notch and, once it has snapped, which piece its instance is now, with the stump in an instance of its own. */
+  private wound(p: VegetationPlant) {
+    const near = p.refs[0];
+    if (!p.tree || !near || !near.mesh.geometry.getAttribute('aNotch')) return;
+    const rec = p.record;
+    const j = rec.notch ? deepest(rec.notch) : -1;
+    if (j < 0 && rec.cut === undefined) return;
+    const sy = p.scale.y;
+    const y = rec.cut ?? bandMid(j) / sy;
+    if (!p.notchStem) {
+      if (!this.section(p, y, 0, 0)) return;
+      p.notchStem = [SEC.cx, SEC.cz, SEC.r];
+    }
+    const [cx, cz, r] = p.notchStem;
+    const share = j >= 0 ? rec.notch![j] : 0.6;
+    const d = rec.notchDir ?? [1, 0];
+    V.set(-d[0], 0, -d[1]).applyQuaternion(Q2.copy(p.rotation).invert());
+    const angle = Math.atan2(V.z, V.x);
+    const half = (0.2 + 0.25 * r * p.scale.x) / sy;
+    setTreeNotch(near.mesh, near.index, y, share, angle, rec.cut !== undefined ? 1 : 0, cx, cz, r, half);
+    if (rec.cut === undefined || !p.stump) return;
+    if (!p.stump.ref) {
+      const i = addTreeSlot(near.mesh, near.index);
+      if (i < 0) return;
+      near.mesh.setMatrixAt(i, near.base);
+      near.mesh.instanceMatrix.addUpdateRange(i * 16, 16);
+      near.mesh.instanceMatrix.needsUpdate = true;
+      p.stump.ref = { mesh: near.mesh, index: i };
+    }
+    setTreeNotch(p.stump.ref.mesh, p.stump.ref.index, y, share, angle, -1, cx, cz, r, half);
+  }
+
   /** Elastic spring bend plus the permanent set the plant has taken so far, which grows with accumulated damage. */
   private rotation(p: VegetationPlant) {
     const [dx, dz] = p.record.direction ?? [1, 0], len = Math.hypot(dx, dz) || 1;
@@ -437,6 +866,7 @@ export class Vegetation {
   }
 
   private update(dt: number) {
+    for (const p of this.falling) this.follow(p, dt);
     for (const p of this.sensors) {
       p.sensorLife = (p.sensorLife ?? 0) - dt;
       if (p.sensorLife > 0 && !p.record.broken) continue;
@@ -543,9 +973,18 @@ export class Vegetation {
         if (Math.max(hit.y, hit.y + hit.dy * distance) < p.position.y || Math.min(hit.y, hit.y + hit.dy * distance) > p.position.y + p.height) return;
         const toi = this.sensor(p).castRay(ray, distance, true);
         if (toi < 0 || toi > distance) return;
-        // A small share of a projectile's work tears flexible leaves; most of it carries on.
-        this.hit(p, { ...hit, x: hit.x + hit.dx * toi, y: hit.y + hit.dy * toi, z: hit.z + hit.dz * toi,
-          impulse: hit.impulse * 0.03, energy: p.woodHulls ? 0 : hit.energy * 0.04 });
+        const x = hit.x + hit.dx * toi, y = hit.y + hit.dy * toi, z = hit.z + hit.dz * toi;
+        // A small share of a projectile's work tears flexible leaves; most of it carries on. A bush's leaves and twigs take
+        // more of a round (buckshot most): a magazine thins one, a few shells shred it.
+        const bush = !p.woodHulls ? BUSH_LEAF[p.kind] : undefined;
+        // (A round named by its ammo has its whole share here; `hit` takes the old 0.12 off only an unnamed one.)
+        const share = hit.kind === 'bullet' && hit.ammo ? (bush ? shredShare(hit.ammo) : 0.04 * 0.12) : 0.04;
+        this.hit(p, { ...hit, x, y, z, impulse: hit.impulse * 0.03, energy: p.woodHulls ? 0 : hit.energy * share });
+        // And a few leaves come away, out of a crown or a bush.
+        const leaf = p.wood ? WOOD[p.wood].leaf : bush;
+        if (leaf && hit.kind === 'bullet' && this.physics.treeEvents) {
+          this.physics.treeEvents.leaves(x, y, z, leafTear(hit.ammo ?? 'pistol') + (bush ? 1 : 0), leaf, bush ? 0.4 : 0.8);
+        }
       });
     }
   }
@@ -568,6 +1007,14 @@ export class Vegetation {
     const p = this.trees[index];
     if (!p?.tree) return;
     p.material.strength = treeMechanics(TREE_SPECIES[p.tree.sp], p.tree.s).strength * (1 - Math.min(1, Math.max(0, char)) * 0.75);
+    // A snapped tree's stump chars with it (the chunk has just coloured the tree's own instance).
+    const near = p.refs[0], stump = p.stump?.ref;
+    if (near?.mesh.instanceColor && stump?.mesh.instanceColor) {
+      near.mesh.getColorAt(near.index, C);
+      stump.mesh.setColorAt(stump.index, C);
+      stump.mesh.instanceColor.addUpdateRange(stump.index * 3, 3);
+      stump.mesh.instanceColor.needsUpdate = true;
+    }
   }
 
   /**
@@ -639,8 +1086,15 @@ export class Vegetation {
       if (p.body) this.savePose(p);
       if (p.sensor?.isValid()) this.physics.removeCollider(p.sensor);
       for (const c of p.colliders) if (c.isValid()) this.physics.removeCollider(c);
+      // Removing a body takes the hinge joined to it.
       if (p.body?.isValid()) this.physics.world.removeRigidBody(p.body);
+      if (p.stump) {
+        for (const c of p.stump.colliders) if (c.isValid()) this.physics.removeCollider(c);
+        if (p.stump.body.isValid()) this.physics.world.removeRigidBody(p.stump.body);
+      }
+      p.hinge = undefined;
     }
+    this.falling.clear();
     this.active.clear();
     this.sensors.clear();
     this.plants.length = 0;

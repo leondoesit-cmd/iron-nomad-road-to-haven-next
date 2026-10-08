@@ -1042,10 +1042,12 @@ export class LegScene extends Scene {
     const mats = data.city && this.leg.biome !== 'city' ? (this.cityMats ??= makeChunkMaterials('city', this.leg.theme)) : this.mats;
     const view = new ChunkView(data, this.terrain!, mats, this.P, {
       scatter: QUALITY[this.R.quality].scatter, staged, vegetationMemory: this.vegetationMemory,
-      onTreeBreak: (index) => {
+      onTreeBreak: (index, stumpTop) => {
         const t = data.trees[index];
         const a = data.aabbs.find((a) => a.kind === 'tree' && Math.abs((a.minX + a.maxX) / 2 - t.x) < 0.01 && Math.abs((a.minZ + a.maxZ) / 2 - t.z) < 0.01);
-        if (a) { a.physOnly = true; this.obs.remove(a); }
+        // A shot-down tree's stump still stands in the way, only lower; one that went over whole leaves nothing.
+        if (a && stumpTop !== undefined) a.y1 = Math.min(a.y1, Math.max(a.y0 + 0.3, stumpTop));
+        else if (a) { a.physOnly = true; this.obs.remove(a); }
       },
       onGround: () => this.landscape.setLoaded(cx, cz, true),
     });

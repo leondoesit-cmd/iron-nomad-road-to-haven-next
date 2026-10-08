@@ -9,7 +9,7 @@ import { GLOBALS } from './materials';
  */
 
 /** Cells of the atlas, 4 across and 3 down. */
-export const CELL = { splat0: 0, splat1: 1, splat2: 2, splat3: 3, spray: 4, drops: 5, pool: 7, hole: 8, splinter: 9, scuff: 10, crack: 11 } as const;
+export const CELL = { splat0: 0, splat1: 1, splat2: 2, splat3: 3, spray: 4, drops: 5, scar: 6, pool: 7, hole: 8, splinter: 9, scuff: 10, crack: 11 } as const;
 
 const ATLAS_W = 4;
 const ATLAS_H = 3;
@@ -185,6 +185,34 @@ function scuffCell(buf: Uint8Array, seed: number) {
   for (let i = 0; i < 9; i++) streak(buf, 32, 32, rnd() * 6.28, 6, 10 + rnd() * 14, 1, 200, 0, rnd);
 }
 
+/**
+ * Where a round tore the bark off a tree: a ragged patch of pale wood stretched along the grain (the cell's x, laid along the
+ * trunk), torn fibres running out along it, a dark lip of curled bark round its edge and a dark hole in the middle.
+ */
+function scarCell(buf: Uint8Array, seed: number) {
+  const rnd = lcg(seed);
+  blob(buf, 32, 32, 12, rnd, 1.75, (rnd() - 0.5) * 0.15);
+  // The torn lip: the outer rim of the patch goes dark.
+  for (let i = 0; i < PX * PX; i++) {
+    const a = buf[i * 4 + 3];
+    if (a > 0 && a < 150) {
+      buf[i * 4] = 80;
+      buf[i * 4 + 2] = 120;
+    }
+  }
+  for (let i = 0; i < 9; i++) {
+    const side = rnd() < 0.5 ? 0 : Math.PI;
+    streak(buf, 32, 32 + (rnd() - 0.5) * 10, side + (rnd() - 0.5) * 0.25, 6, 12 + rnd() * 16, 0.8 + rnd() * 0.6, 245, 0, rnd);
+  }
+  for (let y = 0; y < PX; y++) {
+    for (let x = 0; x < PX; x++) {
+      const d = Math.hypot((x + 0.5 - 32) / 1.6, y + 0.5 - 32);
+      if (d < 3.6) px(buf, x, y, 30, 0, 255, 1);
+      else if (d < 5.5) px(buf, x, y, 110, 0, 150, 1);
+    }
+  }
+}
+
 /** A web of cracks from a point: what a wall looks like before it gives. */
 function crackCell(buf: Uint8Array, seed: number) {
   const rnd = lcg(seed);
@@ -261,6 +289,8 @@ function atlas(): THREE.DataTexture {
   put(CELL.scuff);
   crackCell(cell, 36);
   put(CELL.crack);
+  scarCell(cell, 37);
+  put(CELL.scar);
   // A pool: one broad, smooth, slightly irregular puddle.
   {
     const rnd = lcg(21);

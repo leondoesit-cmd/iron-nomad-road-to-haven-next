@@ -76,7 +76,8 @@ const pavingMaterial = () => {
 
 export interface ChunkOpts {
   vegetationMemory?: VegetationMemory;
-  onTreeBreak?: (index: number) => void;
+  /** A tree went down: `stumpTop` (world y) when gunfire snapped it and its stump still stands. */
+  onTreeBreak?: (index: number, stumpTop?: number) => void;
   /** Ground cover density, 0..1 (quality setting). */
   scatter: number;
   /**
