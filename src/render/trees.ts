@@ -1003,7 +1003,7 @@ void treeWound( inout vec3 col, out float cap ) {
   if ( vTWood < 0.5 || ( vTN.y <= 0.0 && vTN.w == 0.0 ) ) return;
   vec2 rel = vTL.xz - vTNB.xy;
   float r = max( vTNB.z, 1e-3 );
-  vec3 sap = mix( vec3( 0.6, 0.46, 0.29 ), col * 2.2, 0.2 );
+  vec3 sap = mix( vec3( 0.46, 0.34, 0.2 ), col * 2.2, 0.2 );
   if ( vTN.w != 0.0 && !gl_FrontFacing ) {
     if ( length( rel ) > r * 1.35 || abs( vTL.y - vTN.x ) > r * 4.0 ) return;
     vec3 d = vTL - vTCam;
@@ -1023,12 +1023,20 @@ void treeWound( inout vec3 col, out float cap ) {
   if ( vTN.y > 0.0 && gl_FrontFacing ) {
     float rad = length( rel );
     if ( rad > r * 2.2 ) return;
+    float th = atan( rel.y, rel.x );
     float side = dot( rel / max( rad, 1e-4 ), vec2( cos( vTN.z ), sin( vTN.z ) ) );
-    float n = tNoise( vec2( atan( rel.y, rel.x ) * 4.0, vTL.y * 9.0 / max( vTNB.w, 0.05 ) ) );
-    float dy = abs( vTL.y - vTN.x ) / max( vTNB.w, 1e-3 );
+    float hy = vTL.y / max( vTNB.w, 0.05 );
+    float n = tNoise( vec2( th * 6.0, hy * 5.0 ) );
+    // Fibres run along the grain; pits are where rounds went in.
+    float fib = tNoise( vec2( th * 40.0, hy * 1.5 ) );
+    float pit = tNoise( vec2( th * 18.0, hy * 14.0 ) );
+    float dy = abs( vTL.y - vTN.x ) / max( vTNB.w, 1e-3 ) + ( n - 0.5 ) * 0.7;
     float wrap = mix( 0.75, -0.85, clamp( vTN.y * 1.4, 0.0, 1.0 ) );
-    float chew = ( 1.0 - smoothstep( 0.55, 1.0, dy + n * 0.3 ) ) * smoothstep( wrap - 0.2, wrap + 0.2, side + ( n - 0.5 ) * 0.4 ) * smoothstep( 0.0, 0.06, vTN.y );
-    vec3 torn = sap * ( 0.55 + 0.45 * n ) * mix( 1.0, 0.45, ( 1.0 - min( dy, 1.0 ) ) * clamp( vTN.y * 1.6, 0.0, 1.0 ) );
+    float chew = ( 1.0 - smoothstep( 0.7, 0.85, dy ) ) * smoothstep( wrap - 0.15, wrap + 0.15, side + ( n - 0.5 ) * 0.5 ) * smoothstep( 0.0, 0.06, vTN.y );
+    float deep = ( 1.0 - clamp( dy, 0.0, 1.0 ) ) * clamp( vTN.y * 1.6, 0.0, 1.0 );
+    vec3 torn = sap * ( 0.5 + 0.6 * fib ) * mix( 1.0, 0.4, deep ) * mix( 1.0, 0.3, smoothstep( 0.55, 0.8, pit ) * ( 0.4 + 0.6 * deep ) );
+    // The torn lip of the bark round it is darker than either.
+    torn *= 1.0 - 0.45 * smoothstep( 0.45, 0.7, dy );
     col = mix( col, torn, chew );
   }
 }
