@@ -810,7 +810,8 @@ export class Game {
   /** Open the field workbench for one of the convoy's vehicles. The game stands still while it is open. */
   openWorkbench(p: Player, v: Vehicle) {
     const sc = this.scene;
-    if (!sc || this.workbench || (this.phase !== 'leg' && this.phase !== 'camp')) return;
+    // A boat or a raider's ride has no build to work on: the bench would fail on it.
+    if (!sc || !v.build || this.workbench || (this.phase !== 'leg' && this.phase !== 'camp')) return;
     const back = this.phase;
     sc.paused = true;
     this.phase = 'vote';
