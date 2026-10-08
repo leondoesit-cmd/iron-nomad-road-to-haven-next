@@ -304,15 +304,6 @@ export class InventoryView {
     return a ? a.label[0].toLowerCase() + a.label.slice(1) : '';
   }
 
-  /** A letter or digit typed while the menu is open: run the row it names. Returns true if one ran. */
-  shortcut(key: string): boolean {
-    if (!this.menu) return false;
-    const m = this.menuItems.find((i) => i.key === key && i.enabled);
-    if (!m) return false;
-    m.run();
-    return true;
-  }
-
   // ------------------------------------------------------------------ actions
 
   /** Run a loadout change, report it, and bring the survivor and the screen up to date. */
@@ -437,7 +428,7 @@ export class InventoryView {
   /** Put it on the ground at your feet, as a find anyone can walk up to and take. */
   drop(uid: string) {
     const p = this.p!;
-    if (!this.field) return;
+    if (!this.field || p.swimming) return;
     const it = takeOut(this.loadout, uid);
     if (!it) return this.act({ ok: false, reason: 'That cannot come out of your kit right now' });
     p.ctx.dropGear(it, p.pos.x, p.pos.z);
@@ -1249,8 +1240,8 @@ export class InventoryScreen implements InventoryHost {
     sel?.classList.add('sel');
     const f = g.focus;
     if (replaced) {
+      // (The panel takes the pointer in the stylesheet, buttons and all, so nothing here touches every button's style.)
       v.placeMenu(panel);
-      for (const b of panel.querySelectorAll<HTMLElement>('button')) b.style.pointerEvents = 'auto';
       // With a menu open, only its rows take the cursor: it is modal until it closes.
       const scope = v.menu ? this.menuEl! : panel;
       const keys = f.keys();

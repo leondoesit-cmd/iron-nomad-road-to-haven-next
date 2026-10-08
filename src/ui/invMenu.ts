@@ -212,7 +212,8 @@ function gearMenu(h: MenuHost, uid: string): MenuItem[] {
     const room = them.gear.bag.length < bagCap(them.gear);
     out.push(item('a-give', `Give to ${them.name}`, K.give, !room ? { ok: false, reason: 'Their bag is full' } : out_, () => h.give(uid)));
   }
-  if (h.field) out.push(item('a-drop', 'Drop it', K.drop, out_, () => h.drop(uid)));
+  // Set down at your feet; in deep water it would only sink out of reach.
+  if (h.field) out.push(item('a-drop', 'Drop it', K.drop, h.p.swimming ? { ok: false, reason: 'Not while you are swimming' } : out_, () => h.drop(uid)));
   out.push(item('a-scrap', 'Break down', K.scrap, out_, () => h.scrap(uid), { danger: true, note: `+${scrapOf({ ...it, att: undefined })} Scrap` }));
   return out;
 }
@@ -253,9 +254,12 @@ export function menuFor(h: MenuHost, t: InvTarget): MenuItem[] {
   return utilMenu(h, t.id);
 }
 
-/** The action X (and a double click) does: the first that can be done, never breaking something down. */
+/** Rows that send the item out of the kit: never what X does on its own, so a stray press loses nothing. */
+const LEAVES = new Set(['a-give', 'a-drop', 'a-scrap']);
+
+/** The action X (and a double click) does: the first that can be done that keeps the item, never breaking it down. */
 export function defaultAction(items: MenuItem[]): MenuItem | null {
-  return items.find((i) => i.enabled && !i.danger && !i.chip) ?? null;
+  return items.find((i) => i.enabled && !i.danger && !i.chip && !LEAVES.has(i.id)) ?? null;
 }
 
 /** A heading for the menu. */

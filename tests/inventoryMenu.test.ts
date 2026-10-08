@@ -118,6 +118,10 @@ describe('the inventory menu', () => {
     expect(row(m, 'a-off')).toMatchObject({ enabled: false, reason: 'Your bag has no room for that' });
     // It can still leave the kit another way: it is not holding the bag's contents.
     expect(row(m, 'a-drop').enabled).toBe(true);
+    // But X never gives away, drops or breaks down on its own: with nothing else to do, it does nothing.
+    expect(defaultAction(m)).toBeNull();
+    s.p.swimming = true;
+    expect(row(menu({ kind: 'gear', uid: body.uid }), 'a-drop')).toMatchObject({ enabled: false, reason: 'Not while you are swimming' });
     s.sc.dispose();
   });
 
