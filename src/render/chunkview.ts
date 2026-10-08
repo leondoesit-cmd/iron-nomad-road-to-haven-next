@@ -25,7 +25,8 @@ import { BOULEVARD_HALF, SIDEWALK } from '../world/layout';
 import { GROUPS, type Collider, type PhysicsWorld } from '../physics/physics';
 import { hash2, noise2 } from '../core/rng';
 import { smoothstep } from '../core/math';
-import { forestAt, hydroCalm, lushAt } from '../world/hydro';
+import { forestAt, lushAt } from '../world/hydro';
+import { waterCalm } from '../world/washes';
 import { bendGround } from '../world/millBend';
 import { dryGround, mixDry, mixWater, wetGround, type GroundMix } from './groundMix';
 import { buildTreesSteps, charTreeInstance, TREE_NEAR_SHOW, type TreeSet } from './trees';
@@ -102,8 +103,8 @@ export function cliffDetail(def: TerrainDef, x: number, z: number): number {
   const fine = noise2(x / 3.7, z / 3.7, def.seed + 62);
   const ledge = Math.floor(noise2(x / 37, z / 37, def.seed + 63) * 5) * 1.1;
   const out = m * (ridge * 4.2 + ridge2 * 3.5 + fine * 1.6 + ledge - 5.5) + mountainRelief(def, x, z, d, ch);
-  // A waterfall off the rim pours down a clean notch, not through the crags.
-  return def.hydro ? out * (1 - hydroCalm(def.hydro, x, z)) : out;
+  // A waterfall off the rim pours down a clean notch, and a flood down a wash's gorge, not through the crags.
+  return out * (1 - waterCalm(def, x, z));
 }
 
 /** Big ridges and peaks on the slopes beyond the canyon rim: the far scenery, never reachable. */
@@ -150,7 +151,7 @@ function cliffPush(def: TerrainDef, x: number, z: number, h: number): [number, n
   if (m <= 0) return null;
   const n1 = noise2(z / 15 + h / 9, h / 13 + x / 40, def.seed + 66) * 2 - 1;
   const n2 = noise2(z / 5.5 - h / 4, h / 5 + 3.1, def.seed + 67) * 2 - 1;
-  const amt = (n1 * 3.2 + n2 * 1.1) * m * (def.hydro ? 1 - hydroCalm(def.hydro, x, z) : 1);
+  const amt = (n1 * 3.2 + n2 * 1.1) * m * (1 - waterCalm(def, x, z));
   // Toward the corridor (negative = into the rock).
   return [-Math.sign(x - rx) * amt, 0];
 }

@@ -30,6 +30,14 @@ export const FORD_DEPTH = 0.26;
 const FALL_SLOPE = 0.35;
 /** Lushness raster cell (metres). */
 const LUSH_CELL = 8;
+/** How high a levee's crest stands over the water it holds back, and how wide its crest runs (least, most) in metres. */
+export const LEVEE_FREEBOARD = 0.38;
+const LEVEE_CREST: [number, number] = [2.6, 4];
+/**
+ * How far past the water's edge a course's water can reach (metres): over a low bank into a backwater, or out over the
+ * floodplain when the river is in flood. The drawn ribbon reaches as far, and the physics looks no further.
+ */
+export const FLOOD_REACH = 8;
 
 export type CourseKind = 'river' | 'stream';
 /** `gum`: the eucalyptus groves along a river planted with them (`WaterCourseSpec.grove`). */
@@ -424,10 +432,22 @@ export function courseAt(hy: Hydro, x: number, z: number, pad = 0): CourseHit | 
   return best;
 }
 
+/** How steeply the ground climbs through a course's waterline, in the shallows and up the foot of the bank (m/m). */
+const SHORE_SLOPE = 0.6;
+/** How much of its height a course's bank has climbed `e` metres past the waterline (0..1): at `SHORE_SLOPE` from the water, easing over at the top. */
+function bankClimb(e: number, height: number): number {
+  const ramp = (2 * height) / SHORE_SLOPE;
+  if (e >= ramp) return 1;
+  const k = 1 - e / ramp;
+  return 1 - k * k;
+}
+
 /** Bed of a course across its channel: a rounded trough, its waterline exactly at the half-width. */
 function channelBed(h: CourseHit): number {
   const u = h.d / h.half;
-  return h.level - h.depth * Math.pow(Math.max(0, 1 - u * u), 0.7);
+  // The last metre or so shelves up to the waterline at the same slope as the bank climbs out of it, so the shore is one
+  // straight slope through the water's edge, which the 2 m ground mesh draws where it really is.
+  return h.level - Math.min(h.depth * Math.pow(Math.max(0, 1 - u * u), 0.7), SHORE_SLOPE * (h.half - h.d));
 }
 
 /** The ground at (x, z) once a course has been cut into it. */
@@ -436,8 +456,18 @@ function courseCut(def: TerrainDef, h: CourseHit, x: number, z: number, ground: 
   if (h.d < h.half) out = channelBed(h);
   else {
     // A strip of flat floodplain by the water, then the valley side.
-    const t = smoothstep(0.12, 1, (h.d - h.half) / Math.max(1, h.bank));
-    out = lerp(h.level + 0.35 + 0.25 * Math.min(1, (h.d - h.half) / 4), ground, t);
+    const e = h.d - h.half;
+    // The bank climbs out of the water over a metre or two rather than standing up in a step at the waterline: the 2 m
+    // ground mesh smears a step into a slope a metre either side, and the shore you see would no longer be the physics'.
+    const rise = 0.35 + 0.25 * Math.min(1, e / 4);
+    const top = h.level + rise * bankClimb(e, 0.35);
+    out = lerp(top, ground, smoothstep(0.12, 1, e / Math.max(1, h.bank)));
+    // Where the land beyond lies lower than the water (the course rides a fill), the bank is a levee: its crest keeps a
+    // freeboard over the water for a few metres, wide enough for the 2 m ground mesh to hold it, before it falls away.
+    if (ground < top) {
+      const crest = clamp(1.6 + 0.25 * h.half, LEVEE_CREST[0], LEVEE_CREST[1]);
+      out = Math.max(out, h.level + LEVEE_FREEBOARD - Math.max(0, e - crest) * 0.45);
+    }
   }
   // Roads: asphalt crosses on a causeway (the water passes under in culverts), a dirt track on a ford of gravel.
   const o = def.open;
@@ -514,16 +544,19 @@ export function hydroWater(def: TerrainDef, hy: Hydro, x: number, z: number): Wa
     const bed = heightAt(def, x, z);
     if (bed < sp.level - 0.02) return { kind: 'spring', style: 'spring', level: sp.level, depth: sp.level - bed, ref: sp.id, name: sp.name };
   }
-  const c = courseAt(hy, x, z);
-  if (c && c.d < c.half + 1.5) {
+  const c = courseAt(hy, x, z) ?? courseAt(hy, x, z, FLOOD_REACH);
+  if (c && c.d < c.half + FLOOD_REACH) {
     // Copy out of the pooled hit: `heightAt` below runs the same query again.
     const r = c.river;
     const i = c.i;
     const level = c.level;
     const side = c.side;
+    const near = c.d < c.half + 1.5;
     const sp = r.speed[i] + (r.speed[i + 1] - r.speed[i]) * c.t;
     const toBank = 0.18 * sp * smoothstep(0.2, 0.9, c.d / c.half);
-    const depth = level - heightAt(def, x, z);
+    // Past the first metre and a half of bank, only a backwater the river can reach over the ground between (a low gap in
+    // the bank, a wash's mouth): the drawn water shows the same.
+    const depth = near ? level - heightAt(def, x, z) : spillDepth(def, c, x, z, level);
     if (depth > 0.02) {
       // Down the stream, and a little toward the nearer bank, so a swamped car fetches up against it.
       const fx = r.dx[i] * sp - r.dz[i] * side * toBank;
@@ -542,6 +575,41 @@ export function hydroWater(def: TerrainDef, hy: Hydro, x: number, z: number): Wa
     }
   }
   return null;
+}
+
+/**
+ * Depth of water standing at `level` in course `h`'s channel at (x, z), or 0 where it cannot get there: on ground as high, or
+ * behind ground as high anywhere between the water's edge and the point (sampled every 0.7 m square out from the course).
+ * The river ribbon draws exactly this (its `aBar`), so a flood or a backwater is wet where it shows and nowhere else.
+ */
+export function spillDepth(def: TerrainDef, h: CourseHit, x: number, z: number, level: number): number {
+  // Copy out of the pooled hit: `heightAt` runs the same query.
+  const r = h.river;
+  const px = r.x[h.i] + (r.x[h.i + 1] - r.x[h.i]) * h.t;
+  const pz = r.z[h.i] + (r.z[h.i + 1] - r.z[h.i]) * h.t;
+  const d = h.d;
+  const half = h.half;
+  const depth = level - heightAt(def, x, z);
+  if (depth <= 0 || d <= half) return Math.max(0, depth);
+  const ux = (x - px) / d;
+  const uz = (z - pz) / d;
+  for (let s = half; s < d; s += 0.7) if (heightAt(def, px + ux * s, pz + uz * s) >= level) return 0;
+  return depth;
+}
+
+/**
+ * How much of a river's rise reaches a sample: none where it runs into a lake or swamp (whose level stays put), out of a
+ * spring pool or near a fall (whose sheet stands still), all of it everywhere else. The ribbon's shader asks the same.
+ */
+export function riseTaper(hy: Hydro, r: River, i: number): number {
+  let k = 1 - smoothstep(r.end - 14, r.end - 2, i);
+  if (r.spring >= 0) k *= smoothstep(4, 18, i);
+  for (const f of hy.falls) {
+    if (f.river !== r.id) continue;
+    const d = i < f.i0 ? f.i0 - i : i > f.i1 ? i - f.i1 : 0;
+    k *= smoothstep(1, 10, d);
+  }
+  return k;
 }
 
 /** Wet ground: the channel and the first metre of bank, a swamp, a spring's bowl. Surface 'mud'. */
@@ -1766,6 +1834,20 @@ function settleCourse(def: TerrainDef, hy: Hydro, r: River, L: Float32Array) {
     else L[i] = Math.max(L[i], target + slope * (sEnd - r.s[i]));
   }
   for (let i = 1; i < n; i++) L[i] = Math.min(L[i], L[i - 1]);
+  // The free level followed the land as it was before any lake or swamp was dug. Where the hollow of the water it runs into
+  // falls away under the course short of that water's edge, the course goes over the lip there and runs on at that water's
+  // level in a cut of its own, instead of hanging at its own level out over the hollow until it meets the waterline.
+  if (r.into.kind !== 'river') {
+    for (let i = Math.max(1, r.end - 80); i < r.end; i++) {
+      const x = r.x[i];
+      const z = r.z[i];
+      const g = basinGround(def, hy, r, x, z);
+      if (g < L[i] - 0.25 && baseHeight(def, x, z) - g > 0.5) {
+        for (let j = i; j < n; j++) L[j] = Math.min(L[j], target);
+        break;
+      }
+    }
+  }
   r.level.set(L);
   const base = r.kind === 'river' ? 0.75 : 0.55;
   for (let i = 0; i < n; i++) {
@@ -1800,6 +1882,15 @@ function settleCourse(def: TerrainDef, hy: Hydro, r: River, L: Float32Array) {
       for (let k = 1; k <= 4 && i + k < n; k++) r.depth[i + k] = Math.max(r.depth[i + k], r.depth[i + k] + 1.4 * (1 - k / 5));
     }
   }
+}
+
+/**
+ * The ground on a course's centre-line with the hollow of the lake or swamp it runs into dug, but no course cut yet. (While the
+ * water is planned `heightAt` carves the lakes only.)
+ */
+function basinGround(def: TerrainDef, hy: Hydro, r: River, x: number, z: number): number {
+  const h = heightAt(def, x, z);
+  return r.into.kind === 'swamp' ? swampAdjust(hy.swamps[r.into.ref], x, z, h) : h;
 }
 
 function indexCourse(hy: Hydro, r: River) {
