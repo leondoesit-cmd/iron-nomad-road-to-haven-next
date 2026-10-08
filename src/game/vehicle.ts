@@ -155,6 +155,8 @@ export class Vehicle {
   swing: Record<Panel, number> = { hood: 0, doorL: 0, doorR: 0, trunk: 0 };
   /** Water: engine drowned (wheeled vehicles), seconds spent out of the water since, and the spray timer. */
   flooded = false;
+  /** Picks a raider car's look (paint, scrap, spikes, banner) from where it was spawned, so no two in a war party match. */
+  private visSeed = 0;
   dryT = 0;
   splashT = 0;
 
@@ -176,6 +178,7 @@ export class Vehicle {
     this.body = def.physics.kind === 'boat' ? new BoatBody(ctx.P, def, o.x, o.y ?? gy + def.physics.halfExtents[1] + 0.6, o.z, o.yaw, (x, z) => ctx.waterAt(x, z)) : new VehicleBody(ctx.P, def, o.x, gy + gOff + 0.25, o.z, o.yaw);
     const isRaider = o.faction === 'raider';
     const color = o.color ?? (this.ownerIndex >= 0 ? PLAYER_COLORS[this.ownerIndex] : 0x6b8a5a);
+    this.visSeed = (Math.imul(Math.round(o.x * 8) | 0, 73856093) ^ Math.imul(Math.round(o.z * 8) | 0, 19349663)) >>> 0;
     this.visual = this.makeVisual(color);
     this.group.add(this.visual.root);
     this.shadowCasters(this.visual.root);
@@ -205,8 +208,8 @@ export class Vehicle {
   private makeVisual(color: number): VehicleVisual {
     const w = this.body.wheelLocal;
     const st = this.body.steered;
-    if (this.kind === 'raiderBuggy') return buildRaiderBuggy(this.def, w, st);
-    if (this.kind === 'wagon') return buildWagon(this.def, w, st);
+    if (this.kind === 'raiderBuggy') return buildRaiderBuggy(this.def, w, st, this.visSeed);
+    if (this.kind === 'wagon') return buildWagon(this.def, w, st, this.visSeed);
     if (this.def.physics.kind === 'boat') return buildBoatVisual(this.def, color);
     const look = this.build ? lookOf(this.build) : defaultLook(color);
     return buildVehicleVisual(this.def, w, st, look);
