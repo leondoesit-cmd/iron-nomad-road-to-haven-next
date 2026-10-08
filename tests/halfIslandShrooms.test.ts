@@ -246,7 +246,7 @@ describe('at the Half Island', () => {
     const f = g.faces[0];
     p1.placeAt(g.x + Math.cos(f.az) * (g.r + 4), g.z + Math.sin(f.az) * (g.r + 4), 0);
     p0.drugs.dose('mushrooms');
-    run(sc, 55);
+    run(sc, 40);
     const ft = sc.faceTrip!;
     expect(ft.views[0].k).toBeGreaterThan(0.9);
     expect(ft.views[1].k).toBe(0);
@@ -277,14 +277,14 @@ describe('at the Half Island', () => {
   });
 
   it('at the peak, ordinary trunks round the tripper look back, in their own view only', () => {
-    const { h, sc } = scene(false);
+    const { h, sc } = scene(true);
     const [p0] = sc.players;
     const ft = sc.faceTrip!;
     // Somewhere with trunks that can take a face.
     const trees = sc.treesNear(p0.pos.x, p0.pos.z, 120).filter((t) => [0, 1, 3, 7, 8].includes(t.sp) && t.s >= 0.6);
     expect(trees.length).toBeGreaterThan(3);
     p0.drugs.dose('mushrooms');
-    run(sc, 45);
+    run(sc, 36);
     expect(ft.views[0].k).toBeGreaterThan(GHOST_FROM);
     // Spawn straight onto the nearest few, facing the tripper (as the timer would).
     let made = 0;
