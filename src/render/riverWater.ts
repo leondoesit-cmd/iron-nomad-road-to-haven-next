@@ -1,35 +1,44 @@
 import * as THREE from 'three';
 import { GLOBALS } from './materials';
 import { mirrorWaterMaterial, waterNoiseTexture, waterNormalTexture } from './water';
-import { lakeColors } from '../world/lakes';
+import { DrawnGround } from './drawnGround';
+import type { TerrainUniforms } from './terrainMaterial';
+import { lakeColors, lakeWater } from '../world/lakes';
 import { heightAt, type TerrainDef } from '../world/terrain';
-import { nearestRoad } from '../world/openWorld';
-import { RIFFLE_HALF, type Hydro, type River, type Waterfall } from '../world/hydro';
+import { nearestRoad, ROAD_REACH } from '../world/openWorld';
+import { coursesNear, FLOOD_REACH, RIFFLE_HALF, riseTaper, swampQ, type Hydro, type River, type Waterfall } from '../world/hydro';
 import { clamp, lerp, smoothstep } from '../core/math';
 
 /**
  * Running water: every river and stream of the open world as one ribbon mesh, and every waterfall as one more.
  *
- * The ribbon follows each course's centre-line sample by sample. A cross-section is seven vertices: the waterline on each
- * side, three across the channel between them, and one a metre and a half out over each bank, which the banks hide by the
- * depth test. It is flat across (the water level of that sample), so the channel cut into the terrain shapes the water's
- * edge exactly as it shapes the ground. Each vertex carries the depth of water under it, how far across the channel it is,
- * a travel-time coordinate along the flow and the current's speed, so the shader can scroll ripples down the stream at
- * the speed the water actually runs, fade the waterline and whiten the shallows, the rapids and the boil under a fall.
+ * The ribbon follows each course's centre-line sample by sample. A cross-section is flat at that sample's water level and
+ * runs from the middle out over each bank as far as a flood can reach (`FLOOD_REACH`), its vertices close together over the
+ * waterline and the first metres of bank. Each vertex carries what the shader needs to show only the water that is really
+ * there, measured against the ground as it is drawn (`DrawnGround`), not as `heightAt` has it:
+ * - the depth of water over the drawn ground, which fades the shore softly where the depth test cuts it hard;
+ * - the bar: the highest drawn ground between the channel and the vertex. Water shows only where its surface stands over the
+ *   bar, so it never spills over a bank into low ground behind it, however low that lies; a flood tops the bars as it rises;
+ * - how much of it another sheet covers (the lake, swamp or spring pool it runs into), where it fades out under that sheet;
+ * - how far it must rise to clear the far landscape's coarse mesh, which stands in for the ground beyond the streamed chunks.
+ * It also carries how far across the channel it is, a travel-time coordinate along the flow and the current's speed, so the
+ * shader can scroll ripples down the stream at the speed the water actually runs, and whiten the shallows, the rapids and
+ * the boil under a fall.
  *
  * The steep runs of a course (the falls) are left out of the ribbon and drawn by the falls mesh instead: a sheet down the
  * drop that leaves the lip in a short arc, a veil of streaks just in front of it, and a ring of spray standing in the
  * plunge pool. Falling water is white and rough and must not mirror anything, so it has its own material and blend.
  */
 
-/** Samples drawn past `end`, into whatever the course runs into: there the ribbon sinks under that water and fades out. */
-const PAST_END = 4;
-/** How far the ribbon reaches out over each bank. */
-const BANK_PAD = 1.5;
-/** And further out over the floodplain, hidden under the ground until the river rises over it. */
-const FLOOD_PAD = 8;
+/**
+ * Offsets of a cross-section's vertices past the water's edge, each side (metres): close over the waterline and the first
+ * metres of bank, where the shore and the crest of the bank lie, wider out over the reach of a flood.
+ */
+const SHORE = [-0.9, -0.45, 0, 0.4, 0.8, 1.25, 1.8, 2.6, 3.8, 5.6, FLOOD_REACH];
+/** Vertices each side of the centre: two out in the channel, then the shore's. */
+const SIDE = 2 + SHORE.length;
 /** Vertices across a ribbon cross-section. */
-export const RIBBON_NX = 9;
+export const RIBBON_NX = 1 + 2 * SIDE;
 const NX = RIBBON_NX;
 /** Rivers whose rise the shader knows (`RIVER_RISE.uRise`). */
 export const MAX_RIVERS = 8;
@@ -43,22 +52,17 @@ export const RIVER_RISE = {
   uMurk: { value: 0 },
 };
 
+/** How much of a river's rise reaches a sample (lives with the water's plan, which the physics shares). */
+export { riseTaper };
 /**
- * How much of a river's rise reaches a sample: none where it runs into a lake or swamp (whose level stays put), out of a
- * spring pool or near a fall (whose sheet stands still), all of it everywhere else. The physics asks the same.
+ * How far the ribbon sinks under a sheet that covers it (the lake, swamp or pool it runs into), where it fades out beneath
+ * that sheet: a gap the depth buffer resolves at any distance, not a coplanar tie.
  */
-export function riseTaper(hy: Hydro, r: River, i: number): number {
-  let k = 1 - smoothstep(r.end - 14, r.end - 2, i);
-  if (r.spring >= 0) k *= smoothstep(4, 18, i);
-  for (const f of hy.falls) {
-    if (f.river !== r.id) continue;
-    const d = i < f.i0 ? f.i0 - i : i > f.i1 ? i - f.i1 : 0;
-    k *= smoothstep(1, 10, d);
-  }
-  return k;
-}
-/** How far the ribbon sinks where it meets standing water at the same level, so that water's sheet wins the depth test. */
-const SINK = 0.06;
+const SINK = 0.12;
+/** The water stands this far over the far landscape's mesh where that mesh is what is drawn. */
+const FAR_CLEAR = 0.1;
+/** Bar of a vertex out in the channel (metres over the water): nothing there holds the water back. */
+const OPEN_BAR = -0.05;
 /** Every scrolling coordinate repeats a whole number of texture tiles in this many seconds, so time can wrap. */
 const PERIOD = 100;
 /** Free fall. The speed the water leaves a lip with, straight down. */
@@ -77,9 +81,58 @@ export interface RibbonData {
   courses: RibbonCourse[];
 }
 
-/** Across offsets of a cross-section, metres from the centre-line, for a half-width `h`. */
-function acrossOffsets(h: number): number[] {
-  return [-(h + FLOOD_PAD), -(h + BANK_PAD), -h, -0.55 * h, 0, 0.55 * h, h, h + BANK_PAD, h + FLOOD_PAD];
+/** One side's offsets from the centre-line, outward, for a half-width `h`, none further out than `limit`. */
+function sideOffsets(h: number, limit: number, out: Float32Array) {
+  const shore = Math.max(0.3 * h, h + SHORE[0]);
+  out[0] = shore * 0.4;
+  out[1] = shore * 0.75;
+  for (let k = 0; k < SHORE.length; k++) out[2 + k] = Math.max(h + SHORE[k], out[1 + k] + 0.05);
+  for (let k = 0; k < SIDE; k++) out[k] = Math.min(out[k], Math.max(limit, k ? out[k - 1] : 0));
+}
+
+/**
+ * How tightly a course bends at each sample toward its left (+) or right (-), 1/m, the strongest over a few samples round it.
+ * The inside of a bend can hold the ribbon only so far out before its cross-sections fold over each other.
+ */
+function bendCurvature(r: River): Float32Array {
+  const k = new Float32Array(r.n);
+  for (let i = 1; i < r.n - 1; i++) {
+    const ds = Math.max(0.5, r.s[i + 1] - r.s[i - 1]);
+    // The turn of the flow direction, projected on the left normal (-dz, dx).
+    k[i] = ((r.dx[i + 1] - r.dx[i - 1]) * -r.dz[i] + (r.dz[i + 1] - r.dz[i - 1]) * r.dx[i]) / ds;
+  }
+  const out = new Float32Array(r.n);
+  for (let i = 0; i < r.n; i++) {
+    let m = 0;
+    for (let j = Math.max(0, i - 3); j <= Math.min(r.n - 1, i + 3); j++) if (Math.abs(k[j]) > Math.abs(m)) m = k[j];
+    out[i] = m;
+  }
+  return out;
+}
+
+/**
+ * How much of a point another sheet of water covers (0..1), as that sheet's own shader fades it in: the lake, swamp or river
+ * a course runs into, and the spring pool it runs out of.
+ */
+function coverAt(def: TerrainDef, hy: Hydro, r: River, i: number, x: number, z: number): number {
+  let c = 0;
+  if (r.spring >= 0 && i < 40) {
+    const sp = hy.springs[r.spring];
+    const d = Math.hypot(x - sp.x, z - sp.z);
+    // The pool's disc reaches 1.2 m past its rim (`springGeometry`), and shows wherever there is water under it.
+    if (d < sp.r + 1.2) c = smoothstep(0.02, 0.12, sp.level - heightAt(def, x, z));
+  }
+  if (i < r.end - 14) return c;
+  if (r.into.kind === 'lake') {
+    const w = lakeWater([def.lakes[r.into.ref]], x, z);
+    if (w) c = Math.max(c, smoothstep(0.02, 0.16, w.depth));
+  } else if (r.into.kind === 'swamp') {
+    const s = hy.swamps[r.into.ref];
+    if (swampQ(s, x, z) < 1.08) c = Math.max(c, smoothstep(0.02, 0.1, s.level - heightAt(def, x, z)));
+  } else {
+    for (const h of coursesNear(hy, x, z)) if (h.river.id === r.into.ref) c = Math.max(c, 1 - smoothstep(h.half - 1, h.half + 0.3, h.d));
+  }
+  return c;
 }
 
 /**
@@ -126,109 +179,154 @@ function steepSegments(hy: Hydro, r: River): Uint8Array {
 }
 
 /**
- * The ribbon geometry of every course, merged. Attributes besides position and normal:
- * `aFlow` (metres across the channel, travel time down the course in seconds, depth of water, current in m/s),
- * `aDir` (flow direction x, z; how steeply the level drops, m/m; plunge-pool churn 0..1),
- * `aFade` (opacity, 0 where the course has run into other water; how far the far-view lift may raise it).
+ * The ribbon geometry of every course, merged. Attributes besides position (there is no normal: the water faces up):
+ * `aFlow` (metres across the channel, travel time down the course in seconds, depth of water over the drawn ground, current
+ * in m/s), `aDir` (flow direction x, z; how steeply the level drops, m/m; plunge-pool churn 0..1), `aFade` (opacity, 0 where
+ * other water covers it; how far it must rise to clear the far landscape), `aRise` (river id; how much of its rise reaches
+ * here; the bar, metres over the water: the highest drawn ground between the channel and here).
  */
 export function riverRibbonGeometry(def: TerrainDef): RibbonData | null {
   const hy = def.hydro;
   if (!hy?.ready || !hy.rivers.length) return null;
   const hit = ribbonCache.get(hy);
-  if (hit) return { geometry: geometryFrom(hit, 2.6), courses: hit.courses! };
+  if (hit) return { geometry: geometryFrom(hit, hit.lift ?? 2.6), courses: hit.courses! };
   const o = def.open;
+  const ground = new DrawnGround(def);
   let rowsTotal = 0;
-  for (const r of hy.rivers) rowsTotal += Math.min(r.n - 1, r.end + PAST_END) + 1;
+  for (const r of hy.rivers) rowsTotal += r.n;
   const V = rowsTotal * NX;
   const pos = new Float32Array(V * 3);
-  const nrm = new Float32Array(V * 3);
   const flow = new Float32Array(V * 4);
   const dir = new Float32Array(V * 4);
   const fade = new Float32Array(V * 2);
-  const rise = new Float32Array(V * 2);
+  const rise = new Float32Array(V * 3);
   const idx: number[] = [];
   const courses: RibbonCourse[] = [];
+  const offs = new Float32Array(SIDE);
+  // One cross-section's values, the centre in slot 0 and each side outward after it, before they are laid into the arrays.
+  const us = new Float32Array(NX);
+  const xs = new Float32Array(NX);
+  const zs = new Float32Array(NX);
+  const depth = new Float32Array(NX);
+  const bar = new Float32Array(NX);
+  const lift = new Float32Array(NX);
+  let maxLift = 0;
   let v = 0;
   for (const r of hy.rivers) {
-    const last = Math.min(r.n - 1, r.end + PAST_END);
     const churn = plungeChurn(hy, r);
     const rif = riffleChurn(hy, r);
     for (let i = 0; i < r.n; i++) churn[i] = Math.max(churn[i], rif[i]);
     const steep = steepSegments(hy, r);
-    const sp = r.spring >= 0 ? hy.springs[r.spring] : null;
+    const bend = bendCurvature(r);
     const first = v;
     let tau = 0;
-    for (let i = 0; i <= last; i++) {
+    for (let i = 0; i < r.n; i++) {
       if (i > 0) tau += (r.s[i] - r.s[i - 1]) / Math.max(0.2, 0.5 * (r.speed[i] + r.speed[i - 1]));
-      // Into a lake, swamp or river at the same level: sink under its sheet and fade out.
-      const into = smoothstep(r.end - 2, r.end + 1, i);
-      let alpha = 1 - smoothstep(r.end, r.end + PAST_END, i);
-      let sink = SINK * into;
-      let lift = 1 - smoothstep(r.end - 6, r.end, i);
-      if (sp) {
-        // Out of a spring pool: the pool's own sheet covers the first metres.
-        const inPool = 1 - smoothstep(sp.r - 1, sp.r + 1.5, Math.hypot(r.x[i] - sp.x, r.z[i] - sp.z));
-        sink = Math.max(sink, SINK * inPool);
-        alpha *= 1 - inPool * 0.85;
-        lift = Math.min(lift, 1 - inPool);
-      }
-      const y = r.level[i] - sink;
+      const level = r.level[i];
       const i0 = Math.max(0, i - 1);
       const i1 = Math.min(r.n - 1, i + 1);
       const drop = clamp((r.level[i0] - r.level[i1]) / Math.max(0.5, r.s[i1] - r.s[i0]), 0, 1);
       const h = r.half[i];
       const nx = -r.dz[i];
       const nz = r.dx[i];
-      const us = acrossOffsets(h);
       const taper = riseTaper(hy, r, i);
-      for (let k = 0; k < NX; k++) {
-        const u = us[k];
+      for (const side of [1, -1]) {
+        // On the inside of a bend the ribbon reaches out no further than most of the way to the bend's centre.
+        const k = bend[i] * side;
+        sideOffsets(h, k > 1e-4 ? Math.max(h + 0.4, 0.85 / k) : Infinity, offs);
+        const base = side > 0 ? 1 : SIDE + 1;
+        for (let q = 0; q < SIDE; q++) us[base + q] = offs[q] * side;
+      }
+      us[0] = 0;
+      // A paved road within reach of the cross-section? (The road index finds every road within ROAD_REACH of a point.)
+      const reachOut = Math.max(Math.abs(us[SIDE]), Math.abs(us[2 * SIDE])) + 5;
+      const roadNear = !!o && (reachOut > ROAD_REACH || nearestRoad(o, r.x[i], r.z[i]).edge < reachOut);
+      for (let q = 0; q < NX; q++) {
+        const u = us[q];
         const x = r.x[i] + nx * u;
         const z = r.z[i] + nz * u;
-        let depth: number;
+        xs[q] = x;
+        zs[q] = z;
         // Where a road crosses on its causeway the water runs on underneath, in the channel's own shape (the causeway hides it).
-        const rd = o ? nearestRoad(o, x, z) : null;
-        const causeway = !!rd?.road && rd.road.kind !== 'track' && rd.edge < 5;
-        if (causeway) {
+        const rd = roadNear ? nearestRoad(o!, x, z) : null;
+        if (rd?.road && rd.road.kind !== 'track' && rd.edge < 5) {
           const a = Math.abs(u) / h;
-          depth = a < 1 ? r.depth[i] * Math.pow(1 - a * a, 0.7) : -(Math.abs(u) - h) * 0.4;
-        } else depth = r.level[i] - heightAt(def, x, z);
-        pos[v * 3] = x;
-        pos[v * 3 + 1] = y;
-        pos[v * 3 + 2] = z;
-        nrm[v * 3 + 1] = 1;
-        flow[v * 4] = u;
+          depth[q] = a < 1 ? r.depth[i] * Math.pow(1 - a * a, 0.7) : -(Math.abs(u) - h) * 0.4;
+        } else depth[q] = level - ground.mesh(x, z);
+        lift[q] = clamp(ground.far(x, z) + FAR_CLEAR - level, 0, 6);
+      }
+      // The bar, each side: the highest drawn ground met going out from the channel, between the vertices too (every half
+      // metre). Out in the channel nothing holds the water back.
+      bar[0] = Math.min(-depth[0], OPEN_BAR);
+      for (const base of [1, SIDE + 1]) {
+        let b = bar[0];
+        let prev = 0;
+        let wetLift = lift[0];
+        for (let q = 0; q < SIDE; q++) {
+          const u = us[base + q];
+          const a = Math.abs(u);
+          const own = -depth[base + q];
+          if (a < h - 1e-3) b = Math.max(b, Math.min(own, OPEN_BAR));
+          else {
+            const from = Math.max(prev, h);
+            const steps = Math.floor((a - from) / 0.5);
+            const sgn = u < 0 ? -1 : 1;
+            for (let t = 1; t <= steps; t++) {
+              const ua = (from + ((a - from) * t) / (steps + 1)) * sgn;
+              b = Math.max(b, ground.mesh(r.x[i] + nx * ua, r.z[i] + nz * ua) - level);
+            }
+            b = Math.max(b, own);
+          }
+          bar[base + q] = b;
+          // A dry vertex rises with the last wet one inward, so the water's edge never tilts up to meet the far mesh.
+          if (depth[base + q] > 0 && b < 0) wetLift = lift[base + q];
+          else lift[base + q] = wetLift;
+          prev = a;
+        }
+      }
+      // Laid left edge to right edge. Into a lake, swamp or river, or out of a spring, the ribbon sinks a little under the
+      // other sheet and fades out beneath it.
+      for (let slot = 0; slot < NX; slot++) {
+        const q = slot < SIDE ? SIDE + SIDE - slot : slot === SIDE ? 0 : slot - SIDE;
+        const cover = coverAt(def, hy, r, i, xs[q], zs[q]);
+        pos[v * 3] = xs[q];
+        pos[v * 3 + 1] = level - SINK * Math.min(1, cover * 4);
+        pos[v * 3 + 2] = zs[q];
+        flow[v * 4] = us[q];
         flow[v * 4 + 1] = tau;
-        flow[v * 4 + 2] = depth;
+        flow[v * 4 + 2] = depth[q];
         flow[v * 4 + 3] = r.speed[i];
         dir[v * 4] = r.dx[i];
         dir[v * 4 + 1] = r.dz[i];
         dir[v * 4 + 2] = drop;
         dir[v * 4 + 3] = churn[i];
-        fade[v * 2] = alpha;
-        // The floodplain edge never lifts for the far view: it would stand up out of the banks.
-        fade[v * 2 + 1] = k === 0 || k === NX - 1 ? 0 : lift;
-        rise[v * 2] = r.id;
-        rise[v * 2 + 1] = taper;
+        fade[v * 2] = 1 - cover;
+        fade[v * 2 + 1] = lift[q];
+        if (lift[q] > maxLift && depth[q] > 0) maxLift = lift[q];
+        rise[v * 3] = r.id;
+        rise[v * 3 + 1] = taper;
+        rise[v * 3 + 2] = bar[q];
         v++;
       }
     }
     // Quads between cross-sections, wound to face up; the falls' segments are the falls mesh's.
-    for (let i = 0; i < last; i++) {
+    for (let i = 0; i < r.n - 1; i++) {
       if (steep[i]) continue;
       const a = first + i * NX;
       const b = a + NX;
       for (let k = 0; k < NX - 1; k++) idx.push(a + k, a + k + 1, b + k, a + k + 1, b + k + 1, b + k);
     }
-    courses.push({ river: r.id, first, rows: last + 1 });
+    courses.push({ river: r.id, first, rows: r.n });
   }
   const data: MeshArrays = {
-    attrs: { position: [pos, 3], normal: [nrm, 3], aFlow: [flow, 4], aDir: [dir, 4], aFade: [fade, 2], aRise: [rise, 2] },
+    attrs: { position: [pos, 3], aFlow: [flow, 4], aDir: [dir, 4], aFade: [fade, 2], aRise: [rise, 3] },
     index: Uint32Array.from(idx),
     courses,
+    // Room above for a flood's rise and the far view's lift.
+    lift: 2.6 + maxLift,
   };
   ribbonCache.set(hy, data);
-  return { geometry: geometryFrom(data, 2.6), courses };
+  return { geometry: geometryFrom(data, data.lift!), courses };
 }
 
 /**
@@ -239,6 +337,8 @@ interface MeshArrays {
   attrs: Record<string, [Float32Array, number]>;
   index: Uint32Array;
   courses?: RibbonCourse[];
+  /** How far the vertex shader may lift the mesh above its bounds. */
+  lift?: number;
 }
 const ribbonCache = new WeakMap<Hydro, MeshArrays>();
 const fallCache = new WeakMap<Hydro, MeshArrays>();
@@ -434,14 +534,19 @@ const RIVER_VERT_PARS = /* glsl */ `
 attribute vec4 aFlow;
 attribute vec4 aDir;
 attribute vec2 aFade;
-attribute vec2 aRise;
+attribute vec3 aRise;
 uniform float uRise[ ${MAX_RIVERS} ];
 uniform float uSilt[ ${MAX_RIVERS} ];
+#ifdef R_FAR
+uniform sampler2D tLoaded;
+uniform vec4 uLoadedRect;
+#endif
 varying vec3 vWWorld;
 varying vec4 vFlow;
 varying vec4 vDir;
 varying float vFade;
 varying float vSilt;
+varying float vBar;
 `;
 
 const RIVER_VERT_MAIN = /* glsl */ `
@@ -449,17 +554,23 @@ vFlow = aFlow;
 vDir = aDir;
 vFade = aFade.x;
 vSilt = uSilt[ int( aRise.x + 0.5 ) ];
-{
-  // A river in flood: the whole surface stands higher (and out over the floodplain), deeper and quicker.
-  float rRise = uRise[ int( aRise.x + 0.5 ) ] * aRise.y;
-  transformed.y += rRise;
-  vFlow.z += rRise;
-  vFlow.w *= 1.0 + rRise * 0.9;
-}
+// A river in flood: the whole surface stands higher, deeper and quicker, and out over its banks as far as it tops them.
+float rRise = uRise[ int( aRise.x + 0.5 ) ] * aRise.y;
+transformed.y += rRise;
+vFlow.z += rRise;
+vFlow.w *= 1.0 + rRise * 0.9;
+vBar = rRise - aRise.z;
 vWWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
-// Beyond the streamed chunks the coarse far terrain lies a little proud of the water along the banks: lift the water
-// clear of it there. The edges stay where they were, since the waterline comes from the depth, not the mesh.
-transformed.y += smoothstep( 240.0, 420.0, distance( vWWorld.xz, cameraPosition.xz ) ) * 0.7 * aFade.y;
+#ifdef R_FAR
+{
+  // Beyond the streamed chunks the far landscape's coarse mesh stands in for the ground and can lie over the water along a
+  // narrow channel: there, and only there, the water rises just clear of that mesh. Its outline stays where it was, since it
+  // comes from the depth and the bar, not from the mesh.
+  vec2 lc = ( vWWorld.xz - uLoadedRect.xy ) / uLoadedRect.zw;
+  bool near = lc.x >= 0.0 && lc.y >= 0.0 && lc.x < 1.0 && lc.y < 1.0 && texture2D( tLoaded, lc ).r > 0.5;
+  if ( ! near ) transformed.y += max( 0.0, aFade.y - rRise );
+}
+#endif
 `;
 
 const RIVER_FRAG_PARS = /* glsl */ `
@@ -469,12 +580,17 @@ varying vec4 vFlow;
 varying vec4 vDir;
 varying float vFade;
 varying float vSilt;
+varying float vBar;
 ${COMMON_PARS}
 `;
 
 const RIVER_COLOR = /* glsl */ `
 float rD = vFlow.z;
-if ( rD < 0.015 || vFade < 0.01 ) discard;
+// Water only where it stands over the ground and over every bank between it and the channel. A hair of water over the
+// ground is dropped, more of it far off, where the depth buffer could not tell the two apart.
+vec3 rEye = vWWorld - cameraPosition;
+float rMin = 0.015 + dot( rEye, rEye ) * 3e-7;
+if ( rD < rMin || vBar < 0.0 || vFade < 0.01 ) discard;
 vec2 wp = vWWorld.xz;
 vec2 rF = normalize( vDir.xy );
 vec2 rAc = vec2( - rF.y, rF.x );
@@ -510,9 +626,9 @@ float wFoam = clamp( max( max( rBank, rStreak ), rBoil ), 0.0, 1.0 );
 wCol *= 1.0 + ( rN3.r * rN2.b ) * 0.55 * ( 1.0 - rDeep );
 wCol = mix( wCol, mix( mix( cWFoam, vec3( 0.78, 0.76, 0.66 ), vSilt * 0.6 ), vec3( 0.7, 0.6, 0.46 ), uMurk ), wFoam * 0.92 );
 // Clear enough to see the cobbles, the weed and the fish down to a metre or two; a flood's silt makes it opaque.
-float wA = mix( 0.26, 0.95, smoothstep( 0.05, 3.4, rD ) ) * smoothstep( 0.015, 0.14, rD );
+float wA = mix( 0.26, 0.95, smoothstep( 0.05, 3.4, rD ) ) * smoothstep( rMin, rMin + 0.125, rD );
 wA = mix( wA, max( wA, 0.94 * smoothstep( 0.015, 0.2, rD ) ), max( uMurk, vSilt ) );
-wA = max( wA, wFoam * 0.9 * smoothstep( 0.015, 0.06, rD ) ) * vFade;
+wA = max( wA, wFoam * 0.9 * smoothstep( rMin, rMin + 0.045, rD ) ) * vFade * smoothstep( 0.0, 0.03, vBar );
 diffuseColor = vec4( wCol, wA );
 float wRough = mix( 0.05, 0.5, wFoam ) + rRapid * 0.05;
 `;
@@ -606,13 +722,17 @@ function siltOf(hy: Hydro): Float32Array {
   return out;
 }
 
-function riverMaterial(hy: Hydro): THREE.MeshStandardMaterial {
+function riverMaterial(hy: Hydro, lod?: TerrainUniforms): THREE.MeshStandardMaterial {
   const mat = mirrorWaterMaterial();
-  const uniforms = { ...colourUniforms(), ...RIVER_RISE, uSilt: { value: siltOf(hy) } };
+  const uniforms = { ...colourUniforms(), ...RIVER_RISE, uSilt: { value: siltOf(hy) }, ...(lod ?? {}) };
+  // With the far landscape's loaded-chunk mask the water knows where that coarse mesh is what is drawn.
+  if (lod) mat.defines = { R_FAR: '' };
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${RIVER_VERT_PARS}`)
+      // The ribbon has no normal attribute: running water faces up (the fragment shader bends it with the ripples).
+      .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3( 0.0, 1.0, 0.0 );')
       .replace('#include <project_vertex>', `${RIVER_VERT_MAIN}\n#include <project_vertex>`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${RIVER_FRAG_PARS}`)
@@ -621,7 +741,7 @@ function riverMaterial(hy: Hydro): THREE.MeshStandardMaterial {
       .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = 0.0;')
       .replace('#include <normal_fragment_maps>', 'normal = normalize( ( viewMatrix * vec4( wNw, 0.0 ) ).xyz );');
   };
-  mat.customProgramCacheKey = () => 'riverWater';
+  mat.customProgramCacheKey = () => (lod ? 'riverWater:far' : 'riverWater');
   return mat;
 }
 
@@ -671,8 +791,11 @@ export interface RiverWater {
   dispose(): void;
 }
 
-/** Every river, stream and waterfall of the leg: two draw calls. Null off the open world. */
-export function buildRiverWater(def: TerrainDef): RiverWater | null {
+/**
+ * Every river, stream and waterfall of the leg: two draw calls. Null off the open world. `lod` is the far landscape's
+ * loaded-chunk mask: given it, the water rises clear of the far mesh wherever that mesh stands in for the ground.
+ */
+export function buildRiverWater(def: TerrainDef, lod?: TerrainUniforms): RiverWater | null {
   const ribbon = riverRibbonGeometry(def);
   const fallGeo = fallsGeometry(def);
   if (!ribbon && !fallGeo) return null;
@@ -682,12 +805,13 @@ export function buildRiverWater(def: TerrainDef): RiverWater | null {
   let river: THREE.Mesh | null = null;
   let falls: THREE.Mesh | null = null;
   if (ribbon) {
-    const m = riverMaterial(def.hydro!);
+    const m = riverMaterial(def.hydro!, lod);
     mats.push(m);
     river = new THREE.Mesh(ribbon.geometry, m);
     river.receiveShadow = true;
-    // After the standing water, which it sinks under where they meet; before anything else see-through.
-    river.renderOrder = -1;
+    // First of everything see-through: where a course runs into a lake, a swamp or out of a spring pool it fades out a
+    // little under that sheet, which then lays over it rather than hiding it with its own faint shallows.
+    river.renderOrder = -3;
     group.add(river);
   }
   if (fallGeo) {

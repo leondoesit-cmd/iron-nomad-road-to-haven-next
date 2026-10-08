@@ -356,7 +356,7 @@ export function buildFlatWater(o: FlatWaterOpts): WaterSheet {
   mesh.position.set(o.x, o.level, o.z);
   mesh.receiveShadow = true;
   mesh.frustumCulled = false;
-  // Standing water draws first of everything see-through; running water, which sinks under it where they meet, comes next.
+  // Standing water draws right after running water (-3), which fades out a little under it where they meet.
   mesh.renderOrder = -2;
   return {
     mesh,
