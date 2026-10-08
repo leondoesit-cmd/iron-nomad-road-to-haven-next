@@ -1135,6 +1135,13 @@ export class Vehicle {
       v.interior.visible = !!this.driver || !!this.passenger || this.ctx.players.some((pl) => pl.cam.pos.distanceToSquared(rp) < CABIN_LOD * CABIN_LOD);
       if (v.steerWheel) v.steerWheel.visible = v.interior.visible;
     }
+    // Far from every camera the wheels drop their tread blocks and bolts (see `addWheelSet`).
+    if (v.setDetail) {
+      const rp = v.root.position;
+      let d2 = Infinity;
+      for (const pl of this.ctx.players) d2 = Math.min(d2, pl.cam.pos.distanceToSquared(rp));
+      v.setDetail(d2);
+    }
     // The wheel turns with the steering, a good deal more than the road wheels do.
     if (v.steerWheel) v.steerWheel.rotation.z = clamp(this.body.steerAngle * -6, -3.2, 3.2);
     if (this.firing > 0) {

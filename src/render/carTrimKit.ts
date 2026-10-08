@@ -480,7 +480,8 @@ export function stencils(c: TrimCtx) {
   };
   const doorZc = (z.door[0] + z.door[1]) / 2;
   const midY = (sp.sill + sp.belt) / 2 + 0.04;
-  const sidePlane = (sx: 1 | -1, zc: number, y: number): Plane => ({ o: new THREE.Vector3(sx * (z.hw + LIFT_MARK), y, zc), right: new THREE.Vector3(0, 0, -sx), up: new THREE.Vector3(0, 1, 0) });
+  // A van's box stands 3 cm in from the flank below its waist: lettering on the box goes on the box.
+  const sidePlane = (sx: 1 | -1, zc: number, y: number): Plane => ({ o: new THREE.Vector3(sx * ((sp.id === 'van' && y > sp.belt ? z.hw - 0.03 : z.hw) + LIFT_MARK), y, zc), right: new THREE.Vector3(0, 0, -sx), up: new THREE.Vector3(0, 1, 0) });
   const bonnetPlane = (): Plane => {
     const zc = (z.nose + sp.wsBase) / 2;
     return { o: new THREE.Vector3(0, sp.hood + 0.012 + LIFT_MARK, zc), right: new THREE.Vector3(1, 0, 0), up: new THREE.Vector3(0, 0.02, -1).normalize() };

@@ -233,6 +233,18 @@ describe('fitted parts read on the car', () => {
     expect(y('sus_sport')).toBeCloseTo(base + RIDE_LIFT.sus_sport, 5);
   });
 
+  it('far off, the wheels swap to a model a tenth the size, and come back near', () => {
+    const { v } = visual('truck', 9);
+    const mesh = v.wheels[0].spin.children[0] as THREE.Mesh;
+    const near = tris(mesh.geometry);
+    v.setDetail!(80 * 80);
+    expect(tris(mesh.geometry)).toBeLessThan(near / 5);
+    v.setDetail!(43 * 43);
+    expect(tris(mesh.geometry)).toBeLessThan(near / 5);
+    v.setDetail!(20 * 20);
+    expect(tris(mesh.geometry)).toBe(near);
+  });
+
   it('tyres show their type: mud lugs and crawler blocks are not the road tread', () => {
     const geo = (p: string) => (visual('pickup', 9, (b) => installPart(b, newPart(p, 1), 0)).v.wheels[0].spin.children[0] as THREE.Mesh).geometry;
     const g = ['whl_road', 'whl_mt', 'whl_bl'].map(geo);
