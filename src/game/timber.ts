@@ -212,6 +212,9 @@ export class Timber implements TreeEvents {
       this.burst(f.wood, f.x + Math.cos(a) * f.radius, f.y, f.z + Math.sin(a) * f.radius, Math.cos(a), 0.4, Math.sin(a), 4, 2, 4.5, size, floor);
     }
     this.dust(f.wood, f.x, f.y, f.z, f.dx, 0.3, f.dz, 1);
+    // The scars above the break go with the top (they would hang in the air); those on the stump stay.
+    const R = f.radius * 1.6 + 0.15;
+    this.gore.marks.removeInBox(f.x - R, f.x + R, f.y + 0.03, f.y + 8, f.z - R, f.z + R);
     ctx.sig.emit(f.x, f.z, 40, 'noise');
     this.falls.push({ f, t: 0, struck: new Set(), groaned: false, landed: false });
   }
