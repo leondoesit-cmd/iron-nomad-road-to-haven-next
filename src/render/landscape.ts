@@ -19,6 +19,7 @@ import type { LegLayout } from '../world/layout';
 import { shoreShade } from '../world/lakes';
 import { buildLakeWater, buildSpringWater, buildSwampWater } from './water';
 import { buildRiverWater } from './riverWater';
+import { FAR_SINK, farGridAxes } from './drawnGround';
 
 /** The far forest's plan per leg: the same every time a scene of that leg is built, so it is worked out once. */
 const FAR_PLANS = new WeakMap<TerrainDef, FarTree[][]>();
@@ -162,9 +163,8 @@ export class Landscape {
     const def = this.def;
     // Chunk grid the hole mask covers.
     const open = def.open;
-    const halfW = open ? open.x1 + 800 : 1500;
-    const z0 = open ? def.zMin - 600 : -600;
-    const z1 = open ? def.zMax + 700 : def.length + 900;
+    // The grid is shared with `DrawnGround`, which lays the rivers over this mesh where it is what is drawn.
+    const { halfW, z0, z1, us, zs } = farGridAxes(def);
     this.cx0 = Math.floor((-halfW - 200) / CHUNK);
     this.cw = Math.ceil((halfW + 200) / CHUNK) - this.cx0 + 1;
     this.cz0 = Math.floor(z0 / CHUNK);
@@ -184,15 +184,7 @@ export class Landscape {
     // Lush and wooded land is packed into tdata exactly as the detailed chunks pack it, so the two meshes agree.
     const green = !!(open && def.hydro?.lush);
     const gm: GroundMix = { sand: 0, earth: 0, rock: 0, gravel: 0, wet: 0, tr: 1, tg: 1, tb: 1 };
-    // A grid in (offset from the road, z): dense near the canyon, coarse toward the mountains.
-    const us: number[] = [];
-    for (let u = -halfW; u <= halfW; ) {
-      us.push(u);
-      const a = Math.abs(u);
-      u += open ? (a < open.x1 ? 24 : 60) : a < 240 ? 10 : a < 600 ? 20 : 40;
-    }
-    const zs: number[] = [];
-    for (let z = z0; z <= z1; z += open ? 24 : 16) zs.push(z);
+    // A grid in (offset from the road, z): dense near the canyon, coarse toward the mountains (`farGridAxes`).
     const cols = us.length;
     const rows = zs.length;
     const pos = new Float32Array(cols * rows * 3);
@@ -206,7 +198,7 @@ export class Landscape {
         // In the open world the grid is laid over the map, not strung along the road.
         const x = (open ? 0 : rx) + us[c];
         // Slightly below the detailed chunks, so any seam hides under them.
-        const h = heightAt(def, x, z) + cliffDetail(def, x, z) - 0.6;
+        const h = heightAt(def, x, z) + cliffDetail(def, x, z) - FAR_SINK;
         const i = r * cols + c;
         pos[i * 3] = x;
         pos[i * 3 + 1] = h;
@@ -224,7 +216,7 @@ export class Landscape {
         gm.wet = 0;
         gm.tr = gm.tg = gm.tb = 1;
         // Shores, banks and beds read the same as in the detailed chunks.
-        const wg = wetGround(def, x, z, h + 0.6);
+        const wg = wetGround(def, x, z, h + FAR_SINK);
         if (wg) mixWater(gm, wg);
         const dg = dryGround(def, x, z);
         if (dg) mixDry(gm, dg);
@@ -294,7 +286,7 @@ export class Landscape {
   private farGroundAt(x: number, z: number): number {
     const { us, zs, pos } = this.farGrid!;
     const cols = us.length;
-    if (x <= us[0] || x >= us[cols - 1] || z <= zs[0] || z >= zs[zs.length - 1]) return heightAt(this.def, x, z) - 0.6;
+    if (x <= us[0] || x >= us[cols - 1] || z <= zs[0] || z >= zs[zs.length - 1]) return heightAt(this.def, x, z) - FAR_SINK;
     let lo = 0;
     let hi = cols - 1;
     while (hi - lo > 1) {
@@ -344,7 +336,7 @@ export class Landscape {
       this.water.push(springs);
       this.group.add(springs.mesh);
     }
-    const rivers = buildRiverWater(this.def);
+    const rivers = buildRiverWater(this.def, this.lod ?? undefined);
     if (rivers) {
       this.water.push(rivers);
       this.group.add(rivers.group);

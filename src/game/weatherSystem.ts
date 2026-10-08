@@ -7,10 +7,10 @@ import { RainFx } from '../render/rain';
 import { LightningFx } from '../render/lightning';
 import { buildFloodWater, HYDRO, setHydroTexture, type FloodWater } from '../render/floodWater';
 import { MAX_RIVERS, RIVER_RISE, riseTaper } from '../render/riverWater';
-import { courseAt, lushAt } from '../world/hydro';
+import { courseAt, FLOOD_REACH, lushAt, spillDepth } from '../world/hydro';
 import { districtMask } from '../world/openWorld';
 import { floodAt, floodStage, PAN_POOL, washAt } from '../world/washes';
-import { heightAt, type TerrainDef } from '../world/terrain';
+import type { TerrainDef } from '../world/terrain';
 import { TREE_DIMS, TREE_SPECIES, type TreeSpot } from '../world/flora';
 import type { WaterKind } from '../world/lakes';
 import { weatherAudio } from '../audio/weatherAudio';
@@ -373,12 +373,14 @@ export class WeatherSystem {
             const k = 1 + rise * 0.9;
             return { ...base, level: base.level + rise, depth: base.depth + rise, flow: base.flow ? [base.flow[0] * k, base.flow[1] * k] : base.flow };
           }
+          // Out over the banks only as far as the drawn flood reaches, and only where the water can get to over the ground.
+          const i = c.i;
           const level = c.level + rise;
-          const depth = level - heightAt(def, x, z);
+          const depth = c.d < c.half + FLOOD_REACH ? spillDepth(def, c, x, z, level) : 0;
           if (depth > 0.02) {
             // Out over the floodplain the water still runs downstream, slower than in the channel.
-            const sp = (r.speed[c.i] ?? 0.6) * 0.6 * (1 + rise);
-            return { level, depth, flow: [r.dx[c.i] * sp, r.dz[c.i] * sp], kind: r.kind, name: r.name };
+            const sp = (r.speed[i] ?? 0.6) * 0.6 * (1 + rise);
+            return { level, depth, flow: [r.dx[i] * sp, r.dz[i] * sp], kind: r.kind, name: r.name };
           }
         }
       }

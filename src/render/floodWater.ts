@@ -3,26 +3,36 @@ import { GLOBALS } from './materials';
 import { mirrorWaterMaterial, waterNoiseTexture, waterNormalTexture } from './water';
 import { lakeColors } from '../world/lakes';
 import { heightAt, type TerrainDef } from '../world/terrain';
-import { FLOOD_SPEED, PAN_POOL, panQ, type Pan, type WashNet } from '../world/washes';
+import { FLOOD_SPEED, floodTaper, PAN_POOL, panQ, type Pan, type WashNet } from '../world/washes';
+import { DrawnGround } from './drawnGround';
 import { HYDRO_DT, type Hydrograph } from '../sim/climate';
 
 /**
  * Flash floods and the pools they leave.
  *
- * Every wash gets a ribbon like a river's, laid flat across its dry bed. It is invisible until the day's hydrograph says
- * water is coming: the vertex shader reads the runoff leaving the mountains from a small texture (`HYDRO`), delayed by how
- * long a flood front takes to run that far down the wash, and lifts the ribbon by the flood's depth there. So the front
- * runs down the wash at its own speed, a churning brown bore with the water piling up behind it, and the wash drains again
- * from the top down. Nothing on the CPU moves per frame but one clock uniform.
+ * Every wash gets a ribbon like a river's, laid flat across its dry bed and out over its banks. It is invisible until the
+ * day's hydrograph says water is coming: the vertex shader reads the runoff leaving the mountains from a small texture
+ * (`HYDRO`), delayed by how long a flood front takes to run that far down the wash, and lifts the ribbon by the flood's depth
+ * there. So the front runs down the wash at its own speed, a churning brown bore with the water piling up behind it, and the
+ * wash drains again from the top down. Nothing on the CPU moves per frame but one clock uniform. The stage is the physics'
+ * own (`floodStage`): never over the lower bank (`Wash.cap`), sinking away at the mouth, and drawn only where it stands over
+ * the drawn ground and over every bit of bank between it and the bed, so it fills the wash and nothing beyond.
  *
  * Each clay pan gets a sheet of the same silty water at the level its fill gives, with the ground under it carried per
  * vertex so the shore fades and only real water is drawn. A pan that has dried is just clay again.
  */
 
-const NX = 7;
+/**
+ * Offsets of a cross-section's vertices each side of the centre-line: two out on the bed, its edge, then up the bank (as
+ * shares of its width), where the flood's edge climbs as it rises.
+ */
+const BANK_AT = [0.1, 0.22, 0.36, 0.52, 0.7, 1];
+const SIDE = 3 + BANK_AT.length;
+/** Vertices across a flood ribbon's cross-section. */
+export const FLOOD_NX = 1 + 2 * SIDE;
+const NX = FLOOD_NX;
 /** How far past the end of a wash its ribbon runs on into the pan or the river, fading out. */
 const PAST_END = 6;
-
 /** The hydrograph as a texture, R: runoff into the washes, G: river rise, B: pan fill, A: wet ground. One texel per step. */
 export const HYDRO = {
   tHydro: { value: null as THREE.DataTexture | null },
@@ -65,11 +75,14 @@ export function setHydroTexture(h: Hydrograph, dayLength: number) {
 // ------------------------------------------------------------------------------------------------ the wash ribbons
 
 /**
- * Attributes: `aWash` (metres down the wash; metres across it; how far the ground at the vertex stands over the bed; the
- * flood's depth at the head of the wash), `aWash2` (flow direction x, z; the wash's length; fade into what it runs into).
+ * Attributes: `aWash` (metres down the wash; metres across it; how far the drawn ground at the vertex stands over the bed;
+ * the flood's depth at the head of the wash), `aWash2` (flow direction x, z; the wash's length; fade into what it runs into),
+ * `aWash3` (the most a flood stands over the bed here; how much of it is left this near the mouth; the bar: the highest drawn
+ * ground over the bed between the bed and the vertex).
  */
 export function floodRibbonGeometry(def: TerrainDef, net: WashNet): THREE.BufferGeometry | null {
   if (!net.washes.length) return null;
+  const ground = new DrawnGround(def);
   let rows = 0;
   for (const w of net.washes) rows += Math.min(w.n - 1, w.end + PAST_END) + 1;
   const V = rows * NX;
@@ -77,33 +90,69 @@ export function floodRibbonGeometry(def: TerrainDef, net: WashNet): THREE.Buffer
   const nrm = new Float32Array(V * 3);
   const a1 = new Float32Array(V * 4);
   const a2 = new Float32Array(V * 4);
+  const a3 = new Float32Array(V * 3);
   const idx: number[] = [];
+  const us = new Float32Array(NX);
+  const over = new Float32Array(NX);
+  const bar = new Float32Array(NX);
   let v = 0;
   for (const w of net.washes) {
     const last = Math.min(w.n - 1, w.end + PAST_END);
     const first = v;
     for (let i = 0; i <= last; i++) {
       const h = w.half[i];
-      const reach = h + w.bank[i] * 0.8 + 0.5;
-      const us = [-reach, -h, -0.5 * h, 0, 0.5 * h, h, reach];
+      const b = w.bank[i];
       const nx = -w.dz[i];
       const nz = w.dx[i];
+      const bed = w.bed[i];
       const fade = 1 - Math.max(0, i - w.end) / (PAST_END + 1);
-      for (let k = 0; k < NX; k++) {
-        const x = w.x[i] + nx * us[k];
-        const z = w.z[i] + nz * us[k];
-        pos[v * 3] = x;
-        pos[v * 3 + 1] = w.bed[i];
-        pos[v * 3 + 2] = z;
+      const taper = floodTaper(w, w.s[i]);
+      // Centre, then each side outward; the bar runs out from the bed, between the vertices too (every half metre).
+      us[0] = 0;
+      over[0] = ground.mesh(w.x[i], w.z[i]) - bed;
+      bar[0] = Math.min(over[0], 0);
+      for (const side of [1, -1]) {
+        const base = side > 0 ? 1 : SIDE + 1;
+        let bb = bar[0];
+        let prev = 0;
+        for (let q = 0; q < SIDE; q++) {
+          const a = q === 0 ? 0.45 * h : q === 1 ? 0.8 * h : q === 2 ? h : h + b * BANK_AT[q - 3];
+          const x = w.x[i] + nx * a * side;
+          const z = w.z[i] + nz * a * side;
+          us[base + q] = a * side;
+          over[base + q] = ground.mesh(x, z) - bed;
+          if (a < h - 1e-3) bb = Math.max(bb, Math.min(over[base + q], 0));
+          else {
+            const from = Math.max(prev, h);
+            const steps = Math.floor((a - from) / 0.5);
+            for (let t = 1; t <= steps; t++) {
+              const ua = (from + ((a - from) * t) / (steps + 1)) * side;
+              bb = Math.max(bb, ground.mesh(w.x[i] + nx * ua, w.z[i] + nz * ua) - bed);
+            }
+            bb = Math.max(bb, over[base + q]);
+          }
+          bar[base + q] = bb;
+          prev = a;
+        }
+      }
+      for (let slot = 0; slot < NX; slot++) {
+        // Left edge to right edge.
+        const q = slot < SIDE ? SIDE + SIDE - slot : slot === SIDE ? 0 : slot - SIDE;
+        pos[v * 3] = w.x[i] + nx * us[q];
+        pos[v * 3 + 1] = bed;
+        pos[v * 3 + 2] = w.z[i] + nz * us[q];
         nrm[v * 3 + 1] = 1;
         a1[v * 4] = w.s[i];
-        a1[v * 4 + 1] = us[k];
-        a1[v * 4 + 2] = heightAt(def, x, z) - w.bed[i];
+        a1[v * 4 + 1] = us[q];
+        a1[v * 4 + 2] = over[q];
         a1[v * 4 + 3] = w.flood;
         a2[v * 4] = w.dx[i];
         a2[v * 4 + 1] = w.dz[i];
         a2[v * 4 + 2] = w.len;
         a2[v * 4 + 3] = fade;
+        a3[v * 3] = w.cap[i];
+        a3[v * 3 + 1] = taper;
+        a3[v * 3 + 2] = bar[q];
         v++;
       }
     }
@@ -118,6 +167,7 @@ export function floodRibbonGeometry(def: TerrainDef, net: WashNet): THREE.Buffer
   g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
   g.setAttribute('aWash', new THREE.BufferAttribute(a1, 4));
   g.setAttribute('aWash2', new THREE.BufferAttribute(a2, 4));
+  g.setAttribute('aWash3', new THREE.BufferAttribute(a3, 3));
   g.setIndex(idx);
   g.computeBoundingBox();
   g.boundingBox!.max.y += 2;
@@ -138,10 +188,12 @@ vec4 hydroAt( float t ) {
 const FLOOD_VERT_PARS = /* glsl */ `
 attribute vec4 aWash;
 attribute vec4 aWash2;
+attribute vec3 aWash3;
 ${HYDRO_PARS}
 varying vec4 vFl;
 varying vec4 vFl2;
 varying vec3 vFlW;
+varying float vFlBar;
 `;
 
 const FLOOD_VERT_MAIN = /* glsl */ `
@@ -151,8 +203,11 @@ const FLOOD_VERT_MAIN = /* glsl */ `
   float fQ = hydroAt( fT ).r;
   // A moment before: where the flood is still rising fast, this is the front.
   float fQ0 = hydroAt( fT - 0.004 ).r;
-  float fStage = aWash.w * fQ * ( 1.0 - 0.35 * clamp( aWash.x / aWash2.z, 0.0, 1.0 ) );
+  // As floodStage has it: lower down the wash, never over the lower bank, sinking away at the mouth.
+  float fStage = min( aWash.w * fQ * ( 1.0 - 0.35 * clamp( aWash.x / aWash2.z, 0.0, 1.0 ) ), aWash3.x ) * aWash3.y;
   transformed.y += fStage;
+  // Over every bit of bank between the bed and here, or the water cannot be here.
+  vFlBar = fStage - aWash3.z;
   // Depth over the ground here; how hard the front is breaking; across; down the wash.
   vFl = vec4( fStage - aWash.z, clamp( ( fQ - fQ0 ) * 26.0, 0.0, 1.0 ), aWash.y, aWash.x );
   // Flow direction, the flood's stage as a share of a big one, fade into what it runs into.
@@ -171,11 +226,12 @@ uniform float uWTime;
 varying vec4 vFl;
 varying vec4 vFl2;
 varying vec3 vFlW;
+varying float vFlBar;
 `;
 
 const FLOOD_COLOR = /* glsl */ `
 float fD = vFl.x;
-if ( fD < 0.012 || vFl2.z < 0.015 || vFl2.w < 0.02 ) discard;
+if ( fD < 0.012 || vFlBar < 0.0 || vFl2.z < 0.015 || vFl2.w < 0.02 ) discard;
 float fSpd = 2.4 + 3.4 * clamp( vFl2.z, 0.0, 1.2 );
 float fT = mod( uWTime, 100.0 );
 // Down the wash at the water's own speed; boils and standing waves that hold still while the water runs through them.
@@ -195,7 +251,7 @@ fCol = mix( fCol, cWFoam * ( 0.85 + 0.2 * fN2.g ), fFoam * 0.85 );
 // Sticks and brush tumbling in it.
 float fJunk = smoothstep( 0.86, 0.9, texture2D( tWNoise, fp * vec2( 0.9, 0.4 ) + 0.7 ).b ) * ( 1.0 - fFoam );
 fCol = mix( fCol, vec3( 0.12, 0.09, 0.06 ), fJunk * 0.8 );
-float wA = smoothstep( 0.012, 0.09, fD ) * vFl2.w;
+float wA = smoothstep( 0.012, 0.09, fD ) * smoothstep( 0.0, 0.03, vFlBar ) * vFl2.w;
 diffuseColor = vec4( fCol, wA );
 // Silt-thick and churning: it scatters more than it mirrors.
 float wRough = mix( 0.34, 0.62, fFoam ) + fRough * 0.12;

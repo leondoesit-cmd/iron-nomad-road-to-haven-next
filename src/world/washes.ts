@@ -5,6 +5,7 @@ import { sampleHydro, type Hydrograph } from '../sim/climate';
 import { heightAt, type TerrainDef } from './terrain';
 import { nearestRoad } from './openWorld';
 import type { WaterHit } from './lakes';
+import { hydroCalm } from './hydro';
 
 /**
  * The dry washes (wadis) and clay pans (playas) of the open world's desert.
@@ -26,6 +27,8 @@ const GRID = 32;
 const cellKey = (ix: number, iz: number) => (ix + 4096) * 8192 + (iz + 4096);
 /** How fast a flood front runs down a wash, metres a second: faster than anyone runs. */
 export const FLOOD_SPEED = 6;
+/** How far a flood's surface stays under the top of the lower bank of its wash. */
+const FLOOD_FREEBOARD = 0.25;
 /** The deepest a full pan's sheet of water stands over its floor. */
 export const PAN_POOL = 0.6;
 /** Beyond this (in units of a pan's radius) a pan changes nothing. */
@@ -48,6 +51,11 @@ export interface Wash {
   half: Float32Array;
   /** Width of the cut bank that climbs back up to the land. */
   bank: Float32Array;
+  /**
+   * The most a flood may stand over the bed (metres): a freeboard under the lower of the two banks' tops, so a flood fills the
+   * wash and never tops its banks; nil out on the flat floor of a pan.
+   */
+  cap: Float32Array;
   /** Unit direction of flow. */
   dx: Float32Array;
   dz: Float32Array;
@@ -232,6 +240,23 @@ export function washAdjust(def: TerrainDef, net: WashNet, x: number, z: number, 
   return mouth ? Math.min(ground, cut) : cut;
 }
 
+/**
+ * 1 on a wash's bed and the foot of its banks (where a flood runs), 0 up on the land. With `hydroCalm` it keeps the visual
+ * crags of the cliffs out of the gorges the washes come down through, so a flood is never hidden under rock that is not there.
+ */
+export function washCalm(net: WashNet | undefined, x: number, z: number): number {
+  if (!net?.ready) return 0;
+  const c = washAt(net, x, z, 4);
+  if (!c) return 0;
+  return 1 - smoothstep(c.half + c.bank * 0.35, c.half + c.bank * 0.8 + 2, c.d);
+}
+
+/** How calm the drawn ground must lie at a point for the water there: running water, its banks, a wash and its flood. */
+export function waterCalm(def: TerrainDef, x: number, z: number): number {
+  const a = def.hydro ? hydroCalm(def.hydro, x, z) : 0;
+  return a >= 1 ? 1 : Math.max(a, washCalm(def.washes, x, z));
+}
+
 /** True when (x, z) is within `pad` metres of a wash's banks or a pan. For keeping trees and places out. */
 export function nearWash(def: TerrainDef, x: number, z: number, pad: number): boolean {
   const net = def.washes;
@@ -248,8 +273,18 @@ export function floodStage(net: WashNet, w: Wash, s: number, t: number, hy: Hydr
   const travel = s / (FLOOD_SPEED * net.dayLength);
   const q = sampleHydro(hy.wash, t - travel);
   if (q <= 0.002) return 0;
-  // It spreads and soaks into the gravel as it goes: the far end of a wash runs lower than the gorge.
-  return w.flood * q * (1 - 0.35 * clamp(s / w.len, 0, 1));
+  // It spreads and soaks into the gravel as it goes: the far end of a wash runs lower than the gorge. It never tops the banks,
+  // and it sinks into the river or the pan it runs into rather than riding over it (the flood ribbon's shader does the same).
+  const f = clamp(s / WASH_STEP, 0, w.n - 1.001);
+  const i = Math.floor(f);
+  const cap = w.cap[i] + (w.cap[Math.min(w.n - 1, i + 1)] - w.cap[i]) * (f - i);
+  return Math.min(w.flood * q * (1 - 0.35 * clamp(s / w.len, 0, 1)), cap) * floodTaper(w, s);
+}
+
+/** How much of a flood still stands in the last stretch of a wash (0..1): it sinks away into what the wash runs into. */
+export function floodTaper(w: Wash, s: number): number {
+  const sEnd = w.s[w.end];
+  return 1 - smoothstep(sEnd - 30, sEnd - 3, s);
 }
 
 /** How full a pan is now (0..1), its flood having come down the longest of its washes. */
@@ -473,6 +508,7 @@ function layWash(def: TerrainDef, net: WashNet, ws: WashSpec, rng: Rng, panIds: 
     bed: mk(),
     half: mk(),
     bank: mk(),
+    cap: mk(),
     dx: mk(),
     dz: mk(),
     into,
@@ -569,6 +605,28 @@ function settleBed(def: TerrainDef, net: WashNet, w: Wash, bed: Float32Array) {
       k++;
     }
     w.bank[i] = Math.max(b[i] * 0.7, acc / k);
+  }
+  // The deepest a flood may run: a freeboard under the lower of the two banks' tops (the land the wash is cut into, before
+  // it is cut: the washes are not carved yet), the least of it over a few samples either way.
+  const top = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const nx = -w.dz[i];
+    const nz = w.dx[i];
+    let lo = Infinity;
+    for (const side of [-1, 1]) {
+      let hi = -Infinity;
+      for (const k of [0.5, 0.75, 1]) {
+        const d = (w.half[i] + w.bank[i] * k) * side;
+        hi = Math.max(hi, heightAt(def, w.x[i] + nx * d, w.z[i] + nz * d));
+      }
+      lo = Math.min(lo, hi);
+    }
+    top[i] = Math.max(0, lo - bed[i] - FLOOD_FREEBOARD);
+  }
+  for (let i = 0; i < n; i++) {
+    let m = top[i];
+    for (let j = Math.max(0, i - 3); j <= Math.min(n - 1, i + 3); j++) m = Math.min(m, top[j]);
+    w.cap[i] = m;
   }
 }
 
