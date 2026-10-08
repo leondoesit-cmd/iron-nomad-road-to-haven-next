@@ -258,9 +258,9 @@ export class Foraging {
       this.dirty = true;
       if (this.left(s) <= 0) this.unregister(s.id);
     }
-    p.note(o.note, o.tone);
     // Unknown ones go in the stash by their look, the quick belt's mushroom slot pointing at them: eating one is the gamble.
     if (b.wild) this.stashWild(p, b.wild);
+    else p.note(o.note, o.tone);
     if (o.learn) this.learn(p, o.learn);
   }
 
@@ -270,12 +270,13 @@ export class Foraging {
     this.host.audio.play('pickup', p.pos.x, p.pos.z, 0.4);
     selectWildLot(p, sp);
     const key = promptLabel(this.host.input.slots?.[p.index] ?? null, 'Down');
+    const look = SHROOM_LOOK[sp];
     const first = !c.flags[`tip.wild.${p.hero}`];
     if (first) {
       c.flags[`tip.wild.${p.hero}`] = true;
       p.selectQuick('wild');
-      p.note(`Kept in the stash, by their look. Tap ${key} to eat one and find out what they are: food, a trip, or poison`, 'info');
-    } else p.note(`${SHROOM_LOOK[sp].charAt(0).toUpperCase() + SHROOM_LOOK[sp].slice(1)} ×${c.items[WILD_ITEM[sp]]} in the stash (quick belt, ${key})`, 'info');
+      p.note(`Picked ${look} you don't know, kept by their look. Tap ${key} to eat one and find out: food, a trip, or poison`, 'info');
+    } else p.note(`Picked ${look} (unknown): ×${c.items[WILD_ITEM[sp]]} in the stash, ${key} on the quick belt`, 'info');
   }
 
   /** Death caps eaten from the stash (anywhere) leave a flag; here it becomes the poisoning. */

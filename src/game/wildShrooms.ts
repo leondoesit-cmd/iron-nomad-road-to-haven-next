@@ -14,6 +14,9 @@ import type { Player } from './player';
  * `forage.sick.<hero>` set, and the open world's `Foraging` turns that into the poisoning (so it waits out a delve).
  */
 
+/** A lot nobody knows, as short as a HUD chip wants it. */
+const SHORT: Record<Shroom, string> = { field: 'White caps?', liberty: 'Brown caps?', deathcap: 'Olive caps?' };
+
 /** Belt order of the lots: the ones that do something first. */
 const LOTS: Shroom[] = ['liberty', 'field', 'deathcap'];
 
@@ -73,8 +76,8 @@ export function lotName(p: Player, s: Shroom): string {
   return knowsShroom(p.ctx.campaign, p.hero, s) ? SHROOM_NAME[s] : `${SHROOM_LOOK[s]} (unknown)`;
 }
 
-/** The belt slot as the HUD shows it to one player. */
-export function wildSlot(p: Player): { name: string; glyph: string; color: string; blurb: string; n: number } {
+/** The belt slot as the HUD shows it to one player (`chip`: the short name for the chip under the belt). */
+export function wildSlot(p: Player): { name: string; chip: string; glyph: string; color: string; blurb: string; n: number } {
   const lot = wildLot(p);
   const n = lot ? p.ctx.campaign.items[WILD_ITEM[lot]] : 0;
   const lots = LOTS.filter((s) => p.ctx.campaign.items[WILD_ITEM[s]] > 0).length;
@@ -82,7 +85,8 @@ export function wildSlot(p: Player): { name: string; glyph: string; color: strin
   const blurb = lot
     ? `Mushrooms you picked without knowing them. Eat one to find out what they do: food, a trip, or a very bad day.${lots > 1 ? ' ◀ ▶ walks through the kinds you have.' : ''}`
     : 'Mushrooms picked in the woods that nobody knew go here, by their look. Eating one is how you learn them.';
-  return { name, glyph: '🍄', color: '#c9a36a', blurb, n };
+  const chip = lot ? (knowsShroom(p.ctx.campaign, p.hero, lot) ? SHROOM_NAME[lot] : SHORT[lot]) : 'Wild mushrooms';
+  return { name, chip, glyph: '🍄', color: '#c9a36a', blurb, n };
 }
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);

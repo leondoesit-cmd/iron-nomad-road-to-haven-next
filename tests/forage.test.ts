@@ -51,20 +51,24 @@ describe('forage rules', () => {
     expect(pickHandful('yarrow', { needs: fed(), cover: 'none', bleeding: false, roll: 0.5 }).bank.bandage).toBe(1);
   });
 
-  it('mushrooms: known death caps are left, unknown ones eaten hungry poison you, and looking them over teaches', () => {
+  it('mushrooms: known death caps are left, unknown ones are kept by their look, and looking them over teaches', () => {
     const known = new Set<Shroom>(['deathcap']);
     expect(pickHandful('mushroom', { needs: hungry(), cover: 'none', bleeding: false, roll: 0.5, shroom: 'deathcap', known }).took).toBe(false);
-    const eat = pickHandful('mushroom', { needs: hungry(), cover: 'none', bleeding: false, roll: 0.5, shroom: 'deathcap', known: new Set() });
-    expect(eat.poison).toBe(true);
-    expect(eat.learn).toBe('deathcap');
-    const trip = pickHandful('mushroom', { needs: hungry(), cover: 'none', bleeding: false, roll: 0.5, shroom: 'liberty', known: new Set() });
-    expect(trip.trip).toBe(true);
-    // Fed: study them. A lucky look teaches and picks; an unlucky one leaves them on the ground.
+    // Unknown: picked into the stash even hungry, never eaten on the spot.
+    const keep = pickHandful('mushroom', { needs: hungry(), cover: 'none', bleeding: false, roll: 0.5, shroom: 'deathcap', known: new Set() });
+    expect(keep.took).toBe(true);
+    expect(keep.poison).toBe(false);
+    expect(keep.bank.wild).toBe('deathcap');
+    const lib = pickHandful('mushroom', { needs: hungry(), cover: 'none', bleeding: false, roll: 0.5, shroom: 'liberty', known: new Set() });
+    expect(lib.trip).toBe(false);
+    expect(lib.bank.wild).toBe('liberty');
+    // A lucky look teaches and picks them for what they are.
     const lucky = pickHandful('mushroom', { needs: fed(), cover: 'none', bleeding: false, roll: 0.1, shroom: 'liberty', known: new Set() });
     expect(lucky.learn).toBe('liberty');
     expect(lucky.bank.mushrooms).toBe(1);
     const unlucky = pickHandful('mushroom', { needs: fed(), cover: 'none', bleeding: false, roll: 0.9, shroom: 'field', known: new Set() });
-    expect(unlucky.took).toBe(false);
+    expect(unlucky.took).toBe(true);
+    expect(unlucky.bank.wild).toBe('field');
     expect(unlucky.learn).toBeUndefined();
     // Known liberty caps go on the belt even when hungry: nobody trips by accident.
     const safe = pickHandful('mushroom', { needs: hungry(), cover: 'none', bleeding: false, roll: 0.5, shroom: 'liberty', known: new Set<Shroom>(['liberty']) });
@@ -231,25 +235,44 @@ describe('gathering in a real scene', () => {
     sc.dispose();
   });
 
-  it('a hungry stranger to death caps eats them and is very sick for a while, then learns them', () => {
-    const { sc } = scene();
+  it('a hungry stranger to death caps keeps them; eaten from the stash they make you very sick for a while, then you know them', () => {
+    const { h, sc } = scene();
     const p = sc.players[0];
     const f = sc.forage!;
     Object.assign(p.needs, { food: 0.3, water: 0.9 });
+    // This one never learns them by looking.
+    (f as unknown as { roll: () => number }).roll = () => 0.99;
     const spot: ForageSpot = { id: 'fg:test', kind: 'mushroom', x: p.pos.x, y: 0, z: p.pos.z, yaw: 0, s: 1, v: 0, h: 0, shroom: 'deathcap' };
     // A patch that is fruiting today.
     for (let k = 0; f.left(spot) === 0; k++) Object.assign(spot, { id: `fg:test${k}`, h: k * 0.013 });
     f.pick(p, spot);
+    expect(f.sick.has(0)).toBe(false);
+    expect(sc.campaign.items.wildDeathcap).toBe(1);
+    expect(f.known(p).has('deathcap')).toBe(false);
+    // Eaten from the quick belt.
+    p.selectQuick('wild');
+    const it = h.intents[0];
+    it.pressed |= 1 << Btn.Down;
+    it.held |= 1 << Btn.Down;
+    sc.tick(DT);
+    it.pressed = 0;
+    it.held = 0;
+    it.released |= 1 << Btn.Down;
+    sc.tick(DT);
+    it.released = 0;
+    expect(sc.campaign.items.wildDeathcap).toBe(0);
+    for (let i = 0; i < 30; i++) sc.tick(DT);
     expect(f.sick.has(0)).toBe(true);
-    expect(f.known(p).has('deathcap')).toBe(true);
     const hp = p.hp;
     for (let i = 0; i < Math.round((DEATHCAP.onset + 40) / DT); i++) sc.tick(DT);
     expect(p.hp).toBeLessThan(hp - 10);
     expect(p.needs.water).toBeLessThan(0.9);
+    expect(f.known(p).has('deathcap')).toBe(true);
     // Now known, the next patch of death caps is left alone.
     const before = p.hp;
     f.pick(p, { ...spot });
     expect(f.sick.get(0)?.t ?? 0).toBeGreaterThan(DEATHCAP.onset);
+    expect(sc.campaign.items.wildDeathcap).toBe(0);
     expect(p.hp).toBeCloseTo(before, 0);
     sc.dispose();
   });
