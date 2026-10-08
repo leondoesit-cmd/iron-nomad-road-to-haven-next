@@ -52,7 +52,7 @@ import { COOLANT_LOW, WATER_CAN, WATER_RESERVE_MAX, pourWater } from '../sim/flu
 import { TANK_DREGS, addReserve, planDrain, reserveOf, takeReserve } from '../sim/fuel';
 import { dropCarry, guide, sitePos, haulCandidate, haulKey, haulPrompt, pryCandidate, returnCarry, stashBeforeEntering } from './hauling';
 import { disposeHold, eatCarried, holdFloats, holdFrame, holdTick, lookTick, newHold, type HandHint, type LookInfo } from './grab';
-import { eatWildShroom, stepWildLot } from './wildShrooms';
+import { eatWildShroom, stepWildLot, wildLot } from './wildShrooms';
 
 /** Jobs done by hand on a car's own parts: doing one to an abandoned car makes it the convoy's. */
 const HANDS_ON = new Set(['unbolt', 'fit', 'lift', 'liftdeck', 'oil', 'fuel', 'pry', 'water', 'spray']);
@@ -1213,8 +1213,10 @@ export class Player implements Pilot {
   private stepQuick(dir: 1 | -1) {
     // The wild mushrooms' slot walks through its kinds before the belt moves on.
     if (this.quickSel === 'wild' && stepWildLot(this, dir)) return;
-    const i = QUICK.indexOf(this.quickSel);
-    const next = QUICK[(i + dir + QUICK.length) % QUICK.length];
+    let i = QUICK.indexOf(this.quickSel);
+    let next = QUICK[(i = (i + dir + QUICK.length) % QUICK.length)];
+    // The wild mushrooms' slot only stands on the belt while there are unknown mushrooms to eat.
+    if (next === 'wild' && !wildLot(this)) next = QUICK[(i + dir + QUICK.length) % QUICK.length];
     if (!isDrugId(next)) this.dressingSel = next;
     else {
       this.dressingSel = null;
