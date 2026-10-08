@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { legById } from '../src/data';
@@ -9,6 +9,9 @@ import { generatePlan, type Look } from '../src/world/interiors';
 import { roadLayer } from '../src/world/openWorld';
 import { makeTerrainDef } from '../src/world/terrain';
 import { coplanarOverlaps } from './helpers/coplanar';
+import { initPhysics, PhysicsWorld } from '../src/physics/physics';
+import { ChunkView, makeChunkMaterials } from '../src/render/chunkview';
+import { CHUNK } from '../src/world/terrain';
 
 const NEAR = 0.2;
 const FAR = 3400;
@@ -143,6 +146,32 @@ describe('buildings draw no two faces in one plane', () => {
   it('the Ofer mall: facade, parapet, sign box, roof and shop fittings', () => {
     const mall = new ChunkSource(legById('L3P')).layout.rural.find((b) => b.look === 'mall')!;
     const bad = visibleFights(buildBuildingGeometry(mall), 0.05).map((h) => `${h.a}${h.ca} x ${h.b}${h.cb} n ${h.n.map((v) => v.toFixed(1))} at ${h.at.map((v) => v.toFixed(2))} (${(h.area * 1e4).toFixed(0)} cm2)`);
+    expect(bad.slice(0, 6)).toEqual([]);
+  });
+});
+
+describe('streamed chunks draw no two faces in one plane', () => {
+  beforeAll(initPhysics);
+
+  it('Petah Tikva blocks (ledges, shop bands, cornices, parapets) and the containers round Dustwell', () => {
+    const leg = legById('W');
+    const src = new ChunkSource(leg);
+    const mats = makeChunkMaterials('city', leg.theme);
+    const P = new PhysicsWorld();
+    const bad: string[] = [];
+    for (const [x, z] of [[40, 780], [97, 100]] as const) {
+      const view = new ChunkView(src.get(Math.floor(x / CHUNK), Math.floor(z / CHUNK)), src.layout.terrain, mats, P, { scatter: 0 });
+      view.group.updateMatrixWorld(true);
+      const parts: { name: string; geo: THREE.BufferGeometry }[] = [];
+      view.group.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh && !(m as THREE.InstancedMesh).isInstancedMesh) parts.push({ name: `mesh${parts.length}`, geo: m.geometry.clone().applyMatrix4(m.matrixWorld) });
+      });
+      expect(parts.length).toBeGreaterThan(3);
+      for (const h of coplanarOverlaps(parts, 2e-4, 4e-4, true)) {
+        if (h.ca !== h.cb && h.n[1] > -0.9 && h.area > 0.03) bad.push(`chunk ${x},${z}: ${h.ca} x ${h.cb} n ${h.n.map((v) => v.toFixed(1))} at ${h.at.map((v) => v.toFixed(2))} (${(h.area * 1e4).toFixed(0)} cm2)`);
+      }
+    }
     expect(bad.slice(0, 6)).toEqual([]);
   });
 });

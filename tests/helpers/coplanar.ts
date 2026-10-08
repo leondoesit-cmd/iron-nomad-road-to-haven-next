@@ -13,6 +13,9 @@ export interface CoplanarHit {
   cb: string;
   /** Overlap, square metres. */
   area: number;
+  /** The two triangles' corners, rounded, for finding what made them. */
+  ta: string;
+  tb: string;
   /** A point in the overlap, and the shared normal. */
   at: [number, number, number];
   n: [number, number, number];
@@ -42,6 +45,15 @@ function trisOf(g: THREE.BufferGeometry, src: string, out: Tri[]) {
     const len = nn.length();
     if (len < 1e-8) continue;
     nn.divideScalar(len);
+    // Face the way the shading normals say (a mirrored part can be wound the other way round).
+    const nor = g.attributes.normal;
+    if (nor) {
+      const ids = [0, 1, 2].map((k) => (idx ? idx.getX(i + k) : i + k));
+      const sx = ids.reduce((a, j) => a + nor.getX(j), 0);
+      const sy = ids.reduce((a, j) => a + nor.getY(j), 0);
+      const sz = ids.reduce((a, j) => a + nor.getZ(j), 0);
+      if (sx * nn.x + sy * nn.y + sz * nn.z < 0) nn.negate();
+    }
     const lo = p[0].clone().min(p[1]).min(p[2]);
     const hi = p[0].clone().max(p[1]).max(p[2]);
     out.push({ src, col: hex(idx ? idx.getX(i) : i), lo, hi, p, n: nn, d: nn.dot(p[0]) });
@@ -103,6 +115,18 @@ export function coplanarOverlaps(parts: { name: string; geo: THREE.BufferGeometr
     if (!b) buckets.set(k, (b = []));
     b.push(t);
   }
+  // Flush on the back of a face turned the other way (the inside of a shell's wall): seen only from inside that shell.
+  const backed = (c: THREE.Vector3, t: Tri) => {
+    const nk2 = `${Math.round(-t.n.x * 500)},${Math.round(-t.n.y * 500)},${Math.round(-t.n.z * 500)}`;
+    const dk = Math.round(-t.d / tol);
+    for (const k of [dk - 1, dk, dk + 1]) {
+      for (const o of buckets.get(`${nk2}|${k}`) ?? []) {
+        if (Math.abs(o.d + t.d) > tol) continue;
+        if (pointIn(c, o)) return true;
+      }
+    }
+    return false;
+  };
   const hits: CoplanarHit[] = [];
   for (const [k, list] of buckets) {
     const [nPart, dPart] = k.split('|');
@@ -116,8 +140,9 @@ export function coplanarOverlaps(parts: { name: string; geo: THREE.BufferGeometr
         if (Math.abs(a.d - b.d) > tol || a.n.dot(b.n) < 0.9995) continue;
         const o = overlap(a, b);
         if (o.area <= minArea) continue;
-        if (exposed && !exposed(o.c, a.n)) continue;
-        hits.push({ a: a.src, b: b.src, ca: a.col, cb: b.col, area: o.area, at: [o.c.x, o.c.y, o.c.z], n: [a.n.x, a.n.y, a.n.z] });
+        if (exposed && (backed(o.c, a) || !exposed(o.c, a.n))) continue;
+        const tri = (t: Tri) => t.p.map((q) => `(${q.x.toFixed(2)},${q.y.toFixed(2)},${q.z.toFixed(2)})`).join('');
+        hits.push({ a: a.src, b: b.src, ca: a.col, cb: b.col, ta: tri(a), tb: tri(b), area: o.area, at: [o.c.x, o.c.y, o.c.z], n: [a.n.x, a.n.y, a.n.z] });
       }
     }
   }
@@ -198,4 +223,23 @@ function exposure(tris: Tri[]): (p: THREE.Vector3, n: THREE.Vector3) => boolean 
     }
     return true;
   };
+}
+
+/** Whether a point (in the triangle's plane) lies inside it, with a millimetre's grace. */
+function pointIn(c: THREE.Vector3, t: Tri): boolean {
+  const [a, b, d] = t.p;
+  const v0 = new THREE.Vector3().subVectors(d, a);
+  const v1 = new THREE.Vector3().subVectors(b, a);
+  const v2 = new THREE.Vector3().subVectors(c, a);
+  const d00 = v0.dot(v0);
+  const d01 = v0.dot(v1);
+  const d02 = v0.dot(v2);
+  const d11 = v1.dot(v1);
+  const d12 = v1.dot(v2);
+  const den = d00 * d11 - d01 * d01;
+  if (Math.abs(den) < 1e-12) return false;
+  const u = (d11 * d02 - d01 * d12) / den;
+  const v = (d00 * d12 - d01 * d02) / den;
+  const e = 1e-3 / Math.sqrt(Math.max(d00, d11));
+  return u >= -e && v >= -e && u + v <= 1 + e;
 }
