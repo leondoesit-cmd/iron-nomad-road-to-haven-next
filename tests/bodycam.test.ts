@@ -33,6 +33,7 @@ import {
   wallBlend,
 } from '../src/sim/gait';
 import { ViewModel } from '../src/render/viewmodel';
+import { FRAMES } from '../src/sim/gunFrames';
 import { defaultSettings, InputManager } from '../src/input/input';
 import { Brass } from '../src/render/brass';
 import { CYCLE_EJECT, DROPS_MAG, GUN_POINTS, RELOAD_KIND, curve, cycleRack, cycleTime, dropAt, newGunPose, reloadPose } from '../src/sim/weaponanim';
@@ -1027,6 +1028,30 @@ describe('the first-person arms are whole and hold the weapon', () => {
         const sh = world(up);
         const local = cam.worldToLocal(sh.clone());
         expect(local.z > -0.1 || Math.abs(ndc(sh).y) > 1 || Math.abs(ndc(sh).x) > 1, m).toBe(true);
+      }
+    }
+  });
+
+  it('a long gun\'s fore-end is cupped from below, the forearm coming up to it from low on the left', () => {
+    const LONG = ['smg', 'smg2', 'sawn', 'coach', 'pump', 'combat', 'rifle', 'sniper', 'lever', 'carbine', 'ar', 'br', 'dmr', 'lmg', 'crossbow'] as const;
+    for (const m of LONG) {
+      for (const k of [0, 1]) {
+        const { vm, cam } = posed(m, k);
+        const r = rig(vm);
+        const tag = `${m} ${k ? 'sights up' : 'hip'}`;
+        // The hand closes round the middle of the fore-end, not a point on its skin.
+        expect(world(r.handL).distanceTo(r.gun.localToWorld(new THREE.Vector3(...FRAMES[m].support!))), tag).toBeLessThan(1e-4);
+        // The palm is under it, facing up into it.
+        const palm = new THREE.Vector3(0, 0, 1).transformDirection(r.handL.matrixWorld);
+        const up = new THREE.Vector3(0, 1, 0).transformDirection(r.gun.matrixWorld);
+        expect(palm.dot(up), tag).toBeGreaterThan(0.85);
+        // On screen the forearm rises from the elbow, low on the left, to the wrist: steeply, not reaching in level across the frame.
+        const elbow = world(r.foreL).project(cam);
+        const wrist = world(r.handL, new THREE.Vector3(0, 0.06, -0.036)).project(cam);
+        expect(wrist.x, tag).toBeGreaterThan(elbow.x);
+        expect(Math.atan2(wrist.y - elbow.y, (wrist.x - elbow.x) * cam.aspect), tag).toBeGreaterThan(0.75);
+        // The elbow is out of the picture or low in it.
+        expect(elbow.y, tag).toBeLessThan(-0.7);
       }
     }
   });
