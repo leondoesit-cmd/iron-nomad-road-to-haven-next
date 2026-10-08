@@ -246,6 +246,8 @@ export class StoryDirector {
         this.sc.toast('NEW CONTENT UNLOCKED IN HOW TO PLAY: HANDS ON');
       }
     }
+    // A reload after the build lands on 'help' (no flag records the tank): an empty tank still comes first.
+    if (this.beat === 'help' && v && v.fuel < 0.5) this.beat = 'fuel';
     if (this.beat === 'fuel' && v && v.fuel >= 0.5) {
       this.beat = 'help';
       this.say(0.4, 'Fuel\'s in. Now Nar.', 3);

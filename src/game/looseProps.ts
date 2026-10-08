@@ -116,7 +116,8 @@ export class LooseProps {
   }
 
   private destroy(l: Loose) {
-    this.ctx.P.world.removeCollider(l.collider, false);
+    // Through the physics wrapper, so the collider's surface and impact entries go with it (they piled up all leg long).
+    this.ctx.P.removeCollider(l.collider);
     this.ctx.P.world.removeRigidBody(l.body);
     l.mesh.removeFromParent();
   }

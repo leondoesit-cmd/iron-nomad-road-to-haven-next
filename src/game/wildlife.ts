@@ -1830,8 +1830,11 @@ export class WildlifeSystem {
     if (a.def.temper === 'swimmer') {
       const s = this.waterSpot(a.x, a.z, 60, 200, 0.45, 50, away) ?? this.waterSpot(a.x, a.z, 25, 60, 0.4, 50, away);
       if (s) return { x: s.x, z: s.z, water: true };
-      // Nowhere else to go: a turn round the sky and back to the far side of the same water.
-      return { x: a.x, z: a.z, water: true };
+      // No other water in reach (a lone pond with someone on its bank): they leave it for open ground well away, rather than
+      // landing back on the spot they rose from and taking off again every few frames.
+      const ang = Math.atan2(a.z - fromZ, a.x - fromX) + this.rng.range(-0.6, 0.6);
+      const r = this.rng.range(90, 150);
+      return { x: a.x + Math.cos(ang) * r, z: a.z + Math.sin(ang) * r, water: false };
     }
     if (a.kind === 'heron') {
       const s = this.waterSpot(a.x, a.z, 45, 140, 0.04, 0.4, away);
@@ -2781,7 +2784,8 @@ export class WildlifeSystem {
         v.shove((dx / l) * v.mass * (t === 'brute' ? 0.5 : 0.35), (dz / l) * v.mass * (t === 'brute' ? 0.5 : 0.35));
         ctx.audio.play('crash', a.x, a.z, 0.7);
         if (t === 'charger') {
-          this.damage(a, 6 + v.speed, { fromX: v.position.x, fromZ: v.position.z });
+          // Speed either way hurts it: a car backing into a boar is no tonic.
+          this.damage(a, 6 + Math.abs(v.speed), { fromX: v.position.x, fromZ: v.position.z });
           a.state = 'rest';
           a.stateT = 0;
         }
