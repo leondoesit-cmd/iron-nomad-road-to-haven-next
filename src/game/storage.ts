@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PARTS, chassisDef, gearDef, isGlassSlot, isInteriorSlot, mountsFor, partDef, type FuelType, type PartSlot } from '../data';
 import { Btn, NAV, newIntent, wasPressed, type PlayerIntent } from '../input/intents';
 import { FUEL_CAN, carriedName, carryModelKey, planFit, type Carried } from '../sim/carry';
-import { sizeOfPart, surfacesOf, ZONE_NAME, type CargoEntry, type Zone } from '../sim/cargo';
+import { cargoName, sizeOfPart, surfacesOf, ZONE_NAME, type CargoEntry, type Zone } from '../sim/cargo';
 import { idInSlot, installPart, tyreFits, type VehicleBuild } from '../sim/garage';
 import { partName, scrapValue, slotsOf, type PartItem } from '../sim/parts';
 import { reserveOf, takeReserve, planPour } from '../sim/fuel';
@@ -160,7 +160,7 @@ export function storageEntries(v: Vehicle): StorageEntry[] {
       whereName: where,
       cargo: e,
       item: part ?? undefined,
-      name: d ? d.name : carriedName(c),
+      name: d ? d.name : cargoName(c),
       mark: d ? markOf(d) : c.kind === 'fuel' || c.kind === 'water' ? `${c.amount.toFixed(1)} ${c.kind === 'fuel' ? 'FU' : 'L'}` : '',
       css: d ? markCss(d) : '#e6dcc0',
       slot: d?.slot,
@@ -236,7 +236,7 @@ export function needHints(v: Vehicle, list?: StorageEntry[], keyA = 'E'): NeedHi
   const flats = comp.tires.filter((c) => c <= 0.001).length + v.stats.tyresGone;
   if (flats) {
     const s = spareFor('wheels');
-    out.push(s ? { text: `Spare tyre in the ${s.whereName} · take it to the flat, hold ${keyA} at the wheel`, tone: 'warn', slot: 'wheels' } : { text: `${flats} flat tyre${flats > 1 ? 's' : ''} · no spare aboard`, tone: 'bad', slot: 'wheels' });
+    out.push(s ? { text: `Spare tyre in the ${s.whereName} · hold ${keyA} at the flat wheel`, tone: 'warn', slot: 'wheels' } : { text: `${flats} flat tyre${flats > 1 ? 's' : ''} · no spare aboard`, tone: 'bad', slot: 'wheels' });
   }
   if (v.convoyEngine && v.stats.noEngine) {
     const s = spareFor('engine');

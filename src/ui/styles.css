@@ -2861,9 +2861,9 @@ kbd {
 .carcard {
   left: calc(50% + 34px * var(--u, 1));
   top: 50%;
-  transform: translateY(-28%);
-  width: calc(232px * var(--u, 1));
-  max-width: 44%;
+  transform: translateY(-50%);
+  width: calc(214px * var(--u, 1));
+  max-width: 42%;
   padding: 6px 9px 7px;
   background: rgba(14, 11, 8, 0.7);
   border-left: 2px solid rgba(255, 196, 120, 0.55);
@@ -2929,18 +2929,19 @@ kbd {
   color: #ff8a6a;
 }
 .cc-facts {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 8px;
-  margin-top: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 9px;
+  margin-top: 2px;
 }
 .cc-facts div {
-  display: contents;
+  white-space: nowrap;
 }
 .cc-facts span {
   color: #a99d84;
 }
 .cc-facts b {
+  margin-left: 3px;
   font-weight: 600;
   font-family: var(--mono);
   font-size: 0.95em;
@@ -2961,9 +2962,10 @@ kbd {
   font-weight: 600;
 }
 .cc-more {
-  margin-top: 3px;
-  color: #c6bba3;
-  font-size: 0.9em;
+  margin-top: 2px;
+  color: #b9ae96;
+  font-size: 0.86em;
+  line-height: 1.22;
 }
 .cc-hint,
 .tk-hint {
@@ -2984,9 +2986,15 @@ kbd {
   background: rgba(143, 212, 124, 0.1);
 }
 .cc-act {
-  margin-top: 5px;
-  font-size: 0.92em;
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px 10px;
+  font-size: 0.88em;
   color: #ddd3bd;
+}
+.cc-act div {
+  white-space: nowrap;
 }
 .cc-act div.off,
 .tk-f span.off {
@@ -3032,9 +3040,8 @@ kbd {
 }
 .tk-h {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
+  flex-direction: column;
+  gap: 0;
 }
 .tk-h b {
   text-transform: uppercase;
@@ -3210,16 +3217,16 @@ kbd {
 /* The breakdown: every component and the car's totals, held up beside the car while the details button is down. */
 .carbk {
   right: 10px;
-  top: calc(56px * var(--u, 1));
-  bottom: calc(110px * var(--u, 1));
-  width: calc(560px * var(--u, 1));
-  max-width: 72%;
+  top: calc(92px * var(--u, 1));
+  max-height: calc(100% - 200px * var(--u, 1));
+  width: calc(720px * var(--u, 1));
+  max-width: 88%;
   font-size: calc(11px * var(--u, 1));
   line-height: 1.28;
   pointer-events: none;
 }
 .bk {
-  height: 100%;
+  max-height: inherit;
   display: flex;
   flex-direction: column;
   background: rgba(14, 11, 8, 0.82);
@@ -3244,12 +3251,18 @@ kbd {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1.2fr);
+  gap: 12px;
   overflow: hidden;
 }
 .bk-list {
   overflow: hidden;
+  column-count: 2;
+  column-gap: 12px;
+}
+.bk-r,
+.bk-g {
+  break-inside: avoid;
 }
 .bk-g {
   margin: 3px 0 0;
@@ -3278,12 +3291,12 @@ kbd {
 }
 .bk-l {
   color: #a99d84;
-  min-width: 7.2em;
+  min-width: 6.4em;
 }
 .bk-n {
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 13em;
+  max-width: 9.5em;
 }
 .bk-m {
   font-family: var(--mono);
@@ -3375,6 +3388,9 @@ kbd {
 }
 .gdetail .bk-cols {
   grid-template-columns: 1fr;
+}
+.gdetail .bk-list {
+  column-count: 1;
 }
 .gdetail .bk-r.on {
   background: rgba(255, 180, 84, 0.18);

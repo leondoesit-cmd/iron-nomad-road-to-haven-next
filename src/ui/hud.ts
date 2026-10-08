@@ -605,7 +605,7 @@ export class Hud {
     // The car screens (the part card, the storage panel, the breakdown) and what they take the place of.
     const car = updateCarHud(h, p);
     // The vehicle you are standing next to: what it is and what is wrong with it.
-    h.setHtml('vread', car.card || car.panel ? '' : this.vehicleReadout(p, scene));
+    h.setHtml('vread', car.card || car.panel || car.details ? '' : this.vehicleReadout(p, scene));
 
     // Notes
     h.setHtml('notes', p.notes.slice(-3).map((n) => `<div class="note ${n.kind}">${escapeHtml(n.text)}</div>`).join(''));

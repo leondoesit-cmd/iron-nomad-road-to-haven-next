@@ -299,7 +299,7 @@ export function figureRows(now: CarFigures, stock: CarFigures, other?: CarFigure
     const txt = (v: number | null) => (v === null ? '—' : show(v));
     rows.push({ key, label, now: txt(a), stock: txt(s), other: other ? txt(o) : undefined, vsStock: cmp(a, s, lower), vsOther: other ? cmp(a, o, lower) : undefined });
   };
-  add('power', 'Power', (f) => f.powerKw, fmt.power);
+  add('power', 'Power', (f) => f.powerKw, fmt.kw);
   add('torque', 'Torque', (f) => f.torqueNm, fmt.nm);
   add('mass', 'Weight', (f) => f.massKg, fmt.kg, true);
   add('top', 'Top speed', (f) => f.topKmh, fmt.kmh);

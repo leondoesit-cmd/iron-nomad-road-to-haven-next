@@ -680,9 +680,12 @@ export class WorkFx {
       g.edgeMat[1].opacity = GHOST_BEHIND * g.a * pulse;
       if (g.a <= 0 && g.seen > 0.12) this.dropGhost(id);
     }
+    // A long frame (a hitch, a hidden tab) counts as a short one here: the calls come from the fixed ticks, and one slow frame
+    // must not make the highlight blink out while the player is still looking at the part.
+    const hd = Math.min(dt, 1 / 30);
     for (const [key, h] of this.highlights) {
-      h.seen += dt;
-      h.a = h.seen > 0.12 ? Math.max(0, h.a - dt * 7) : Math.min(1, h.a + dt * 9);
+      h.seen += hd;
+      h.a = h.seen > 0.12 ? Math.max(0, h.a - hd * 7) : Math.min(1, h.a + hd * 9);
       h.group.visible = h.a > 0.02;
       const pulse = 0.85 + 0.15 * Math.sin(this.clock * 3.2);
       h.mats[0].opacity = 0.9 * h.a * pulse;
