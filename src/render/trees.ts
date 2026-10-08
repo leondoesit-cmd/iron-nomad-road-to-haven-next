@@ -948,6 +948,101 @@ function encode(tint: V3, slot: number, out: THREE.Color) {
 }
 
 /**
+ * A tree's wound, per instance (`aNotch`, `aNotchB`, see `setTreeNotch`), in its own model space: where gunfire has chewed
+ * a notch into the stem and how deep, and, once it has snapped there, which piece this instance draws. The falling top
+ * (mode 1) keeps the wood above a jagged break and all the leaves; the stump (mode -1) keeps the wood below it. The break
+ * is jagged (long splinters on the hinge side, away from the notch) and the open end of the stem is closed by drawing its
+ * inside as the cut face: a back face of the wood near the break shows the end grain where the view ray crosses the break
+ * plane, lit as that plane. No extra geometry: the same buffers, two vec4s a tree.
+ */
+const WOUND_V = /* glsl */ `
+attribute vec4 aNotch;
+attribute vec4 aNotchB;
+varying vec3 vTL;
+varying vec4 vTN;
+varying vec4 vTNB;
+varying float vTWood;
+`;
+const WOUND_F = /* glsl */ `
+varying vec3 vTL;
+varying vec4 vTN;
+varying vec4 vTNB;
+varying float vTWood;
+float treeJag( vec2 rel, float ang, float r ) {
+  float th = atan( rel.y, rel.x );
+  float hinge = 0.5 - 0.5 * cos( th - ang );
+  float t1 = abs( fract( th * 1.4324 + 0.37 ) - 0.5 ) * 2.0;
+  float t2 = abs( fract( th * 3.5014 + 0.11 ) - 0.5 ) * 2.0;
+  return r * ( 0.12 + 0.88 * hinge ) * ( 0.6 * t1 * t1 + 0.28 * t2 );
+}
+bool treeCutAway() {
+  if ( vTN.w == 0.0 ) return false;
+  vec2 rel = vTL.xz - vTNB.xy;
+  float cut = vTN.x + treeJag( rel, vTN.z, vTNB.z ) - vTNB.z * 0.2;
+  if ( vTN.w > 0.0 ) {
+    if ( vTWood > 0.5 && vTL.y < cut ) return true;
+  } else if ( vTWood < 0.5 || vTL.y > cut ) return true;
+  // Wood inside the stem near the break (a root's start, a gum's smooth stem in its rough sleeve) is never really seen.
+  return vTWood > 0.5 && gl_FrontFacing && length( rel ) < vTNB.z * 0.78 && abs( vTL.y - vTN.x ) < vTNB.z * 3.0;
+}
+`;
+const WOUND_COLOUR = /* glsl */ `
+varying vec3 vTCam;
+varying vec3 vTCapN;
+float tHash( vec2 p ) { return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
+float tNoise( vec2 p ) {
+  vec2 i = floor( p );
+  vec2 f = fract( p );
+  f = f * f * ( 3.0 - 2.0 * f );
+  return mix( mix( tHash( i ), tHash( i + vec2( 1.0, 0.0 ) ), f.x ), mix( tHash( i + vec2( 0.0, 1.0 ) ), tHash( i + 1.0 ), f.x ), f.y );
+}
+// The pale wood under the bark, the darker heart, the end grain of the break and the chewed notch. 'cap' is set where
+// this fragment draws the break's face (it is then lit as that face).
+void treeWound( inout vec3 col, out float cap ) {
+  cap = 0.0;
+  if ( vTWood < 0.5 || ( vTN.y <= 0.0 && vTN.w == 0.0 ) ) return;
+  vec2 rel = vTL.xz - vTNB.xy;
+  float r = max( vTNB.z, 1e-3 );
+  vec3 sap = mix( vec3( 0.46, 0.34, 0.2 ), col * 2.2, 0.2 );
+  if ( vTN.w != 0.0 && !gl_FrontFacing ) {
+    if ( length( rel ) > r * 1.35 || abs( vTL.y - vTN.x ) > r * 4.0 ) return;
+    vec3 d = vTL - vTCam;
+    float t = ( vTN.x - vTCam.y ) / ( abs( d.y ) > 1e-4 ? d.y : 1e-4 );
+    vec2 q = vTCam.xz + d.xz * t - vTNB.xy;
+    float rr = length( q ) / r;
+    if ( rr > 1.25 ) return;
+    float a = atan( q.y, q.x );
+    float ring = 0.5 + 0.5 * sin( rr * 38.0 + tNoise( vec2( a * 3.0, rr * 4.0 ) ) * 2.5 );
+    vec3 heart = sap * vec3( 0.66, 0.46, 0.34 );
+    vec3 wood = mix( heart, sap, smoothstep( 0.2, 0.72, rr ) ) * ( 0.8 + 0.2 * ring );
+    wood *= 0.74 + 0.36 * tNoise( q * 30.0 / r );
+    col = mix( wood, col * 0.8, smoothstep( 0.9, 1.05, rr ) );
+    cap = 1.0;
+    return;
+  }
+  if ( vTN.y > 0.0 && gl_FrontFacing ) {
+    float rad = length( rel );
+    if ( rad > r * 2.2 ) return;
+    float th = atan( rel.y, rel.x );
+    float side = dot( rel / max( rad, 1e-4 ), vec2( cos( vTN.z ), sin( vTN.z ) ) );
+    float hy = vTL.y / max( vTNB.w, 0.05 );
+    float n = tNoise( vec2( th * 6.0, hy * 5.0 ) );
+    // Fibres run along the grain; pits are where rounds went in.
+    float fib = tNoise( vec2( th * 40.0, hy * 1.5 ) );
+    float pit = tNoise( vec2( th * 18.0, hy * 14.0 ) );
+    float dy = abs( vTL.y - vTN.x ) / max( vTNB.w, 1e-3 ) + ( n - 0.5 ) * 0.7;
+    float wrap = mix( 0.75, -0.85, clamp( vTN.y * 1.4, 0.0, 1.0 ) );
+    float chew = ( 1.0 - smoothstep( 0.7, 0.85, dy ) ) * smoothstep( wrap - 0.15, wrap + 0.15, side + ( n - 0.5 ) * 0.5 ) * smoothstep( 0.0, 0.06, vTN.y );
+    float deep = ( 1.0 - clamp( dy, 0.0, 1.0 ) ) * clamp( vTN.y * 1.6, 0.0, 1.0 );
+    vec3 torn = sap * ( 0.5 + 0.6 * fib ) * mix( 1.0, 0.4, deep ) * mix( 1.0, 0.3, smoothstep( 0.55, 0.8, pit ) * ( 0.4 + 0.6 * deep ) );
+    // The torn lip of the bark round it is darker than either.
+    torn *= 1.0 - 0.45 * smoothstep( 0.45, 0.7, dy );
+    col = mix( col, torn, chew );
+  }
+}
+`;
+
+/**
  * The 3D trees' vertex work: keep only this instance's variant (and, for the colour pass, only near the camera), then sway.
  * Variant indices remove unused models before submission; the guard remains for callers using the complete species geometry.
  * The colour pass also skips trees beyond the cross-fade before lighting. Shadows keep the existing wind and alpha test.
@@ -970,11 +1065,31 @@ function treeVertex(shader: THREE.WebGLProgramParametersWithUniforms, colour: bo
 }
 #endif`;
   shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', `#include <common>\nattribute vec3 tree;\nuniform float uTime;\nuniform vec4 uWind;\nuniform vec2 uTreeLod;\n${colour ? 'varying float vTreeKeep;' : ''}`)
+    .replace(
+      '#include <common>',
+      `#include <common>\nattribute vec3 tree;\nuniform float uTime;\nuniform vec4 uWind;\nuniform vec2 uTreeLod;\n${WOUND_V}${colour ? 'varying float vTreeKeep;\nvarying vec3 vTCam;\nvarying vec3 vTCapN;' : ''}`,
+    )
     .replace(colour ? '#include <uv_vertex>' : '#include <project_vertex>', colour ? `${keep}\n#include <uv_vertex>` : `${keep}\n#include <project_vertex>`)
     .replace(
       '#include <begin_vertex>',
       /* glsl */ `#include <begin_vertex>
+vTL = position;
+vTN = aNotch;
+vTNB = aNotchB;
+vTWood = tree.x > 0.0 ? 0.0 : 1.0;
+${
+  colour
+    ? `vTCam = vec3( 0.0 );
+vTCapN = vec3( 0.0, 1.0, 0.0 );
+#ifdef USE_INSTANCING
+if ( aNotch.w != 0.0 ) {
+  // Where the camera is in the tree's own frame, for the view ray through the break's face, and that face's normal.
+  vTCam = ( inverse( modelMatrix * instanceMatrix ) * vec4( cameraPosition, 1.0 ) ).xyz;
+  vTCapN = normalize( normalMatrix * ( mat3( instanceMatrix ) * vec3( 0.0, aNotch.w < 0.0 ? 1.0 : -1.0, 0.0 ) ) );
+}
+#endif`
+    : ''
+}
 #if defined( USE_INSTANCING ) && defined( USE_INSTANCING_COLOR )
 {
   vec3 tO = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
@@ -1005,20 +1120,29 @@ export function treeMaterial(): THREE.MeshStandardMaterial {
       `#include <color_vertex>\n#ifdef USE_INSTANCING_COLOR\n{\n${DECODE}\nvColor = vec4( color * ( tree.x > 0.0 ? treeTint : barkTint( color ) ), 1.0 );\n}\n#endif`,
     );
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\nvarying float vTreeKeep;\n${DITHER}`)
-      .replace('#include <alphatest_fragment>', '#include <alphatest_fragment>\nif ( treeDither( gl_FragCoord.xy ) >= vTreeKeep ) discard;')
-      // Leaf normals were bent round the crown: keep them whichever side of a card faces the camera.
-      .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal = normalize( vNormal );');
+      .replace('#include <common>', `#include <common>\nvarying float vTreeKeep;\n${DITHER}\n${WOUND_F}\n${WOUND_COLOUR}`)
+      .replace(
+        '#include <alphatest_fragment>',
+        '#include <alphatest_fragment>\nif ( treeDither( gl_FragCoord.xy ) >= vTreeKeep ) discard;\nif ( treeCutAway() ) discard;\nfloat tCap = 0.0;\ntreeWound( diffuseColor.rgb, tCap );',
+      )
+      // Leaf normals were bent round the crown: keep them whichever side of a card faces the camera. A break's face is lit as
+      // the plane it is.
+      .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal = normalize( vNormal );\nif ( tCap > 0.5 ) normal = normalize( vTCapN );');
   };
   m.customProgramCacheKey = () => 'tree3d';
   return (treeMat = shared(m));
 }
 
-/** The 3D trees' shadow pass: the same variant pick and sway (three copies the atlas and alpha test in). */
+/** The 3D trees' shadow pass: the same variant pick and sway (three copies the atlas and alpha test in), and the same break. */
 export function treeDepthMaterial(): THREE.MeshDepthMaterial {
   if (treeDepth) return treeDepth;
   const m = new THREE.MeshDepthMaterial();
-  m.onBeforeCompile = (shader) => treeVertex(shader, false);
+  m.onBeforeCompile = (shader) => {
+    treeVertex(shader, false);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\n${WOUND_F}`)
+      .replace('#include <alphatest_fragment>', '#include <alphatest_fragment>\nif ( treeCutAway() ) discard;');
+  };
   m.customProgramCacheKey = () => 'tree3d-depth';
   return (treeDepth = shared(m));
 }
@@ -1162,7 +1286,73 @@ export interface TreeSet {
   far: THREE.InstancedMesh | null;
 }
 
-/** A chunk's trees in slices: a species/variant a slice. */
+/**
+ * A mesh's own geometry for a model: the shared buffers of `source`, plus the per-tree wound data (`setTreeNotch`) sized for
+ * `capacity` instances. Marked shared so a scene teardown never frees the model's buffers through it; `releaseWoundGeometry`
+ * frees only its own (it runs when its mesh is disposed).
+ */
+function woundGeometry(source: THREE.BufferGeometry, capacity: number): THREE.BufferGeometry {
+  const geo = new THREE.BufferGeometry();
+  for (const [name, attribute] of Object.entries(source.attributes)) geo.setAttribute(name, attribute);
+  geo.setIndex(source.index);
+  geo.boundingBox = source.boundingBox?.clone() ?? null;
+  geo.boundingSphere = source.boundingSphere?.clone() ?? null;
+  geo.setAttribute('aNotch', new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4));
+  geo.setAttribute('aNotchB', new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4));
+  return shared(geo);
+}
+
+function releaseWoundGeometry(geo: THREE.BufferGeometry) {
+  for (const name of Object.keys(geo.attributes)) if (name !== 'aNotch' && name !== 'aNotchB') geo.deleteAttribute(name);
+  geo.setIndex(null);
+  geo.dispose();
+}
+
+/**
+ * Lay a tree's wound on its 3D instance (all in the tree's model units): the notch's height, the share of the section gone
+ * there, the side it faces (radians in the model's x-z plane), the piece drawn (0 the standing tree, 1 its falling top, -1
+ * its stump), the stem's centre and radius at the notch, and the notch's half height.
+ */
+export function setTreeNotch(mesh: THREE.InstancedMesh, i: number, y: number, share: number, angle: number, mode: number, cx: number, cz: number, r: number, half: number) {
+  const a = mesh.geometry.getAttribute('aNotch') as THREE.InstancedBufferAttribute | undefined;
+  const b = mesh.geometry.getAttribute('aNotchB') as THREE.InstancedBufferAttribute | undefined;
+  if (!a || !b || i >= a.count) return;
+  a.setXYZW(i, y, share, angle, mode);
+  b.setXYZW(i, cx, cz, r, half);
+  a.addUpdateRange(i * 4, 4);
+  b.addUpdateRange(i * 4, 4);
+  a.needsUpdate = true;
+  b.needsUpdate = true;
+}
+
+/**
+ * Another instance of a mesh's tree in the next free slot, a copy of instance `from` (a snapped tree's stump: its top keeps
+ * the original slot and goes where the falling body goes). Returns the slot, or -1 if the mesh has none left.
+ */
+export function addTreeSlot(mesh: THREE.InstancedMesh, from: number): number {
+  if (mesh.count >= mesh.instanceMatrix.count) return -1;
+  const i = mesh.count++;
+  mesh.getMatrixAt(from, _m);
+  mesh.setMatrixAt(i, _m);
+  mesh.instanceMatrix.addUpdateRange(i * 16, 16);
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) {
+    mesh.getColorAt(from, _c);
+    mesh.setColorAt(i, _c);
+    mesh.instanceColor.addUpdateRange(i * 3, 3);
+    mesh.instanceColor.needsUpdate = true;
+  }
+  for (const name of ['aNotch', 'aNotchB']) {
+    const a = mesh.geometry.getAttribute(name) as THREE.InstancedBufferAttribute | undefined;
+    if (!a) continue;
+    a.setXYZW(i, a.getX(from), a.getY(from), a.getZ(from), a.getW(from));
+    a.addUpdateRange(i * 4, 4);
+    a.needsUpdate = true;
+  }
+  return i;
+}
+
+/** A chunk's trees in slices: a species/variant a slice. Each mesh has room for as many again (the stumps of snapped trees). */
 export function* buildTreesSteps(trees: TreeSpot[]): Generator<void, TreeSet> {
   const set: TreeSet = { near: [], far: null };
   if (!trees.length) return set;
@@ -1171,7 +1361,10 @@ export function* buildTreesSteps(trees: TreeSpot[]): Generator<void, TreeSet> {
     for (let variant = 0; variant < 3; variant++) {
       const mine = inst.filter((t) => t.sp === sp && t.v === variant);
       if (!mine.length) continue;
-      const im = new THREE.InstancedMesh(treeVariantGeometry(sp, variant), treeMaterial(), mine.length);
+      const capacity = mine.length * 2;
+      const im = new THREE.InstancedMesh(woundGeometry(treeVariantGeometry(sp, variant), capacity), treeMaterial(), capacity);
+      im.count = mine.length;
+      im.addEventListener('dispose', () => releaseWoundGeometry(im.geometry));
       im.userData.sp = sp;
       im.userData.variant = variant;
       mine.forEach((t, i) => {
@@ -1344,7 +1537,7 @@ export function farForestMeshes(groups: FarTree[][], mat: THREE.Material): THREE
  */
 export function treeWarmup(): THREE.InstancedMesh[] {
   const out: THREE.InstancedMesh[] = [];
-  for (const [geo, mat] of [[treeGeometry(0), treeMaterial()], [impostorGeometry(), impostorMaterial()]] as const) {
+  for (const [geo, mat] of [[woundGeometry(treeGeometry(0), 1), treeMaterial()], [impostorGeometry(), impostorMaterial()]] as const) {
     const im = new THREE.InstancedMesh(geo, mat, 1);
     im.setMatrixAt(0, _m.makeScale(0, 0, 0));
     im.setColorAt(0, _c.setRGB(1, 1, 1));

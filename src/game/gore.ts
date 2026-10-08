@@ -5,6 +5,7 @@ import { Brass, type MagKind, type ShellKind } from '../render/brass';
 import { CELL, Decals } from '../render/decals';
 import { roadLift } from '../render/chunkview';
 import { Gibs } from '../render/gibs';
+import { Timber } from './timber';
 import type { AnimalKind, ZombieKind } from '../data';
 import type { Ctx } from './ctx';
 import { BODY, type AnimalPart } from '../sim/anatomy';
@@ -81,6 +82,8 @@ export class Gore {
   readonly marks = new Decals(1100);
   readonly brass: Brass;
   readonly gibs: Gibs;
+  /** Gunfire in the trees: chips, bark, leaves, scars, and trees snapping and coming down (`game/timber.ts`). */
+  readonly timber: Timber;
   private bleeders: Bleeder[] = [];
   /** Marks laid since the scene began, for tests. */
   placed = 0;
@@ -130,6 +133,7 @@ export class Gore {
         if (speed > 3) ctx.audio.play('thud', x, z, 0.25);
       },
     });
+    this.timber = new Timber(ctx, this);
   }
 
   /** Add the meshes to a scene root. */
@@ -138,6 +142,7 @@ export class Gore {
     root.add(this.marks.mesh);
     for (const m of this.brass.meshes) root.add(m);
     root.add(this.gibs.group);
+    root.add(this.timber.chips.group);
   }
 
   // ------------------------------------------------------------------ blood on surfaces
@@ -592,6 +597,7 @@ export class Gore {
     this.marks.update(ctx.time);
     this.brass.update(dt);
     this.gibs.update(dt);
+    this.timber.update(dt);
     for (let i = this.bleeders.length - 1; i >= 0; i--) {
       const b = this.bleeders[i];
       b.t -= dt;
@@ -636,6 +642,7 @@ export class Gore {
     this.marks.clear();
     this.brass.clear();
     this.gibs.clear();
+    this.timber.clear();
   }
 
   dispose() {
@@ -644,5 +651,6 @@ export class Gore {
     this.marks.dispose();
     this.brass.dispose();
     this.gibs.dispose();
+    this.timber.dispose();
   }
 }
