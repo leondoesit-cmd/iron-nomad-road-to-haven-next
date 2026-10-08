@@ -34,7 +34,7 @@ import { DRUGS } from '../sim/drugs';
 import { MEDKIT_HEAL, UTILITIES, utilityName, type Player, type QuickId } from '../game/player';
 import { BLEED, STAMINA, wearLabel, wearOf } from '../sim/vitals';
 import { whole } from '../sim/resources';
-import { dressOther } from '../game/consumables';
+import { dressOther, drugWord } from '../game/consumables';
 import type { Game } from '../game/game';
 import type { Campaign } from '../game/campaign';
 import type { Slot } from '../input/input';
@@ -301,7 +301,7 @@ export class InventoryView {
     const t = this.menu?.t ?? (fid ? targetOf(this.loadout, fid) : null);
     if (!t) return '';
     const a = defaultAction(this.menu ? this.menuItems : menuFor(this.mh, t));
-    return a ? a.label.toLowerCase() : '';
+    return a ? a.label[0].toLowerCase() + a.label.slice(1) : '';
   }
 
   /** A letter or digit typed while the menu is open: run the row it names. Returns true if one ran. */
@@ -497,7 +497,7 @@ export class InventoryView {
   takeDrug(id: SupplyId) {
     if (!isDrug(id)) return;
     const p = this.p!;
-    if (!p.takeDrug(id)) return this.done(false, `No ${DRUGS[id].name.toLowerCase()} left`);
+    if (!p.takeDrug(id)) return this.done(false, `No ${drugWord(id)} left`);
     this.done(true, `${DRUGS[id].name} taken. ${kicksInText(DRUGS[id])}`);
   }
 
@@ -594,8 +594,16 @@ export class InventoryView {
     return `<h3 class="sysh">In your system</h3><div class="system">${body}</div>`;
   }
 
-  /** The second column: in hand, the bag, and the stores' supplies. */
+  /**
+   * The second column: in hand, the stores' supplies, and the bag. Three parts, so the screen can redraw one without the
+   * others (taking a dose never rebuilds the bag grid). Supplies sit above the bag: they are reached for far more often, and a
+   * big bag would push them out of sight.
+   */
   packHtml(): string {
+    return this.handHtml() + this.supHtml() + this.bagHtml();
+  }
+
+  handHtml(): string {
     const p = this.p!;
     const L = this.loadout;
     const belt = Array.from({ length: BELT_SIZE }, (_, i) => {
@@ -608,6 +616,19 @@ export class InventoryView {
       const fid = `util:${u}`;
       return this.btn(fid, `<span class="ic">${itemIcon(UTILITY_ICON[u])}</span><small>${UTILITY_SHORT[u]}</small><em class="cnt">${n}</em>`, (by) => this.press(fid, by), true, `tile util${L.sel === UTILITY_SLOT && p.utility === u ? ' held' : ''}${!this.liveSel && this.other?.kind === 'util' && this.other.id === u ? ' sel' : ''}`, utilityName(u));
     }).join('');
+    return `<h3>In hand <small>${escapeHtml(this.key('LB'))} swaps</small></h3>
+      <div class="invbelt">${belt}</div>
+      <div class="invutil">${util}</div>`;
+  }
+
+  supHtml(): string {
+    return `<h3>Supplies <small>shared stores</small></h3>
+      <div class="invsup">${this.suppliesHtml()}</div>
+      <div class="invsupply">${this.pillsHtml()}</div>`;
+  }
+
+  bagHtml(): string {
+    const L = this.loadout;
     const cap = bagCap(L);
     const cells: string[] = [];
     for (let i = 0; i < Math.max(cap, L.bag.length); i++) {
@@ -615,14 +636,7 @@ export class InventoryView {
       cells.push(this.itemBtn('bag', it?.uid ?? `e${i}`, it, it ? (gearDef(it.id).short ?? gearDef(it.id).name) : i < cap ? '' : 'Over'));
     }
     const over = L.bag.length > cap ? ' bad' : '';
-    // Supplies sit above the bag: they are reached for far more often, and a big bag would push them out of sight.
-    return `<h3>In hand <small>${escapeHtml(this.key('LB'))} swaps</small></h3>
-      <div class="invbelt">${belt}</div>
-      <div class="invutil">${util}</div>
-      <h3>Supplies <small>shared stores</small></h3>
-      <div class="invsup">${this.suppliesHtml()}</div>
-      <div class="invsupply">${this.pillsHtml()}</div>
-      <h3>Bag <small class="${over}">${L.bag.length}/${cap}</small>${this.btn('sortbag', 'Sort', () => this.sort(), L.bag.length > 1, 'chipbtn sortbtn', 'Guns, blades, tools, then clothes')}</h3>
+    return `<h3>Bag <small class="${over}">${L.bag.length}/${cap}</small>${this.btn('sortbag', 'Sort', () => this.sort(), L.bag.length > 1, 'chipbtn sortbtn', 'Guns, blades, tools, then clothes')}</h3>
       <div class="invbag">${cells.join('')}</div>`;
   }
 
@@ -1124,7 +1138,7 @@ export class InventoryScreen implements InventoryHost {
     this.root.classList.add('on');
     this.root.innerHTML = `<div class="ledger panel paper inv ${this.side}">
       <h2><span><span class="pcolor" style="background:${PLAYER_CSS[p.index]}"></span>Inventory · ${name}</span><small>THE GAME IS PAUSED</small></h2>
-      <div class="invbody"><section class="invcol wearcol"></section><section class="invcol packcol"></section><section class="invcol detail"></section></div>
+      <div class="invbody"><section class="invcol wearcol"></section><section class="invcol packcol"><div class="pk"></div><div class="pk"></div><div class="pk"></div></section><section class="invcol detail"></section></div>
       <div class="benchfoot"><span class="mutedtxt invhint"></span><span class="invfoot"></span></div>
       <div class="invmenu" hidden></div>
     </div>`;
@@ -1133,7 +1147,8 @@ export class InventoryScreen implements InventoryHost {
     this.wearEl = q('.wearcol');
     this.menuEl = q('.invmenu');
     this.hintEl = q('.invhint');
-    this.parts = [this.wearEl, q('.packcol'), q('.detail'), this.menuEl, q('.invfoot')].map((el) => ({ el, html: '' }));
+    const [hand, sup, bag] = panel.querySelectorAll<HTMLElement>('.packcol > .pk');
+    this.parts = [this.wearEl, hand, sup, bag, q('.detail'), this.menuEl, q('.invfoot')].map((el) => ({ el, html: '' }));
     this.unbind = this.view.bindEvents(panel);
     window.addEventListener('resize', this.onResize);
     this.lastFid = null;
@@ -1214,7 +1229,7 @@ export class InventoryScreen implements InventoryHost {
     const v = this.view;
     this.acts.clear();
     // The strings first: building them registers the buttons' actions.
-    const html = [v.wearHtml(), v.packHtml(), v.detailHtml(), v.menuHtml(), this.btn('invdone', 'Back to the road', () => this.shut())];
+    const html = [v.wearHtml(), v.handHtml(), v.supHtml(), v.bagHtml(), v.detailHtml(), v.menuHtml(), this.btn('invdone', 'Back to the road', () => this.shut())];
     let replaced = 0;
     for (let i = 0; i < html.length; i++) {
       const part = this.parts[i];

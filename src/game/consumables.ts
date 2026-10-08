@@ -80,9 +80,15 @@ export function drinkCheck(p: Player): Check {
   return r.ok ? yes : no(r.reason ?? 'You cannot drink now');
 }
 
+/** A drug's name inside a sentence: lower case, except a name that is an abbreviation (LSD). */
+export function drugWord(id: DrugId): string {
+  const n = DRUGS[id].name;
+  return n === n.toUpperCase() ? n : n.toLowerCase();
+}
+
 /** A dose: one in the stores and someone in a state to take it. */
 export function drugCheck(p: Player, id: DrugId): Check {
-  if ((p.ctx.campaign.items[id] ?? 0) <= 0) return no(`No ${DRUGS[id].name.toLowerCase()} left`);
+  if ((p.ctx.campaign.items[id] ?? 0) <= 0) return no(`No ${drugWord(id)} left`);
   if (p.state === 'dead' || p.state === 'downed') return no('Not now');
   if (p.drugs.passedOut) return no('You are passed out');
   return yes;

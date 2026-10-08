@@ -263,7 +263,7 @@ describe('supplies from the pack', () => {
     const s = scene();
     const { menu } = view(s);
     s.h.campaign.items.lsd = 0;
-    expect(row(menu({ kind: 'supply', id: 'lsd' }), 'a-take')).toMatchObject({ enabled: false, reason: 'No lsd left' });
+    expect(row(menu({ kind: 'supply', id: 'lsd' }), 'a-take')).toMatchObject({ enabled: false, reason: 'No LSD left' });
     s.sc.dispose();
   });
 

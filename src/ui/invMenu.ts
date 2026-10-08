@@ -16,9 +16,8 @@ import {
   type Result,
 } from '../sim/gear';
 import { canFit, fitted, kitOf, slotsOfGun } from '../sim/gunmods';
-import { DRUGS } from '../sim/drugs';
 import { UTILITIES, utilityName, type Player, type QuickId } from '../game/player';
-import { dressCheck, dressOtherCheck, drinkCheck, drugCheck, eatCheck, type Check } from '../game/consumables';
+import { dressCheck, dressOtherCheck, drinkCheck, drugCheck, drugWord, eatCheck, type Check } from '../game/consumables';
 import { isDrug, supplyName, type SupplyId } from './supplies';
 import type { Campaign } from '../game/campaign';
 
@@ -234,7 +233,7 @@ function supplyMenu(h: MenuHost, id: SupplyId): MenuItem[] {
     }
   } else if (id === 'ration') out.push(item('a-eat', 'Eat a ration', K.use, eatCheck(p), () => h.eat()));
   else if (id === 'water') out.push(item('a-drink', 'Drink', K.use, drinkCheck(p), () => h.drink()));
-  else if (isDrug(id)) out.push(item('a-take', `Take ${DRUGS[id].name.toLowerCase()}`, K.use, drugCheck(p, id), () => h.takeDrug(id)));
+  else if (isDrug(id)) out.push(item('a-take', `Take ${drugWord(id)}`, K.use, drugCheck(p, id), () => h.takeDrug(id)));
   out.push(item('a-quick', 'Put on quick belt', K.quick, onBelt ? { ok: false, reason: 'It is on the quick belt already' } : ok(), () => h.setQuick(quickId)));
   return out;
 }
