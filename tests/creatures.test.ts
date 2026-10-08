@@ -76,6 +76,8 @@ function world(players: FakePlayer[], noise: { x: number; z: number; level: numb
     interact: { add: noop, remove: noop },
     groundAt: () => 0,
     waterAt: () => null,
+    // Open ground: nothing stands between an eye and what it looks at (sight.ts casts through the physics world).
+    P: { raycast: () => null, surfaces: new Map() },
     visibleToAnyView: () => false,
     notify: noop,
     radio: noop,

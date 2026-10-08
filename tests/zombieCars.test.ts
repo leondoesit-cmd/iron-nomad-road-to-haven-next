@@ -50,7 +50,7 @@ describe('the dead and cars', () => {
     const v = p.vehicle!;
     expect(p.inVehicle).toBe(true);
     const c = v.position;
-    const zs = [];
+    const zs: ReturnType<typeof sc.zombies.spawn>[] = [];
     for (let i = 0; i < 14; i++) {
       const a = (i / 14) * Math.PI * 2;
       zs.push(sc.zombies.spawn(i % 2 ? 'runner' : 'walker', c.x + Math.cos(a) * 9, c.z + Math.sin(a) * 9, false, 1));
