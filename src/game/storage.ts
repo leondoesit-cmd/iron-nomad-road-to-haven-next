@@ -275,6 +275,18 @@ export function storageTarget(p: Player): Vehicle | null {
   return null;
 }
 
+/**
+ * Is the player at the outside of the car (the roof, the bed, a rack) rather than at a way in? As with putting things away
+ * (`hauling.ts` xPlace), a shut door does not count as the way in, and of the two the nearer one faced wins.
+ */
+function atOutside(p: Player, v: Vehicle): boolean {
+  const ld = loadPlace(p, v);
+  if (!ld) return false;
+  const place = placeFor(p, v, 'stow');
+  const st = place.gate.ok ? place.at : null;
+  return !st || ld.dist - 1.2 * ld.facing <= st.dist - 1.2 * st.facing;
+}
+
 /** X would reload the gun in hand rather than open the car: a gun short of a full magazine, with rounds to put in it. */
 function wantsReload(p: Player): boolean {
   if (p.equip !== 'gun') return false;
@@ -287,9 +299,9 @@ export function storagePrompt(p: Player) {
   if (!v || wantsReload(p) || p.equip === 'wrench' || storageOf(p)) return;
   const own = v.faction === 'convoy' ? v.stowedParts().length + v.cargoRig.entries.length : 0;
   let text = own ? `Storage · ${own} item${own > 1 ? 's' : ''} in the ${v.def.name}` : `Storage · the ${v.def.name}`;
-  // At the roof, the bed or a rack (not a way inside): name what rides there, and whether it is held.
+  // At the roof, the bed or a rack (nearer that than a way inside): name what rides there, and whether it is held.
   const out = v.cargoRig.entries;
-  if (out.length && !placeFor(p, v, 'stow').at && loadPlace(p, v)) {
+  if (out.length && atOutside(p, v)) {
     const e = out[0];
     const where = surfacesOf(v.def, v.build!.fit).find((q) => q.zone === e.zone)?.name ?? ZONE_NAME[e.zone];
     text = `Storage · ${carriedName(e.c)} on the ${where}, ${v.cargoRig.isSecure(e) ? 'secure' : 'loose'}${out.length > 1 ? ` (+${out.length - 1} more)` : ''}`;
@@ -758,8 +770,8 @@ export function openStorage(p: Player, v: Vehicle): boolean {
   if (v.faction === 'neutral') p.ctx.cars.claim(v, p);
   if (v.faction !== 'convoy') return false;
   const place = placeFor(p, v, 'stow');
-  // At the boot or a back door: the lid comes up as you reach in.
-  if (place.at && place.gate.need?.kind === 'open') v.setPanel(place.gate.need.panel, true);
+  // At the boot or a back door: the lid comes up as you reach in (not when it is the roof or the bed you are at).
+  if (place.at && place.gate.need?.kind === 'open' && !atOutside(p, v)) v.setPanel(place.gate.need.panel, true);
   p.action = null;
   sessions.set(p, new StorageSession(p, v));
   p.ctx.audio.play('pickup', v.position.x, v.position.z, 0.3);

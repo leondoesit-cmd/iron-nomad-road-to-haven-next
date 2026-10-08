@@ -7,7 +7,7 @@ import { bayFit, bayText, engineSpec, hoodState } from '../sim/engines';
 import { partName } from '../sim/parts';
 import { planRepair, type RepairKind } from '../sim/repair';
 import { workFor, type Spot } from '../sim/access';
-import { isOwnRide, panelCand, pointPos, toolHit } from './access';
+import { isOwnRide, isWorkable, panelCand, pointPos, toolHit } from './access';
 import { panelClose } from './hauling';
 import type { Cand, Player } from './player';
 import type { Vehicle } from './vehicle';
@@ -63,7 +63,7 @@ function wrenchDots(v: Vehicle): THREE.Vector3[] {
  * is in the way. Null when there is nothing to do here, so the caller can fall back to a whole-car repair.
  */
 export function wrenchCandidate(p: Player, repair: () => Cand | null): Cand | null {
-  const v = p.nearestVehicle(5, isOwnRide);
+  const v = p.nearestVehicle(5, isWorkable);
   if (!v || !v.build) return null;
   const ctx = p.ctx;
   const dots = wrenchDots(v);

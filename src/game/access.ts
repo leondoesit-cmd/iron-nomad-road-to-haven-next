@@ -19,6 +19,12 @@ import type { Vehicle } from './vehicle';
 /** Vehicles that count as "our ride": the convoy's own cars with a build. */
 export const isOwnRide = (v: Vehicle) => v.faction === 'convoy' && !!v.build && !v.wreck && v.kind !== 'crew';
 
+/**
+ * Vehicles that can be worked on by hand: our own, and any abandoned car with a build. A found car is treated as if it were
+ * already ours (a part bolted on or off, something stowed in it, makes it the convoy's, as driving it would).
+ */
+export const isWorkable = (v: Vehicle) => !!v.build && !v.wreck && v.kind !== 'crew' && (v.faction === 'convoy' || v.faction === 'neutral') && v.def.physics.kind !== 'boat';
+
 /** How far (m) a person reaches to each kind of point: the engine bay and the roof are big. */
 export const REACH: Record<Spot, number> = { hood: 1.8, doorL: 1.5, doorR: 1.5, trunk: 1.5, flap: 1.5, wheel: 1.5, under: 1.5, roof: 2.3, front: 1.5, rear: 1.5, flank: 1.5, gun: 1.8, screen: 1.7, back: 1.7 };
 
@@ -159,7 +165,7 @@ export function focusPanels(p: Player, v: Vehicle, at: Reach | null) {
  * `closeOnly` (a tool in hand) it only offers to shut something that is open, so a wrench next to a door still repairs the car.
  */
 export function panelCandidate(p: Player, closeOnly = false): Cand | null {
-  const v = p.nearestVehicle(5, isOwnRide);
+  const v = p.nearestVehicle(5, isWorkable);
   if (!v?.build) return null;
   const spots = panelSpots(v);
   if (!spots.length) return null;

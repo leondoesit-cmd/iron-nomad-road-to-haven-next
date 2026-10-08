@@ -363,6 +363,68 @@ describe('storage', () => {
 
 // ------------------------------------------------------------------------------------------------ the crosshair
 
+/** An abandoned car by the road, nobody's yet. */
+function foundCar(sc: LegScene, chassis = 'hatch'): Vehicle {
+  const p = sc.players[0];
+  p.exitVehicle(false);
+  const st = sc.src.layout.start;
+  const x = st.x - 9;
+  const z = st.z + 8;
+  const v = sc.spawnVehicle({ build: newBuild(chassis, { seed: 41, fuel: 0.1 }), x, z, y: sc.groundAt(x, z), yaw: 0, ownerIndex: -1, faction: 'neutral' });
+  run(sc, 1.5);
+  return v;
+}
+
+function hold(h: ReturnType<typeof fakeServices>, sc: LegScene, who: number, btn: number, secs: number) {
+  const it = h.intents[who];
+  it.device = 'keyboard';
+  for (let i = 0; i < Math.round(secs / DT); i++) {
+    it.held |= 1 << btn;
+    it.pressed = i === 0 ? 1 << btn : 0;
+    it.heldTime[btn] += DT;
+    sc.tick(DT);
+    if (i % 10 === 0) pose(sc);
+  }
+  it.held &= ~(1 << btn);
+  it.pressed = 0;
+  it.heldTime[btn] = 0;
+  sc.tick(DT);
+}
+
+describe('an abandoned car is worked on as if it were ours', () => {
+  it('its storage opens with X, and reaching in takes it for the convoy', () => {
+    const { h, sc, c } = leg();
+    const v = foundCar(sc);
+    const p = sc.players[0];
+    standAt(sc, v, 'trunk');
+    p.equip = 'crowbar';
+    tap(h, sc, 0, Btn.X);
+    expect(storageOf(p)).toBeTruthy();
+    expect(v.faction).toBe('convoy');
+    expect(c.garage.some((b) => b.uid === v.build!.uid)).toBe(true);
+  });
+
+  it('a part carried to it is stowed in its boot, and the wrench takes off what is bolted on', () => {
+    const { h, sc, c } = leg();
+    const v = foundCar(sc);
+    const p = sc.players[0];
+    installPart(v.build!, newPart('arm_sheet', 0.9));
+    v.syncFromBuild();
+    openPanel(v, 'trunk');
+    standAt(sc, v, 'trunk');
+    p.carry = { kind: 'part', item: newPart('whl_mt', 1) };
+    tap(h, sc, 0, Btn.X);
+    expect(p.carry).toBeNull();
+    expect(v.faction).toBe('convoy');
+    expect(c.inventory.find((i) => i.id === 'whl_mt')?.on).toBe(v.build!.uid);
+    // The plating on the flank comes off with the wrench.
+    p.equip = 'wrench';
+    standAt(sc, v, 'flank', 0);
+    hold(h, sc, 0, Btn.A, 3);
+    expect(p.carry).toMatchObject({ kind: 'part', item: { id: 'arm_sheet' } });
+  });
+});
+
 describe('reading a part with the crosshair', () => {
   /** The centre of a mount's box, in the world. */
   function mount(v: Vehicle, slot: PartSlot, i: number): THREE.Vector3 {
