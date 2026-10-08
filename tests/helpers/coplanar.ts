@@ -21,6 +21,9 @@ export interface CoplanarHit {
 interface Tri {
   src: string;
   col: string;
+  /** Bounding box, for a quick reject before clipping. */
+  lo: THREE.Vector3;
+  hi: THREE.Vector3;
   p: THREE.Vector3[];
   n: THREE.Vector3;
   d: number;
@@ -39,7 +42,9 @@ function trisOf(g: THREE.BufferGeometry, src: string, out: Tri[]) {
     const len = nn.length();
     if (len < 1e-8) continue;
     nn.divideScalar(len);
-    out.push({ src, col: hex(idx ? idx.getX(i) : i), p, n: nn, d: nn.dot(p[0]) });
+    const lo = p[0].clone().min(p[1]).min(p[2]);
+    const hi = p[0].clone().max(p[1]).max(p[2]);
+    out.push({ src, col: hex(idx ? idx.getX(i) : i), lo, hi, p, n: nn, d: nn.dot(p[0]) });
   }
 }
 
@@ -107,6 +112,7 @@ export function coplanarOverlaps(parts: { name: string; geo: THREE.BufferGeometr
       for (let j = i + 1; j < all.length; j++) {
         const a = list[i];
         const b = all[j];
+        if (a.lo.x > b.hi.x || b.lo.x > a.hi.x || a.lo.y > b.hi.y || b.lo.y > a.hi.y || a.lo.z > b.hi.z || b.lo.z > a.hi.z) continue;
         if (Math.abs(a.d - b.d) > tol || a.n.dot(b.n) < 0.9995) continue;
         const o = overlap(a, b);
         if (o.area <= minArea) continue;
@@ -142,7 +148,7 @@ function exposure(tris: Tri[]): (p: THREE.Vector3, n: THREE.Vector3) => boolean 
   const pv = new THREE.Vector3();
   const tv = new THREE.Vector3();
   const qv = new THREE.Vector3();
-  const REACH = 0.3;
+  const REACH = 0.5;
   /** The nearest surface a ray off `o` along `n` meets within reach, and whether it was met from behind. */
   const cast = (o: THREE.Vector3, n: THREE.Vector3): { d: number; back: boolean } => {
     const end = o.clone().addScaledVector(n, REACH);
