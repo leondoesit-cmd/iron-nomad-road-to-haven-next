@@ -62,12 +62,15 @@ export interface Bench {
   /** Speed (km/h) after 12 s flat out from rest up a 10% and a 20% grade. */
   hill10: number;
   hill20: number;
+  /** Gear held at the end of the flat run and at the end of the 20% climb. */
+  gearFlat: number;
+  gearHill: number;
   /** Settled height of the chassis centre above the pad, m. */
   rest: number;
 }
 
-export function bench(def: VehicleDef, o: BenchOpts = {}, opts: { skipHill?: boolean } = {}): Bench {
-  const out: Bench = { t50: Infinity, t80: Infinity, t100: Infinity, top: 0, brakeFrom: 0, brakeDist: 0, coast: 0, hill10: 0, hill20: 0, rest: 0 };
+export function bench(def: VehicleDef, o: BenchOpts = {}, opts: { skipHill?: boolean; brakeKmh?: number } = {}): Bench {
+  const out: Bench = { t50: Infinity, t80: Infinity, t100: Infinity, top: 0, brakeFrom: 0, brakeDist: 0, coast: 0, hill10: 0, hill20: 0, gearFlat: 0, gearHill: 0, rest: 0 };
   // Settle and accelerate.
   {
     const P = flatWorld();
@@ -87,9 +90,10 @@ export function bench(def: VehicleDef, o: BenchOpts = {}, opts: { skipHill?: boo
       if (kmh >= 100 && out.t100 === Infinity) out.t100 = t;
       out.top = Math.max(out.top, kmh);
     }
+    out.gearFlat = v.unit.gear;
   }
   // Brake and coast from 80 km/h, or from 90% of what it can reach.
-  const from = Math.min(80, out.top * 0.9);
+  const from = opts.brakeKmh ?? Math.min(80, out.top * 0.9);
   out.brakeFrom = from;
   for (const mode of ['brake', 'coast'] as const) {
     const P = flatWorld();
@@ -124,7 +128,10 @@ export function bench(def: VehicleDef, o: BenchOpts = {}, opts: { skipHill?: boo
         P.step();
       }
       if (grade === 0.1) out.hill10 = v.speed * 3.6;
-      else out.hill20 = v.speed * 3.6;
+      else {
+        out.hill20 = v.speed * 3.6;
+        out.gearHill = v.unit.gear;
+      }
     }
   }
   return out;
@@ -132,4 +139,4 @@ export function bench(def: VehicleDef, o: BenchOpts = {}, opts: { skipHill?: boo
 
 export const fmt = (b: Bench) =>
   [b.t50, b.t80, b.t100].map((t) => (Number.isFinite(t) ? t.toFixed(2).padStart(6) : '     -')).join(' ') +
-  ` | top ${b.top.toFixed(1).padStart(5)} | brake ${b.brakeFrom.toFixed(0)}→0 ${b.brakeDist.toFixed(1).padStart(5)} m | coast ${b.coast.toFixed(2)} | hill10 ${b.hill10.toFixed(1).padStart(5)} hill20 ${b.hill20.toFixed(1).padStart(5)} | rest ${b.rest.toFixed(3)}`;
+  ` | top ${b.top.toFixed(1).padStart(5)} | brake ${b.brakeFrom.toFixed(0)}→0 ${b.brakeDist.toFixed(1).padStart(5)} m | coast ${b.coast.toFixed(2)} | hill10 ${b.hill10.toFixed(1).padStart(5)} hill20 ${b.hill20.toFixed(1).padStart(5)} | gear ${b.gearFlat}/${b.gearHill} | rest ${b.rest.toFixed(3)}`;
