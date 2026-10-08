@@ -144,6 +144,14 @@ export function preparePlan(leg: LegDef) {
   masterOf(leg);
 }
 
+/**
+ * The master plan itself, if it is made, for reading only (the title warms render caches from it). Never hand it to a
+ * scene and never change it: every copy is made from it.
+ */
+export function planMaster(leg: LegDef): ChunkSource | null {
+  return masters.get(leg)?.src ?? null;
+}
+
 /** A plan of its own for a new scene on this leg: a pristine copy of the master, made first if need be. */
 export function takePlan(leg: LegDef): ChunkSource {
   const m = masterOf(leg);
