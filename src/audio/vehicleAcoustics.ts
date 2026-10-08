@@ -20,6 +20,7 @@ export function engineCharacter(e: EngineParams) {
 
 /** Automatic audio gear bands; simulation has gearing ratios but no discrete gear selector. */
 export function audioGear(e: EngineParams, previous = 1) {
+  if (e.gear !== undefined) return e.gear;
   if ((e.speed ?? 0) < -.6) return -1;
   const normalized = Math.abs(e.speed ?? 0) / Math.max(8, e.topSpeed ?? 28);
   const previousForward = Math.max(1, previous);
