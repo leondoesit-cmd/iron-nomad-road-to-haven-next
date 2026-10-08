@@ -224,18 +224,22 @@ describe('In-Browser Text-to-Speech (TTS) Engine', () => {
       expect(v2).toBeDefined();
     });
 
-    it('speaks cleaned text and cancels existing transmissions before speaking', () => {
+    it('speaks cleaned text and cancels its own transmission (never anyone else\'s) before speaking', () => {
       const tts = new TTSEngine();
       const onStart = vi.fn();
       const onEnd = vi.fn();
 
+      // Nothing of its own is speaking: the page's shared queue (a story line, say) is left alone.
       const success = tts.speak('...Haven holds. Follow north...', { onStart, onEnd });
       expect(success).toBe(true);
-      expect(mockSynth.cancel).toHaveBeenCalled();
+      expect(mockSynth.cancel).not.toHaveBeenCalled();
       expect(mockSynth.speak).toHaveBeenCalled();
       expect(spokenUtterances.length).toBe(1);
       expect(spokenUtterances[0].text).toBe('Haven holds. Follow north.');
       expect(onStart).toHaveBeenCalled();
+      // A newer transmission cuts off its own stale one.
+      tts.speak('Contact north!');
+      expect(mockSynth.cancel).toHaveBeenCalledTimes(1);
     });
 
     it('adjusts rate and pitch upward for urgent messages', () => {

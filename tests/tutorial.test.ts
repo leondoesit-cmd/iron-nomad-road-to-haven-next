@@ -290,6 +290,12 @@ describe('training', () => {
     sc.addPing(a.pos.x, a.pos.z + 20, 0);
     sc.addPing(b.pos.x, b.pos.z + 20, 1);
     run(0.3);
+    // The big map holds the feet and takes the interact button for waypoints: step back out of it to play on.
+    for (let w = 0; w < 2; w++) {
+      tap(w, Btn.Map);
+      tap(w, Btn.Map);
+    }
+    expect(sc.players.map((p) => p.mapMode)).toEqual([0, 0]);
     finishLesson();
     expect(at()).toBe('10:Your pack');
 
