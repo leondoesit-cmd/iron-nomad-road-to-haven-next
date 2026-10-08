@@ -26,6 +26,7 @@ import type { MapFrame } from './mapdata';
 import { MapPainter, PIN_COLOR } from './minimap';
 import { heatLabel, stormLabel, stormMapRadius, windAt } from '../sim/weather';
 import { STALK } from '../sim/hunting';
+import { updateDrugStrip } from './drugStrip';
 
 /** The key or button a prompt names, as this seat has it bound. */
 export function btnLabel(slot: Slot | null, btn: string): string {
@@ -812,6 +813,7 @@ export class Hud {
     h.setClass('drugfx', fallback && (haze > 0 || dark > 0) ? 'on' : '');
     h.setStyle('drugfx', '--haze', String(haze));
     h.setStyle('drugfx', '--dark', String(dark));
+    updateDrugStrip(h.root, p, scene.campaign, slot);
     if (!p.beltOpen) {
       h.setStyle('belt', 'display', 'none');
       return;

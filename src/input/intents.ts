@@ -24,6 +24,11 @@ export const Btn = {
   Map: 18,
   /** Not a physical button: the inventory, driven by whatever the player binds to it (D-pad left on a pad). */
   Inventory: 19,
+  /**
+   * Not a physical button: the drugs quick pick, keys only (a pad reaches drugs through the quick belt and the inventory).
+   * 24 is `Summon`, added alongside this one; keep both and set `BTN_COUNT` to 26 when merging.
+   */
+  Drugs: 25,
   /** Not physical buttons: the four chores, driven by keys. A pad reaches them through the quick belt. */
   Eat: 20,
   Drink: 21,
@@ -31,7 +36,7 @@ export const Btn = {
   Shit: 23,
 } as const;
 /** Logical buttons, including View, Jump, Map and Inventory. */
-export const BTN_COUNT = 24;
+export const BTN_COUNT = 26;
 export type BtnName = keyof typeof Btn;
 
 export type DeviceKind = 'pad' | 'keyboard';

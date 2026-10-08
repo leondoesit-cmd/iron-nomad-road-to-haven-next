@@ -1,0 +1,241 @@
+/* ------------------------------------------------------------------ inventory: menu, supplies, body state */
+/* Loaded by ui/inventory.ts after the main stylesheet. Kept modest: paper tones, thin rules, no glow. */
+
+/* Split screen: the panel stays inside the half of whoever opened it. */
+.ledger.inv.top {
+  inset: 2% 2% 51% 2%;
+  font-size: 0.68em;
+}
+.ledger.inv.bottom {
+  inset: 51% 2% 2% 2%;
+  font-size: 0.68em;
+}
+
+/* The context menu: a small card beside the picked tile. */
+.invmenu {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 12.5em;
+  max-width: 19em;
+  padding: 4px;
+  background: #efe6cf;
+  border: 1px solid rgba(38, 28, 16, 0.55);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  font-size: 0.95em;
+  pointer-events: auto;
+}
+.invmenu[hidden] {
+  display: none;
+}
+.invmenu .mhead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 4px 4px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid rgba(38, 28, 16, 0.3);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.86em;
+  color: #5a3a14;
+}
+.invmenu .mic {
+  width: 1.7em;
+  height: 1.7em;
+  flex: none;
+}
+.invmenu .mrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 6px;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  background: transparent;
+  border: none;
+}
+.invmenu .mrow .ml {
+  flex: 1;
+  min-width: 0;
+}
+.invmenu .mrow em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 0.82em;
+  opacity: 0.7;
+}
+.invmenu .mrow .why {
+  display: block;
+  font-size: 0.78em;
+  color: #8a4a2a;
+  letter-spacing: 0;
+}
+.invmenu .mrow:disabled {
+  opacity: 0.55;
+}
+.invmenu .mrow.danger .ml {
+  color: #9a2e1c;
+}
+.invmenu button:hover:not(:disabled) {
+  background: rgba(38, 28, 16, 0.12);
+}
+.invmenu kbd,
+.invsup kbd {
+  flex: none;
+  min-width: 1.5em;
+  padding: 0 4px;
+  font-family: var(--mono);
+  font-size: 0.78em;
+  line-height: 1.4;
+  text-align: center;
+  color: #3a2a18;
+  background: rgba(255, 250, 235, 0.7);
+  border: 1px solid rgba(38, 28, 16, 0.4);
+  border-radius: 3px;
+}
+.invmenu kbd.pad {
+  border-radius: 9px;
+}
+.invmenu .mchips {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+}
+.invmenu .mcl {
+  flex: 1;
+  font-size: 0.8em;
+  color: #5a4630;
+  text-transform: none;
+}
+.invmenu .mchip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 3.2em;
+  padding: 1px 2px;
+  font-family: var(--mono);
+  font-size: 0.86em;
+  line-height: 1.1;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.invmenu .mchip small {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 0.68em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.75;
+}
+.invmenu .mfoot {
+  margin-top: 2px;
+  padding: 3px 4px 0;
+  border-top: 1px dotted rgba(38, 28, 16, 0.3);
+  font-family: var(--mono);
+  font-size: 0.72em;
+  color: #6a5640;
+  text-transform: none;
+}
+/* The cursor in the menu is a quiet bar in the player's colour, not the grid's thick ring. */
+.invmenu .focusable.f0,
+.invmenu .focusable.f1 {
+  outline: none;
+  background: rgba(38, 28, 16, 0.13);
+  box-shadow: inset 3px 0 0 var(--p1);
+}
+.invmenu .focusable.f1 {
+  box-shadow: inset 3px 0 0 var(--p2);
+}
+.invmenu .focusable.f0::after,
+.invmenu .focusable.f1::after {
+  content: none;
+}
+.invmenu .mchip.focusable.f0,
+.invmenu .mchip.focusable.f1 {
+  box-shadow: inset 0 -3px 0 var(--p1);
+}
+
+/* Supplies: smaller tiles than the bag, with the count and a mark for the quick belt. */
+.invsup {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(3.1em, 1fr));
+  gap: 5px;
+}
+.invsup .tile.sup {
+  aspect-ratio: 1 / 1.12;
+}
+.invsup .tile.drug {
+  border-bottom-color: var(--dc, rgba(38, 28, 16, 0.4)) !important;
+  border-bottom-width: 3px !important;
+}
+.invsup .tile.none {
+  opacity: 0.45;
+}
+.invsup .tile.want {
+  box-shadow: inset 0 0 0 2px rgba(168, 50, 31, 0.55);
+}
+.invsup .tile .qk {
+  position: absolute;
+  left: 3px;
+  top: 2px;
+  font-family: var(--mono);
+  font-size: 0.6em;
+  line-height: 1;
+  padding: 1px 3px;
+  color: #f3e6c8;
+  background: rgba(90, 58, 20, 0.85);
+  border-radius: 3px;
+}
+.invsup .nodrugs {
+  grid-column: 1 / -1;
+  font-size: 0.8em;
+  text-transform: none;
+}
+
+/* In your system. */
+.invcol .sysh {
+  margin-top: 4px;
+}
+.invcol .system .stat {
+  font-family: var(--mono);
+  font-size: 0.82em;
+  text-transform: none;
+  line-height: 1.35;
+}
+.toxbar {
+  position: relative;
+  height: 1.15em;
+  margin: 3px 0;
+  background: rgba(38, 28, 16, 0.12);
+  border: 1px solid rgba(38, 28, 16, 0.35);
+}
+.toxbar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgba(200, 140, 40, 0.55);
+}
+.toxbar.hot i {
+  background: rgba(168, 50, 31, 0.6);
+}
+.toxbar span {
+  position: relative;
+  padding-left: 4px;
+  font-family: var(--mono);
+  font-size: 0.74em;
+  text-transform: none;
+}
+
+.bigcard.sup {
+  border-color: var(--dc, rgba(38, 28, 16, 0.4));
+}
+.invcol .hintline {
+  margin-top: 6px;
+  font-size: 0.78em;
+  opacity: 0.8;
+}
