@@ -371,6 +371,12 @@ function assemble(def: VehicleDef, fit: Fit, tyres: Tyres | undefined, cal: Chas
   return pt;
 }
 
+/**
+ * The accelerator's map, as a drive-by-wire throttle has: progressive, so half a pedal is well over half the torque and a
+ * stick held part way still pulls the way it always did. Full is full.
+ */
+export const pedalMap = (thr: number): number => 1 - Math.pow(1 - clamp(thr, 0, 1), 1.4);
+
 /** The limiter's trim: full fuel up to 98% of the redline, none at it. */
 const soft = (c: EngineCurve, rpm: number) => clamp((c.redline - rpm) / (c.redline * 0.02), 0, 1);
 
@@ -511,13 +517,13 @@ export class DriveUnit {
       this.holdT = 0;
     }
     if (g.cvt && this.gear > 0) {
-      const want = c.idle + (c.peakPwRpm * 0.97 - c.idle) * Math.pow(thr, 0.75);
+      const want = c.idle + (c.peakPwRpm * 0.97 - c.idle) * Math.pow(thr, 0.5);
       this.cvtRatio = clamp(want / Math.max(1, wheelRpm * g.final), g.ratios[g.ratios.length - 1], g.ratios[0]);
     }
     const overall = this.ratio() * g.final;
     const locked = wheelRpm * overall;
     // The clutch (or converter, or a scooter's centrifugal clutch) slips until the wheels can carry the engine's revs.
-    const engage = g.cvt ? Math.min(c.launch, c.idle + (c.peakPwRpm * 0.97 - c.idle) * Math.pow(thr, 0.75)) : c.idle + (c.launch - c.idle) * Math.pow(thr, 0.8);
+    const engage = g.cvt ? Math.min(c.launch, c.idle + (c.peakPwRpm * 0.97 - c.idle) * Math.pow(thr, 0.5)) : c.idle + (c.launch - c.idle) * Math.pow(thr, 0.8);
     let target: number;
     if (thr > 0.01 && locked < engage) {
       target = engage;
@@ -541,10 +547,10 @@ export class DriveUnit {
     this.limiter = at >= c.redline * 0.995 || this.rpm >= c.redline * 0.995;
     const full = torqueAt(c, at) * soft(c, at);
     let T: number;
-    if (thr > 0.01) T = thr * full;
+    if (thr > 0.01) T = pedalMap(thr) * full;
     else if (this.slip === 0 && Math.abs(v) > 1 && dir >= 0 === this.gear > 0) T = -engineDrag(c, at) * pt.brakeGain;
     else T = 0;
-    this.load = clamp(thr > 0.01 ? (thr * full) / c.peakNm : 0, 0, 1);
+    this.load = clamp(thr > 0.01 ? (pedalMap(thr) * full) / c.peakNm : 0, 0, 1);
     const sign = this.gear < 0 ? -REVERSE_K : 1;
     const cut = shifting ? 1 - g.cut : 1;
     const F = T * overall * (g.eff / g.wheelR) * pt.gain * pt.boost * (T > 0 ? gain : 1) * cut * sign;

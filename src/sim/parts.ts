@@ -5,6 +5,8 @@ import { coolingKw, engineEffects, engineLine, type BayLabel } from './engines';
 import { bodyOff, drivetrainEffects, gearTop } from './drivetrain';
 import { coolantLitres, oilRate, sumpLitres } from './fluids';
 import { cabinEffects, cabinGaps, cabinStatCounts } from './cabin';
+import { OCCUPANT_KG, curbKg, referenceKg } from './massModel';
+import { engineCurve, powerToWeight, powertrainFor, straightRun, topSpeed, type Powertrain } from './powertrain';
 
 export { INTERIOR_SLOTS, isInteriorSlot } from '../data';
 export { cabinGaps, cabinPart, canRidePassenger, type CabinGaps } from './cabin';
@@ -153,6 +155,37 @@ export interface Stats {
   noPassengerSeat: boolean;
   noRearSeat: boolean;
   noDash: boolean;
+  /** The engine's torque curve: its peak (Nm) and where it comes, where the power peaks, and the redline (rpm). 0 with no engine. */
+  peakTorque: number;
+  peakTorqueRpm: number;
+  peakPowerRpm: number;
+  redline: number;
+  /** Forward gears (a CVT counts as one), whether it is a CVT, and the final drive matched to this engine. */
+  gears: number;
+  cvt: boolean;
+  finalDrive: number;
+  /** Kilowatts per tonne with a driver aboard. */
+  powerToWeight: number;
+  /** Seconds from rest to 100 km/h on the flat with a driver and a full tank (Infinity when it never gets there). */
+  zeroTo100: number;
+  /** Top speed on the flat with a driver and a full tank, km/h. */
+  topKmh: number;
+}
+
+const perfCache = new WeakMap<Powertrain, Map<number, { t100: number; top: number }>>();
+
+/** The straight-line figures of a powertrain at a weight (kg, real), from the same drive model the physics runs. Cached. */
+function perfOf(def: VehicleDef, pt: Powertrain, kg: number): { t100: number; top: number } {
+  let byMass = perfCache.get(pt);
+  if (!byMass) perfCache.set(pt, (byMass = new Map()));
+  const key = Math.round(kg);
+  const hit = byMass.get(key);
+  if (hit) return hit;
+  // The physics runs every chassis at the scale of its reference weight (the table's mass stands for stock with a driver).
+  const m = (def.physics.mass * kg) / referenceKg(def);
+  const r = pt.curve && !pt.noDrive ? { t100: straightRun(pt, m, [100 / 3.6], 40).times[0], top: topSpeed(pt, m) * 3.6 } : { t100: Infinity, top: 0 };
+  byMass.set(key, r);
+  return r;
 }
 
 const sum = (fit: Fit, k: keyof PartStats): number => {
@@ -189,7 +222,12 @@ export function effectiveStats(def: VehicleDef, fit: Fit, tyres?: Tyres): Stats 
   const gone = tyresGone(tyres, wheels);
   const goneK = 1 - 0.18 * gone;
   const topMult = clamp(Math.max(0.5, 1 + sum(fit, 'top')) * ef.top * gearTop(def, fit) * goneK, 0.2, 2);
-  const dt = drivetrainEffects(def, fit, ef, topMult);
+  // Every part has a weight (`sim/massModel.ts`): the curb weight is what the springs and the brakes are judged against.
+  const curb = def.physics.kind === 'boat' ? def.physics.mass : curbKg(def, fit, tyres);
+  const dt = drivetrainEffects(def, fit, ef, topMult, curb);
+  const pt = def.physics.kind === 'boat' ? null : powertrainFor(def, fit, tyres);
+  const run = pt ? perfOf(def, pt, curb + OCCUPANT_KG) : { t100: Infinity, top: 0 };
+  const curve = pt?.curve ?? null;
   const off = bodyOff(def, fit);
   const spec = ef.spec;
   const sump = sumpLitres(spec.litres);
@@ -248,6 +286,16 @@ export function effectiveStats(def: VehicleDef, fit: Fit, tyres?: Tyres): Stats 
     noPassengerSeat: gaps.seatP,
     noRearSeat: gaps.seatR,
     noDash: gaps.dash,
+    peakTorque: curve?.peakNm ?? 0,
+    peakTorqueRpm: curve?.peakTqRpm ?? 0,
+    peakPowerRpm: curve?.peakPwRpm ?? 0,
+    redline: curve?.redline ?? 0,
+    gears: pt ? (pt.gearing.cvt ? 1 : pt.gearing.ratios.length) : 0,
+    cvt: !!pt?.gearing.cvt,
+    finalDrive: pt?.gearing.final ?? 0,
+    powerToWeight: powerToWeight(ef.empty ? 0 : ef.spec.kw, curb + OCCUPANT_KG),
+    zeroTo100: run.t100,
+    topKmh: run.top,
   };
 }
 
@@ -340,12 +388,19 @@ const pct = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
 
 /** What a part is, in plain words: an engine's size, output and fuel, a radiator's rating, otherwise its stat changes. */
 export function describePart(d: PartDef): string[] {
-  if (d.engine) return d.empty ? ['no engine: the vehicle will not run'] : [engineLine(d.engine), `${Math.round(d.engine.mass)} kg · size ${d.engine.size}`];
+  if (d.engine) {
+    if (d.empty) return ['no engine: the vehicle will not run'];
+    const c = engineCurve(d.engine);
+    const torque = c ? `${Math.round(c.peakNm)} Nm at ${rpmText(c.peakTqRpm)} · redline ${rpmText(c.redline)}` : '';
+    return [engineLine(d.engine), ...(torque ? [torque] : []), `${Math.round(d.engine.mass)} kg · size ${d.engine.size}`];
+  }
   if (d.cooling !== undefined) return d.empty ? ['no cooling: it will overheat fast'] : [`cooling ${Math.round(d.cooling)} kW`];
   if (d.gearbox) {
     if (d.empty) return ['no gearbox: nothing reaches the wheels'];
     const g = d.gearbox.gearing;
-    return [`carries ${Math.round(d.gearbox.rating)} kW`, g > 0.05 ? 'short gears: quick off the line, lower top speed' : g < -0.05 ? 'tall gears: higher top speed, slower launch' : 'balanced gearing', `${Math.round(d.gearbox.mass)} kg`];
+    const n = d.gearbox.ratios?.length ?? 0;
+    const kind = d.gearbox.cvt ? 'CVT: no steps, it holds the engine where it pulls' : n ? `${n} speeds${(d.gearbox.shift ?? 0.3) <= 0.1 ? ', lightning shifts' : ''}` : '';
+    return [`carries ${Math.round(d.gearbox.rating)} kW`, ...(kind ? [kind] : []), g > 0.05 ? 'short gears: quick off the line, lower top speed' : g < -0.05 ? 'tall gears: higher top speed, slower launch' : 'balanced gearing', `${Math.round(d.gearbox.mass)} kg`];
   }
   if (d.suspension) {
     if (d.empty) return ['no springs: the body sits on the axles'];
@@ -387,6 +442,24 @@ export const EMPTY_CABIN_TEXT: Record<string, string> = {
   steer_none: 'no steering wheel: the steering barely turns; it still goes straight',
   dash_none: 'no dashboard: the wiring hangs out and the lamps flicker',
 };
+
+/** Revs for reading: "3,900 rpm". */
+export const rpmText = (rpm: number): string => `${(Math.round(rpm / 50) * 50).toLocaleString('en-US')} rpm`;
+
+/**
+ * How a whole build goes, in a few lines: its weight and power to weight, the engine's torque, the gears, and the figures
+ * from the same drive model the physics runs ("1,080 kg · 46 kW/t", "87 Nm at 3,950 rpm", "5 speeds · 0-100 km/h 5.4 s",
+ * "top 112 km/h"). For the garage and the inspection cards.
+ */
+export function describePerformance(st: Stats): string[] {
+  if (st.noEngine) return [`${Math.round(st.mass).toLocaleString('en-US')} kg`, 'no engine'];
+  const out = [`${Math.round(st.mass).toLocaleString('en-US')} kg · ${Math.round(st.powerToWeight)} kW/t`];
+  if (st.peakTorque > 0) out.push(`${Math.round(st.peakTorque)} Nm at ${rpmText(st.peakTorqueRpm)}`);
+  const box = st.noDrive ? 'no gearbox' : st.cvt ? 'CVT' : `${st.gears} speeds`;
+  out.push(`${box} · 0-100 km/h ${Number.isFinite(st.zeroTo100) ? `${st.zeroTo100.toFixed(1)} s` : 'never'}`);
+  if (st.topKmh > 0) out.push(`top ${Math.round(st.topKmh)} km/h`);
+  return out;
+}
 
 /** A part's effects in plain words, best news first: "+17% power · +8% top speed · +10% fuel burn". */
 export function describeStats(st: PartStats): string[] {

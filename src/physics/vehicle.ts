@@ -127,6 +127,8 @@ export class VehicleBody {
   private fzRef: number;
   /** Flat-ground top speed with the present powertrain and load, m/s (recomputed when either changes). */
   private vTopNow = 0;
+  /** Roll inertia the payload adds (a pillion, a loaded rack), for the two-wheeler's balance. */
+  private rollExtra = 0;
   private vTopFor: Powertrain | null = null;
   /** Each wheel's load (smoothed, N) and what its tyre can put down this step (N). */
   private fzS: Float64Array;
@@ -211,11 +213,13 @@ export class VehicleBody {
     this.mass = m;
     const [hx, hy, hz] = p.halfExtents;
     const ex = l.inertia ?? { x: 0, y: 0, z: 0 };
+    this.rollExtra = ex.z;
     // The box's own inertia about its centre at this mass, with what the payload adds out on the roof or in the bed.
     const ix = (m * (hy * hy + hz * hz)) / 3 + ex.x;
     const iy = (m * (hx * hx + hz * hz)) / 3 + ex.y;
     const iz = (m * (hx * hx + hy * hy)) / 3 + ex.z;
-    this.collider.setMassProperties(m, l.com, { x: ix, y: iy, z: iz }, { x: 0, y: 0, z: 0, w: 1 });
+    if (Math.abs(scale - 1) < 0.002 && Math.abs(l.com.x) + Math.abs(l.com.y) + Math.abs(l.com.z) < 0.003 && !(ex.x + ex.y + ex.z)) this.collider.setMass(p.mass);
+    else this.collider.setMassProperties(m, l.com, { x: ix, y: iy, z: iz }, { x: 0, y: 0, z: 0, w: 1 });
     // Real springs: the same rate in N/m whatever the load, so Rapier's per-unit-mass stiffness falls as the mass rises.
     const k = (p.suspension.stiffness * spring) / scale;
     const crit = 2 * Math.sqrt(p.suspension.stiffness);
@@ -324,8 +328,9 @@ export class VehicleBody {
       thr *= clamp((vGov - v) / (0.06 * vGov + 0.5), 0, 1);
     }
     const force = this.unit.step(dt, v, thr, dir, on, env.power * env.forceMult);
-    // With the engine dead and nothing pressed it rolls to a stop, stalled in gear.
-    let decel = !on && thr <= 0 && pedal <= 0 ? 2.2 : 0;
+    // With nothing pressed it rolls to a stop: stalled in gear with the engine dead, held by the drag of the drivetrain at a
+    // crawl with it running (above a crawl, engine braking, the tyres and the air do it).
+    let decel = thr <= 0 && pedal <= 0 ? (!on ? 2.2 : av < 2 ? 0.8 : 0) : 0;
     const handbrake = input.handbrake;
     if (handbrake) decel += 5;
 
@@ -525,7 +530,7 @@ export class VehicleBody {
       const av3 = this.body.angvel();
       const rollRate = av3.x * f[0] + av3.y * f[1] + av3.z * f[2];
       const [hx, hy] = p.halfExtents;
-      const inertia = (this.mass * ((2 * hx) ** 2 + (2 * hy) ** 2)) / 12;
+      const inertia = (this.mass * ((2 * hx) ** 2 + (2 * hy) ** 2)) / 12 + this.rollExtra;
       const w2 = p.uprightGain;
       const kd = 2 * 0.9 * Math.sqrt(w2);
       const tq = inertia * (w2 * rollErr - kd * rollRate) * dt;

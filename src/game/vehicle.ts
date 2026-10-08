@@ -17,6 +17,8 @@ import { fuelMismatch } from '../sim/fuel';
 import { T_CRITICAL, T_HOT, T_OVERHEAT, overheatPower, overheatWear, steamLevel, thermalStep } from '../sim/thermal';
 import { buildRaiderBuggy, buildVehicleVisual, buildWagon, defaultLook, lookOf, mountsOfChassis, type VehicleVisual } from '../render/vehicleModels';
 import { CargoRig } from './cargo';
+import { powertrainFor, type Powertrain } from '../sim/powertrain';
+import { bodyLoadOf, massBreakdown, type MassBreakdown, type Seat } from '../sim/massModel';
 import { insideMax, insideName, insideUnits, unitsUsed, type InsideRoom } from '../sim/cargo';
 import { PLAYER_COLORS } from '../render/palette';
 import type { Humanoid, Palette } from '../render/humanoid';
@@ -153,6 +155,15 @@ export class Vehicle {
   open: Partial<Record<Panel, boolean>> = {};
   /** How far each panel is swung, 0 shut to 1 open. `Bodywork` eases it and poses the model. */
   swing: Record<Panel, number> = { hood: 0, doorL: 0, doorR: 0, trunk: 0 };
+  /** The engine, gearbox and final drive turning the wheels (`sim/powertrain.ts`). Null on a boat. */
+  powertrain: Powertrain | null = null;
+  /**
+   * What it weighs right now, item by item, and where its centre of mass is (`sim/massModel.ts`), as last put on the
+   * physics body. Null for vehicles with no build (raiders, crew, boats): they run at their tuned reference weight.
+   */
+  massInfo: MassBreakdown | null = null;
+  private massKey = '';
+  private driveView = { rpm: 0, gear: 0, rpmFrac: 0, load: 0, shifting: false, limiter: false, idle: 0, redline: 0, cvt: false };
   /** Water: engine drowned (wheeled vehicles), seconds spent out of the water since, and the spray timer. */
   flooded = false;
   dryT = 0;
@@ -197,8 +208,72 @@ export class Vehicle {
     this.bodywork = new Bodywork(this);
     this.glass = new CarGlass(this);
     this.cargoRig = new CargoRig(this);
+    if (this.body instanceof VehicleBody) this.powertrain = powertrainFor(def, o.build?.fit ?? {}, o.build?.tyres);
+    this.weigh();
     if (o.hulk) this.makeHulk();
     this.syncStands();
+  }
+
+  /**
+   * Weigh the vehicle and put the weight on the body: its parts, its fuel and fluids, who is aboard, the spares stowed in it
+   * and the load on its decks. Cheap, but only redone when something that weighs anything has changed.
+   */
+  weigh(force = false) {
+    const b = this.build;
+    if (!b || !(this.body instanceof VehicleBody)) return;
+    const camp = this.ctx.campaign;
+    let stowed = 0;
+    if (this.faction === 'convoy') for (const it of camp.inventory) if (it.on === b.uid) stowed++;
+    const c = this.health.comp;
+    const key = `${Math.round(this.fuel * 8)}|${this.driver ? 1 : 0}${this.passenger ? 1 : 0}|${stowed}|${this.cargoRig.entries.length}|${Math.round(c.oil * 10)}|${Math.round((c.coolant ?? 1) * 10)}`;
+    if (!force && key === this.massKey) return;
+    this.massKey = key;
+    const occupants: { seat: Seat }[] = [];
+    if (this.driver) occupants.push({ seat: 'driver' });
+    if (this.passenger) occupants.push({ seat: this.weapon === 'bedMG' || !this.def.seat ? 'gunner' : 'passenger' });
+    const mb = massBreakdown(
+      { chassis: b.chassis, def: this.def, fit: b.fit, tyres: b.tyres, tank: this.fuelType, comp: c, cargo: this.cargoRig.entries },
+      {
+        fuel: this.fuel,
+        occupants,
+        stowed: stowed ? camp.inventory.filter((it) => it.on === b.uid) : undefined,
+        // Things dealt into a deck's grid sit where the deck puts them.
+        place: (e) => {
+          const w = this.cargoRig.worldOf(e);
+          return this.localOf(w.x, w.y, w.z);
+        },
+      },
+    );
+    this.massInfo = mb;
+    this.body.setLoad(bodyLoadOf(this.def, b.fit, mb));
+  }
+
+  /** The engine as the gauges and the sound see it: revs, the gear (-1 reverse), how hard it is working. Shared object. */
+  get drive() {
+    const d = this.driveView;
+    const u = this.body instanceof VehicleBody ? this.body.unit : null;
+    const c = this.powertrain?.curve ?? null;
+    if (!u || !c) {
+      d.rpm = d.rpmFrac = d.load = d.idle = d.redline = 0;
+      d.gear = 0;
+      d.shifting = d.limiter = d.cvt = false;
+      return d;
+    }
+    d.rpm = u.rpm;
+    d.gear = u.gear;
+    d.rpmFrac = u.rpmFrac;
+    d.load = u.load;
+    d.shifting = u.shifting;
+    d.limiter = u.limiter;
+    d.idle = c.idle;
+    d.redline = c.redline;
+    d.cvt = this.powertrain!.gearing.cvt;
+    return d;
+  }
+
+  /** Kilograms aboard and all, as last weighed (the table's mass with a driver when it has no build to weigh). */
+  get massKg(): number {
+    return this.massInfo?.total ?? this.def.physics.mass;
   }
 
   /** The model for this vehicle's chassis, paint and fitted parts. */
@@ -268,6 +343,8 @@ export class Vehicle {
     if (this.visual.passenger && wasSeated.p !== undefined) this.visual.passenger.root.visible = wasSeated.p;
     this.spin = this.body.wheelLocal.map(() => 0);
     if (this.wreck) this.charVisual();
+    if (this.body instanceof VehicleBody) this.powertrain = powertrainFor(this.def, b.fit, b.tyres);
+    this.weigh(true);
     this.syncStands();
   }
 
@@ -300,6 +377,8 @@ export class Vehicle {
     this.health.armorBonus = fresh.armorBonus;
     this.tankMax = this.stats.tank;
     this.fuel = Math.min(this.fuel, this.tankMax);
+    if (this.body instanceof VehicleBody) this.powertrain = powertrainFor(this.def, b.fit, b.tyres);
+    this.weigh(true);
   }
 
   // ------------------------------------------------------------------ panels
@@ -691,8 +770,11 @@ export class Vehicle {
       if (!e.engineOn && this.engineOn) this.engineOn = false;
       e.power = perf.power * this.tetherPower * (this.convoyEngine ? overheatPower(this.temp) * gearboxPower(this.health.comp.gearbox ?? 1) : 1);
       e.grip = perf.grip * this.stats.gripMult;
-      e.forceMult = this.stats.forceMult;
-      e.topSpeedMult = this.stats.topSpeedMult * this.tetherTop;
+      // A wheeled vehicle drives through its powertrain, which already carries the engine, the gears and the bolt-ons:
+      // the tether is left as a governor on it. A boat keeps the table's multipliers.
+      e.drive = this.powertrain ?? undefined;
+      e.forceMult = this.powertrain ? 1 : this.stats.forceMult;
+      e.topSpeedMult = (this.powertrain ? 1 : this.stats.topSpeedMult) * this.tetherTop;
       e.travelMult = this.stats.travelMult;
       e.brakeMult = this.stats.brakeMult;
       e.steerMult = this.stats.steerMult;
@@ -740,6 +822,7 @@ export class Vehicle {
     if ((this.loadT -= dt) <= 0) {
       this.loadT = 0.5;
       this.cargoRig.refresh();
+      this.weigh();
     }
     this.cargoRig.step(dt);
 
