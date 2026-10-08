@@ -112,14 +112,15 @@ describe('the numbers in plain words', () => {
     expect(v6[0]).toMatchObject({ label: 'Power' });
     expect(v6[0].text).toMatch(/kW \(\d+ hp\)/);
     expect(v6.some((f) => f.label === 'Weight' && /kg$/.test(f.text))).toBe(true);
-    expect(v6.some((f) => f.label === 'Torque')).toBe(false);
+    // The torque curve (sim/powertrain.ts) gives every engine its peak, in Nm.
+    expect(v6.find((f) => f.label === 'Torque')?.text).toMatch(/ Nm$/);
     const mt = partFacts(partDef('whl_mt'));
     expect(mt.find((f) => f.label === 'Grip')).toMatchObject({ text: '+10%', tone: 'good' });
-    // Wire a torque figure in and it shows, in Nm.
+    // A model that knows nothing hides the row.
     const was = carData.engineTorque;
-    carData.engineTorque = (e) => e.kw * 2;
+    carData.engineTorque = () => null;
     try {
-      expect(partFacts(partDef('eng_v6')).find((f) => f.label === 'Torque')?.text).toMatch(/ Nm$/);
+      expect(partFacts(partDef('eng_v6')).some((f) => f.label === 'Torque')).toBe(false);
     } finally {
       carData.engineTorque = was;
     }
@@ -140,8 +141,8 @@ describe('the numbers in plain words', () => {
     const power = rows.find((r) => r.key === 'power')!;
     expect(power.vsStock).toBe(1);
     expect(rows.find((r) => r.key === 'mass')!.vsStock).toBe(-1);
-    // No torque model yet: no torque row.
-    expect(rows.some((r) => r.key === 'torque')).toBe(false);
+    // The torque model is wired in: the row is there.
+    expect(rows.some((r) => r.key === 'torque')).toBe(true);
     expect(rows.map((r) => r.label)).toEqual(expect.arrayContaining(['Grip: road', 'Grip: sand', 'Range', 'Armour']));
   });
 

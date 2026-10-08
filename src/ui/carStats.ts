@@ -3,6 +3,8 @@ import { clamp } from '../core/math';
 import { EMPTY_CABIN_TEXT, EMPTY_GLASS_TEXT, conditionLabel, effectiveStats, fitsChassis, isWorn, slotsOf, terrainGrip, type Fit, type PartItem, type Stats, type Tyres } from '../sim/parts';
 import { insideUnits, surfacesOf } from '../sim/cargo';
 import { factoryIdFor } from '../sim/drivetrain';
+import { engineCurve, powertrainFor, straightRun } from '../sim/powertrain';
+import { OCCUPANT_KG } from '../sim/massModel';
 import { EMPTY_ID, factoryTyreId, tyreFits } from '../sim/garage';
 
 /**
@@ -19,10 +21,10 @@ import { EMPTY_ID, factoryTyreId, tyreFits } from '../sim/garage';
 
 /** The drivetrain figures that come from the physics model. Each returns null when the model does not know it yet. */
 export const carData = {
-  /** Peak torque of an engine, Nm. */
+  /** Peak torque of an engine, Nm, from its torque curve (sim/powertrain.ts). */
   engineTorque(e: EngineSpec): number | null {
-    void e;
-    return null;
+    const c = engineCurve(e);
+    return c && c.peakNm > 0 ? c.peakNm : null;
   },
   /** The whole vehicle's weight, kg, as it stands. */
   mass(def: VehicleDef, fit: Fit, tyres: Tyres | undefined, st: Stats): number | null {
@@ -41,9 +43,17 @@ export const carData = {
    * Seconds from standstill to `toKmh` on asphalt at full throttle: stepped with the same force taper the wheel model uses
    * (`physics/vehicle.ts`), so it moves with power, gearing and weight. Null for a car that never gets there.
    */
-  accel(def: VehicleDef, st: Stats, massKg: number | null, toKmh: number): number | null {
+  accel(def: VehicleDef, st: Stats, massKg: number | null, toKmh: number, fit?: Fit, tyres?: Tyres): number | null {
     const p = def.physics;
     if (p.kind === 'boat' || st.noEngine || st.noDrive || st.forceMult <= 0) return null;
+    // With the fit known, run the real powertrain (torque curve, gears, shifts, grip, air) with this weight and a driver.
+    if (fit) {
+      const pt = powertrainFor(def, fit, tyres);
+      if (pt) {
+        const t = straightRun(pt, (massKg && massKg > 0 ? massKg : st.mass) + OCCUPANT_KG, [toKmh / 3.6]).times[0];
+        return Number.isFinite(t) ? t : null;
+      }
+    }
     const vmax = (def.topSpeedKmh / 3.6) * st.topSpeedMult;
     const goal = toKmh / 3.6;
     if (vmax * 0.97 <= goal) return null;
@@ -248,7 +258,7 @@ export function carFigures(def: VehicleDef, fit: Fit, tyres?: Tyres): CarFigures
     torqueNm: torque,
     massKg,
     topKmh,
-    accelS: carData.accel(def, st, massKg, accelTo),
+    accelS: carData.accel(def, st, massKg, accelTo, fit, tyres),
     accelTo,
     grip: { road: g * surfaceGrip('asphalt'), dirt: g * terrainGrip(surfaceGrip('hardpan'), st.offroad), sand: g * terrainGrip(surfaceGrip('sand'), st.offroad), mud: g * terrainGrip(surfaceGrip('mud'), st.offroad) },
     armourPct: st.armor,
