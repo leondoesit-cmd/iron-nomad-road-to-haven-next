@@ -33,8 +33,8 @@ import { BenchmarkRun, type BenchmarkReport } from './benchmark';
 import { Rng } from '../core/rng';
 import { perf } from '../core/perfMarks';
 import { delay, nextPaint, quietSlot } from '../core/idle';
-import { planMade, preparePlan } from '../world/planCache';
-import { WARMUPS } from '../render/warmup';
+import { planMade, planMaster, preparePlan } from '../world/planCache';
+import { WARMUPS, worldWarmups } from '../render/warmup';
 import { LoadingVeil } from '../ui/loading';
 
 export type Phase =
@@ -228,9 +228,13 @@ export class Game {
         await quiet();
         perf.time('prep:plan', () => preparePlan(leg));
       }
-      for (const [name, step] of WARMUPS) {
-        await quiet();
-        perf.time(`prep:${name}`, step);
+      const master = planMaster(leg);
+      for (const [name, step] of [...WARMUPS, ...(master ? worldWarmups(master) : [])]) {
+        // A step with more to do says so, and goes on at the next quiet moment.
+        for (let more = true; more; ) {
+          await quiet();
+          more = perf.time(`prep:${name}`, step) === true;
+        }
       }
       perf.measure('prep:world', t0);
       this.worldReady = true;

@@ -82,7 +82,8 @@ export function copyGraph<T>(root: T, keep: (o: object) => boolean): T {
       return c;
     }
     if (isGenerator(v)) throw new Error('copyGraph: a half-made generator cannot be copied');
-    if (Array.isArray(v)) c = new Array(v.length);
+    // Arrays are filled by push, so they stay packed (a `new Array(n)` would be holey: slower in every hot loop over it).
+    if (Array.isArray(v)) c = [];
     else if (v instanceof Map) c = new Map();
     else if (v instanceof Set) c = new Set();
     else {
@@ -99,7 +100,7 @@ export function copyGraph<T>(root: T, keep: (o: object) => boolean): T {
     const c = copies.get(v)!;
     if (Array.isArray(v)) {
       const a = c as unknown[];
-      for (let i = 0; i < v.length; i++) a[i] = copy(v[i]);
+      for (let i = 0; i < v.length; i++) a.push(copy(v[i]));
     } else if (v instanceof Map) {
       const m = c as Map<unknown, unknown>;
       for (const [k, x] of v) m.set(copy(k), copy(x));
