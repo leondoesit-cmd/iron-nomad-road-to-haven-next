@@ -23,19 +23,36 @@ describe('river and stream water', () => {
     const hy = def.hydro!;
     expect(rib.courses.length).toBe(hy.rivers.length);
     const pos = rib.geometry.getAttribute('position');
+    const fade = rib.geometry.getAttribute('aFade');
     for (const c of rib.courses) {
       const r = hy.rivers[c.river];
       expect(c.rows).toBeGreaterThan(r.end);
-      // Up to where the course runs into other water, every vertex of a cross-section sits on that sample's level.
-      for (let i = 0; i < r.end - 2; i++) {
+      // Every vertex of a cross-section sits on that sample's level, but where another sheet covers it (the lake it runs
+      // into, the spring pool it runs out of): there it fades out, a little under that sheet.
+      for (let i = 0; i < c.rows; i++) {
         for (let k = 0; k < RIBBON_NX; k++) {
-          const y = pos.getY(c.first + i * RIBBON_NX + k);
-          if (r.spring >= 0 && Math.hypot(r.x[i] - hy.springs[r.spring].x, r.z[i] - hy.springs[r.spring].z) < hy.springs[r.spring].r + 2) continue;
-          expect(Math.abs(y - r.level[i])).toBeLessThan(1e-3);
+          const v = c.first + i * RIBBON_NX + k;
+          const dy = r.level[i] - pos.getY(v);
+          if (fade.getX(v) > 0.999) expect(Math.abs(dy)).toBeLessThan(1e-3);
+          else expect(dy).toBeGreaterThan(-1e-3);
+          expect(dy).toBeLessThan(0.121);
         }
       }
     }
     for (const name of ['position', 'aFlow', 'aDir', 'aFade', 'aRise']) expect(finite(rib.geometry.getAttribute(name).array as Float32Array)).toBe(true);
+    // Across each cross-section the vertices run from one edge to the other, and the bar never falls going out from the middle.
+    const flow = rib.geometry.getAttribute('aFlow');
+    const rise = rib.geometry.getAttribute('aRise');
+    for (const c of rib.courses) {
+      for (let i = 0; i < c.rows; i += 7) {
+        const b = c.first + i * RIBBON_NX;
+        const mid = RIBBON_NX >> 1;
+        expect(flow.getX(b + mid)).toBe(0);
+        for (let k = 1; k < RIBBON_NX; k++) expect(flow.getX(b + k)).toBeGreaterThanOrEqual(flow.getX(b + k - 1));
+        for (let k = mid + 1; k < RIBBON_NX; k++) expect(rise.getZ(b + k)).toBeGreaterThanOrEqual(rise.getZ(b + k - 1));
+        for (let k = mid - 1; k >= 0; k--) expect(rise.getZ(b + k)).toBeGreaterThanOrEqual(rise.getZ(b + k + 1));
+      }
+    }
     expect(rib.geometry.boundingSphere!.radius).toBeGreaterThan(1000);
   });
 

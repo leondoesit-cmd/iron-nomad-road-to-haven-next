@@ -29,22 +29,37 @@ export function farGridAxes(def: TerrainDef): { halfW: number; z0: number; z1: n
   return { halfW, z0, z1, us, zs };
 }
 
+/** Grid points per side of one block of the near-height cache. */
+const BLOCK = 32;
+
 /** Heights of the drawn ground meshes, sampled lazily and cached by grid point. One per build: it holds on to what it read. */
 export class DrawnGround {
-  private near = new Map<number, number>();
+  /** Near heights in blocks of BLOCK x BLOCK grid points (NaN until read), by block. */
+  private blocks = new Map<number, Float32Array>();
+  private lastKey = NaN;
+  private last: Float32Array | null = null;
   private farH = new Map<number, number>();
   private axes: { us: number[]; zs: number[] } | null = null;
 
   constructor(private def: TerrainDef) {}
 
   private nearAt(c: number, r: number): number {
-    const k = (c + 65536) * 131072 + (r + 65536);
-    let h = this.near.get(k);
-    if (h === undefined) {
+    const bc = Math.floor(c / BLOCK);
+    const br = Math.floor(r / BLOCK);
+    const key = (bc + 32768) * 65536 + (br + 32768);
+    let blk = this.last;
+    if (key !== this.lastKey) {
+      blk = this.blocks.get(key) ?? null;
+      if (!blk) this.blocks.set(key, (blk = new Float32Array(BLOCK * BLOCK).fill(NaN)));
+      this.lastKey = key;
+      this.last = blk;
+    }
+    const i = (r - br * BLOCK) * BLOCK + (c - bc * BLOCK);
+    let h = blk![i];
+    if (h !== h) {
       const x = c * CELL;
       const z = r * CELL;
-      h = heightAt(this.def, x, z) + cliffDetail(this.def, x, z);
-      this.near.set(k, h);
+      h = blk![i] = heightAt(this.def, x, z) + cliffDetail(this.def, x, z);
     }
     return h;
   }

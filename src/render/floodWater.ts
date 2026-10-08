@@ -3,7 +3,7 @@ import { GLOBALS } from './materials';
 import { mirrorWaterMaterial, waterNoiseTexture, waterNormalTexture } from './water';
 import { lakeColors } from '../world/lakes';
 import { heightAt, type TerrainDef } from '../world/terrain';
-import { FLOOD_SPEED, floodTaper, PAN_POOL, panQ, type Pan, type WashNet } from '../world/washes';
+import { FLOOD_SPEED, floodTaper, PAN_POOL, panQ, roadRamp, type Pan, type WashNet } from '../world/washes';
 import { DrawnGround } from './drawnGround';
 import { HYDRO_DT, type Hydrograph } from '../sim/climate';
 
@@ -82,6 +82,8 @@ export function setHydroTexture(h: Hydrograph, dayLength: number) {
  */
 export function floodRibbonGeometry(def: TerrainDef, net: WashNet): THREE.BufferGeometry | null {
   if (!net.washes.length) return null;
+  const hit = floodCache.get(net);
+  if (hit) return floodGeometryFrom(hit);
   const ground = new DrawnGround(def);
   let rows = 0;
   for (const w of net.washes) rows += Math.min(w.n - 1, w.end + PAST_END) + 1;
@@ -101,7 +103,8 @@ export function floodRibbonGeometry(def: TerrainDef, net: WashNet): THREE.Buffer
     const first = v;
     for (let i = 0; i <= last; i++) {
       const h = w.half[i];
-      const b = w.bank[i];
+      // Out to the top of the banks, as far as `floodAt` looks: further where a road ramps down into the bed.
+      const reach = Math.max(w.bank[i], roadRamp(def, w.x[i], w.z[i]));
       const nx = -w.dz[i];
       const nz = w.dx[i];
       const bed = w.bed[i];
@@ -116,7 +119,7 @@ export function floodRibbonGeometry(def: TerrainDef, net: WashNet): THREE.Buffer
         let bb = bar[0];
         let prev = 0;
         for (let q = 0; q < SIDE; q++) {
-          const a = q === 0 ? 0.45 * h : q === 1 ? 0.8 * h : q === 2 ? h : h + b * BANK_AT[q - 3];
+          const a = q === 0 ? 0.45 * h : q === 1 ? 0.8 * h : q === 2 ? h : h + reach * BANK_AT[q - 3];
           const x = w.x[i] + nx * a * side;
           const z = w.z[i] + nz * a * side;
           us[base + q] = a * side;
@@ -162,13 +165,30 @@ export function floodRibbonGeometry(def: TerrainDef, net: WashNet): THREE.Buffer
       for (let k = 0; k < NX - 1; k++) idx.push(a + k, a + k + 1, b + k, a + k + 1, b + k + 1, b + k);
     }
   }
+  const data: FloodArrays = { pos, nrm, a1, a2, a3, index: Uint32Array.from(idx) };
+  floodCache.set(net, data);
+  return floodGeometryFrom(data);
+}
+
+interface FloodArrays {
+  pos: Float32Array;
+  nrm: Float32Array;
+  a1: Float32Array;
+  a2: Float32Array;
+  a3: Float32Array;
+  index: Uint32Array;
+}
+/** The flood ribbon's arrays by wash network: the leg scene is built again every dawn on the same terrain. */
+const floodCache = new WeakMap<WashNet, FloodArrays>();
+
+function floodGeometryFrom(d: FloodArrays): THREE.BufferGeometry {
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
-  g.setAttribute('aWash', new THREE.BufferAttribute(a1, 4));
-  g.setAttribute('aWash2', new THREE.BufferAttribute(a2, 4));
-  g.setAttribute('aWash3', new THREE.BufferAttribute(a3, 3));
-  g.setIndex(idx);
+  g.setAttribute('position', new THREE.BufferAttribute(d.pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(d.nrm, 3));
+  g.setAttribute('aWash', new THREE.BufferAttribute(d.a1, 4));
+  g.setAttribute('aWash2', new THREE.BufferAttribute(d.a2, 4));
+  g.setAttribute('aWash3', new THREE.BufferAttribute(d.a3, 3));
+  g.setIndex(new THREE.BufferAttribute(d.index, 1));
   g.computeBoundingBox();
   g.boundingBox!.max.y += 2;
   g.boundingSphere = g.boundingBox!.getBoundingSphere(new THREE.Sphere());
