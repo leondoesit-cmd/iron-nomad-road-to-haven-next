@@ -27,7 +27,11 @@ import { ARROW_LEN, BRACE, BowRig } from './bow';
  * The third-person rig in `humanoid.ts` stays what a partner sees; this one is only ever drawn in its owner's view.
  */
 
-const mat = kitMaterial();
+/**
+ * Both faces drawn: an arm runs back past the eye, and where the near plane slices a sleeve the inside of the cloth closes
+ * the cut instead of leaving it open.
+ */
+const mat = kitMaterial({ side: THREE.DoubleSide });
 
 type V3 = [number, number, number];
 
@@ -61,6 +65,12 @@ const POLE_FORE = new THREE.Vector3(-0.5, -1, 0.1).normalize();
  * the bottom corners of the frame, where the lens cuts them open.
  */
 const POLE_TUCK_R = new THREE.Vector3(0.45, -1, 0.15).normalize();
+/**
+ * With the sights up the firing elbow drops down by the ribs: held out to the side, the forearm runs back across the bottom
+ * right of the frame so close to the eye that the lens cuts the sleeve open.
+ */
+const POLE_R_ADS = new THREE.Vector3(0.25, -1, -0.15).normalize();
+const _pa = new THREE.Vector3();
 const POLE_TUCK_L = new THREE.Vector3(-0.45, -1, 0.15).normalize();
 const _pr = new THREE.Vector3();
 const _pl = new THREE.Vector3();
@@ -151,12 +161,25 @@ const CARRY: Record<'handgun' | 'smg' | 'sawn' | 'pump' | 'rifle' | 'crossbow', 
 /** Which way each gun is carried: by its base gun, except the shouldered crossbow and the two-handed machine pistol. */
 const carryOf = (m: GunModel) => (HANDGUNS.includes(m) ? CARRY.handgun : m === 'crossbow' ? CARRY.crossbow : CARRY[GUN_BASE[m] === 'pistol' || GUN_BASE[m] === 'revolver' ? 'handgun' : (GUN_BASE[m] as 'smg' | 'sawn' | 'pump' | 'rifle')]);
 
+/**
+ * With the sights up the firing hand stays at least this far out from the eye (metres), clear of the near plane (0.2 m) with
+ * its wrist: a gun whose rear sight sits far up the barrel from the grip (a lever gun's buckhorn, a double's rib) is held
+ * further out, up to `ADS_FAR`.
+ */
+const GRIP_CLEAR = 0.3;
+const ADS_FAR = 0.5;
+const adsOf = (m: GunModel) => {
+  const f = FRAMES[m];
+  return clamp(f.rear[2] - f.grip.p[2] + GRIP_CLEAR, carryOf(m).ads, ADS_FAR);
+};
+
 const SPECS = {} as Record<Exclude<Held, 'none'>, Spec>;
 for (const m of GUN_MODELS) {
   const f = FRAMES[m];
   const hand = HANDGUNS.includes(m);
   SPECS[m] = {
     ...carryOf(m),
+    ads: adsOf(m),
     scale: 1,
     r: GRIP_R(f.grip.p, f.grip.a),
     l: f.support ? (hand ? SUPPORT_HANDGUN(f.support, f.grip.a) : FORE_END(f.support)) : undefined,
@@ -735,7 +758,8 @@ export class ViewModel {
       const k = clamp01(gp.rack * 3);
       rp = [lerp(rp[0], -0.045, k), lerp(rp[1], 0.05, k), lerp(rp[2], 0.12 - gp.rack * 0.09, k)];
     }
-    const poleR = dp ? _pr.copy(POLE_R).lerp(POLE_TUCK_R, dw).normalize() : POLE_R;
+    const poleR0 = ads > 0 ? _pa.copy(POLE_R).lerp(POLE_R_ADS, ads).normalize() : POLE_R;
+    const poleR = dp ? _pr.copy(poleR0).lerp(POLE_TUCK_R, dw).normalize() : poleR0;
     const pole0 = spec.long && spec.l ? POLE_FORE : POLE_L;
     const poleL = dp ? _pl.copy(pole0).lerp(POLE_TUCK_L, dw).normalize() : pole0;
     this.handOn(rp, spec.r, 'r', this.handR, SHOULDER_R, poleR, this.upperR, this.foreR, 0, dhR);

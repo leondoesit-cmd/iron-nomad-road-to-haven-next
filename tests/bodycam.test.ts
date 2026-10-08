@@ -926,6 +926,20 @@ describe('aiming down the sights', () => {
     }
   });
 
+  it('with the sights up the firing hand stays clear of the near plane, its elbow down, on every gun', () => {
+    const ALL = ['pistol', 'compact', 'mp', 'revolver', 'cannon', 'smg', 'smg2', 'sawn', 'coach', 'pump', 'combat', 'rifle', 'sniper', 'lever', 'carbine', 'ar', 'br', 'dmr', 'lmg', 'crossbow'] as const;
+    for (const m of ALL) {
+      const { vm, cam } = posed(m, 1);
+      const r = vm as unknown as { handR: THREE.Mesh; foreR: THREE.Mesh };
+      const local = (o: THREE.Object3D) => cam.worldToLocal(o.getWorldPosition(new THREE.Vector3()));
+      // The grip a hand's breadth beyond the 0.2 m near plane (a lever gun's far-forward rear sight is held further out).
+      expect(-local(r.handR).z, m).toBeGreaterThan(0.24);
+      expect(sighted(m as (typeof GUNS)[number], 1).distance, m).toBeLessThan(0.51);
+      // The elbow well below the hand: the forearm runs back and down out of the frame, not across it.
+      expect(local(r.handR).y - local(r.foreR).y, m).toBeGreaterThan(0.1);
+    }
+  });
+
   it('looking up or down, the sights stay on the line', () => {
     for (const pitch of [-0.9, -0.5, 0.4, 0.9]) {
       const r = sighted('pistol', 1, { pitch });
