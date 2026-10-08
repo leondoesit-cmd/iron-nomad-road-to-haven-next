@@ -15,7 +15,7 @@ import { WATER_RESERVE_MAX, pourWater } from '../sim/fluids';
 import { needText, spotName, workFor, type Panel, type Spot } from '../sim/access';
 import { partName } from '../sim/parts';
 import { lizardCandidate, lookedAt } from './grab';
-import { PER_WHEEL, anchorWorld, carryTarget, fittedAt, ghostAnchors, isOwnRide, panelCand, placeFor, pointPos, reached, toLocal, toolHit, type Place, type Reach, type SocketHit } from './access';
+import { PER_WHEEL, anchorWorld, carryTarget, fittedAt, ghostAnchors, isOwnRide, isWorkable, panelCand, placeFor, pointPos, reached, toLocal, toolHit, type Place, type Reach, type SocketHit } from './access';
 import type { Cand, Player } from './player';
 import type { Vehicle } from './vehicle';
 
@@ -56,8 +56,14 @@ const trunkPos = (v: Vehicle) => sitePos(v, 'rear');
 /** How close a loose item must be to lift it. */
 export const LIFT_REACH = 1.9;
 
+/** The car at hand to work on: one of ours, or an abandoned one (which working on makes ours). */
 function ownRideNear(p: Player): Vehicle | null {
-  return p.nearestVehicle(3.8, isOwnRide);
+  return p.nearestVehicle(3.8, isWorkable);
+}
+
+/** Putting something in or on an abandoned car takes it for the convoy, as driving it would. */
+function claimFor(p: Player, v: Vehicle) {
+  if (v.faction === 'neutral') p.ctx.cars.claim(v, p);
 }
 
 // ---------------------------------------------------------------- sockets
@@ -85,7 +91,7 @@ function socketsFor(v: Vehicle, category: PartSlot): Socket[] {
 export function nearestSocket(p: Player, category: PartSlot, within = SHOW_REACH): SocketHit | null {
   let best: SocketHit | null = null;
   for (const v of p.ctx.vehicles) {
-    if (!isOwnRide(v)) continue;
+    if (!isWorkable(v)) continue;
     const [lx, ly, lz] = toLocal(v, p.pos.x, p.pos.y + 1.0, p.pos.z);
     for (const sock of socketsFor(v, category)) {
       const { dist, anchor, index } = socketDistance(sock, lx, ly, lz);
@@ -322,7 +328,7 @@ export function guide(p: Player) {
   if (p.carry?.kind === 'part') {
     const item = p.carry.item;
     const slot = partDef(item.id).slot;
-    const v = p.nearestVehicle(SHOW_REACH, isOwnRide);
+    const v = p.nearestVehicle(SHOW_REACH, isWorkable);
     if (!v?.build) return;
     const tgt = carryTarget(p, v, slot);
     const moving = Math.abs(v.speed) > 2;
@@ -422,7 +428,7 @@ export function haulCandidate(p: Player, deck?: () => Cand | null): Cand | null 
   }
   const c = p.carry;
   if (c.kind === 'paint') return sprayCandidate(p, c);
-  const v = p.nearestVehicle(c.kind === 'part' ? 9 : 4.5, isOwnRide);
+  const v = p.nearestVehicle(c.kind === 'part' ? 9 : 4.5, isWorkable);
   if (!v?.build) return null;
   const info = carryInfo(p, v, c);
   const moving = Math.abs(v.speed) > 2;
@@ -647,6 +653,7 @@ export function stowCarry(p: Player, quiet = false): boolean {
     return false;
   }
   const camp = p.ctx.campaign;
+  if (near) claimFor(p, near);
   if (near && !quiet) {
     // It flies into the boot (or the cab), onto the spot of the floor it will lie on (`render/bootDeck.ts`).
     const [lx, ly, lz] = bootSpot(bootDeck(near.def), near.stowedParts().length);
@@ -753,6 +760,7 @@ export function loadCarry(p: Player): boolean {
     p.note(t('access.moving', { name: v.def.name }), 'warn');
     return false;
   }
+  claimFor(p, v);
   const spot = v.cargoRig.nextSpot(c, plan.zone);
   p.ctx.work.stow(c.kind === 'part' ? modelKey(c.item) : carryModelKey(c), handPos(p), spot, () => v.refreshLoadNow());
   v.cargoRig.add(c, plan.zone);
