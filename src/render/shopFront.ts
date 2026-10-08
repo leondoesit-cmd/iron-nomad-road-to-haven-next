@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { shared } from './dispose';
+import { COPLANAR, coplanarOffset } from './depth';
 import { MeshBuilder, S } from './builder';
 import { MELABES } from '../world/melabes';
 
@@ -48,7 +49,7 @@ export function shopFrontMaterial(id: ShopId): THREE.MeshStandardMaterial {
   const tex = shared(new THREE.CanvasTexture(drawFront(id)));
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
-  m = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.22, roughness: 0.85, metalness: 0, alphaTest: 0.5, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+  m = coplanarOffset(new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.22, roughness: 0.85, metalness: 0, alphaTest: 0.5 }), COPLANAR.detail);
   m.userData.shared = true;
   materials.set(id, m);
   tryPhoto(id, m);

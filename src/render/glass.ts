@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { shared } from './dispose';
+import { COPLANAR, coplanarOffset } from './depth';
 import type { GlassKind, PaneStage } from '../sim/glass';
 
 /**
@@ -53,7 +54,7 @@ let crackMat: THREE.MeshStandardMaterial | null = null;
 let crackTex: THREE.Texture | null = null;
 
 function glassMaterial(opacity: number, color: number, rough: number): THREE.MeshStandardMaterial {
-  const m = new THREE.MeshStandardMaterial({ color, transparent: true, opacity, roughness: rough, metalness: 0.1, side: THREE.DoubleSide, depthWrite: false, envMapIntensity: 1.5, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+  const m = coplanarOffset(new THREE.MeshStandardMaterial({ color, transparent: true, opacity, roughness: rough, metalness: 0.1, side: THREE.DoubleSide, depthWrite: false, envMapIntensity: 1.5 }), COPLANAR.detail);
   m.userData.shared = true;
   return m;
 }
@@ -144,7 +145,7 @@ function crackTexture(): THREE.Texture {
 
 function crackMaterial(): THREE.MeshStandardMaterial {
   if (crackMat) return crackMat;
-  crackMat = new THREE.MeshStandardMaterial({ map: crackTexture(), color: 0xe6eef0, transparent: true, depthWrite: false, roughness: 0.25, metalness: 0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+  crackMat = coplanarOffset(new THREE.MeshStandardMaterial({ map: crackTexture(), color: 0xe6eef0, transparent: true, depthWrite: false, roughness: 0.25, metalness: 0, side: THREE.DoubleSide }), COPLANAR.decal);
   crackMat.userData.shared = true;
   return crackMat;
 }

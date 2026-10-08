@@ -674,7 +674,8 @@ export class ChunkView {
   private roadRibbon(def: TerrainDef, mats: ChunkMaterials, road: RoadPath, ri: number, run: number[], x0: number, z0: number, us: number[], cols: number, half: number, crown: number, tmp: [number, number, number]) {
     const p = road.pts;
     const n = p.length / 2;
-    const lift = roadLayer(def.open!, ri) * ROAD_STACK;
+    const layer = roadLayer(def.open!, ri);
+    const lift = layer * ROAD_STACK;
     const verts: number[] = [];
     const nors: number[] = [];
     const uvs: number[] = [];
@@ -721,6 +722,8 @@ export class ChunkView {
     g.setAttribute('normal', new THREE.Float32BufferAttribute(nors, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     g.setAttribute('rtan', new THREE.Float32BufferAttribute(tans, 3));
+    // Each layer is drawn nearer the eye than the roads it crosses, in proportion to the distance (see terrainMaterial).
+    g.setAttribute('rlayer', new THREE.Float32BufferAttribute(new Float32Array(verts.length / 3).fill(layer), 1));
     g.setIndex(idx);
     g.computeBoundingSphere();
     const m = this.addMesh(g, mats.road, false, true);
@@ -900,36 +903,32 @@ export class ChunkView {
     const d = z1 - z0;
     const cx = (x0 + x1) / 2;
     const cz = (z0 + z1) / 2;
+    // Bands round the walls (ledges, the shop lintel, the cornice): the front and back runs cover the corners and the side
+    // runs fit between them. Overlapping at the corners, their tops and ends were one plane and flickered.
+    const band = (y: number, h: number, out: number) => {
+      det.box(cx, y, z1 + out / 2, w + out * 2, h, out, trim);
+      det.box(cx, y, z0 - out / 2, w + out * 2, h, out, trim);
+      det.box(x1 + out / 2, y, cz, out, h, d, trim);
+      det.box(x0 - out / 2, y, cz, out, h, d, trim);
+    };
     // Floor ledges on panel and stucco buildings, a heavier cornice at the top.
     if (style === 0 || style === 2) {
       const gh = floorH * 1.3;
-      for (let y = gh; y < y1 - 1; y += floorH * (style === 2 ? 2 : 1)) {
-        det.box(cx, y0 + y, z1 + 0.05, w + 0.1, 0.12, 0.1, trim);
-        det.box(cx, y0 + y, z0 - 0.05, w + 0.1, 0.12, 0.1, trim);
-        det.box(x1 + 0.05, y0 + y, cz, 0.1, 0.12, d + 0.1, trim);
-        det.box(x0 - 0.05, y0 + y, cz, 0.1, 0.12, d + 0.1, trim);
-      }
+      for (let y = gh; y < y1 - 1; y += floorH * (style === 2 ? 2 : 1)) band(y0 + y, 0.12, 0.1);
     }
-    if (ground) {
-      // Shop band lintel.
-      const lh = floorH * 1.3 - 0.1;
-      det.box(cx, lh, z1 + 0.06, w + 0.12, 0.2, 0.12, trim);
-      det.box(cx, lh, z0 - 0.06, w + 0.12, 0.2, 0.12, trim);
-      det.box(x1 + 0.06, lh, cz, 0.12, 0.2, d + 0.12, trim);
-      det.box(x0 - 0.06, lh, cz, 0.12, 0.2, d + 0.12, trim);
-    }
+    // Shop band lintel.
+    if (ground) band(floorH * 1.3 - 0.1, 0.2, 0.12);
     const ct = style === 3 ? 0.2 : 0.38;
-    det.box(cx, y1 - ct / 2, z1 + 0.12, w + 0.3, ct, 0.24, trim);
-    det.box(cx, y1 - ct / 2, z0 - 0.12, w + 0.3, ct, 0.24, trim);
-    det.box(x1 + 0.12, y1 - ct / 2, cz, 0.24, ct, d + 0.3, trim);
-    det.box(x0 - 0.12, y1 - ct / 2, cz, 0.24, ct, d + 0.3, trim);
+    band(y1 - ct / 2, ct, 0.24);
     // Roof slab and parapet with coping; some parapets broken away.
     det.box(cx, y1 + 0.02, cz, w - 0.1, 0.06, d - 0.1, S.concrete(C.concreteDark, 0.8));
     if (!civic.pitched) {
       const ph = 0.9;
+      // The coping overhangs 4 cm; along the sides it stops at the front and back copings instead of running under them.
       const parapet = (px: number, pz: number, sx: number, sz: number) => {
         det.box(px, y1 + ph / 2, pz, sx, ph, sz, wallC);
-        det.box(px, y1 + ph + 0.04, pz, sx + 0.08, 0.08, sz + 0.08, trim);
+        const side = sz > sx;
+        det.box(px, y1 + ph + 0.04, pz, sx + 0.08, 0.08, sz + (side ? -0.08 : 0.08), trim);
       };
       const gap = hash2(Math.round(x0), Math.round(z0), 5) > 0.7;
       parapet(cx, z1 - 0.15, w, 0.3);

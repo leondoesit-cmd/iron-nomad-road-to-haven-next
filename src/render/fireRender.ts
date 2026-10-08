@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { atmoUniforms } from './atmosphere';
 import { GLOBALS } from './materials';
+import { COPLANAR, coplanarOffset } from './depth';
 import { shared } from './dispose';
 
 /**
@@ -343,16 +344,13 @@ export class FireView {
     this.bGeo.setAttribute('iB', new THREE.InstancedBufferAttribute(this.bB, 4).setUsage(THREE.DynamicDrawUsage));
     this.bGeo.setAttribute('iN', new THREE.InstancedBufferAttribute(this.bN, 3).setUsage(THREE.DynamicDrawUsage));
     this.bGeo.instanceCount = 0;
-    const bMat = new THREE.ShaderMaterial({
+    const bMat = coplanarOffset(new THREE.ShaderMaterial({
       uniforms: { ...atmoUniforms(), tNoise: { value: flameNoise() }, uTime: GLOBALS.uTime },
       vertexShader: BED_VERT,
       fragmentShader: BED_FRAG,
-      polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2,
       side: THREE.DoubleSide,
       ...premultiplied,
-    });
+    }), COPLANAR.ground);
     this.beds = new THREE.Mesh(this.bGeo, bMat);
     this.beds.frustumCulled = false;
     this.beds.renderOrder = 3;

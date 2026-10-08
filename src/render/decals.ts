@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { atmoUniforms } from './atmosphere';
 import { GLOBALS } from './materials';
+import { COPLANAR, DEPTH_UNIFORMS, PULL, coplanarOffset, depthPullGlsl } from './depth';
 
 /**
  * Marks left on the world and kept: blood that sprays onto walls and pools on the road, and the holes bullets leave.
@@ -18,6 +19,7 @@ const PX = 64;
 const vert = /* glsl */ `
 attribute vec4 aParam; // atlas cell, opacity, born (scene seconds), negative spread seconds / 1 for permanent marks
 uniform float uSceneTime;
+uniform float uPullStep;
 attribute vec3 aTint;
 varying vec2 vUv;
 varying vec4 vParam;
@@ -32,6 +34,8 @@ void main() {
   vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4( position.xy * spread, position.z, 1.0 );
   vDepth = -mvPosition.z;
   gl_Position = projectionMatrix * mvPosition;
+  // Nearer the eye than any road layer under it, however far off (see depth.ts).
+  ${depthPullGlsl(PULL.decal.toFixed(1))}
   #include <fog_vertex>
 }`;
 
@@ -371,6 +375,7 @@ export class Decals {
       tAtlas: { value: atlasTex },
       uLight: GLOBALS.uLight,
       uSceneTime: { value: 0 },
+      uPullStep: DEPTH_UNIFORMS.uPullStep,
     };
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
@@ -379,10 +384,8 @@ export class Decals {
       transparent: true,
       depthWrite: false,
       fog: true,
-      polygonOffset: true,
-      polygonOffsetFactor: -3,
-      polygonOffsetUnits: -3,
     });
+    coplanarOffset(mat, COPLANAR.decal);
     this.mesh = new THREE.InstancedMesh(geo, mat, capacity);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 2;

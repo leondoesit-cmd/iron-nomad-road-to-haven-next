@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { COPLANAR, DEPTH_UNIFORMS, PULL, coplanarOffset, depthPullGlsl } from './depth';
 import type { MarkStyle } from '../sim/bodywork';
 
 /**
@@ -54,8 +55,9 @@ interface Trail {
   next: Float32Array | null;
 }
 
-const VERT_PARS = `attribute vec4 aMark;\nvarying vec4 vMark;\nvarying vec3 vMarkW;\n#include <common>`;
-const VERT_MAIN = `vMark = aMark;\nvMarkW = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;\n#include <project_vertex>`;
+const VERT_PARS = `attribute vec4 aMark;\nuniform float uPullStep;\nvarying vec4 vMark;\nvarying vec3 vMarkW;\n#include <common>`;
+// Pulled toward the eye above every road layer (see depth.ts), so the tracks stay on the road far off.
+const VERT_MAIN = `vMark = aMark;\nvMarkW = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;\n#include <project_vertex>\n${depthPullGlsl(PULL.mark.toFixed(1))}`;
 const FRAG_PARS = `varying vec4 vMark;\nvarying vec3 vMarkW;\nuniform sampler2D tMark;\nuniform float uMarkTime;\n#include <common>`;
 const FRAG_COLOR = /* glsl */ `
 #include <color_fragment>
@@ -151,11 +153,12 @@ export class TrackMarks {
     g.setIndex(new THREE.BufferAttribute(idx, 1));
     g.setDrawRange(0, 0);
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
-    const m = new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, depthWrite: false, roughness: 0.92, metalness: 0, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+    const m = coplanarOffset(new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, depthWrite: false, roughness: 0.92, metalness: 0 }), COPLANAR.mark);
     const tex = markTexture();
     m.onBeforeCompile = (shader) => {
       shader.uniforms.tMark = { value: tex };
       shader.uniforms.uMarkTime = this.uTime;
+      shader.uniforms.uPullStep = DEPTH_UNIFORMS.uPullStep;
       shader.vertexShader = shader.vertexShader.replace('#include <common>', VERT_PARS).replace('#include <project_vertex>', VERT_MAIN);
       shader.fragmentShader = shader.fragmentShader.replace('#include <common>', FRAG_PARS).replace('#include <color_fragment>', FRAG_COLOR);
     };
