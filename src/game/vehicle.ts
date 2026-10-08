@@ -20,6 +20,7 @@ import { CargoRig } from './cargo';
 import { powertrainFor, type Powertrain } from '../sim/powertrain';
 import { bodyLoadOf, massBreakdown, type MassBreakdown, type Seat } from '../sim/massModel';
 import { insideMax, insideName, insideUnits, unitsUsed, type InsideRoom } from '../sim/cargo';
+import { bootDeck, bootSpot } from '../render/bootDeck';
 import { PLAYER_COLORS } from '../render/palette';
 import type { Humanoid, Palette } from '../render/humanoid';
 import { shared, disposeTree } from '../render/dispose';
@@ -617,15 +618,25 @@ export class Vehicle {
     return { free: Math.max(0, total - used), max: insideMax(this.def), name: insideName(this.def) };
   }
 
-  /** Everything inside that could be taken out by hand, with where it comes out of in the world. */
-  deckSpots(): { kind: 'part' | 'fuel' | 'oil' | 'crate'; uid?: string; id?: string; world: THREE.Vector3 }[] {
+  /**
+   * Everything inside that could be taken out by hand, each with its own spot on the boot floor (`render/bootDeck.ts`) in the
+   * world: the spares in the order they went in, then the reserve cans.
+   */
+  deckSpots(): { kind: 'part' | 'fuel' | 'diesel' | 'oil' | 'water' | 'crate'; uid?: string; id?: string; world: THREE.Vector3; local: [number, number, number] }[] {
     if (this.faction !== 'convoy' || !this.build) return [];
-    const [x, y, z] = this.body.toWorld(0, 0.8, -this.def.length * 0.42);
-    const at = () => new THREE.Vector3(x, y, z);
+    const deck = bootDeck(this.def);
+    let n = 0;
+    const at = () => {
+      const local = bootSpot(deck, n++);
+      const [x, y, z] = this.body.toWorld(local[0], local[1], local[2]);
+      return { world: new THREE.Vector3(x, y, z), local };
+    };
     const camp = this.ctx.campaign;
-    const out: { kind: 'part' | 'fuel' | 'oil' | 'crate'; uid?: string; id?: string; world: THREE.Vector3 }[] = this.stowedParts().map((it) => ({ kind: 'part' as const, uid: it.uid, id: it.id, world: at() }));
-    if (camp.stocks.fuel >= 1) out.push({ kind: 'fuel', world: at() });
-    if (camp.items.oil > 0.05) out.push({ kind: 'oil', world: at() });
+    const out: ReturnType<Vehicle['deckSpots']> = this.stowedParts().map((it) => ({ kind: 'part' as const, uid: it.uid, id: it.id, ...at() }));
+    if (camp.stocks.fuel >= 1) out.push({ kind: 'fuel', ...at() });
+    if (camp.items.diesel >= 1) out.push({ kind: 'diesel', ...at() });
+    if (camp.items.oil > 0.05) out.push({ kind: 'oil', ...at() });
+    if (camp.items.water > 0.5) out.push({ kind: 'water', ...at() });
     return out;
   }
 

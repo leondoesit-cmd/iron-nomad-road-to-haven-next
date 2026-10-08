@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { partDef } from '../data';
 import { mountsOfChassis } from '../render/vehicleModels';
 import { accessPointsOf } from '../render/accessPoints';
-import { buildCargoMesh, deckOfZone, layoutEntries, pieceGeometry } from '../render/cargoLoad';
+import { buildCargoMesh, buildStowedMesh, deckOfZone, layoutEntries, pieceGeometry } from '../render/cargoLoad';
+import { bootDeck } from '../render/bootDeck';
 import { bodyMat } from '../render/vehicleKit';
 import { disposeTree } from '../render/dispose';
 import type { Carried } from '../sim/carry';
@@ -117,7 +118,38 @@ export class CargoRig {
   reset() {
     this.mesh = null;
     this.seen = '';
+    this.inside = null;
+    this.insideSeen = '';
     this.resecure();
+  }
+
+  /** What is stowed inside, drawn on the boot floor, and what it was drawn from. */
+  private inside: THREE.Mesh | null = null;
+  private insideSeen = '';
+
+  /**
+   * Draw what is stowed inside where it lies on the boot floor (`render/bootDeck.ts`), so an open boot shows its spares and the
+   * storage panel's pick is picked out on the thing itself. Rebuilt only when the contents change.
+   */
+  private refreshInside() {
+    const v = this.v;
+    const camp = v.ctx.campaign;
+    const draw = this.active && !bootDeck(v.def).sides;
+    const parts = draw ? v.stowedParts() : [];
+    const key = draw ? `${parts.map((it) => it.uid).join(',')}|${camp.stocks.fuel >= 1 ? 'f' : ''}${camp.items.diesel >= 1 ? 'd' : ''}${camp.items.oil > 0.05 ? 'o' : ''}${camp.items.water > 0.5 ? 'w' : ''}` : '';
+    if (key === this.insideSeen) return;
+    this.insideSeen = key;
+    if (this.inside) {
+      v.visual.inner.remove(this.inside);
+      this.inside.geometry.dispose();
+      this.inside = null;
+    }
+    if (!key) return;
+    const mesh = buildStowedMesh(v.deckSpots().map((s, i) => ({ kind: s.kind, partId: s.id, x: s.local[0], y: s.local[1], z: s.local[2], yaw: ((i * 53) % 17) * 0.05 - 0.4 })));
+    if (mesh) {
+      v.visual.inner.add(mesh);
+      this.inside = mesh;
+    }
   }
 
   // ------------------------------------------------------------------ drawing
@@ -129,6 +161,7 @@ export class CargoRig {
 
   refresh() {
     const v = this.v;
+    this.refreshInside();
     const fitKey = v.build ? Object.values(v.build.fit).map((p) => p?.id).join(',') : '';
     const key = `${this.entries.map((e) => `${e.id}:${e.zone}${e.at ? `@${e.at.join(',')}:${e.yaw ?? 0}` : ''}`).join('|')}#${fitKey}`;
     if (key === this.seen) return;
@@ -197,6 +230,8 @@ export class CargoRig {
   /** Once per fixed tick. Measures what the car does and lets whatever is not held work loose. */
   step(dt: number) {
     const v = this.v;
+    // What is stowed inside shows while the way in is open: the boot lid up (or a body with no lid, a pickup's cab).
+    if (this.inside) this.inside.visible = !v.hasPanel('trunk') || v.swing.trunk > 0.3;
     if (!this.active) return;
     const lv = v.body.body.linvel();
     const vel = new THREE.Vector3(lv.x, lv.y, lv.z);
@@ -308,6 +343,11 @@ export class CargoRig {
       this.v.visual.inner.remove(this.mesh);
       disposeTree(this.mesh);
       this.mesh = null;
+    }
+    if (this.inside) {
+      this.v.visual.inner.remove(this.inside);
+      this.inside.geometry.dispose();
+      this.inside = null;
     }
   }
 

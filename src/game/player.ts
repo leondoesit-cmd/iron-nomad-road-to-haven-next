@@ -45,7 +45,9 @@ import { SWIM, diveRate, newBreath, stepBreath, swimSpeed } from '../sim/swim';
 import { UTILITY_SLOT, damageTaken, effectiveGun, effectiveMelee, heldItem, statsOf, stepSel, type EffectiveGun, type GearItem, type HurtKind, type Loadout, type Resolved } from '../sim/gear';
 import type { GunModel, MeleeStats } from '../data';
 import { OIL_LOW, pourOil } from '../sim/oil';
-import { takeOutKey, takeOutPrompt, wrenchCandidate } from './carwork';
+import { wrenchCandidate } from './carwork';
+import { storageInput, storageKey, storagePrompt } from './storage';
+import { carLookTick } from './carLook';
 import { goLine, panelCand, panelCandidate, placeFor, pointPos, toLocal } from './access';
 import { accessPointsOf } from '../render/accessPoints';
 import { COOLANT_LOW, WATER_CAN, WATER_RESERVE_MAX, pourWater } from '../sim/fluids';
@@ -1033,7 +1035,8 @@ export class Player implements Pilot {
 
   update(dt: number) {
     const ctx = this.ctx;
-    const it = this.intent;
+    // With a car's storage open (`storage.ts`) the panel has this seat's controls; the rest of the tick only sees looking.
+    const it = storageInput(this, this.intent, dt);
     this.prevPos.copy(this.pos);
     if (this.hitCooldown > 0) this.hitCooldown -= dt;
     if (this.invuln > 0) this.invuln -= dt;
@@ -2837,8 +2840,8 @@ export class Player implements Pilot {
     this.promptAlt = null;
     if (!cand) cand = haulCandidate(this);
     if (this.carry && wasPressed(it, Btn.X) && !this.action) haulKey(this);
-    // X with empty hands at an open boot takes the last thing stowed out again (with the wrench out, X is the workbench).
-    else if (!this.carry && this.equip !== 'wrench' && wasPressed(it, Btn.X) && !this.action) takeOutKey(this);
+    // X with free hands at a car's boot, back door, bed or roof opens its storage (with the wrench out, X is the workbench).
+    else if (!this.carry && this.equip !== 'wrench' && wasPressed(it, Btn.X) && !this.action) storageKey(this);
     // 3. Tools on vehicles: the wrench repairs, the crowbar strips, the jerrycan fills and siphons.
     if (!cand && !this.carry && this.equip === 'wrench') cand = wrenchCandidate(this, () => this.repairCandidate()) ?? this.repairCandidate();
     else if (!cand && !this.carry && this.equip === 'crowbar') cand = this.salvageCandidate() ?? pryCandidate(this);
@@ -2908,12 +2911,14 @@ export class Player implements Pilot {
     if (this.action) this.speedPenalty();
     if (this.carry) haulPrompt(this);
     else {
-      takeOutPrompt(this);
+      storagePrompt(this);
       // The panel prompt has the main slot; getting in is still Y.
       if (cand?.kind === 'panel' && !this.promptAlt && this.nearestDoor()) this.promptAlt = { text: t('prompt.enter'), button: 'Y', ok: true };
     }
     guide(this);
     lookTick(this, cand?.kind === 'fit' && cand.ok, !this.carry && !!cand?.ok && (cand.kind === 'unbolt' || cand.kind === 'pry'));
+    // A part of a car under the crosshair: picked out, with its card beside the crosshair (`carLook.ts`).
+    carLookTick(this, cand);
     // Something held close is held in the hands: the arms reach for it.
     if (!this.workAt && holdFloats(this) && this.hold.dist < 1.35) this.workAt = this.hold.at.clone();
   }

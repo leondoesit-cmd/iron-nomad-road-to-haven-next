@@ -29,6 +29,7 @@ import { loadCarry } from '../src/game/hauling';
 import { openPanel, standAt } from './helpers/access';
 import { fakeServices } from './helpers/sim';
 import type { Vehicle } from '../src/game/vehicle';
+import { storageOf } from '../src/game/storage';
 
 // Cargo that is really on a car: held by a holder, loose on an open surface, or stowed inside.
 vi.setConfig({ testTimeout: 90000 });
@@ -425,7 +426,7 @@ describe('in the scene', () => {
     expect(p.notes.some((n) => /is full/.test(n.text))).toBe(true);
   });
 
-  it('X with empty hands at a loaded roof takes the load back, and the prompt says whether it was secure', () => {
+  it('X with empty hands at a loaded roof opens the storage on the load, says whether it was secure, and A takes it back', () => {
     const { h, sc } = leg();
     const v = ownCar(sc);
     const p = sc.players[0];
@@ -433,8 +434,13 @@ describe('in the scene', () => {
     v.refreshLoadNow();
     standOff(sc, v, 'roof', 1.9);
     run(sc, 0.2);
-    expect(p.promptAlt?.text ?? p.prompt?.text).toMatch(/off the roof.*loose/);
+    expect(p.promptAlt?.text ?? p.prompt?.text).toMatch(/on the roof, loose/);
     tap(h, sc, 0, Btn.X);
+    const s = storageOf(p)!;
+    const row = s.entries.findIndex((e) => e.kind === 'cargo');
+    expect(s.entries[row]).toMatchObject({ where: 'roof', secure: false });
+    s.select(row);
+    tap(h, sc, 0, Btn.A);
     expect(p.carry).toMatchObject({ kind: 'part' });
     expect(v.cargoRig.entries.length).toBe(0);
   });
