@@ -170,7 +170,8 @@ export function dirtStep(d: Dirt, o: DirtIn) {
   d.dust -= 0.004 * o.wet * o.dt;
   d.blood -= 0.0012 * o.wet * o.dt;
   // Mud dries and crumbles to dust over a long time.
-  const dry = 0.0012 * (1 - o.wet) * o.dt;
+  // Only mud that is there can dry: a clean car does not crust over with dust from nothing.
+  const dry = Math.min(Math.max(0, d.mud), 0.0012 * (1 - o.wet) * o.dt);
   d.mud -= dry;
   d.dust += dry * 0.4;
   if (o.wading > 0) {

@@ -63,8 +63,13 @@ export function grantLoot(ctx: Ctx, specs: LootSpec[], at: { x: number; z: numbe
         if (ctx.loose) {
           const p = spot();
           ctx.loose.drop(p.x, p.z, { kind: 'paint', color: s.color, charges: s.charges });
+          names.push(specName(s));
+        } else {
+          // Underground there is no ground to set a can on for later and no shelf in the hold for one: the convoy takes it
+          // for what the can is worth rather than announcing a find that then vanishes.
+          ctx.addLoot({ scrap: 2 }, 'search');
+          names.push(`${specName(s)} (as scrap)`);
         }
-        names.push(specName(s));
         break;
       }
       case 'rations':
