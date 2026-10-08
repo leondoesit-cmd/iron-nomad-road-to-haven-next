@@ -52,6 +52,7 @@ import { COOLANT_LOW, WATER_CAN, WATER_RESERVE_MAX, pourWater } from '../sim/flu
 import { TANK_DREGS, addReserve, planDrain, reserveOf, takeReserve } from '../sim/fuel';
 import { dropCarry, guide, sitePos, haulCandidate, haulKey, haulPrompt, pryCandidate, returnCarry, stashBeforeEntering } from './hauling';
 import { disposeHold, eatCarried, holdFloats, holdFrame, holdTick, lookTick, newHold, type HandHint, type LookInfo } from './grab';
+import { eatWildShroom, stepWildLot } from './wildShrooms';
 
 /** Jobs done by hand on a car's own parts: doing one to an abandoned car makes it the convoy's. */
 const HANDS_ON = new Set(['unbolt', 'fit', 'lift', 'liftdeck', 'oil', 'fuel', 'pry', 'water', 'spray']);
@@ -87,9 +88,12 @@ export type PState = 'foot' | 'entering' | 'driving' | 'gunner' | 'downed' | 'de
 export type Equip = 'gun' | 'melee' | 'wrench' | 'crowbar' | 'jerrycan' | 'utility';
 export type Utility = 'flare' | 'charge' | 'molotov' | 'horn';
 export const UTILITIES: Utility[] = ['flare', 'molotov', 'charge', 'horn'];
-/** What the quick belt (hold the use button) holds: field dressings first, then the drugs, then the body's own chores. */
-export type QuickId = 'bandage' | 'medkit' | DrugId | NeedAct;
-export const QUICK: QuickId[] = ['bandage', 'medkit', ...DRUG_IDS, ...NEED_ACTS];
+/**
+ * What the quick belt (hold the use button) holds: field dressings first, then the drugs, the wild mushrooms nobody knows yet
+ * (`wildShrooms.ts`), then the body's own chores.
+ */
+export type QuickId = 'bandage' | 'medkit' | DrugId | 'wild' | NeedAct;
+export const QUICK: QuickId[] = ['bandage', 'medkit', ...DRUG_IDS, 'wild', ...NEED_ACTS];
 const isDrugId = (id: QuickId): id is DrugId => (DRUG_IDS as string[]).includes(id);
 /** Medkits heal this much, from the belt or the inventory. */
 export const MEDKIT_HEAL = 60;
@@ -1169,6 +1173,8 @@ export class Player implements Pilot {
 
   /** Walk the quick belt a slot. Drugs stay in `drugs.selected`, so everything that reads it still agrees. */
   private stepQuick(dir: 1 | -1) {
+    // The wild mushrooms' slot walks through its kinds before the belt moves on.
+    if (this.quickSel === 'wild' && stepWildLot(this, dir)) return;
     const i = QUICK.indexOf(this.quickSel);
     const next = QUICK[(i + dir + QUICK.length) % QUICK.length];
     if (!isDrugId(next)) this.dressingSel = next;
@@ -1214,7 +1220,17 @@ export class Player implements Pilot {
     const sel = this.quickSel;
     if (sel === 'bandage' || sel === 'medkit') this.useDressing(sel);
     else if (isNeedAct(sel)) this.doNeed(sel);
+    else if (sel === 'wild') eatWildShroom(this);
     else this.takeDrug(sel);
+  }
+
+  /** Rest the quick belt on a slot (as if walked there), e.g. the wild mushrooms just picked. */
+  selectQuick(id: QuickId) {
+    if (!isDrugId(id)) this.dressingSel = id;
+    else {
+      this.dressingSel = null;
+      this.drugs.selected = id;
+    }
   }
 
   /** Eat, drink, piss or shit, from the belt or from its own key. Pressing piss or shit again stops one under way. */

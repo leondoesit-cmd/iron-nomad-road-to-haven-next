@@ -44,6 +44,10 @@ export interface Items extends Record<DrugId, number> {
   water: number;
   /** Hides off butchered game: the Ledger buys them, or cuts them into leather wraps. */
   hides: number;
+  /** Wild mushrooms picked by someone who did not know them, by what they really are (`sim/forage.ts` `WILD_ITEM`). */
+  wildField: number;
+  wildLiberty: number;
+  wildDeathcap: number;
 }
 
 /** The most spare oil the convoy can stow. */
@@ -117,7 +121,7 @@ export class Campaign {
   hub: string | null = null;
   stocks: Stocks = newStocks(LEGS.start.stocks);
   ammo = LEGS.start.ammo;
-  items: Items = { medkit: 1, bandage: 2, arrow: 0, molotov: 1, flare: 2, charge: 0, painkiller: 1, stim: 1, adrenaline: 0, alcohol: 1, weed: 0, haze: 0, mushrooms: 0, lsd: 0, ayahuasca: 0, oil: 1, diesel: 0, water: 30, hides: 0 };
+  items: Items = { medkit: 1, bandage: 2, arrow: 0, molotov: 1, flare: 2, charge: 0, painkiller: 1, stim: 1, adrenaline: 0, alcohol: 1, weed: 0, haze: 0, mushrooms: 0, lsd: 0, ayahuasca: 0, oil: 1, diesel: 0, water: 30, hides: 0, wildField: 0, wildLiberty: 0, wildDeathcap: 0 };
   /** What each player has in their blood. Saved, so a trip survives a camp and a reload. */
   drugs: [DrugState, DrugState] = [new DrugState(), new DrugState()];
   /** Hunger, thirst, bladder and bowels, one body each. Carried across camps and legs and saved. */
