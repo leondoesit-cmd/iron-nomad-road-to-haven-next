@@ -344,7 +344,7 @@ function goneTyres(tyres: Tyres | undefined, n: number): number {
   return k;
 }
 
-function assemble(def: VehicleDef, fit: Fit, tyres: Tyres | undefined, cal: ChassisCal): Powertrain {
+function assemble(def: VehicleDef, fit: Fit, tyres: Tyres | undefined, cal: ChassisCal, withTop = true): Powertrain {
   const spec = engineSpec(def, fit);
   const empty = bayEmpty(def, fit);
   const gb = gearboxSpec(def, fit);
@@ -367,7 +367,7 @@ function assemble(def: VehicleDef, fit: Fit, tyres: Tyres | undefined, cal: Chas
     transfer: comHeight(def) / wheelbaseOf(def),
     vTop: 0,
   };
-  pt.vTop = topSpeed(pt, def.physics.mass);
+  if (withTop) pt.vTop = topSpeed(pt, def.physics.mass);
   return pt;
 }
 
@@ -721,10 +721,10 @@ export function calibrate(def: VehicleDef): ChassisCal {
   const fitGain = () => {
     let lo = 0.05;
     let hi = 60;
-    for (let i = 0; i < 24; i++) {
+    for (let i = 0; i < 16; i++) {
       const mid = Math.sqrt(lo * hi);
       cal.gain = mid;
-      const t = straightRun(assemble(def, {}, undefined, cal), m, [vm * 0.6], 30).times[0];
+      const t = straightRun(assemble(def, {}, undefined, cal, false), m, [vm * 0.6], t60 + 0.1).times[0];
       if (t > t60) lo = mid;
       else hi = mid;
     }
@@ -734,28 +734,34 @@ export function calibrate(def: VehicleDef): ChassisCal {
     // A wider spread (a shorter first gear) launches harder for the same pull further up.
     let lo = 0.2;
     let hi = 1.2;
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 10; i++) {
       cal.spread = (lo + hi) / 2;
       fitGain();
-      const t = straightRun(assemble(def, {}, undefined, cal), m, [vm * 0.25], 30).times[0];
+      const t = straightRun(assemble(def, {}, undefined, cal, false), m, [vm * 0.25], t25 + 0.1).times[0];
       if (t > t25) lo = cal.spread;
       else hi = cal.spread;
     }
     cal.spread = (lo + hi) / 2;
     fitGain();
-    // Coast from 60% of top speed in the gear a light foot would have it in.
+    // The air: enough that near the limiter in top gear under a third of the pull is left over, so a hill or a load costs
+    // top speed rather than vanishing into a rev limiter it never leaves.
+    const ptNow = assemble(def, {}, undefined, cal, false);
+    const vr = ptNow.gearing.vRev * 0.97;
+    const airTop = Math.max(airMin, (0.7 * maxPull(ptNow, vr) - BODY_DAMPING * m * vr - ROLL * m * G) / (vr * vr));
+    // Coasting from 60% of top speed in the gear a light foot would have it in: the air, the tyres and engine braking
+    // together. Where the air already does most of it, the engine braking is eased off to match.
     const v = vm * 0.6;
-    const u = new DriveUnit(assemble(def, {}, undefined, { ...cal, brakeGain: 1 }));
+    const u = new DriveUnit(assemble(def, {}, undefined, { ...cal, brakeGain: 1 }, false));
     for (let i = 0; i < 120; i++) u.step(1 / 30, v, 0.3, 1, true, 1);
     for (let i = 0; i < 20; i++) u.step(1 / 30, v, 0, 1, true, 1);
     const eb = Math.max(0, -u.step(1 / 30, v, 0, 1, true, 1));
     const need = 0.8 * m - ROLL * m * G;
-    if (need - eb >= airMin * v * v) {
+    if (need - eb >= airTop * v * v) {
       cal.brakeGain = 1;
       cal.air = (need - eb) / (v * v);
     } else {
-      cal.air = airMin;
-      cal.brakeGain = eb > 1 ? clamp((need - airMin * v * v) / eb, 0, 1) : 0;
+      cal.air = airTop;
+      cal.brakeGain = eb > 1 ? clamp((need - airTop * v * v) / eb, 0.1, 1) : 0;
     }
   }
   calCache.set(key, cal);

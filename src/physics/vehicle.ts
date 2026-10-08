@@ -1,6 +1,7 @@
 import { RAPIER, GROUPS, type PhysicsWorld, type RigidBody, type Collider } from './physics';
 import { wheelLayout, type VehicleDef } from '../data';
 import { clamp, damp } from '../core/math';
+import { BODY_DAMPING, DriveUnit, stockPowertrain, topSpeed, type Powertrain } from '../sim/powertrain';
 
 export interface DriveInput {
   /** -1 (left) .. 1 (right). */
@@ -27,7 +28,32 @@ export interface DriveEnv {
   engineOn: boolean;
   /** Surface lookup under a wheel contact. */
   surface?: (x: number, z: number) => { grip: number; drag: number };
+  /**
+   * The engine, gearbox and final drive turning the wheels (`sim/powertrain.ts`). Missing: the chassis' factory one. With
+   * it, `forceMult` is only an extra on its torque and `topSpeedMult` a governor below 1 (the tether slowing a leader).
+   */
+  drive?: Powertrain;
 }
+
+/**
+ * How heavy the vehicle is against the reference it was tuned at (stock, a driver, full tank), where its centre of mass
+ * has moved to, and how stiff its springs are against the factory ones. See `sim/massModel.ts`.
+ */
+export interface BodyLoad {
+  /** Total mass over the reference mass. */
+  scale: number;
+  /** Centre of mass, chassis frame, against the reference. */
+  com: { x: number; y: number; z: number };
+  /** Spring rate against the factory springs (heavy-duty springs squat less under the same load). */
+  spring?: number;
+  /** Extra rotational inertia from the payload (roof and bed loads), kg m^2, already at the physics' scale (like `scale`). */
+  inertia?: { x: number; y: number; z: number };
+}
+
+/** The brakes are sized with this much in hand over what the tyres can use at the reference weight. */
+const BRAKE_HEADROOM = 1.25;
+/** Tyre load sensitivity: grip per unit load falls as the load on a tyre rises (exponent on load over reference). */
+const LOAD_SENS = -0.15;
 
 /** A point where something presses on the chassis, in the vehicle's frame. */
 export interface Contact {
@@ -87,11 +113,27 @@ export class VehicleBody {
   flipTimer = 0;
   private tmpV = { x: 0, y: 0, z: 0 };
   private baseSlip: number;
-  readonly mass: number;
+  /** Mass the body runs at right now (the table's mass at the reference load, scaled by `setLoad`). */
+  mass: number;
   readonly maxSteer: number;
   /** Distance between the front and rear axles, used for speed-sensitive steering and the yaw assist. */
   wheelbase = 1.5;
   private yawTarget = 0;
+  /** The engine and its gearbox: revs, gear, clutch, shifts. */
+  unit: DriveUnit;
+  /** Load against the reference, and the spring rate, as last set. */
+  load: Required<Pick<BodyLoad, 'scale' | 'spring'>> & { com: { x: number; y: number; z: number } } = { scale: 1, spring: 1, com: { x: 0, y: 0, z: 0 } };
+  /** Static load on one wheel at the reference weight, N: what the tyres' load sensitivity is measured against. */
+  private fzRef: number;
+  /** Flat-ground top speed with the present powertrain and load, m/s (recomputed when either changes). */
+  private vTopNow = 0;
+  private vTopFor: Powertrain | null = null;
+  /** Each wheel's load (smoothed, N) and what its tyre can put down this step (N). */
+  private fzS: Float64Array;
+  private capW: Float64Array;
+  /** Drive force asked for and put down this step, N, for tests and the HUD. */
+  driveAsked = 0;
+  drivePut = 0;
 
   constructor(
     private P: PhysicsWorld,
@@ -107,7 +149,7 @@ export class VehicleBody {
     const desc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(x, y, z)
       .setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) })
-      .setLinearDamping(0.04)
+      .setLinearDamping(BODY_DAMPING)
       .setAngularDamping(p.wheelCount === 2 ? 2.0 : 1.2)
       .setCanSleep(false);
     this.body = P.world.createRigidBody(desc);
@@ -143,6 +185,52 @@ export class VehicleBody {
       this.ctl.setWheelSuspensionRelaxation(i, 0.88 * crit);
       this.ctl.setWheelMaxSuspensionForce(i, p.mass * 40);
     }
+    this.fzRef = (p.mass * 9.81) / Math.max(1, this.wheelCount);
+    this.fzS = new Float64Array(this.wheelCount).fill(this.fzRef);
+    this.capW = new Float64Array(this.wheelCount);
+    this.unit = new DriveUnit(stockPowertrain(def));
+  }
+
+  /**
+   * Put the vehicle's real weight on the body: its mass (the table's, scaled by the load), where its centre of mass sits, and
+   * springs that carry it as real springs would. Rapier's suspension pushes per unit of chassis mass, so the stiffness and
+   * damping are scaled down as the mass goes up: a loaded car squats, wallows and rolls more, an empty one rides a little
+   * high. Heavier-rated springs are preloaded to keep the factory ride height and squat less. Call it when the load changes
+   * (it is cheap, but not every frame).
+   */
+  setLoad(l: BodyLoad) {
+    const p = this.def.physics;
+    const scale = clamp(l.scale, 0.2, 6);
+    const spring = clamp(l.spring ?? 1, 0.5, 2);
+    this.load.scale = scale;
+    this.load.spring = spring;
+    this.load.com.x = l.com.x;
+    this.load.com.y = l.com.y;
+    this.load.com.z = l.com.z;
+    const m = p.mass * scale;
+    this.mass = m;
+    const [hx, hy, hz] = p.halfExtents;
+    const ex = l.inertia ?? { x: 0, y: 0, z: 0 };
+    // The box's own inertia about its centre at this mass, with what the payload adds out on the roof or in the bed.
+    const ix = (m * (hy * hy + hz * hz)) / 3 + ex.x;
+    const iy = (m * (hx * hx + hz * hz)) / 3 + ex.y;
+    const iz = (m * (hx * hx + hy * hy)) / 3 + ex.z;
+    this.collider.setMassProperties(m, l.com, { x: ix, y: iy, z: iz }, { x: 0, y: 0, z: 0, w: 1 });
+    // Real springs: the same rate in N/m whatever the load, so Rapier's per-unit-mass stiffness falls as the mass rises.
+    const k = (p.suspension.stiffness * spring) / scale;
+    const crit = 2 * Math.sqrt(p.suspension.stiffness);
+    // Preload: at the reference weight a stiffer spring still sits at the factory ride height.
+    const sag = 9.81 / (Math.max(1, this.wheelCount) * p.suspension.stiffness);
+    const rest = p.suspension.rest - sag + sag / spring;
+    for (let i = 0; i < this.wheelCount; i++) {
+      this.ctl.setWheelSuspensionStiffness(i, k);
+      this.ctl.setWheelSuspensionCompression(i, (0.83 * crit * Math.sqrt(spring)) / scale);
+      this.ctl.setWheelSuspensionRelaxation(i, (0.88 * crit * Math.sqrt(spring)) / scale);
+      this.ctl.setWheelSuspensionRestLength(i, rest);
+      this.ctl.setWheelMaxSuspensionForce(i, m * 40);
+    }
+    this.body.wakeUp();
+    this.vTopFor = null;
   }
 
   /** Signed forward speed in m/s. Computed from velocity: the controller's own value flips sign on two-wheelers. */
@@ -175,8 +263,17 @@ export class VehicleBody {
     return [t.x + rx, t.y + ry, t.z + rz];
   }
 
+  /** What it will do on the flat with this powertrain and this load (for the AI, the camera and the sound), m/s. */
   topSpeed(env: DriveEnv): number {
-    return (this.def.topSpeedKmh / 3.6) * env.topSpeedMult * (0.55 + 0.45 * Math.min(1, env.power));
+    return this.flatTop(env.drive ?? this.unit.pt) * Math.min(1, env.topSpeedMult) * (0.55 + 0.45 * Math.min(1, env.power));
+  }
+
+  private flatTop(pt: Powertrain): number {
+    if (this.vTopFor !== pt) {
+      this.vTopFor = pt;
+      this.vTopNow = Math.max(4, topSpeed(pt, this.mass));
+    }
+    return this.vTopNow;
   }
 
   /** Apply driver intent and step the wheel model. Call once per fixed tick before the world step. */
@@ -184,8 +281,9 @@ export class VehicleBody {
     const p = this.def.physics;
     const v = this.speed;
     const av = Math.abs(v);
-    const vmax = this.topSpeed(env);
     const on = env.engineOn;
+    const pt = env.drive ?? this.unit.pt;
+    if (this.unit.pt !== pt) this.unit.setPowertrain(pt);
 
     // Speed-sensitive steering: the lock is capped so the requested lateral acceleration stays inside what the
     // tyres can hold. Full lock at speed is what spins a vehicle out.
@@ -202,39 +300,84 @@ export class VehicleBody {
     // quickly and the yaw cap below is what keeps it a slide rather than a spin.
     if (input.handbrake && p.wheelCount !== 2) this.yawTarget *= 2.1;
 
-    let force = 0;
-    let decel = 0; // m/s^2 applied against the direction of travel
-    const baseForce = p.engineForce * env.forceMult * env.power * (on ? 1 : 0);
-    const taper = (s: number, m: number) => clamp(1 - Math.pow(s / m, 2.2), 0, 1);
+    // What the driver's feet ask of the engine and the brakes. The accelerator drives forward, or brakes while still rolling
+    // back; the brake pedal brakes, or backs up once all but stopped.
+    let thr = 0;
+    let dir = 0;
+    let pedal = 0;
     if (input.throttle > 0.01) {
-      if (v < -1.2) decel = p.brake * env.brakeMult * input.throttle;
-      else force = baseForce * input.throttle * taper(Math.max(0, v), vmax);
+      if (v < -1.2) pedal = input.throttle;
+      else {
+        thr = input.throttle;
+        dir = 1;
+      }
     } else if (input.brake > 0.01) {
-      if (v > 1.2) decel = p.brake * env.brakeMult * input.brake;
-      else force = -baseForce * 0.55 * input.brake * taper(Math.max(0, -v), Math.max(4, vmax * 0.3));
-    } else {
-      decel = on ? 0.8 : 2.2; // engine braking and rolling resistance
+      if (v > 1.2) pedal = input.brake;
+      else {
+        thr = input.brake;
+        dir = -1;
+      }
     }
-    const drivenCount = this.driven.filter(Boolean).length || 1;
+    // A governor below 1 (the tether holding a leader back) eases off the throttle as it nears its share of top speed.
+    if (dir > 0 && env.topSpeedMult < 1) {
+      const vGov = this.flatTop(pt) * env.topSpeedMult;
+      thr *= clamp((vGov - v) / (0.06 * vGov + 0.5), 0, 1);
+    }
+    const force = this.unit.step(dt, v, thr, dir, on, env.power * env.forceMult);
+    // With the engine dead and nothing pressed it rolls to a stop, stalled in gear.
+    let decel = !on && thr <= 0 && pedal <= 0 ? 2.2 : 0;
     const handbrake = input.handbrake;
     if (handbrake) decel += 5;
 
+    let gripSum = 0;
+    let gripN = 0;
+    let capSum = 0;
+    const kz = 1 - Math.exp(-dt / 0.08);
     for (let i = 0; i < this.wheelCount; i++) {
       const flat = env.flats?.[i] ?? false;
+      const contact = this.ctl.wheelIsInContact(i);
       this.ctl.setWheelSteering(i, this.steered[i] ? this.steerAngle : 0);
-      this.ctl.setWheelEngineForce(i, this.driven[i] ? (force / drivenCount) * (flat ? 0.5 : 1) : 0);
       this.ctl.setWheelBrake(i, 0);
 
-      // Per-wheel surface grip from the previous contact point.
+      // Per-wheel surface grip from the previous contact point, and the tyre's load sensitivity: a tyre pressed harder
+      // grips more in all, but less for each kilogram on it, so a loaded car (and the outside wheels in a bend) grip a bit less.
+      // The load is smoothed over a few steps: a wheel skipping over a bump should not throw the drive about.
       let sg = 1;
-      if (env.surface && this.ctl.wheelIsInContact(i)) {
+      if (env.surface && contact) {
         const cp = this.ctl.wheelContactPoint(i);
         if (cp) sg = env.surface(cp.x, cp.z).grip;
       }
-      let slip = this.baseSlip * env.grip * sg * (flat ? 0.45 : 1);
+      const raw = contact ? Math.max(0, this.ctl.wheelSuspensionForce(i) ?? 0) : 0;
+      const fz = (this.fzS[i] += (raw - this.fzS[i]) * kz);
+      const ls = fz > 1 ? clamp(Math.pow(fz / this.fzRef, LOAD_SENS), 0.85, 1.12) : 1;
+      const tyre = sg * ls * (flat ? 0.45 : 1);
+      if (contact) {
+        gripSum += Math.min(1, sg) * ls * (flat ? 0.45 : 1);
+        gripN++;
+      }
+      // What this wheel's tyre can put down: nothing in the air.
+      const cap = this.driven[i] && contact ? pt.mu * env.grip * tyre * fz : 0;
+      this.capW[i] = cap;
+      capSum += cap;
+      let slip = this.baseSlip * env.grip * tyre;
       if (handbrake && this.rear[i]) slip *= 0.55; // lets the tail step out
       this.ctl.setWheelFrictionSlip(i, slip);
       this.ctl.setWheelMaxSuspensionTravel(i, p.suspension.travel * env.travelMult);
+    }
+    // The drive goes where the grip is (the diffs and the driver's foot see to that): each driven wheel takes its share of
+    // what the tyres can hold, and whatever is asked beyond that spins them.
+    const put = clamp(force, -capSum, capSum);
+    for (let i = 0; i < this.wheelCount; i++) this.ctl.setWheelEngineForce(i, capSum > 0 ? (put * this.capW[i]) / capSum : 0);
+    this.driveAsked = force;
+    this.drivePut = put;
+    this.unit.tyres(force, put, dt);
+    // Brakes: a force the calipers can make (sized for the reference weight), and no more than the tyres can hold. Heavier,
+    // the same brakes slow it less; on loose ground, or on a flat, the tyres give up first.
+    if (pedal > 0) {
+      const tyre = gripN ? gripSum / gripN : 1;
+      const caliper = (p.brake * env.brakeMult * BRAKE_HEADROOM * p.mass) / this.mass;
+      const hold = p.brake * clamp(env.grip, 0.3, 1.25) * tyre;
+      decel += Math.min(caliper, hold) * pedal;
     }
 
     // Count grounded wheels and gather the average contact normal for the upright assist.
@@ -323,6 +466,26 @@ export class VehicleBody {
       }
     }
 
+    // The air pushes back on the speed squared, whatever the load; the tyres roll against a share of the weight they carry.
+    {
+      const lv = this.body.linvel();
+      const s2 = lv.x * lv.x + lv.y * lv.y + lv.z * lv.z;
+      if (s2 > 0.01) {
+        const s = Math.sqrt(s2);
+        // Never more than the speed it has: a resistance slows, it does not reverse.
+        const dv = Math.min(s, ((pt.air * s2) / this.mass) * dt);
+        const k = (-dv * this.mass) / s;
+        this.body.applyImpulse({ x: lv.x * k, y: lv.y * k, z: lv.z * k }, true);
+      }
+      const vf = this.speed;
+      if (g > 0 && Math.abs(vf) > 0.3) {
+        const dv = Math.min(Math.abs(vf), pt.roll * 9.81 * dt * (g / this.wheelCount));
+        const f = this.forward();
+        const k = -Math.sign(vf) * dv * this.mass;
+        this.body.applyImpulse({ x: f[0] * k, y: f[1] * k, z: f[2] * k }, true);
+      }
+    }
+
     // Drag from soft surfaces (sand, mud) slows the whole body.
     if (env.surface && g > 0) {
       const t = this.body.translation();
@@ -362,7 +525,7 @@ export class VehicleBody {
       const av3 = this.body.angvel();
       const rollRate = av3.x * f[0] + av3.y * f[1] + av3.z * f[2];
       const [hx, hy] = p.halfExtents;
-      const inertia = (p.mass * ((2 * hx) ** 2 + (2 * hy) ** 2)) / 12;
+      const inertia = (this.mass * ((2 * hx) ** 2 + (2 * hy) ** 2)) / 12;
       const w2 = p.uprightGain;
       const kd = 2 * 0.9 * Math.sqrt(w2);
       const tq = inertia * (w2 * rollErr - kd * rollRate) * dt;
