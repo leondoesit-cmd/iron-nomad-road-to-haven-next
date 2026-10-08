@@ -28,6 +28,9 @@ import type { Zombie } from './zombies';
 import { escapeHtml, btnLabel } from '../ui/hud';
 import { disposeTree } from '../render/dispose';
 import { newFrame, type MapFrame } from '../ui/mapdata';
+import { makePickup } from '../render/props';
+import type { PartItem } from '../sim/parts';
+import { grantNightHaul, type HaulGrant } from './nightHaul';
 
 const ARENA = 46;
 const SPAWN_R = 98;
@@ -54,6 +57,8 @@ interface Structure {
 export interface Report {
   lines: string[];
   crew: string[];
+  /** The night's haul, in plain words: what holding the camp through the raid brought. Empty for a rested or skipped night. */
+  haul?: string[];
 }
 
 type Phase = 'build' | 'night' | 'dawn' | 'ledger';
@@ -120,6 +125,17 @@ export class CampScene extends Scene {
   private ammoCrafted = 0;
   private downBothT = 0;
   private spotCones: THREE.Mesh[] = [];
+  /** The night was skipped from the pause menu: a share of the haul at most, by how much of the raid was faced. */
+  private skipped = false;
+  /** A night of rest (night camp off): no build, no raid, no haul; straight to the dawn report. */
+  private rested = false;
+  /** What the night's haul came to, once dawn has handed it over (null before, or for a night that earned none). */
+  haul: HaulGrant | null = null;
+  /**
+   * Where a haul part goes when the trucks are full: the game leaves it in a crate at the camp's spot in the open world, to
+   * be found by the vehicles in the morning. Returns false where there is nowhere (it is then broken down for Scrap).
+   */
+  stashPart: ((item: PartItem) => boolean) | null = null;
 
   constructor(
     svc: SceneServices,
@@ -129,6 +145,8 @@ export class CampScene extends Scene {
     private ledgerOnly = false,
     /** The land the convoy stopped on, on the green (see `CampLand`): the camp is drawn to match. */
     private land?: CampLand,
+    /** A night of rest rather than a camp (night camp off): no build phase, no raid; `restUntilDawn` follows at once. */
+    private rest = false,
   ) {
     super(svc);
     this.biome = leg.biome === 'city' || CITY_CAMPS.has(siteId) ? 'city' : leg.biome;
@@ -171,7 +189,7 @@ export class CampScene extends Scene {
       this.ghost.push(g);
     }
     this.audio.setMusic('camp');
-    if (!ledgerOnly) {
+    if (!ledgerOnly && !rest) {
       this.radio('Dusk settles. You have three minutes to dig in.');
       this.tip('camp');
       this.assignCrewWatch();
@@ -325,7 +343,7 @@ export class CampScene extends Scene {
         v.setEngine(false);
       }
       p.placeAt(x + (i === 0 ? 3 : -3), z + 1.5, yaw);
-      p.buildMode = !this.ledgerOnly;
+      p.buildMode = !this.ledgerOnly && !this.rest;
     });
     for (const m of this.campaign.crewLive) {
       const u = this.crew.spawn(m, 0, -12, 0);
@@ -368,7 +386,11 @@ export class CampScene extends Scene {
     this.clock.elapsed = 0.04 * this.clock.dayLength;
     this.zombies.list.length = 0;
     this.raiders.clearAll();
-    for (const p of this.players) p.buildMode = false;
+    for (const p of this.players) {
+      p.buildMode = false;
+      // The Ledger's cameras are the scene's (a slow orbit of each vehicle): nobody is looking through their own eyes.
+      p.staged = true;
+    }
     for (const g of this.ghost) g.visible = false;
     this.paused = false;
     this.audio.setMusic('camp');
@@ -1001,6 +1023,17 @@ export class CampScene extends Scene {
   /** Sleep through it: no raid is fought, and the morning comes as it would after a quiet night. */
   skipNight() {
     if (!this.canSkipNight) return;
+    this.skipped = true;
+    for (const g of this.ghost) g.visible = false;
+    for (const p of this.players) p.buildMode = false;
+    this.dawn();
+  }
+
+  /** Night camp off, and the convoy chose to rest: the night passes quietly and it is dawn, with no raid and no haul. */
+  restUntilDawn() {
+    if (this.phase === 'dawn' || this.phase === 'ledger') return;
+    this.rested = true;
+    this.safeNight = true;
     for (const g of this.ghost) g.visible = false;
     for (const p of this.players) p.buildMode = false;
     this.dawn();
@@ -1009,6 +1042,8 @@ export class CampScene extends Scene {
   private dawn() {
     if (this.phase === 'dawn') return;
     this.phase = 'dawn';
+    // Waves that came at the camp before the morning (or before the night was skipped).
+    const faced = this.waveIdx + 1;
     this.waveActive = false;
     this.clock.frozen = true;
     this.clock.elapsed = 0.04 * this.clock.dayLength;
@@ -1023,7 +1058,8 @@ export class CampScene extends Scene {
     const crew: string[] = [];
     const hubId = this.campaign.hub ?? this.leg.endHub;
     const hub = hubId ? LEGS.hubs[hubId] : null;
-    lines.push(`${hub?.safeNight ? 'A safe night at ' + hub.name : 'Night ' + c.day + ' at the ' + this.siteName}. ${this.safeNight ? 'No raid came.' : `Raid type: ${this.raidKind}. Threat ${this.plan.threat}.`}`);
+    if (this.rested) lines.push(`${hub?.safeNight ? 'A safe night at ' + hub.name : 'Night ' + c.day + ' at the ' + this.siteName}. You slept by the vehicles, and no raid came.`);
+    else lines.push(`${hub?.safeNight ? 'A safe night at ' + hub.name : 'Night ' + c.day + ' at the ' + this.siteName}. ${this.safeNight ? 'No raid came.' : `Raid type: ${this.raidKind}. Threat ${this.plan.threat}.`}`);
     if (!this.safeNight) lines.push(`Camp Signature ${Math.round(this.signatureS)} (${this.hot ? 'hot' : 'cold'} camp). Waves faced: ${Math.min(3, this.waveCleared + (this.waveActive ? 1 : 0))}/3.`);
     const kills = c.stats.zombiesKilled + c.stats.raidersKilled - this.kills0;
     if (!this.safeNight) lines.push(`${kills} enemies put down. ${this.lostStructures} structures lost. ${this.vehiclesAtStart - this.vehicles.filter((v) => v.faction === 'convoy' && v.kind === 'player' && !v.wreck).length} vehicles lost.`);
@@ -1086,7 +1122,7 @@ export class CampScene extends Scene {
       if (res.events.includes('warn1')) crew.push(`${m.name}: "Pay me what I'm owed, or I'm done riding with you."`);
       if (res.events.includes('warn2')) crew.push(`${m.name}: "One more missed meal and I walk. Last warning."`);
       let delta = 0;
-      if (this.hot) delta += STRUCTURES.raids.hot.loyalty;
+      if (this.hot && !this.rested) delta += STRUCTURES.raids.hot.loyalty;
       if (hub?.safeNight) delta += MERCS.loyalty.restDay;
       else if (!this.safeNight && this.waveCleared >= 2) delta += MERCS.loyalty.wonRaid;
       if (!this.watchers.includes('crew') || true) delta += 2; // sleeping crew regain loyalty
@@ -1110,16 +1146,67 @@ export class CampScene extends Scene {
     // Spotlights burned fuel at night: already deducted. Save vehicle HP for the Ledger.
     const lost = this.commitFleet();
     for (const name of lost) lines.push(`${name} was wrecked in the raid and is lost.`);
-    this.report = { lines, crew };
-    // Rest the players.
+    // The night's haul, for holding the camp: all of it after the whole raid, a share for a night skipped part way, none for a
+    // rest or a safe night. Handed over once (dawn only runs once).
+    const grade = this.rested || this.safeNight ? 'none' : this.skipped ? (faced > 0 ? 'partial' : 'none') : 'full';
+    const haul: string[] = [];
+    if (grade !== 'none') {
+      this.haul = grantNightHaul(c, grade, faced, { crate: this.stashPart ?? undefined });
+      haul.push(...this.haul.lines);
+      this.showHaul(this.haul.models);
+    } else if (this.skipped) haul.push('You turned in before the raid came, so there was nothing to take off it.');
+    else if (this.rested) lines.push('A camp held through a night raid brings a haul at dawn: ammunition, a rare part and medicine.');
+    this.report = { lines, crew, haul };
+    // Rest the players. The report is shown over the camp from the chase cameras: the people are part of the picture.
     for (const p of this.players) {
       p.hp = hungry.has(p) ? Math.round(p.maxHp * 0.65) : p.maxHp;
       if (p.state === 'downed' || p.state === 'dead') p.state = 'foot';
       p.vehicle = null;
+      p.staged = true;
     }
     this.audio.setMusic('camp');
     this.paused = true;
     this.onResult({ type: 'campDone' });
+  }
+
+  /**
+   * The haul set out by the fire: an open crate with the ammunition and the medicine on it, and the part on the ground
+   * beside it, where the dawn camp (and the Ledger behind it) shows it.
+   */
+  private showHaul(models: string[]) {
+    const g = new THREE.Group();
+    const b = new MeshBuilder();
+    const wood = S.wood(C.wood, 0.85);
+    const dark = S.wood(C.woodDark, 0.85);
+    // A slatted crate, its lid off and leaning on its side.
+    b.box(0, 0.03, 0, 0.92, 0.06, 0.62, dark);
+    for (const y of [0.12, 0.26, 0.4]) {
+      b.box(0, y, 0.3, 0.92, 0.1, 0.03, wood);
+      b.box(0, y, -0.3, 0.92, 0.1, 0.03, wood);
+      b.box(0.45, y, 0, 0.03, 0.1, 0.6, wood);
+      b.box(-0.45, y, 0, 0.03, 0.1, 0.6, wood);
+    }
+    b.box(0.62, 0.26, 0, 0.04, 0.6, 0.64, wood, 0, 0, -0.42);
+    const crate = new THREE.Mesh(b.build(), kitMaterial());
+    crate.castShadow = true;
+    crate.receiveShadow = true;
+    g.add(crate);
+    let onTop = 0;
+    for (const k of models) {
+      const m = makePickup(k).group;
+      if (k.startsWith('part:')) {
+        m.position.set(-0.2, 0, 0.85);
+        m.rotation.y = 0.4;
+      } else {
+        m.position.set(-0.22 + onTop * 0.42, 0.45, 0);
+        m.rotation.y = onTop * 0.6 - 0.2;
+        onTop++;
+      }
+      g.add(m);
+    }
+    g.position.set(2.4, 0, -0.6);
+    g.rotation.y = 0.7;
+    this.root.add(g);
   }
 
   pendingDisputes(): Merc[] {

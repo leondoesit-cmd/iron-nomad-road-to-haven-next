@@ -25,7 +25,8 @@ import { Vehicle } from './vehicle';
 import type { Player } from './player';
 import { StoryDirector, storyTrike, storyWake } from './story';
 import { PartyMission } from './partyMission';
-import { DUSK_BELL_AT, DayClock } from '../sim/dayclock';
+import { DAWN_AT, DUSK_BELL_AT, DayClock } from '../sim/dayclock';
+import { STOP_PROMPT, crewMorning, hostilesNear } from './nightfall';
 import { Rng, hashString } from '../core/rng';
 import { gearDrop } from '../sim/gear';
 import { disposeTree } from '../render/dispose';
@@ -416,7 +417,18 @@ export class LegScene extends Scene {
 
   // ------------------------------------------------------------------ making camp (open world)
 
-  /** After the Dusk Bell, anyone on foot can hold to call the camp wherever they are. */
+  /**
+   * Night camp off (the default, outside training): the Dusk Bell does not call a camp. The convoy stops for the night only
+   * when someone chooses to (rest, or a camp for the night's haul), and a night nobody stops is played out on the road.
+   */
+  get freeNight(): boolean {
+    return !this.training && !this.services.nightCamp?.();
+  }
+
+  /**
+   * After the Dusk Bell, anyone on foot can hold to stop wherever they are: a camp vote with night camp on, the night's
+   * choice (rest, camp, or carry on) with it off. Not with something hunting them close by, when the camp is not forced.
+   */
   private startCampPrompt() {
     for (const p of this.players) {
       this.interact.add({
@@ -424,23 +436,26 @@ export class LegScene extends Scene {
         x: p.pos.x,
         z: p.pos.z,
         r: 1.6,
-        prompt: 'Hold to make camp here',
+        prompt: STOP_PROMPT.camp,
         dur: 2.2,
         priority: -4,
         enabled: (q) => q === p && this.clock.bellRung && q.state === 'foot' && !this.pendingResult,
+        onTick: (q) => !this.freeNight || !hostilesNear(this, q.pos.x, q.pos.z),
         run: () => this.callCamp(),
       });
     }
   }
 
-  /** Keeps each camp prompt under its player's feet. */
+  /** Keeps each camp prompt under its player's feet, and its words true to what holding it would do. */
   private moveCampPrompts() {
+    const free = this.freeNight;
     for (const i of this.interact.list) {
       if (!i.id.startsWith('camp:')) continue;
       const p = this.players[Number(i.id.slice(5))];
       if (!p) continue;
       i.x = p.pos.x;
       i.z = p.pos.z;
+      i.prompt = !free ? STOP_PROMPT.camp : this.clock.bellRung && hostilesNear(this, p.pos.x, p.pos.z) ? STOP_PROMPT.hostile : STOP_PROMPT.stop;
     }
   }
 
@@ -454,7 +469,67 @@ export class LegScene extends Scene {
     this.campPose = { x, z, yaw: v ? v.yaw : lead.yaw };
     this.pendingResult = true;
     this.endReached = true;
-    this.onResult({ type: 'dusk' });
+    this.onResult({ type: 'dusk', free: this.freeNight });
+  }
+
+  /** The night's choice was to carry on (night camp off): back on the road, and the prompt is there again for later. */
+  resumeAfterNight() {
+    this.pendingResult = false;
+    this.endReached = false;
+    this.campPose = null;
+  }
+
+  /** Where the convoy stands right now: the lead's vehicle, or the lead on foot. */
+  private convoyPose(): WorldPose {
+    const lead = this.players.find((q) => q.alive) ?? this.players[0];
+    const v = lead.vehicle ?? lead.ownVehicle;
+    return v ? { x: v.position.x, z: v.position.z, yaw: v.yaw } : { x: lead.pos.x, z: lead.pos.z, yaw: lead.yaw };
+  }
+
+  /**
+   * Night camp off: the night has been played out on the road and it is morning. The clock turns over to first light and
+   * the day count goes up, the day's weather is looked up afresh, the crew are fed and paid as a camp would, and the game is
+   * told (the 'dawn' result) so it can save where the convoy stands. The scene carries on as it was.
+   */
+  private newMorning() {
+    const c = this.campaign;
+    this.clock.newDay();
+    c.day++;
+    c.stats.nights++;
+    c.history.push(this.leg.id);
+    this.bellDone = false;
+    this.nightTold = false;
+    this.endReached = false;
+    this.campPose = null;
+    this.resetDayWeather();
+    for (const line of crewMorning(this)) this.radio(line);
+    this.radio(t('radio.dawn.road', { day: c.day }));
+    this.services.onBanner?.('DAWN', `Day ${c.day}`);
+    this.onResult({ type: 'dawn' });
+  }
+
+  /**
+   * What `capture` writes, for a save in the middle of a scene that carries on (a morning on the road): nothing is put away,
+   * and the place to roll out from on a Continue is where the convoy stands now.
+   */
+  snapshot(m: WorldMemory) {
+    m.vegetation = this.vegetationMemory;
+    m.cars = this.cars.states;
+    m.zombies = this.zombies.list.filter((z) => !z.dead && !z.raid).slice(0, 700).map((z) => ({ kind: z.kind, x: z.x, z: z.z, dormant: z.state === 'dormant', cluster: z.cluster }));
+    m.ambushDone = new Set(this.ambushes.filter((a) => a.state === 'done').map((a) => a.spec.id));
+    m.zoneFired = new Set(this.zones.filter((z) => z.fired).map((z) => z.zone.id));
+    m.camp = this.convoyPose();
+    for (const z of this.zones) for (const c of z.zone.containers) if (c.taken) m.searched.add(c.id);
+    m.tracks = this.marks.snapshot();
+    m.scorched = this.fires.scorchedCells();
+    const drops: WorldMemory['drops'] = [];
+    for (const p of this.debris.pieces) {
+      if (!p.item) continue;
+      const tr = p.body.translation();
+      drops.push({ x: tr.x, z: tr.z, carried: { kind: 'part', item: p.item } });
+    }
+    for (const [id, e] of this.pickups) if (id.startsWith('drop') && e.loose) drops.push({ x: e.spawn.x, z: e.spawn.z, carried: e.loose });
+    m.drops = drops;
   }
 
   /** Where the camp is, for the place-name on the Ledger and for the camp's own rules: a hub if one is close. */
@@ -2126,7 +2201,7 @@ export class LegScene extends Scene {
       this.pendingResult = true;
       if (this.clock.t < DUSK_BELL_AT) this.clock.skipToDusk();
       this.radio(t('radio.legDone'));
-      this.onResult({ type: 'dusk' });
+      this.onResult({ type: 'dusk', free: this.freeNight });
     }
     void dt;
   }
@@ -2151,6 +2226,11 @@ export class LegScene extends Scene {
       if (this.clock.t < DUSK_BELL_AT) this.clock.skipToDusk();
       this.radio(t('radio.haven'));
       this.onResult({ type: 'haven' });
+      return;
+    }
+    // Night camp off: a night nobody stopped for is played out, and the morning comes on the road.
+    if (this.freeNight) {
+      if (this.clock.t >= DAWN_AT) this.newMorning();
       return;
     }
     // Past dark with nobody having called it, the convoy stops where it is.
@@ -2240,7 +2320,7 @@ export class LegScene extends Scene {
       this.bellDone = true;
       this.bellBanner = 7;
       this.audio.play('bell');
-      this.radio(t(this.leg.open ? 'radio.dusk.open' : 'radio.dusk'));
+      this.radio(t(this.leg.open ? (this.freeNight ? 'radio.dusk.road' : 'radio.dusk.open') : 'radio.dusk'));
     }
     if (this.clock.night && !this.nightTold) {
       this.nightTold = true;

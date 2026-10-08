@@ -118,6 +118,10 @@ export interface PromptAlt {
 const ENTER_SECS = 0.8;
 /** Pace of the walk to a car's door before the climb starts (m/s). */
 const ENTER_WALK = 2.6;
+/** How far the camera's glide into the eyes has to come before the body is hidden from its owner and the arms take over. */
+const EYES_IN = 0.86;
+/** Seats that have been told, this session, that the third-person view is for vehicles only. */
+const viewTold = [false, false];
 /** Seconds to climb out, a high five, and how long the map button is held to offer one. */
 const EXIT_SECS = 0.55;
 const FIVE_SECS = 1.3;
@@ -340,8 +344,16 @@ export class Player implements Pilot {
   private startNoteAt = -99;
   lookBack = false;
   camFar = false;
-  /** First-person view wanted on this seat. See `firstPerson` for whether it applies right now. */
+  /**
+   * First person wanted in a vehicle (driving, at a gun, riding along); off, the chase camera. On foot the view is always
+   * the eyes. See `firstPerson` for whether it applies right now.
+   */
   viewFirst = false;
+  /**
+   * The scene is staging this player (the dawn report and the Ledger behind it, a photo): the camera is the scene's, and
+   * the body is seen, so first person is off.
+   */
+  staged = false;
   /** Smoothed eye height above the feet, so crouching and swimming ease the first-person camera. */
   private eyeH = EYE_STAND;
   /** How much taller (or shorter) this hero stands than the stock rig: their eyes are that much higher in first person. */
@@ -440,7 +452,7 @@ export class Player implements Pilot {
     public name: string,
   ) {
     this.utility = ctx.campaign.players[index].utility;
-    this.viewFirst = !!ctx.input.settings.firstPerson?.[index];
+    this.viewFirst = ctx.input.settings.vehicleView?.[index] === 'first';
     this.palette = this.outfit();
     this.human = new Humanoid(this.palette);
     this.eyeH = EYE_STAND * this.tall;
@@ -631,10 +643,23 @@ export class Player implements Pilot {
   get intent(): PlayerIntent {
     return this.ctx.input.intents[this.index];
   }
-  /** Whether this seat's camera is in first person right now: wanted, and in a state that has eyes to look through. */
+  /**
+   * Whether this seat's camera is in first person right now. On foot it always is, except where the game frames the body
+   * on purpose: the inventory's turntable, camp building, the title demo (autopilot), a staged scene, and lying out cold
+   * (downed is its own low camera). In a seat it is the seat's choice (`viewFirst`). Climbing in and out is seen from behind.
+   */
   get firstPerson(): boolean {
-    // The title-screen demo (autopilot) always runs on the chase camera, whatever the seat last chose.
-    return this.viewFirst && !this.showcase && !this.autopilot && !this.buildMode && (this.state === 'foot' || this.state === 'driving' || this.state === 'gunner');
+    if (this.showcase || this.autopilot || this.buildMode || this.staged) return false;
+    if (this.state === 'foot') return !this.drugs.passedOut;
+    return this.viewFirst && (this.state === 'driving' || this.state === 'gunner');
+  }
+
+  /**
+   * First person and the camera has arrived at the eyes: the body is hidden from its owner and the arms and bodycam lens are
+   * on. False for the moment the camera is still gliding in from a chase view, so the person is seen climbing out.
+   */
+  get viewEyes(): boolean {
+    return this.firstPerson && this.cam.eyeBlend >= EYES_IN;
   }
   get partner(): Player | undefined {
     return this.ctx.players[1 - this.index];
@@ -1058,7 +1083,14 @@ export class Player implements Pilot {
       this.colliderOn = wantBody;
     }
 
-    if (wasPressed(it, Btn.View) && (this.state === 'foot' || this.state === 'driving' || this.state === 'gunner') && !this.buildMode) this.toggleView();
+    if (wasPressed(it, Btn.View) && !this.buildMode) {
+      if (this.state === 'driving' || this.state === 'gunner') this.toggleView();
+      else if (this.state === 'foot' && !viewTold[this.index]) {
+        // On foot the view is always the eyes: say so once, the first time someone reaches for the switch.
+        viewTold[this.index] = true;
+        this.note('On foot you see through your own eyes. The view switches in a vehicle', 'info');
+      }
+    }
     if (wasPressed(it, Btn.Inventory) && !beltBusy) {
       if (this.state === 'foot') {
         this.action = null;
@@ -1527,14 +1559,18 @@ export class Player implements Pilot {
     this.note('The floor comes up to meet you', 'bad');
   }
 
-  /** Switch between the chase camera and the eyes, and remember the choice for the next leg. */
+  /**
+   * In a vehicle: switch between the chase camera and the eyes in the seat, and remember the choice (the vehicle camera
+   * setting) for the next ride and the next run. On foot there is nothing to switch: it is always the eyes.
+   */
   toggleView() {
+    if (this.state !== 'driving' && this.state !== 'gunner') return;
     this.viewFirst = !this.viewFirst;
-    const fp = this.ctx.input.settings.firstPerson;
-    if (fp) fp[this.index] = this.viewFirst;
+    const vv = this.ctx.input.settings.vehicleView;
+    if (vv) vv[this.index] = this.viewFirst ? 'first' : 'third';
     this.ctx.input.onChange?.();
     this.driveLook[0] = this.driveLook[1] = 0;
-    this.note(this.viewFirst ? 'First person view' : 'Third person view', 'info');
+    this.note(this.viewFirst ? 'Vehicle camera: first person' : 'Vehicle camera: third person', 'info');
   }
 
   /** Right-stick and look-key speed for this seat, from the control settings. */
@@ -3522,7 +3558,7 @@ export class Player implements Pilot {
    * Called just before the owner's view draws; `endOwnView` puts it back for the partner's view and the next frame.
    */
   beginOwnView(cam?: THREE.Camera) {
-    if (!this.firstPerson) return;
+    if (!this.viewEyes) return;
     if (this.state === 'foot') {
       const arms = this.viewOn;
       this.human.setFirstPerson(true, arms);
@@ -3596,8 +3632,9 @@ export class Player implements Pilot {
     if (this.syncGunPose(h, dt)) aim = Math.max(aim, 0.75);
     this.syncDrill(h, dt, lying || !!this.carry || slung);
     h.gunKick = clamp(this.kick.pitch.x / 0.05, -0.4, 1.6);
-    // First person: whatever is in hand is held up in front, where the camera can see it.
-    if (this.firstPerson && !this.carry && weapon !== 'none') aim = Math.max(aim, 1);
+    // First person with the rig's own forearms in view (no first-person arms drawn): whatever is in hand is held up in front,
+    // where the camera can see it. With the first-person arms drawn the body carries it as anyone would, as the partner sees.
+    if (this.firstPerson && !this.viewOn && !this.carry && weapon !== 'none') aim = Math.max(aim, 1);
     if (slung) aim = 0;
     this.syncCarryModel();
     holdFrame(this, x, y, z);

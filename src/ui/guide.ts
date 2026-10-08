@@ -72,8 +72,8 @@ const PAGES: Page[] = [
     points: [
       '<b>1 · Dawn Ledger.</b> A shared clipboard: repair, rebuild a vehicle into the next tier, upgrade, craft, hire crew, then roll out.',
       '<b>2 · Roam.</b> Drive anywhere. Dismount at scavenge zones, work through buildings, handle ambushes and the Roadside Encounters.',
-      '<b>3 · Dusk Bell.</b> The clock rings. Step out wherever you like and <b>hold A</b> to make camp. Past full dark the convoy stops where it is.',
-      '<b>4 · Camp.</b> Three minutes to build defences, then <b>5 · a three-wave night raid</b>. Dawn leads straight back to the Ledger.',
+      '<b>3 · Dusk Bell.</b> The clock rings. Step out wherever you like and <b>hold A</b> to stop for the night, or push on through the dark until dawn.',
+      '<b>4 · Rest or camp.</b> Rest until dawn and go to the Ledger, or make camp: three minutes to build, then <b>5 · a three-wave night raid</b>, and the night\'s haul for holding out.',
     ],
   },
   {
@@ -106,7 +106,7 @@ const PAGES: Page[] = [
     art: () => artPad(PAD_DRIVE, 'DRIVING · DEFAULT GAMEPAD LAYOUT'),
     points: () => [
       `<b>Press</b> ${lab('vehicle')} beside any vehicle to climb in. Abandoned cars become yours the moment you do.`,
-      `Tap ${lab('view')} to switch between chase view and the eyes of the driver. Each player has their own view.`,
+      `On foot you always see through your own eyes. In a vehicle the camera starts behind it: tap ${lab('view')} for the eyes in the seat. Each player has their own.`,
       `Hold ${lab('vehicle')} at speed to <b>bail out</b>. It costs health, so it is for emergencies.`,
       'Engines are loud, and the dust they throw is visible. Park and walk when quiet matters.',
     ],
@@ -162,11 +162,11 @@ const PAGES: Page[] = [
     kicker: 'Surviving until dawn',
     art: artCamp,
     points: [
-      'Hold A on foot after the Dusk Bell, vote on a site and a hot or cold camp.',
+      'Night camp is your call (or the rule, under Settings). Hold A on foot after the Dusk Bell, choose to make camp, vote on a site and a hot or cold camp.',
       '<b>Build</b> for three minutes. RT places a piece, LB and RB change it, A rotates it. <b>1 Walls</b> and barricades block the way in.',
       '<b>2 Watch posts</b> (X) give early warning of where each wave is coming from.',
       '<b>3 Park your vehicles</b> in the perimeter: they are part of the wall.',
-      '<b>4 Raids</b> come in three waves, from more than one side. Hold B when you are ready for the night; after the third it is dawn, and the Ledger.',
+      '<b>4 Raids</b> come in three waves, from more than one side. Hold B when you are ready for the night; after the third it is dawn: the night\'s haul (ammunition, a rare part, medicine), then the Ledger.',
     ],
   },
   {

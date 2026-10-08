@@ -293,6 +293,8 @@ export class Overlays {
         ${row('ag', 'Aggro (enemy senses)', `${d.aggro.toFixed(2)}×`)}
         ${row('dm', 'Damage taken', `${d.damage.toFixed(2)}×`)}
         ${row('god', 'God mode (every weapon from the start)', g.godMode ? 'ON' : 'OFF')}
+        ${row('nc', 'Night camp', g.nightCamp ? 'ON · CAMP AND RAID' : 'OFF · YOUR CHOICE')}
+        <div style="font-size:.7em;text-transform:none;letter-spacing:0;max-width:620px">${g.nightCamp ? 'The Dusk Bell calls a camp: build defences and hold off a three-wave night raid.' : 'After the Dusk Bell, rest until dawn, push on through the dark, or make camp and hold it through a raid for the night\'s haul: ammunition, a rare part and medicine.'}</div>
         <div class="item"><button data-fid="back">Back</button><span class="mutedtxt" style="color:#c9bd9f">${solo ? '' : 'Per-player options apply to that seat.'}</span></div>
       </div></div>`;
       (host.querySelectorAll('.menu button') as NodeListOf<HTMLElement>).forEach((b) => (b.style.pointerEvents = 'auto'));
@@ -339,6 +341,9 @@ export class Overlays {
           case 'god':
             g.setGodMode(!g.godMode);
             break;
+          case 'nc':
+            g.nightCamp = !g.nightCamp;
+            break;
           case 'rm1':
             st.rumble[0] = !st.rumble[0];
             break;
@@ -370,7 +375,7 @@ export class Overlays {
         render();
         fc.setItems(makeItems(), keys);
       };
-      const ids = ['q', 'ui', ...(solo ? [] : ['lay']), 'vol', 'user-mus', 'user-vol', 'tts', 'voice', 'rm1', ...(solo ? [] : ['rm2']), 'aa1', ...(solo ? [] : ['aa2']), 'ms', 'dr', 'ag', 'dm', 'god'];
+      const ids = ['q', 'ui', ...(solo ? [] : ['lay']), 'vol', 'user-mus', 'user-vol', 'tts', 'voice', 'rm1', ...(solo ? [] : ['rm2']), 'aa1', ...(solo ? [] : ['aa2']), 'ms', 'dr', 'ag', 'dm', 'god', 'nc'];
       const makeItems = (): FocusItem[] => [
         ...ids.flatMap((id) => [
           { el: el(`${id}-`), press: () => step(id, -1) },
@@ -468,7 +473,7 @@ export class Overlays {
       [pad('B'), 'Crouch', 'Tap lights · hold engine off', 'Cancel', 'Cancel'],
       [pad('X'), 'Reload · hold swap utility · wrench: workbench', 'Tap horn · hold siren', 'Reload', 'Watch post'],
       [pad('Y'), 'Get in any vehicle (abandoned cars become yours)', 'Get out · hold to bail at speed', 'Get out', 'Build wheel'],
-      [pad('view'), 'Switch first / third person', 'Same: look from the cab', 'Same: look along the gun', '—'],
+      [pad('view'), 'Always first person on foot', 'Vehicle camera: chase / the eyes in the cab', 'Same: chase / along the gun', '—'],
       ['D-pad', 'Tap ping · hold command wheel', 'Same', 'Same', 'Same'],
       [pad('map'), 'Tap map: closer look, whole leg, close', 'Same', 'Same', 'Same'],
       [pad('inventory'), 'Inventory: change what you wear and hold (the game pauses)', 'Same', 'Same', 'Same'],
@@ -478,7 +483,7 @@ export class Overlays {
     const kbLine = (set: 0 | 1) => {
       const m: KeyMap = b.kb[set];
       const k = (id: keyof KeyMap) => keyLabel(m[id]);
-      return `${set === 0 ? 'P1' : 'P2'}: ${k('moveUp')} ${k('moveLeft')} ${k('moveDown')} ${k('moveRight')} move, ${k('turnLeft')} / ${k('turnRight')} aim, ${k('fire')} fire, ${k('interact')} interact, ${k('jump')} jump, ${k('vehicle')} vehicle, ${k('view')} first / third person, ${k('crouch')} crouch / lights, ${k('sprint')} sprint / handbrake, ${k('wheel')} wheel, ${k('map')} map, ${k('inventory')} inventory, ${k('swap')} swap tool, ${k('prevBuild')} ${k('nextBuild')} cycle build, hold ${k('sheet')} for the convoy sheet`;
+      return `${set === 0 ? 'P1' : 'P2'}: ${k('moveUp')} ${k('moveLeft')} ${k('moveDown')} ${k('moveRight')} move, ${k('turnLeft')} / ${k('turnRight')} aim, ${k('fire')} fire, ${k('interact')} interact, ${k('jump')} jump, ${k('vehicle')} vehicle, ${k('view')} vehicle camera, ${k('crouch')} crouch / lights, ${k('sprint')} sprint / handbrake, ${k('wheel')} wheel, ${k('map')} map, ${k('inventory')} inventory, ${k('swap')} swap tool, ${k('prevBuild')} ${k('nextBuild')} cycle build, hold ${k('sheet')} for the convoy sheet`;
     };
     const mouse = `fire ${mouseWord(b.mouse.fire)}, aim ${mouseWord(b.mouse.aim)}, view ${mouseWord(b.mouse.view)}`;
     host.innerHTML = `<div class="menu" style="min-width:900px"><h2>Controls</h2>
@@ -754,6 +759,33 @@ export class Overlays {
     g.focus.active = true;
   }
 
+  /**
+   * Night camp off: someone has stopped for the night, and the convoy decides what kind of night it is. Resting goes to dawn
+   * and the Ledger; a camp is the old night (a site, the build and a raid) with the night's haul for holding it; carrying on
+   * goes back to the road (`canGo`: not at the end of a single road, which has nowhere further to go).
+   */
+  showNightChoice(done: (choice: 'rest' | 'camp' | 'go') => void, canGo = true, hubId?: string | null) {
+    const g = this.game;
+    const hub = hubId ? LEGS.hubs[hubId] : null;
+    const choices: { id: 'rest' | 'camp' | 'go'; label: string; sub: string }[] = [
+      { id: 'rest', label: 'Rest until dawn', sub: 'Sleep by the vehicles. No raid. Supper, the dawn report and the Ledger, then roll out from here.' },
+      { id: 'camp', label: 'Make camp', sub: 'Pick a site, build for three minutes, hold off a three-wave night raid. Hold out for the night\'s haul: ammunition, a rare part, medicine.' },
+    ];
+    if (canGo) choices.push({ id: 'go', label: 'Keep moving', sub: 'Not yet. Back on the road: the night can be driven through, and dawn comes on its own.' });
+    this.vote({
+      kind: 'night',
+      title: (g.scene?.night ?? 0) > 0.5 ? 'Nightfall' : 'The Dusk Bell',
+      text: `${hub ? hub.name + ': ' + hub.blurb + ' ' : ''}Stop here for the night?`,
+      choices: choices.map((c) => ({ label: c.label, sub: c.sub })),
+      wide: true,
+      lead: g.campaign.lead,
+      onDone: (i, overridden) => {
+        if (overridden) g.campaign.axes.trust -= 1;
+        done(choices[i].id);
+      },
+    });
+  }
+
   /** `siteIds` and `hubId` are given in the open world, where the choices depend on where the convoy stopped. */
   showCampDecision(leg: LegDef, done: (siteId: string, hot: boolean) => void, siteIds?: string[], hubId?: string | null) {
     const g = this.game;
@@ -802,6 +834,7 @@ export class Overlays {
     const draw = () => {
       this.root.innerHTML = `<div class="report panel paper"><h2>Dawn report · Day ${g.campaign.day}</h2>
         <div class="lines">${rep.lines.map((l) => `<div>${escapeHtml(l)}</div>`).join('')}</div>
+        ${rep.haul?.length ? `<h3 style="margin-top:10px;color:#7a4a14">The night's haul</h3><div class="lines">${rep.haul.map((l) => `<div>${escapeHtml(l)}</div>`).join('')}</div>` : ''}
         ${rep.crew.length ? `<h3 style="margin-top:10px;color:#7a4a14">Crew</h3><div class="lines">${rep.crew.map((l) => `<div>${escapeHtml(l)}</div>`).join('')}</div>` : ''}
         <div class="btnrow" style="margin-top:14px"><button data-fid="go">${disputes.length ? 'Settle the dispute' : 'To the Ledger'}</button></div></div>`;
       this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));
@@ -880,8 +913,8 @@ export class Overlays {
     const g = this.game;
     this.clear();
     this.root.innerHTML = `<div class="enc panel paper" style="width:min(640px,92%)"><h2>The convoy is lost</h2>
-      <p>${escapeHtml(reason)} The road north is long, and it does not forgive. Pick up from the last Dawn Ledger?</p>
-      <div class="btnrow"><button data-fid="retry" ${hasSave() ? '' : 'disabled'}>Retry from the last Ledger</button><button data-fid="new">New convoy</button><button data-fid="quit">Quit to title</button></div></div>`;
+      <p>${escapeHtml(reason)} The road north is long, and it does not forgive. Pick up from the last save?</p>
+      <div class="btnrow"><button data-fid="retry" ${hasSave() ? '' : 'disabled'}>Retry from the last save</button><button data-fid="new">New convoy</button><button data-fid="quit">Quit to title</button></div></div>`;
     this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));
     const q = (k: string) => this.root.querySelector<HTMLElement>(`[data-fid="${k}"]`)!;
     g.focus.setItems([
@@ -899,7 +932,7 @@ export class Overlays {
     const g = this.game;
     this.clear();
     this.root.innerHTML = `<div class="enc panel paper" style="width:min(640px,92%)"><h2>Training complete</h2>
-      <p style="text-transform:none;letter-spacing:.01em">${lessons} lessons done: on foot, shooting, scavenging, driving, noise and dust, repairs and fuel, the map, your pack, and making camp. Out in the world the Dusk Bell is followed by a vote on a camp, three minutes to build, and a three-wave night raid. The illustrated guide covers that part, and the rest of the survival rules.</p>
+      <p style="text-transform:none;letter-spacing:.01em">${lessons} lessons done: on foot, shooting, scavenging, driving, noise and dust, repairs and fuel, the map, your pack, and making camp. Out in the world, the night after the Dusk Bell is yours: rest until dawn, push on through the dark, or make camp, build for three minutes and hold off a three-wave raid for the night's haul (Settings can make the camp the rule). The illustrated guide covers that part, and the rest of the survival rules.</p>
       <div class="btnrow"><button data-fid="new">Start a new convoy</button><button data-fid="guide">Illustrated guide</button><button data-fid="again">Train again</button><button data-fid="quit">Title</button></div></div>`;
     this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));
     const q = (k: string) => this.root.querySelector<HTMLElement>(`[data-fid="${k}"]`)!;

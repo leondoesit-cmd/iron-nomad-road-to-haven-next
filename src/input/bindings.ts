@@ -76,7 +76,7 @@ export const ACTIONS: ActionDef[] = [
   { id: 'interact', label: 'Interact', hint: 'Hold to loot, repair, strip, siphon, refuel, revive · Driving: handbrake on a pad', group: 'team', pad: Btn.A, btn: [Btn.A], devices: ALL },
   { id: 'jump', label: 'Jump', hint: 'On foot: jump · On a pad this shares the interact button and jumps only when nothing is in reach', group: 'move', pad: Btn.Jump, btn: [Btn.Jump], devices: ALL, optional: true },
   { id: 'vehicle', label: 'Enter · exit vehicle', hint: 'Tap to get in or out · Hold to bail out at speed', group: 'vehicle', pad: Btn.Y, btn: [Btn.Y], devices: ALL },
-  { id: 'view', label: 'First / third person', hint: 'Switch the camera on foot, driving and manning the gun · Shares the sheet button on a pad: tap view, hold the sheet', group: 'camera', pad: Btn.View, btn: [Btn.View], devices: ALL, optional: true },
+  { id: 'view', label: 'Vehicle camera', hint: 'In a vehicle: switch between the chase view and the eyes (on foot it is always the eyes) · Shares the sheet button on a pad: tap view, hold the sheet', group: 'camera', pad: Btn.View, btn: [Btn.View], devices: ALL, optional: true },
   { id: 'camera', label: 'Reset camera · look back', hint: 'On foot: recentre · Driving: hold to look behind', group: 'camera', pad: Btn.R3, btn: [Btn.R3], devices: ALL, optional: true },
   { id: 'wheel', label: 'Ping · command wheel', hint: 'Tap to ping, hold for the wheel (aim with the look keys or stick)', group: 'team', pad: Btn.Up, btn: [Btn.Up], devices: ['pad', 'kb'], optional: true },
   { id: 'inventory', label: 'Inventory', hint: 'Open your gear: change what you wear and hold, and see what you carry', group: 'team', pad: Btn.Inventory, btn: [Btn.Inventory], devices: ['pad', 'kb'], optional: true },
