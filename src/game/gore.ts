@@ -566,9 +566,9 @@ export class Gore {
 
   /** Throw an empty case out of a gun held at (x, y, z) facing `yaw`, with the shooter's own motion carried over. */
   eject(kind: ShellKind, x: number, y: number, z: number, yaw: number, vx = 0, vz = 0) {
-    // Out to the right of the gun, up and a little back.
-    const rx = Math.cos(yaw);
-    const rz = -Math.sin(yaw);
+    // Out to the right of the gun (the ports are on its right), up and a little back.
+    const rx = -Math.cos(yaw);
+    const rz = Math.sin(yaw);
     const fx = Math.sin(yaw);
     const fz = Math.cos(yaw);
     const out = 1.6 + Math.random() * 1.4;
