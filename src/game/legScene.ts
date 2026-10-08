@@ -3,7 +3,8 @@ import { FrameBudget } from '../core/frameBudget';
 import { bind } from '../sim/vitals';
 import * as THREE from 'three';
 import { ENEMIES, TRAVELLERS, VEHICLES, boatDef, legById, partDef, t, type HeritageSpec, type LegDef } from '../data';
-import { ChunkSource, type ChunkData } from '../world/chunkgen';
+import type { ChunkSource, ChunkData } from '../world/chunkgen';
+import { takePlan } from '../world/planCache';
 import { CELL, CELLS, CHUNK, clayAt, groundHeight, heightAt, normalAt, roadX, surfaceAt, waterAt as terrainWater, type Surface } from '../world/terrain';
 import { treeKey } from './wildfire';
 import { groundFuel } from '../world/fuel';
@@ -220,7 +221,8 @@ export class LegScene extends Scene {
     // Training holds the sun at midday until the last lesson rings the Dusk Bell.
     this.clock = new DayClock(leg.dayLength, this.training ? 0.4 : 0.1);
     if (this.training) this.clock.frozen = true;
-    this.src = opts.memory?.src ?? new ChunkSource(leg);
+    // A pristine copy of the leg's plan, made once per page (`world/planCache.ts`), unless the run has its own already.
+    this.src = opts.memory?.src ?? takePlan(leg);
     if (opts.memory) this.adoptMemory(opts.memory);
     this.terrain = this.src.layout.terrain;
     this.legRng = new Rng(leg.seed + this.campaign.day * 17);

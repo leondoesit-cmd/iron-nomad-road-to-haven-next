@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { HEROES, type HeroId } from '../data';
-import { AmiratGarden } from '../render/amiratGarden';
+import type { AmiratGarden } from '../render/amiratGarden';
 import { disposeTree } from '../render/dispose';
-import { PartyCast } from '../render/partyCast';
+import type { PartyCast } from '../render/partyCast';
 import { BUZZER, BUZZ_DELAY, DRIVEWAY, GATE, GARDEN_BOUNDS, GARDEN_LAYOUT, HOUSE_NAME, PARTY, gateLeafBox, houseBoxes, houseLocal, houseWorld, inGarden, type HousePlace } from '../world/ududHouse';
 import { GROUPS } from '../physics/physics';
 import type { Collider } from '@dimforge/rapier3d-compat';
@@ -28,6 +28,27 @@ import type { Player } from './player';
  * hundred metres, and gives everyone at the party something to say. The house's colliders are the layout's
  * (`LegLayoutImpl.buildHouse`).
  */
+
+/**
+ * The garden and the people at the party are built only when someone comes near the house, so their models (the garden,
+ * the cast, the burger and the cake: some 200 kB of script) come in a chunk of their own, fetched in the background once a
+ * leg starts, rather than with the game's first download.
+ */
+interface PartyModels {
+  AmiratGarden: typeof AmiratGarden;
+  PartyCast: typeof PartyCast;
+}
+let partyModels: PartyModels | null = null;
+let partyLoading: Promise<PartyModels> | null = null;
+export function loadPartyModels(): Promise<PartyModels> {
+  return (partyLoading ??= Promise.all([import('../render/amiratGarden'), import('../render/partyCast')])
+    .then(([g, c]) => (partyModels = { AmiratGarden: g.AmiratGarden, PartyCast: c.PartyCast }))
+    .catch((error) => {
+      // Try again on the next approach (a dropped connection, say).
+      partyLoading = null;
+      throw error;
+    }));
+}
 
 export const PARTY_FLAG = { house: STORY_FLAG.house, m2: 'story.m2', seen: 'map.house', gate: 'house.gate' } as const;
 
@@ -121,6 +142,8 @@ export class PartyMission {
     this.place = sc.src.layout.house ?? null;
     if (!this.place) return;
     this.gateT = this.flags[PARTY_FLAG.gate] ? 1 : 0;
+    // Fetch the house's models now, long before anyone gets there.
+    loadPartyModels().catch(() => {});
     this.registerTalk();
     this.registerBuzzer();
     this.refresh();
@@ -514,6 +537,12 @@ export class PartyMission {
 
   /** Build the house (its static parts merged) and the party. */
   private show() {
+    // Not loaded yet (a slow connection): the house goes up on the frame after it lands.
+    if (!partyModels) {
+      loadPartyModels().catch(() => {});
+      return;
+    }
+    const { AmiratGarden } = partyModels;
     const p = this.place!;
     const root = new THREE.Group();
     root.name = 'udud-nuhat-house';
@@ -538,7 +567,7 @@ export class PartyMission {
     this.cast?.dispose();
     const absent = this.absent();
     this.castKey = [...absent].sort().join(',');
-    this.cast = new PartyCast(absent);
+    this.cast = new partyModels!.PartyCast(absent);
     this.house.add(this.cast.group);
   }
 
