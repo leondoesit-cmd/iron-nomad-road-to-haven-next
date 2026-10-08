@@ -2,7 +2,7 @@ import { ENCOUNTERS, HEROES, LEGS, STRUCTURES, encounterById, legById, nextHero,
 import { FocusUI, type FocusItem } from './focus';
 import { LedgerPanel } from './ledger';
 import { ControlsMenu } from './controls';
-import { Guide } from './guide';
+import type { Guide } from './guide';
 import { PROMPT_ACTION, keyLabel, padLabel, padPhysical, type KeyMap } from '../input/bindings';
 import { escapeHtml } from './hud';
 import { hasSave, initSave, savedSolo } from '../save/save';
@@ -22,6 +22,18 @@ import type { CampScene } from '../game/campScene';
 import type { QualityPreset } from '../render/renderer';
 import { BENCHMARK_CASES, BENCHMARK_SCENARIOS } from '../game/benchmark';
 import { initPhysics } from '../physics/physics';
+
+let guideClass: typeof Guide | null = null;
+let guideLoading: Promise<typeof Guide> | null = null;
+/** Fetch the illustrated guide's chunk (the title asks for it while idle, so it is there before anyone opens it). */
+export function loadGuide(): Promise<typeof Guide> {
+  return (guideLoading ??= import('./guide')
+    .then((m) => (guideClass = m.Guide))
+    .catch((error) => {
+      guideLoading = null;
+      throw error;
+    }));
+}
 
 export class Overlays {
   root = document.getElementById('overlay')!;
@@ -434,11 +446,23 @@ export class Overlays {
   private controlsMenu: ControlsMenu | null = null;
   private guide: Guide | null = null;
 
-  /** The illustrated guide. From the title it can lead straight into training. */
+  /**
+   * The illustrated guide. From the title it can lead straight into training. Its pictures come in a chunk of their own
+   * (`loadGuide`, fetched while the title is idle); opened before that lands, it shows as soon as it does, unless the
+   * menu has moved on meanwhile.
+   */
   showGuide(back: () => void, onTrain?: () => void, page = 0) {
     const g = this.game;
-    const paused = g.paused;
-    (this.guide ??= new Guide(g)).show(paused ? this.pauseEl! : this.root, paused ? this.pauseFocus : g.focus, back, { onTrain, page });
+    const open = (G: typeof Guide) => {
+      const paused = g.paused;
+      (this.guide ??= new G(g)).show(paused ? this.pauseEl! : this.root, paused ? this.pauseFocus : g.focus, back, { onTrain, page });
+    };
+    if (guideClass) return open(guideClass);
+    const host = g.paused ? this.pauseEl : this.root;
+    const shown = host?.firstElementChild;
+    void loadGuide().then((G) => {
+      if ((g.paused ? this.pauseEl : this.root) === host && host?.firstElementChild === shown) open(G);
+    });
   }
 
   /** Rebind every action and set the look and camera options. */

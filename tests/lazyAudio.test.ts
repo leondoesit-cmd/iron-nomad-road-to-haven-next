@@ -124,13 +124,13 @@ describe('prioritised recordings', () => {
     (engine as unknown as { voice: typeof voice }).voice = voice;
     void lib.init();
     await g.release(0);
-    engine.play('owl');
-    engine.play('owl');
+    engine.play('quack');
+    engine.play('quack');
     expect(voice).not.toHaveBeenCalled();
     let guard = 0;
-    while (!lib.ready('owl') && guard++ < 50) await g.release(1);
+    while (!lib.ready('quack') && guard++ < 50) await g.release(1);
     expect(voice).toHaveBeenCalledTimes(1);
-    expect(voice.mock.calls[0][0]).toBe('owl');
+    expect(voice.mock.calls[0][0]).toBe('quack');
     // Too late: a positional shot asked for long before its take arrives stays silent.
     engine.play('caw', 10, 10);
     ctx.currentTime = 5;
