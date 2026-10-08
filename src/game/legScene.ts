@@ -13,7 +13,7 @@ import type { Aabb, PickupSpawn, ScavContainer, ScavZone } from '../world/layout
 import { heritageRoofAt } from '../world/heritage';
 import { chunkKey } from '../world/layout';
 import { ChunkView, disposeChunkMaterials, makeChunkMaterials, type ChunkMaterials } from '../render/chunkview';
-import { makeBeam, makePickup } from '../render/props';
+import { makePickup } from '../render/props';
 import { grantLoot } from './lootGrant';
 import { rollGunLoot } from '../sim/gunLoot';
 import { GroundGearField } from './groundGear';
@@ -1632,16 +1632,8 @@ export class LegScene extends Scene {
     const outer = new THREE.Group();
     outer.position.set(p.x, p.y, p.z);
     outer.add(m.group);
-    // Good finds show from a distance, in their rarity colour: a tall beam, but the thing itself is lying there too. What a
-    // person put down (or the story laid out in a yard) is just lying there.
-    if (p.host?.kind === 'story' || p.id.startsWith('drop')) {
-      // no beam
-    } else if (p.kind === 'part') {
-      if (p.amount >= 2) outer.add(makeBeam(p.amount >= 3 ? 0xffb454 : 0x7ddc7a, p.amount >= 3 ? 14 : 8));
-    } else if (p.kind === 'fragment' || p.kind === 'chassis') {
-      const col = p.kind === 'fragment' ? 0x3ad0ff : 0x3aa0ff;
-      outer.add(makeBeam(col, 22));
-    } else if (p.kind === 'fuel') outer.add(makeBeam(fuelKind === 'diesel' ? 0xe8c020 : 0xff6a3a, 7));
+    // Finds are just lying there, with no coloured beam to spot them by from afar: the player asked for things to be found
+    // by looking, and picked up by hand (beams stay only for delve chests and the training's markers).
     this.root.add(outer);
     let loose: Carried | undefined;
     if (p.kind === 'part' && p.part) loose = { kind: 'part', item: newPart(p.part.id, p.part.cond) };
