@@ -173,7 +173,7 @@ function cab(b: MeshBuilder, c: CabDims, m: Mats, t: CarTrim) {
     // Bars across the open window.
     for (let i = 1; i <= 3; i++) {
       const zz = d1 + ((zF - d1) * i) / 4;
-      b.rod(sx * (x - 0.03), belt + 0.02, zz, sx * (x - 0.03), roof - 0.03, zz - rake * ((roof - belt) / (roof - belt)) * 0.3 * (i / 3), 0.009, m.dark, 4);
+      b.rod(sx * (x - 0.03), belt + 0.02, zz, sx * (x - 0.03), roof - 0.03, zz - rake * 0.3 * (i / 3), 0.009, m.dark, 4);
     }
   }
   // The split windscreen's frame: header, centre post, the cowl under it, and a bar guard over the glass line (no glass:

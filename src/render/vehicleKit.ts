@@ -68,6 +68,8 @@ export interface VehicleVisual {
   groundY: number;
   /** How far the body is drawn above (or below) its wheels by the springs fitted, metres (see `rideHeight.ts`). */
   rideLift?: number;
+  /** Tell the visual how near the nearest camera is (squared metres): far off, the wheels drop their tread and bolts. */
+  setDetail?(d2: number): void;
   setHeadlights(on: boolean): void;
   damageTint(frac: number): void;
   dispose(): void;
@@ -328,11 +330,58 @@ export interface WheelSpec {
   style: WheelStyle;
 }
 
+const farGeoCache = new Map<string, THREE.BufferGeometry>();
+
+/**
+ * The same wheel for far off: a smooth tyre, the rim's face in its colour and the hub, about a tenth of the triangles.
+ * Tread blocks and lug nuts are below a pixel at that range anyway.
+ */
+export function wheelGeometryFar(radius: number, width: number, st: WheelStyle): THREE.BufferGeometry {
+  const key = `${radius}:${width}:${st.rim}:${st.rimColor}:${st.bare ? 'b' : ''}${st.dual ? 'd' : ''}`;
+  const hit = farGeoCache.get(key);
+  if (hit) return hit;
+  const b = new MeshBuilder();
+  b.jitter = 0.02;
+  const R = radius;
+  const rimR = R * rimFrac(st);
+  const hw = width / 2;
+  const tyreAt = (cx: number, w: number) => {
+    const h = w / 2;
+    b.lathe(`farTyre:${key}:${w}`, [[rimR, -h * 0.85], [R * 0.9, -h], [R * 0.96, -h * 0.6], [R * 0.96, h * 0.6], [R * 0.9, h], [rimR, h * 0.85]], cx, 0, 0, S.rubber(0x1a1a1c), 0, 0, Math.PI / 2, 14);
+  };
+  if (!st.bare) {
+    if (st.dual) {
+      tyreAt(hw * 0.5, width * 0.47);
+      tyreAt(-hw * 0.5, width * 0.47);
+    } else tyreAt(0, width);
+  }
+  const rimS = st.rim === 'wire' ? S.chrome(0xb8bcc0) : st.rim === 'alloy' ? S.metal(st.rimColor, 0.35) : st.rim === 'hubcap' ? S.plastic(st.rimColor, 0.45) : S.paint(st.rimColor, 0.5);
+  const face = hw * (st.tread === 'moto' ? 0 : st.dual ? 0.62 : 0.25);
+  b.cyl(face, 0, 0, rimR * 1.9, 0.03, rimR * 1.9, rimS, 0, 0, Math.PI / 2, 12);
+  b.cyl(face + 0.02, 0, 0, rimR * 0.5, 0.04, rimR * 0.5, S.metal(0x6a6e72, 0.5), 0, 0, Math.PI / 2, 8);
+  const g = shared(b.build());
+  farGeoCache.set(key, g);
+  return g;
+}
+
+/** Wheels go to their far model past this range (metres), and come back inside the nearer one. */
+export const WHEEL_FAR = 46;
+const WHEEL_NEAR = 40;
+
 /** One model per wheel, so a vehicle can run a different tyre on each corner, or none. */
 export function addWheelSet(v: VehicleVisual, def: VehicleDef, wheelLocal: [number, number, number][], steered: boolean[], specs: WheelSpec[]) {
+  const meshes: { m: THREE.Mesh; near: THREE.BufferGeometry; far: THREE.BufferGeometry }[] = [];
+  let far = false;
+  v.setDetail = (d2: number) => {
+    const want = far ? d2 > WHEEL_NEAR * WHEEL_NEAR : d2 > WHEEL_FAR * WHEEL_FAR;
+    if (want === far) return;
+    far = want;
+    for (const w of meshes) w.m.geometry = far ? w.far : w.near;
+  };
   wheelLocal.forEach(([x, y, z], i) => {
     const sp = specs[i] ?? specs[0];
     const geo = wheelGeometry(def.physics.wheelRadius, sp.width, sp.style);
+    const farGeo = wheelGeometryFar(def.physics.wheelRadius, sp.width, sp.style);
     const pivot = new THREE.Group();
     pivot.position.set(x, y - def.physics.suspension.rest, z);
     const spin = new THREE.Group();
@@ -340,6 +389,7 @@ export function addWheelSet(v: VehicleVisual, def: VehicleDef, wheelLocal: [numb
     m.castShadow = true;
     // Mirror the right-hand wheels so the rim face always looks outward.
     if (x < -0.01) m.scale.x = -1;
+    meshes.push({ m, near: geo, far: farGeo });
     spin.add(m);
     pivot.add(spin);
     v.inner.add(pivot);

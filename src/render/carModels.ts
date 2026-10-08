@@ -669,7 +669,8 @@ function* makeShellSteps(def: VehicleDef, look: VehicleLook): Generator<void, Sh
   // A pickup's gun is the pivoting bed gun built on the visual, not a fixed one.
   const fixedGun = !!wpnPart && def.weaponMount === 'front';
   const wheels = wheelXZ(def).map(([x, z]) => [x, z] as [number, number]);
-  addKit(b, rig, fixedGun ? m : { ...m, gun: undefined }, look, { nativeGun, wheels, bayFloor: sp.belt - 0.03 });
+  // The kit's own painted bits (a bonnet bulge, a scoop, a wing) take the paint as it is on this car, faded or not.
+  addKit(b, rig, fixedGun ? m : { ...m, gun: undefined }, { ...look, paint: paintHex, wear }, { nativeGun, wheels, bayFloor: sp.belt - 0.03 });
   extras(c, m);
   roofTop(c, m);
   stencils(c);
