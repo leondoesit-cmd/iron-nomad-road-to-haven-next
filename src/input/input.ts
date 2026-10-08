@@ -100,6 +100,8 @@ export class InputManager {
   /** Last raw key edge events (consumed by menus). */
   private keys = new Set<string>();
   private keyPressedThisTick = new Set<string>();
+  /** Keys first pressed before this tick's sample: what `wasKeyPressed` answers until the next one (swapped, not copied). */
+  private keyEdges = new Set<string>();
   private kbSmooth: [[number, number], [number, number]] = [[0, 0], [0, 0]];
   private prevHeld: [number, number] = [0, 0];
   private holdTime: [Float32Array, Float32Array] = [new Float32Array(BTN_COUNT), new Float32Array(BTN_COUNT)];
@@ -282,8 +284,9 @@ export class InputManager {
   isKeyDown(code: string) {
     return this.keys.has(code);
   }
+  /** A key went down since the previous tick. Valid for the whole tick, after `sample` (menus read raw keys this way). */
   wasKeyPressed(code: string) {
-    return this.keyPressedThisTick.has(code);
+    return this.keyEdges.has(code);
   }
 
   /**
@@ -465,6 +468,11 @@ export class InputManager {
 
   /** Sample devices into intents. Call once per fixed tick. */
   sample(dt: number): void {
+    // The presses gathered since the last tick become this tick's edges; the emptied set gathers the next ones.
+    const edges = this.keyEdges;
+    this.keyEdges = this.keyPressedThisTick;
+    this.keyPressedThisTick = edges;
+    edges.clear();
     this.scanPadCapture();
     // While a rebinding is pending, and briefly after, the game sees nothing: the press must not also act.
     const mute = this.pending !== null || this.muteT > 0;
@@ -544,7 +552,7 @@ export class InputManager {
         const key = (a: ActionId) => {
           const c = k[a];
           // A tap that went down and up between two ticks still counts once.
-          return !!c && (this.keys.has(c) || this.keyPressedThisTick.has(c));
+          return !!c && (this.keys.has(c) || this.keyEdges.has(c));
         };
         const tx = (key('moveRight') ? 1 : 0) - (key('moveLeft') ? 1 : 0);
         const ty = (key('moveUp') ? 1 : 0) - (key('moveDown') ? 1 : 0);
@@ -663,7 +671,6 @@ export class InputManager {
         this.stickAccum[p] = Math.max(0, this.stickAccum[p] - dt * 2);
       }
     }
-    this.keyPressedThisTick.clear();
     this.mouseTap = 0;
   }
 

@@ -89,7 +89,12 @@ export class LedgerPanel {
     this.tab = 'main';
     this.setPreview(false);
     this.game.focus.active = true;
-    this.game.focus.onCancel = () => {};
+    // B steps back out of the Gear tab's item menu or customise panel; elsewhere on the Ledger it does nothing.
+    this.game.focus.onCancel = () => {
+      if (this.tab !== 'gear') return;
+      if (this.inv.menu) this.inv.closeMenu();
+      else if (this.inv.custom) this.inv.closeCustom();
+    };
     this.render();
   }
 
@@ -171,7 +176,7 @@ export class LedgerPanel {
         <h2><span>Gear · ${escapeHtml(c.players[who].name)}</span><span class="tabs">${sw}</span>${tabs}<small>DAY ${c.day} · ${whole(c.stocks.scrap)} SCRAP</small></h2>
         <div class="invbody">${cols}</div>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:2px solid rgba(38,28,16,.4);padding-top:6px">
-          <span class="mutedtxt">${escapeHtml(this.inv.msg || 'Change what you wear and hold before you roll out. D-pad down opens this on the road, too.')}</span>
+          <span class="mutedtxt">${escapeHtml(this.inv.msg || 'Change what you wear and hold before you roll out. Pick anything for what you can do with it; the inventory key opens this on the road, too.')}</span>
           <span style="display:flex;gap:10px;align-items:center">${this.readyHtml()}</span>
         </div></div>`;
     } else if (this.tab === 'garage') {
@@ -187,8 +192,20 @@ export class LedgerPanel {
       ${foot}</div>`;
     }
     this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));
+    // The Gear tab's item menu sits beside its tile and, while it is open, is the only thing the cursors can reach.
+    let scope: HTMLElement = this.root;
+    if (this.tab === 'gear') {
+      const panel = this.root.firstElementChild as HTMLElement | null;
+      if (panel) {
+        this.inv.placeMenu(panel);
+        this.inv.bindEvents(panel);
+        if (this.inv.menu) scope = panel.querySelector<HTMLElement>('.invmenu') ?? this.root;
+      }
+      if (this.inv.focusNext) keys[this.inv.menuBy] = this.inv.focusNext;
+      this.inv.focusNext = null;
+    }
     const items: FocusItem[] = [];
-    this.root.querySelectorAll<HTMLElement>('[data-fid]').forEach((el) => {
+    scope.querySelectorAll<HTMLElement>('[data-fid]').forEach((el) => {
       const id = el.dataset.fid!;
       const act = this.acts.get(id);
       if (!act) return;
