@@ -46,6 +46,7 @@ import type { NatureAmbience, WaterAmbience } from '../audio/audio';
 import { AmbientLife } from './ambientLife';
 import { Foraging } from './foraging';
 import { FaceGums } from '../render/faceGums';
+import { FaceTrip } from './faceTrip';
 import type { VegetationMemory } from '../sim/vegetation';
 
 /**
@@ -143,6 +144,8 @@ export class LegScene extends Scene {
   landscape: Landscape;
   /** The old gums' feet in the rivers' bends, with their faces (`render/faceGums.ts`). */
   faceGums: FaceGums | null = null;
+  /** The faces on a trip, per view: the old gums' coming forward, ghost faces on trunks, the drone (`game/faceTrip.ts`). */
+  faceTrip: FaceTrip | null = null;
   /** Wild food and herbs to gather (`game/foraging.ts`): open world only. */
   forage: Foraging | null = null;
   pickups = new Map<string, PickupEntity>();
@@ -250,6 +253,7 @@ export class LegScene extends Scene {
       this.faceGums = new FaceGums(T.bends!, (x, z) => heightAt(T, x, z));
       this.root.add(this.faceGums.group);
     }
+    this.faceTrip = new FaceTrip(this, this.terrain.bends ?? []);
     // The weather: flood water for the washes and the rivers, and the trees for lightning and fire to find. What burned on
     // an earlier day stays burned.
     this.weather.attachTerrain(this.terrain);
@@ -2215,6 +2219,7 @@ export class LegScene extends Scene {
     this.updateWater(dt);
     this.updateNature(dt);
     this.forage?.update(dt);
+    this.faceTrip?.update(dt);
     // Training is quiet: no hordes, raiders, wildlife, encounters, tips from the road, nor an end to the day.
     if (!this.training) {
       this.updateZones(dt);
@@ -2504,6 +2509,7 @@ export class LegScene extends Scene {
     this.R.onBeforeView[1] = () => {};
     this.landscape.dispose();
     this.faceGums?.dispose();
+    this.faceTrip?.dispose();
     this.forage?.dispose();
     this.audio.setWaterAmbience?.(QUIET_WATER);
     this.audio.setNatureAmbience?.(QUIET_NATURE);

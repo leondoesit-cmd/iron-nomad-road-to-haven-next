@@ -347,17 +347,24 @@ export function planBends(def: TerrainDef): Bend[] {
       willow = { x: wx, y: heightAt(def, wx, wz) - 0.12, z: wz, yaw: rng.range(0, Math.PI * 2), s: 1.05, sp: TREE_SPECIES.indexOf('willow'), v: 0, lean: [0, 0] };
       willow.lean = leanToward(willow.yaw, mill.x - wx, mill.z - wz, 0.16);
     }
-    // Liberty caps in the grass round the old gums' feet, two or three patches to a tree.
+    // Liberty caps in the grass round the old gums' feet: a troop at the foot of every face, right where it looks down, and
+    // one or two more round the tree. Their own dice, so the rest of the bend stays as it was.
     const shrooms: Bend['shrooms'] = [];
+    const srng = new Rng(def.seed * 53 + 1931 + out.length * 7);
     for (const g of gums) {
       if (g.island) continue;
-      const n = 2 + (g.seed % 2);
-      for (let k = 0; k < n; k++) {
-        const a = rng.range(0, Math.PI * 2);
-        const d = g.r * 1.45 + rng.range(0.5, 2.2);
+      const at = (a: number, d: number) => {
         const x = g.x + Math.cos(a) * d;
         const z = g.z + Math.sin(a) * d;
         shrooms.push({ x, z, y: heightAt(def, x, z) });
+      };
+      for (const f of g.faces) at(f.az + srng.range(-0.3, 0.3), g.r * 1.42 + srng.range(0.35, 1.0));
+      const n = 1 + (g.seed % 2);
+      for (let k = 0; k < n; k++) {
+        let a = srng.range(0, Math.PI * 2);
+        // Round the back, away from the faces' own troops.
+        for (const f of g.faces) if (Math.abs(Math.atan2(Math.sin(a - f.az), Math.cos(a - f.az))) < 0.9) a += 1.8;
+        at(a, g.r * 1.45 + srng.range(0.5, 2.2));
       }
     }
     const path = crossingPath(def, lp, mill);

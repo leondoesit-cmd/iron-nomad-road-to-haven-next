@@ -250,10 +250,126 @@ function yarrowCrop(keep: Keep): MeshBuilder {
   return b;
 }
 
+/** A liberty cap's profile (radius, height), unit size: in from the gills' centre, out to the margin, up to the nipple. */
+const LIBERTY_CAP: [number, number][] = [
+  [0.0, 0.3],
+  [0.22, 0.22],
+  [0.44, 0.06],
+  [0.5, 0.0],
+  [0.47, 0.14],
+  [0.4, 0.36],
+  [0.3, 0.58],
+  [0.18, 0.76],
+  [0.1, 0.86],
+  [0.085, 0.95],
+  [0.05, 1.04],
+  [0.0, 1.08],
+];
+
+const C_LIB_WET = new THREE.Color(0x6e4826);
+const C_LIB_TAN = new THREE.Color(0xa9773f);
+const C_LIB_DRY = new THREE.Color(0xd8c08e);
+const C_LIB_GILL = new THREE.Color(0x3a2c26);
+const _lc = new THREE.Color();
+
+/**
+ * A troop of liberty caps: little bell-shaped caps drawn up into a nipple, chestnut and wet at the striate margin, drying to
+ * tan and cream toward the top (some caps paler than others), dark gills under them, on long thin wavy stems with a blue
+ * bruise at the foot, standing in a loose cluster or two in the grass. Somewhat larger than life so they can be found.
+ */
+function libertyTroop(b: MeshBuilder, r: () => number, keep: Keep) {
+  const n = 12;
+  // Two or three knots of them, as they come up in a lawn.
+  const knots: [number, number][] = [];
+  for (let k = 0; k < 3; k++) knots.push([(r() - 0.5) * 0.55, (r() - 0.5) * 0.55]);
+  for (let i = 0; i < n; i++) {
+    const [kx, kz] = knots[i % knots.length];
+    const a = r() * Math.PI * 2;
+    const d = Math.sqrt(r()) * 0.13;
+    const x = kx + Math.cos(a) * d;
+    const z = kz + Math.sin(a) * d;
+    const s = 0.75 + r() * 0.5;
+    const dry = r();
+    const lean = (r() - 0.5) * 0.5;
+    const yaw = r() * Math.PI * 2;
+    const h = (0.085 + r() * 0.06) * s;
+    if (!keep(i)) continue;
+    // The stem: slender, wavy, pale, leaning a little and curving back up under the cap.
+    const lx = Math.cos(yaw) * Math.sin(lean);
+    const lz = Math.sin(yaw) * Math.sin(lean);
+    const wob = (r() - 0.5) * 0.02;
+    const pts: [number, number, number][] = [
+      [x, 0, z],
+      [x + lx * h * 0.3 + wob, h * 0.34, z + lz * h * 0.3 - wob],
+      [x + lx * h * 0.75 - wob, h * 0.7, z + lz * h * 0.75 + wob],
+      [x + lx * h * 0.95, h, z + lz * h * 0.95],
+    ];
+    const sr = 0.0034 * (0.85 + s * 0.3);
+    b.rod(pts[0][0], -0.01, pts[0][2], pts[1][0], pts[1][1], pts[1][2], sr * 1.15, S.cloth(0x9fa9b0, 0.05), 5);
+    b.rod(pts[1][0], pts[1][1], pts[1][2], pts[2][0], pts[2][1], pts[2][2], sr, S.cloth(0xe2d6b8, 0.05), 5);
+    b.rod(pts[2][0], pts[2][1], pts[2][2], pts[3][0], pts[3][1], pts[3][2], sr * 0.9, S.cloth(0xe8dcc0, 0.05), 5);
+    // The cap: the margin dark and wet, drying to tan and cream toward the nipple, a damp sheen all over.
+    // Half its width (the profile is a unit across), and its height: a bell about as tall as it is wide.
+    const cw = (0.021 + r() * 0.009) * s;
+    const ch = cw * 2 * (0.8 + r() * 0.3);
+    const v0 = b.vertexCount;
+    const capGeo = libertyCapGeometry();
+    b.geo(capGeo, pts[3][0], pts[3][1] - ch * 0.12, pts[3][2], cw * 2, ch, cw * 2, { c: 0xffffff, r: 0.32, m: 0, w: 0.04 }, lean * 0.7, Math.PI / 2 - yaw, 0);
+    const top = _lt.copy(C_LIB_TAN).lerp(C_LIB_DRY, dry * dry);
+    const np = LIBERTY_CAP.length;
+    for (let v = v0; v < b.vertexCount; v++) {
+      // The lathe lays its vertices out a profile at a time, so the profile point says where on the cap this one is.
+      const j = (v - v0) % np;
+      const t = LIBERTY_CAP[j][1] / 1.08;
+      if (j < 3) _lc.copy(C_LIB_GILL);
+      else if (t < 0.45) _lc.copy(C_LIB_WET).lerp(top, t / 0.45);
+      else if (t < 0.84) _lc.copy(top);
+      else _lc.copy(top).lerp(C_LIB_WET, 0.4);
+      const o = v * 3;
+      b.col[o] = _lc.r;
+      b.col[o + 1] = _lc.g;
+      b.col[o + 2] = _lc.b;
+    }
+  }
+}
+
+const _lt = new THREE.Color();
+let libertyCapGeo: THREE.BufferGeometry | null = null;
+
+function libertyCapGeometry(): THREE.BufferGeometry {
+  return (libertyCapGeo ??= new THREE.LatheGeometry(LIBERTY_CAP.map(([x, y]) => new THREE.Vector2(x, y)), 9));
+}
+
+/** Short grass round a troop of liberty caps: they grow in the turf, not on bare litter. */
+function libertyTurf(): MeshBuilder {
+  const b = new MeshBuilder();
+  const r = rnd(133);
+  const greens = [0x5d7c3c, 0x6e8a44, 0x7f8e4c, 0x8e8a52];
+  for (let i = 0; i < 26; i++) {
+    const a = r() * Math.PI * 2;
+    const d = 0.08 + Math.sqrt(r()) * 0.42;
+    const h = 0.07 + r() * 0.08;
+    const tilt = 0.15 + r() * 0.45;
+    // A blade: a thin flattened cone leaning out from the troop.
+    b.add('cone6', Math.cos(a) * d, h * 0.5, Math.sin(a) * d, 0.014, h, 0.004, S.cloth(greens[i % greens.length], 0.1), tilt, a + Math.PI / 2, 0);
+  }
+  // A little moss at the foot.
+  for (let i = 0; i < 4; i++) {
+    const a = r() * Math.PI * 2;
+    const d = r() * 0.3;
+    b.add('sphere', Math.cos(a) * d, 0.0, Math.sin(a) * d, 0.16 + r() * 0.12, 0.025, 0.14 + r() * 0.1, S.cloth(i % 2 ? 0x4e6a30 : 0x5a6e36, 0.15));
+  }
+  return b;
+}
+
 function shroomCrop(sp: Shroom, keep: Keep): MeshBuilder {
   const b = new MeshBuilder();
   const r = rnd(sp === 'field' ? 121 : sp === 'liberty' ? 131 : 141);
-  const n = sp === 'liberty' ? 9 : 6;
+  if (sp === 'liberty') {
+    libertyTroop(b, r, keep);
+    return b;
+  }
+  const n = 6;
   for (let i = 0; i < n; i++) {
     const a = r() * Math.PI * 2;
     const d = 0.05 + r() * 0.32;
@@ -261,16 +377,12 @@ function shroomCrop(sp: Shroom, keep: Keep): MeshBuilder {
     const z = Math.sin(a) * d;
     const s = 0.7 + r() * 0.5;
     const t = r();
-    const w = (r() - 0.5) * 0.03;
+    r();
     if (!keep(i)) continue;
     if (sp === 'field') {
       // Squat white-to-buff caps, pinkish-brown underneath.
       b.add('cyl8', x, 0.04 * s, z, 0.035 * s, 0.08 * s, 0.035 * s, S.cloth(0xf0ebe0));
       b.add('sphere16', x, 0.09 * s, z, 0.13 * s, 0.07 * s, 0.13 * s, S.cloth(t < 0.5 ? 0xece4d4 : 0xd8c8a8, 0.15));
-    } else if (sp === 'liberty') {
-      // Small pointed tan caps on long thin wavy stems.
-      b.rod(x, 0, z, x + w, 0.12 * s, z - w, 0.006, S.cloth(0xd8c8a0));
-      b.add('cone12', x, 0.135 * s, z, 0.045 * s, 0.045 * s, 0.045 * s, S.cloth(t < 0.5 ? 0xa8804a : 0x8a6a3a, 0.1));
     } else {
       // Tall, pale olive-green caps on white stems with a skirt, out of a white cup at the foot.
       b.add('sphere', x, 0.015 * s, z, 0.06 * s, 0.04 * s, 0.06 * s, S.cloth(0xf2f0e6));
@@ -288,13 +400,18 @@ type CropKind = Exclude<ForageKind, 'mushroom'> | `mushroom:${Shroom}`;
 const CROP_KINDS: CropKind[] = ['fig', 'bramble', 'sabra', 'zaatar', 'yarrow', 'mushroom:field', 'mushroom:liberty', 'mushroom:deathcap'];
 const handfulsOf = (k: CropKind): number => FORAGE[k.startsWith('mushroom') ? 'mushroom' : (k as ForageKind)].handfuls;
 
-const plantGeo = new Map<ForageKind, THREE.BufferGeometry>();
+/** What stands under a crop: the plant itself, or for liberty caps the turf they come up through. */
+type PlantKey = ForageKind | 'turf';
+const PLANT_KEYS: PlantKey[] = [...FORAGE_KINDS, 'turf'];
+const plantOf = (s: ForageSpot): PlantKey => (s.kind === 'mushroom' && s.shroom === 'liberty' ? 'turf' : s.kind);
+
+const plantGeo = new Map<PlantKey, THREE.BufferGeometry>();
 const cropGeo = new Map<string, THREE.BufferGeometry>();
 
-function plantGeometry(k: ForageKind): THREE.BufferGeometry {
+function plantGeometry(k: PlantKey): THREE.BufferGeometry {
   let g = plantGeo.get(k);
   if (!g) {
-    const b = k === 'fig' ? figPlant() : k === 'bramble' ? brambleePlant() : k === 'sabra' ? sabraPlant() : k === 'zaatar' ? zaatarPlant() : k === 'yarrow' ? yarrowPlant() : litterPlant();
+    const b = k === 'fig' ? figPlant() : k === 'bramble' ? brambleePlant() : k === 'sabra' ? sabraPlant() : k === 'zaatar' ? zaatarPlant() : k === 'yarrow' ? yarrowPlant() : k === 'turf' ? libertyTurf() : litterPlant();
     plantGeo.set(k, (g = b.build()));
   }
   return g;
@@ -323,7 +440,7 @@ const CAP = 512;
 
 export class ForageRender {
   readonly group = new THREE.Group();
-  private plants = new Map<ForageKind, THREE.InstancedMesh>();
+  private plants = new Map<PlantKey, THREE.InstancedMesh>();
   /** Per crop kind, one mesh per handful. */
   private crops = new Map<CropKind, THREE.InstancedMesh[]>();
   private vegetation?: Vegetation;
@@ -331,7 +448,7 @@ export class ForageRender {
   constructor(private physics?: PhysicsWorld, private vegetationMemory?: VegetationMemory) {
     this.group.name = 'forage';
     const mat = kitMaterial();
-    for (const k of FORAGE_KINDS) {
+    for (const k of PLANT_KEYS) {
       const m = new THREE.InstancedMesh(plantGeometry(k), mat, CAP);
       m.count = 0;
       m.frustumCulled = false;
@@ -385,7 +502,7 @@ export class ForageRender {
       p.set(spot.x, spot.y, spot.z);
       s.setScalar(spot.s);
       m4.compose(p, q, s);
-      const pm = this.plants.get(spot.kind)!;
+      const pm = this.plants.get(plantOf(spot))!;
       if (pm.count < CAP) {
         keyOf(pm, `forage:${spot.id}`);
         pm.setMatrixAt(pm.count++, m4);
@@ -401,8 +518,8 @@ export class ForageRender {
     if (this.vegetation) {
       const plants = new Map<string, VegetationPlant>();
       for (const [kind, mesh] of this.plants) {
-        // Mushroom litter is flat; use the visible caps as its contact mesh below.
-        if (kind === 'mushroom') continue;
+        // Mushroom litter and turf are flat; use the visible caps as their contact mesh below.
+        if (kind === 'mushroom' || kind === 'turf') continue;
         for (const p of this.vegetation.addInstances(mesh, kind, keys.get(mesh))) plants.set(p.key, p);
       }
       for (const [kind, meshes] of this.crops) for (const mesh of meshes) {
