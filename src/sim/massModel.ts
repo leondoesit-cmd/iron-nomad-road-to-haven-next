@@ -1,6 +1,6 @@
-import { CHASSIS, PART_SLOTS, partDef, wheelLayout, type FuelType, type PartDef, type PartSlot, type VehicleDef } from '../data';
+import { CHASSIS, FIT_SLOTS, PART_SLOTS, partDef, wheelLayout, type FuelType, type PartDef, type PartSlot, type VehicleDef } from '../data';
 import { clamp } from '../core/math';
-import { factoryIdFor } from './drivetrain';
+import { factoryIdFor, suspensionSpec } from './drivetrain';
 import { coolantLitres, sumpLitres } from './fluids';
 import type { Carried } from './carry';
 import type { CargoEntry, Zone } from './cargo';
@@ -54,6 +54,8 @@ export interface MassBreakdown {
   curb: number;
   /** Load: people, stowed spares and outside cargo. */
   payload: number;
+  /** Rotational inertia the payload adds about the centre of mass, about the chassis axes (x pitch, y yaw, z roll), kg m^2. */
+  inertia: { x: number; y: number; z: number };
 }
 
 /** Who sits where. A gunner stands at the bed gun or rides the passenger seat. */
@@ -462,7 +464,24 @@ export function massBreakdown(src: MassSource, load: MassLoad = {}): MassBreakdo
   // every other item's moment now, less the reference's.
   const total = a.m;
   const com = { x: (a.mx - ref.mx) / total, y: (a.my - ref.my) / total, z: (a.mz - ref.mz) / total };
-  return { total, items: a.items, com, ref: ref.kg, scale: total / ref.kg, curb, payload: total - curb };
+  // What the payload adds to the body's resistance to rolling, pitching and turning: a load on the roof is a long lever.
+  // The driver is part of the reference the body was tuned with, so only what rides beyond them counts.
+  const inertia = { x: 0, y: 0, z: 0 };
+  let driver = false;
+  for (const it of a.items) {
+    if (it.group !== 'people' && it.group !== 'cargo' && it.group !== 'stowed') continue;
+    if (it.label === 'Driver' && !driver) {
+      driver = true;
+      continue;
+    }
+    const dx = it.at[0] - com.x;
+    const dy = it.at[1] - com.y;
+    const dz = it.at[2] - com.z;
+    inertia.x += it.kg * (dy * dy + dz * dz);
+    inertia.y += it.kg * (dx * dx + dz * dz);
+    inertia.z += it.kg * (dx * dx + dy * dy);
+  }
+  return { total, items: a.items, com, ref: ref.kg, scale: total / ref.kg, curb, payload: total - curb, inertia };
 }
 
 function cargoLabel(c: Carried): string {
@@ -482,7 +501,38 @@ function cargoLabel(c: Carried): string {
   }
 }
 
-/** Curb weight of a fit, kg: the chassis with these parts and full fluids, nobody aboard. Stock is the table's own mass. */
+/**
+ * Spring rate against the factory springs: heavy-duty springs (rated for more weight) are stiffer, sport springs for a
+ * lighter car softer. A stripped suspension leaves the body on its bump stops.
+ */
+export function springRate(def: VehicleDef, fit: Fit): number {
+  const now = suspensionSpec(def, fit).load;
+  const id = factoryIdFor(def, 'suspension');
+  const stock = id ? (partDef(id).suspension?.load ?? now) : now;
+  if (now <= 0) return 0.5;
+  return clamp(Math.sqrt(now / Math.max(1, stock)), 0.8, 1.6);
+}
+
+/**
+ * What the physics body needs from a weighing: the mass against the reference, where the centre of mass sits, the spring
+ * rate, and the payload's inertia at the physics' own scale (the table's mass stands for the reference weight).
+ */
+export function bodyLoadOf(def: VehicleDef, fit: Fit, mb: MassBreakdown) {
+  const k = def.physics.mass / mb.ref;
+  return { scale: mb.scale, com: mb.com, spring: springRate(def, fit), inertia: { x: mb.inertia.x * k, y: mb.inertia.y * k, z: mb.inertia.z * k } };
+}
+
+const curbCache = new Map<string, number>();
+
+/** Curb weight of a fit, kg: the chassis with these parts and full fluids, nobody aboard. Stock is the table's own mass. Cached. */
 export function curbKg(def: VehicleDef, fit: Fit, tyres?: Tyres): number {
-  return massBreakdown({ chassis: def.id, def, fit, tyres, fuel: 1 }, {}).curb;
+  let key = `${def.id}:${def.physics.mass}`;
+  for (const slot of FIT_SLOTS) key += `,${fit[slot]?.id ?? ''}`;
+  if (tyres) for (const t of tyres) key += `;${t?.id ?? ''}`;
+  const hit = curbCache.get(key);
+  if (hit !== undefined) return hit;
+  if (curbCache.size > 500) curbCache.clear();
+  const kg = massBreakdown({ chassis: def.id, def, fit, tyres, fuel: 1 }, {}).curb;
+  curbCache.set(key, kg);
+  return kg;
 }
