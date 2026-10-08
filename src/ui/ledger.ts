@@ -67,6 +67,8 @@ export class LedgerPanel {
       rerender: () => self.render(),
       say: (m, ok) => (ok ? self.ok(m) : self.warn(m)),
     });
+    // The breakdown of the mount under the cursor stays in view at the foot of the page, under the scrolling garage.
+    this.garage.detachedDetail = true;
   }
 
   /** The garage tab shrinks both players' views to side strips so the vehicles stay visible next to the panel. */
@@ -176,6 +178,7 @@ export class LedgerPanel {
       this.root.innerHTML = `<div class="ledger panel paper gmode">
         <h2><span>Garage · ${escapeHtml(leg.name)}</span>${tabs}<small>DAY ${c.day} · ${whole(c.stocks.scrap)} SCRAP · ${whole(c.stocks.parts)} PARTS · ${whole(c.stocks.tech)} TECH</small></h2>
         <div class="gbody">${this.garage.html()}</div>
+        ${this.garage.detailPane()}
         ${foot}</div>`;
     } else {
       this.root.innerHTML = `<div class="ledger panel paper">

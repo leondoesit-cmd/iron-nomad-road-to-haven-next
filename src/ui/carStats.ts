@@ -185,7 +185,8 @@ export function partFacts(d: PartDef): Fact[] {
     out.push({ label: 'Stops', text: `${Math.round(d.brakes.energy)} kJ` });
     out.push({ label: 'Bite', text: fmt.signed(d.brakes.power - 1), tone: d.brakes.power >= 1 ? 'good' : 'bad' });
   } else if (d.exhaust) {
-    out.push({ label: 'Power', text: fmt.signed(d.exhaust.flow), tone: d.exhaust.flow >= 0 ? 'good' : 'bad' });
+    const f = d.exhaust.flow;
+    out.push(Math.abs(f) < 0.005 ? { label: 'Power', text: 'as stock' } : { label: 'Power', text: fmt.signed(f), tone: f > 0 ? 'good' : 'bad' });
     out.push({ label: 'Noise', text: `×${d.exhaust.noise.toFixed(1)}`, tone: d.exhaust.noise > 1.05 ? 'bad' : d.exhaust.noise < 0.95 ? 'good' : undefined });
   } else if (d.glass) {
     out.push({ label: 'Toughness', text: `×${d.glass.hp.toFixed(1)}`, tone: d.glass.hp > 1.2 ? 'good' : undefined });
