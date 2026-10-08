@@ -159,6 +159,51 @@ interface Ghost {
 }
 
 const GHOST_RGB: Record<GhostState, number> = { idle: 0xf2f1e8, aimed: 0x8cf08c, blocked: 0xff8a6a };
+
+/**
+ * The layer a player's own highlight is drawn on: view `i`'s camera sees `HIGHLIGHT_LAYER + i` and nothing else does, so
+ * what one player looks at is picked out in their half of the screen only.
+ */
+export const HIGHLIGHT_LAYER = 20;
+
+/** Let each view's camera see its own player's highlight layer (and only that one). Cheap: call it whenever. */
+export function bindHighlightViews(cams: { camera: THREE.Camera }[]) {
+  cams.forEach((v, i) => {
+    if (i > 1 || !v?.camera) return;
+    v.camera.layers.enable(HIGHLIGHT_LAYER + i);
+    v.camera.layers.disable(HIGHLIGHT_LAYER + 1 - i);
+  });
+}
+
+/** Corner brackets of a unit box: three short ticks at each of its eight corners, the way a scope frames what it reads. */
+const bracketGeo = shared(
+  (() => {
+    const k = 0.3;
+    const pts: number[] = [];
+    for (const sx of [-0.5, 0.5])
+      for (const sy of [-0.5, 0.5])
+        for (const sz of [-0.5, 0.5]) {
+          pts.push(sx, sy, sz, sx - Math.sign(sx) * k, sy, sz);
+          pts.push(sx, sy, sz, sx, sy - Math.sign(sy) * k, sz);
+          pts.push(sx, sy, sz, sx, sy, sz - Math.sign(sz) * k);
+        }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    return g;
+  })(),
+);
+/** Highlight colours: warm white to look at, green for a pick that is good to go, red for one that is not. */
+const HIGHLIGHT_RGB: Record<GhostState, number> = { idle: 0xfff0d0, aimed: 0x9cf09c, blocked: 0xff9a7a };
+
+/** One player's highlight: brackets round each box of the part they look at, seen through the body faintly. */
+interface Highlight {
+  group: THREE.Group;
+  lines: THREE.LineSegments[];
+  mats: [THREE.LineBasicMaterial, THREE.LineBasicMaterial];
+  state: GhostState;
+  seen: number;
+  a: number;
+}
 const edgeGeo = shared(new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)));
 const drumFill = new THREE.CylinderGeometry(0.5, 0.5, 1, 28).rotateZ(Math.PI / 2);
 const drumEdge = shared(new THREE.EdgesGeometry(drumFill, 40));
@@ -200,6 +245,7 @@ export class WorkFx {
   private tags = new Map<string, Tag>();
   private ghosts = new Map<string, Ghost>();
   private previews = new Map<number, Preview>();
+  private highlights = new Map<number, Highlight>();
   private clock = 0;
 
   constructor(private fx: Particles) {}
@@ -551,6 +597,61 @@ export class WorkFx {
     g.seen = 0;
   }
 
+  /**
+   * Kept alive by calling it every tick: corner brackets round the boxes of what one player is looking at (a part of a car,
+   * the thing picked in its boot), drawn on that player's own view only (`HIGHLIGHT_LAYER`). Subtle: thin, a little
+   * breath, faint where the body hides it. Fades when the calls stop.
+   */
+  highlight(key: number, anchors: GhostAnchor[], state: GhostState = 'idle') {
+    let h = this.highlights.get(key);
+    if (!h) {
+      const group = new THREE.Group();
+      const mk = (front: boolean) => new THREE.LineBasicMaterial({ color: HIGHLIGHT_RGB[state], transparent: true, opacity: 0, depthTest: front, depthWrite: false, fog: false });
+      h = { group, lines: [], mats: [mk(true), mk(false)], state, seen: 0, a: 0 };
+      this.root.add(group);
+      this.highlights.set(key, h);
+    }
+    const layer = HIGHLIGHT_LAYER + Math.min(1, Math.max(0, key));
+    while (h.lines.length < anchors.length * 2) {
+      const behind = new THREE.LineSegments(bracketGeo, h.mats[1]);
+      const front = new THREE.LineSegments(bracketGeo, h.mats[0]);
+      behind.renderOrder = 56;
+      front.renderOrder = 57;
+      behind.layers.set(layer);
+      front.layers.set(layer);
+      behind.frustumCulled = front.frustumCulled = false;
+      h.group.add(behind, front);
+      h.lines.push(behind, front);
+    }
+    if (h.state !== state) {
+      h.state = state;
+      for (const m of h.mats) m.color.setHex(HIGHLIGHT_RGB[state]);
+    }
+    h.lines.forEach((o, i) => {
+      const a = anchors[i >> 1];
+      o.visible = !!a;
+      if (!a) return;
+      o.position.copy(a.pos);
+      o.quaternion.copy(a.quat);
+      // A hair bigger than the part, so the brackets sit just off its corners.
+      o.scale.set(a.size[0] + 0.05, a.size[1] + 0.05, a.size[2] + 0.05);
+    });
+    h.seen = 0;
+  }
+
+  /** True while a player's highlight is showing (for tests). */
+  highlighting(key: number) {
+    return (this.highlights.get(key)?.seen ?? 1) < 0.12;
+  }
+
+  private dropHighlight(key: number) {
+    const h = this.highlights.get(key);
+    if (!h) return;
+    for (const m of h.mats) m.dispose();
+    h.group.removeFromParent();
+    this.highlights.delete(key);
+  }
+
   private dropGhost(id: string) {
     const g = this.ghosts.get(id);
     if (!g) return;
@@ -578,6 +679,15 @@ export class WorkFx {
       g.edgeMat[0].opacity = GHOST_EDGE * g.a * pulse;
       g.edgeMat[1].opacity = GHOST_BEHIND * g.a * pulse;
       if (g.a <= 0 && g.seen > 0.12) this.dropGhost(id);
+    }
+    for (const [key, h] of this.highlights) {
+      h.seen += dt;
+      h.a = h.seen > 0.12 ? Math.max(0, h.a - dt * 7) : Math.min(1, h.a + dt * 9);
+      h.group.visible = h.a > 0.02;
+      const pulse = 0.85 + 0.15 * Math.sin(this.clock * 3.2);
+      h.mats[0].opacity = 0.9 * h.a * pulse;
+      h.mats[1].opacity = 0.2 * h.a * pulse;
+      if (h.a <= 0 && h.seen > 0.12) this.dropHighlight(key);
     }
     for (const [key, pv] of this.previews) {
       pv.seen += dt;
@@ -685,6 +795,7 @@ export class WorkFx {
     for (const id of [...this.tags.keys()]) this.dropTag(id);
     for (const id of [...this.ghosts.keys()]) this.dropGhost(id);
     for (const key of [...this.previews.keys()]) this.dropPreview(key);
+    for (const key of [...this.highlights.keys()]) this.dropHighlight(key);
     for (const l of this.labels) {
       const m = l.sprite.material as THREE.SpriteMaterial;
       m.map?.dispose();

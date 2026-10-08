@@ -2843,3 +2843,563 @@ kbd {
   color: #d8e85a;
   text-shadow: 0 0 2px #000, 1px 1px 0 #000;
 }
+
+/* ---- Car screens (game/carLook.ts, game/storage.ts, ui/carCard.ts, ui/trunk.ts, ui/breakdown.ts): the card beside the
+   crosshair for the part looked at, the storage panel at the side of the opener's half, and the breakdown while the
+   details button is held. Small, dark, thin lines: they sit over the world without hiding the car. */
+.carcard,
+.trunk,
+.carbk {
+  position: absolute;
+  display: none;
+  font-family: var(--font);
+  text-transform: none;
+  letter-spacing: 0.02em;
+  color: #ece4d0;
+  text-shadow: 0 1px 2px #000;
+}
+.carcard {
+  left: calc(50% + 34px * var(--u, 1));
+  top: 50%;
+  transform: translateY(-28%);
+  width: calc(232px * var(--u, 1));
+  max-width: 44%;
+  padding: 6px 9px 7px;
+  background: rgba(14, 11, 8, 0.7);
+  border-left: 2px solid rgba(255, 196, 120, 0.55);
+  font-size: calc(12px * var(--u, 1));
+  line-height: 1.3;
+  pointer-events: none;
+}
+.carcard .cc-t {
+  font-size: 0.8em;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #b9ab8e;
+}
+.carcard .cc-n {
+  font-weight: 700;
+  font-size: 1.12em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.carcard .cc-n em {
+  font-style: normal;
+  font-weight: 500;
+  font-size: 0.78em;
+  margin-left: 6px;
+  opacity: 0.85;
+}
+.cc-cond {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 3px 0 2px;
+  font-family: var(--mono);
+  font-size: 0.86em;
+}
+.cc-bar {
+  flex: 1 1 auto;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.cc-bar i {
+  display: block;
+  height: 100%;
+  background: #9cd98a;
+}
+.cc-bar i.mid,
+.tk-job i {
+  background: #e9c25a;
+}
+.cc-bar i.bad {
+  background: #e8634e;
+}
+.carcard .good,
+.trunk .good,
+.carbk .good {
+  color: #9fe08c;
+}
+.carcard .mid {
+  color: #f0cf72;
+}
+.carcard .bad,
+.trunk .bad,
+.carbk .bad {
+  color: #ff8a6a;
+}
+.cc-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  margin-top: 3px;
+}
+.cc-facts div {
+  display: contents;
+}
+.cc-facts span {
+  color: #a99d84;
+}
+.cc-facts b {
+  font-weight: 600;
+  font-family: var(--mono);
+  font-size: 0.95em;
+}
+.cc-vs {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  font-size: 0.95em;
+}
+.cc-vs small {
+  flex-basis: 100%;
+  color: #b9ab8e;
+  font-size: 0.86em;
+}
+.cc-vs b {
+  font-weight: 600;
+}
+.cc-more {
+  margin-top: 3px;
+  color: #c6bba3;
+  font-size: 0.9em;
+}
+.cc-hint,
+.tk-hint {
+  margin-top: 4px;
+  padding: 1px 6px;
+  border-left: 2px solid #e9b64a;
+  background: rgba(233, 182, 74, 0.12);
+  font-size: 0.92em;
+}
+.cc-hint.bad,
+.tk-hint.bad {
+  border-color: #e8634e;
+  background: rgba(232, 99, 78, 0.12);
+}
+.cc-hint.good,
+.tk-hint.good {
+  border-color: #8fd47c;
+  background: rgba(143, 212, 124, 0.1);
+}
+.cc-act {
+  margin-top: 5px;
+  font-size: 0.92em;
+  color: #ddd3bd;
+}
+.cc-act div.off,
+.tk-f span.off {
+  opacity: 0.45;
+}
+.carcard kbd,
+.trunk kbd {
+  font-size: 0.86em;
+  padding: 0 4px;
+  margin: 0 5px 1px 0;
+  min-width: 1.4em;
+  line-height: 1.35;
+  border: 1px solid rgba(255, 220, 160, 0.35);
+}
+
+/* The storage panel: at the right of the opener's half, between the minimap and the weapon box. */
+.trunk {
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: calc(292px * var(--u, 1));
+  max-width: 46%;
+  max-height: calc(100% - 290px * var(--u, 1));
+  min-height: 120px;
+  font-size: calc(12px * var(--u, 1));
+  line-height: 1.3;
+  pointer-events: auto;
+}
+.half.h-top .trunk,
+.half.h-bottom .trunk {
+  max-height: calc(100% - 24px);
+}
+.tk {
+  display: flex;
+  flex-direction: column;
+  max-height: inherit;
+  height: 100%;
+  background: rgba(14, 11, 8, 0.78);
+  border: 1px solid rgba(255, 180, 84, 0.22);
+  border-left: 2px solid rgba(255, 196, 120, 0.6);
+  padding: 6px 8px 6px;
+  overflow: hidden;
+}
+.tk-h {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.tk-h b {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.98em;
+  color: #f2e6c8;
+}
+.tk-h span {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  color: #b9ab8e;
+  white-space: nowrap;
+}
+.tk-sort {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 4px 0 2px;
+  font-size: 0.86em;
+  color: #9c917a;
+}
+.tk-sort span {
+  cursor: pointer;
+}
+.tk-sort span.on {
+  color: #f2e6c8;
+  border-bottom: 1px solid rgba(255, 196, 120, 0.7);
+}
+.tk-sort kbd {
+  margin-left: auto;
+}
+.tk-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.tk-g {
+  margin: 4px 0 1px;
+  font-size: 0.78em;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #9c917a;
+}
+.tk-r {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 4px;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tk-r.on {
+  background: rgba(255, 220, 160, 0.09);
+  border-left-color: rgba(255, 210, 140, 0.85);
+}
+.tk-r.junk .tk-n {
+  opacity: 0.6;
+}
+.tk-i,
+.bk-i {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+.pi {
+  width: 100%;
+  height: 100%;
+}
+.tk-n {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+.tk-m {
+  font-size: 0.82em;
+  font-family: var(--mono);
+}
+.tk-c {
+  font-family: var(--mono);
+  font-size: 0.82em;
+}
+.tk-c.good {
+  color: #9fe08c;
+}
+.tk-c.mid {
+  color: #f0cf72;
+}
+.tk-v {
+  margin-left: auto;
+  font-size: 0.82em;
+}
+.tk-v.dim,
+.tk-f .dim,
+.carbk .dim {
+  color: #8f846e;
+}
+.tk-w {
+  font-size: 0.78em;
+  color: #9c917a;
+}
+.tk-job {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+}
+.tk-job i {
+  display: block;
+  height: 100%;
+}
+.tk-more {
+  font-size: 0.78em;
+  color: #8f846e;
+  padding-left: 22px;
+}
+.tk-empty {
+  color: #9c917a;
+  padding: 6px 2px;
+}
+.tk-d {
+  margin-top: 5px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 180, 84, 0.18);
+  font-size: 0.94em;
+}
+.tk-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px 10px;
+  color: #a99d84;
+}
+.tk-facts b {
+  color: #ece4d0;
+  font-weight: 600;
+  font-family: var(--mono);
+  font-size: 0.95em;
+}
+.tk-fit,
+.tk-delta,
+.tk-sub {
+  margin-top: 2px;
+}
+.tk-delta b {
+  font-weight: 600;
+}
+.tk-sub {
+  color: #9c917a;
+  font-size: 0.9em;
+}
+.tk-msg {
+  margin-top: 3px;
+  font-size: 0.92em;
+  color: #cfe8c0;
+}
+.tk-msg.bad {
+  color: #ff9a7a;
+}
+.tk-f {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin-top: 5px;
+  font-size: 0.9em;
+}
+.tk-f span[data-act] {
+  cursor: pointer;
+}
+
+/* The breakdown: every component and the car's totals, held up beside the car while the details button is down. */
+.carbk {
+  right: 10px;
+  top: calc(56px * var(--u, 1));
+  bottom: calc(110px * var(--u, 1));
+  width: calc(560px * var(--u, 1));
+  max-width: 72%;
+  font-size: calc(11px * var(--u, 1));
+  line-height: 1.28;
+  pointer-events: none;
+}
+.bk {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: rgba(14, 11, 8, 0.82);
+  border: 1px solid rgba(255, 180, 84, 0.22);
+  border-left: 2px solid rgba(255, 196, 120, 0.6);
+  padding: 6px 9px;
+  overflow: hidden;
+}
+.bk-h {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  color: #f2e6c8;
+  margin-bottom: 4px;
+}
+.bk-h small {
+  font-weight: 400;
+  color: #b9ab8e;
+  letter-spacing: 0.06em;
+}
+.bk-cols {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 10px;
+  overflow: hidden;
+}
+.bk-list {
+  overflow: hidden;
+}
+.bk-g {
+  margin: 3px 0 0;
+  font-size: 0.82em;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #9c917a;
+}
+.bk-r {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 5px;
+  white-space: nowrap;
+}
+.bk-r.on {
+  background: rgba(255, 220, 160, 0.09);
+  outline: 1px solid rgba(255, 210, 140, 0.35);
+}
+.bk-r.empty .bk-n {
+  color: #ff8a6a !important;
+}
+.bk-i {
+  width: 12px;
+  height: 12px;
+}
+.bk-l {
+  color: #a99d84;
+  min-width: 7.2em;
+}
+.bk-n {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 13em;
+}
+.bk-m {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  color: #8f846e;
+}
+.bk-c {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+.bk-c.mid {
+  color: #f0cf72;
+}
+.bk-f {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 9px;
+  padding: 0 0 2px 17px;
+  color: #a99d84;
+  white-space: normal;
+}
+.bk-f b {
+  color: #ece4d0;
+  font-weight: 600;
+}
+.bk-t {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 0.95em;
+  align-self: start;
+}
+.bk-t th {
+  text-align: right;
+  font-family: var(--font);
+  font-weight: 500;
+  color: #b9ab8e;
+  letter-spacing: 0.04em;
+  padding: 0 0 2px 6px;
+  white-space: nowrap;
+}
+.bk-t td {
+  text-align: right;
+  padding: 0 0 0 6px;
+  white-space: nowrap;
+}
+.bk-t td:first-child {
+  text-align: left;
+  font-family: var(--font);
+  color: #a99d84;
+  padding-left: 0;
+}
+.bk-t tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* The garage and the workbench: the breakdown of the mount under the cursor, and the workbench docked beside the car. */
+.gdetail {
+  min-height: 60px;
+}
+.gdetail .bk {
+  background: rgba(30, 22, 14, 0.06);
+  border: 1px solid rgba(38, 28, 16, 0.25);
+  color: #2a2016;
+  text-shadow: none;
+}
+.gdetail .bk-h,
+.gdetail .bk-f b,
+.gdetail .bk-t td,
+.gdetail .bk-n {
+  color: #2a2016;
+}
+.gdetail .bk-g,
+.gdetail .bk-l,
+.gdetail .bk-m,
+.gdetail .bk-t th,
+.gdetail .bk-t td:first-child,
+.gdetail .bk-f,
+.gdetail .dim {
+  color: #6f604a;
+}
+.gdetail .good {
+  color: #2f7a24;
+}
+.gdetail .bad {
+  color: #a8321c;
+}
+.gdetail .bk-cols {
+  grid-template-columns: 1fr;
+}
+.gdetail .bk-r.on {
+  background: rgba(255, 180, 84, 0.18);
+}
+.compare-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  margin-top: 4px;
+}
+.ledger.bench.docked {
+  font-size: 0.74em;
+  padding: 10px 12px 10px;
+}
+.ledger.bench.docked .gbody {
+  overflow-y: auto;
+  pointer-events: auto;
+}
+.ledger.bench.docked .gtop,
+.ledger.bench.docked .gfoot {
+  grid-auto-flow: row;
+  grid-auto-columns: auto;
+  flex: none;
+}
+.ledger.bench.docked .gpanel {
+  overflow: visible;
+}

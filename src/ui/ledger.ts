@@ -192,6 +192,8 @@ export class LedgerPanel {
       items.push({ el, press: (p) => act(p), disabled: (el as HTMLButtonElement).disabled });
     });
     g.focus.setItems(items, keys);
+    // The garage's breakdown follows the mount under the mouse or a cursor.
+    if (this.tab === 'garage') this.garage.bindDetail(this.root);
   }
 
   private setWho(i: number) {
