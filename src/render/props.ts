@@ -561,10 +561,14 @@ function containerProto(seed: number, tag: number): MeshBuilder {
   const r = rng(seed + 71);
   const c = CONTAINER[(seed + tag) % CONTAINER.length];
   const paint = S.paint(c, 0.9);
-  b.box(0, 1.35, 0, 2.44, 2.5, 6.06, paint);
+  // Each box a few millimetres taller or shorter than the next: walls of them are laid crossing at the corners, and two
+  // roofs at one height fought there.
+  const tall = 2.5 + rng(seed * 3 + tag + 97)() * 0.024;
+  b.box(0, 0.1 + tall / 2, 0, 2.44, tall, 6.06, paint);
   for (let z = -2.8; z <= 2.8; z += 0.35) b.box(1.23, 1.35, z, 0.05, 2.3, 0.12, paint);
   for (let z = -2.8; z <= 2.8; z += 0.35) b.box(-1.23, 1.35, z, 0.05, 2.3, 0.12, paint);
-  for (const x of [-1.15, 1.15]) for (const z of [-2.95, 2.95]) b.box(x, 1.35, z, 0.16, 2.6, 0.16, S.steel(0x3a3c3c, 0.8));
+  // Corner posts stand a centimetre proud of the ends as well as the sides (flush, they fought the end walls).
+  for (const x of [-1.15, 1.15]) for (const z of [-2.955, 2.955]) b.box(x, 1.35, z, 0.16, 2.6, 0.17, S.steel(0x3a3c3c, 0.8));
   b.box(0, 0.08, 0, 2.3, 0.16, 6.0, S.steel(0x2a2a28, 0.8));
   // Doors at the back with locking bars; rust bloom on the sunny side.
   b.box(0, 1.3, 3.03, 2.3, 2.3, 0.05, S.paint(c, 0.85));
