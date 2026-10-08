@@ -6,6 +6,7 @@ import type { TrackSnapshot } from '../render/trackMarks';
 import type { Carried } from '../sim/carry';
 import type { Picked } from './foraging';
 import type { VegetationMemory, VegetationRecord } from '../sim/vegetation';
+import { newUid } from '../sim/parts';
 
 /** Where the convoy stands, for rolling out again from the same spot. */
 export interface WorldPose {
@@ -80,6 +81,7 @@ export class WorldMemory {
       scorched: this.scorched,
       vegetation: [...this.vegetation],
       forage: [...this.forage].map(([id, p]) => [id, p.n, p.day]),
+      drops: this.drops,
     };
   }
 
@@ -99,6 +101,9 @@ export class WorldMemory {
     m.ambushDone = new Set(s.ambush ?? []);
     m.gangKilled = new Set(s.gang ?? []);
     m.camp = s.camp ?? null;
+    // A part left lying (a haul crate the full trucks could not take, a door torn off) gets a fresh id: the run's ids were
+    // reseeded from the campaign alone, and this one must not meet a new part with the same.
+    m.drops = (s.drops ?? []).map((d) => (d.carried.kind === 'part' ? { ...d, carried: { kind: 'part', item: { ...d.carried.item, uid: newUid('p') } } } : d));
     return m;
   }
 }
@@ -121,4 +126,6 @@ export interface WorldSave {
   vegetation?: [string, VegetationRecord][];
   /** Wild plants picked: id, handfuls taken, day. Absent in saves from before foraging. */
   forage?: [string, number, number][];
+  /** Parts and cans lying on the ground. Absent in saves from before they were kept. */
+  drops?: { x: number; z: number; carried: Carried }[];
 }

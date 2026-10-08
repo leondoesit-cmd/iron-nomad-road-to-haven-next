@@ -100,12 +100,13 @@ export class ControlsMenu {
           return [num('ms', 'Mouse / trackpad sensitivity', () => st().mouseSens, (v) => (st().mouseSens = v), 0.1, 0.2, 3), ...invert];
         case 'play':
           return [
-            ...perSeat('vw', 'View', (i) => ({
-              value: () => (st().firstPerson[i] ? 'FIRST PERSON' : 'THIRD PERSON'),
+            // On foot the view is always the eyes; in a vehicle it is the seat's choice, and this is where it starts.
+            ...perSeat('vw', 'Vehicle camera', (i) => ({
+              value: () => (st().vehicleView[i] === 'first' ? 'FIRST PERSON' : 'THIRD PERSON'),
               step: () => {
-                st().firstPerson[i] = !st().firstPerson[i];
+                st().vehicleView[i] = st().vehicleView[i] === 'first' ? 'third' : 'first';
                 const p = g.scene?.players[i];
-                if (p) p.viewFirst = st().firstPerson[i];
+                if (p) p.viewFirst = st().vehicleView[i] === 'first';
               },
             })),
             num('cfov', 'Field of view', () => st().chaseFov, (v) => (st().chaseFov = v), 5, 70, 130, (v) => `${Math.round(v)}°`),
@@ -184,7 +185,7 @@ export class ControlsMenu {
         s.fpFov = 100;
         s.chaseFov = 110;
         s.fpLens = 0.7;
-        s.firstPerson = [false, false];
+        s.vehicleView = ['third', 'third'];
         for (const p of g.scene?.players ?? []) p.viewFirst = false;
       }
       input.bindingsChanged();
@@ -206,7 +207,7 @@ export class ControlsMenu {
           : this.tab === 'mouse'
             ? 'Click the game to capture the mouse. Moving looks around. Trackpads have left and right clicks only.'
             : this.tab === 'play'
-              ? 'The view also switches in play with its own button. These settings apply to the seat named.'
+              ? 'On foot you always see through your own eyes. The vehicle camera also switches in play with the view button. These settings apply to the seat named.'
               : this.tab === 'kb0'
                 ? 'Keyboard 1 joins with its fire key. Both layouts work in solo.'
                 : 'Keyboard 2 joins with its fire key. Both layouts work in solo.';

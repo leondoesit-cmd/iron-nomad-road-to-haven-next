@@ -31,6 +31,7 @@ import type { Player } from './player';
 import type { Vehicle } from './vehicle';
 import { BenchmarkRun, type BenchmarkReport } from './benchmark';
 import { Rng } from '../core/rng';
+import { NightFade } from '../ui/nightFade';
 
 export type Phase =
   | 'boot'
@@ -60,6 +61,14 @@ export class Game {
   godMode = true;
   /** Reads the story's subtitles aloud with the browser's speech synthesis (a setting, on by default). */
   storyVoice = new StoryVoice();
+  /**
+   * Night camp (a setting, off by default). On: the Dusk Bell calls a camp vote and a night raid, as it always did. Off: the
+   * night is the players' to spend: rest until dawn (the Ledger), carry on in the dark, or make camp anyway for the haul.
+   */
+  nightCamp = false;
+  private nightFade = new NightFade();
+  /** A rest in progress: the screen is going dark, and the camp is made when this runs out. */
+  private resting: { t: number; site: string } | null = null;
   phase: Phase = 'boot';
   paused = false;
   pausedBy = -1;
@@ -181,7 +190,7 @@ export class Game {
     try {
       const raw = localStorage.getItem('ironnomad.settings');
       if (!raw) return;
-      const s = JSON.parse(raw) as { quality?: QualityPreset; ui?: number; layout?: 'horizontal' | 'vertical'; vol?: number; music?: number; gameMusicEnabled?: boolean; userMusicEnabled?: boolean; userMusicVolume?: number; tts?: boolean; god?: boolean; voice?: boolean; mouse?: number; solo?: boolean; input?: unknown };
+      const s = JSON.parse(raw) as { quality?: QualityPreset; ui?: number; layout?: 'horizontal' | 'vertical'; vol?: number; music?: number; gameMusicEnabled?: boolean; userMusicEnabled?: boolean; userMusicVolume?: number; tts?: boolean; god?: boolean; voice?: boolean; mouse?: number; solo?: boolean; nightCamp?: boolean; input?: unknown };
       if (s.solo) this.setSolo(true);
       if (s.quality && QUALITY[s.quality]) this.R.setQuality(s.quality);
       if (s.ui) this.hud.setScale(s.ui);
@@ -194,6 +203,8 @@ export class Game {
       if (s.tts !== undefined) this.audio.setTtsEnabled(s.tts);
       if (s.god !== undefined) this.setGodMode(s.god);
       if (s.voice !== undefined) this.storyVoice.enabled = s.voice;
+      // Settings from before the option have none: they get the new default (off), like everybody else.
+      if (typeof s.nightCamp === 'boolean') this.nightCamp = s.nightCamp;
       if (s.mouse) this.input.settings.mouseSens = s.mouse;
       // Control settings: bindings, sensitivities, view. Saved since the first version only kept the mouse speed.
       this.input.importSettings(s.input);
@@ -207,7 +218,7 @@ export class Game {
     try {
       localStorage.setItem(
         'ironnomad.settings',
-        JSON.stringify({ quality: this.R.quality, ui: this.hud.uiScale, layout: this.R.layout, vol: this.audio.volume, music: this.audio.musicVolume, gameMusicEnabled: this.audio.gameMusicEnabled, userMusicEnabled: this.audio.userMusicEnabled, userMusicVolume: this.audio.userMusicVolume, tts: this.audio.ttsEnabled, god: this.godMode, voice: this.storyVoice.enabled, mouse: this.input.settings.mouseSens, solo: this.solo, input: this.input.exportSettings() }),
+        JSON.stringify({ quality: this.R.quality, ui: this.hud.uiScale, layout: this.R.layout, vol: this.audio.volume, music: this.audio.musicVolume, gameMusicEnabled: this.audio.gameMusicEnabled, userMusicEnabled: this.audio.userMusicEnabled, userMusicVolume: this.audio.userMusicVolume, tts: this.audio.ttsEnabled, god: this.godMode, voice: this.storyVoice.enabled, mouse: this.input.settings.mouseSens, solo: this.solo, nightCamp: this.nightCamp, input: this.input.exportSettings() }),
       );
     } catch {
       /* ignore */
@@ -230,6 +241,7 @@ export class Game {
       },
       onTip: (id) => this.hud.showTip(t(`tip.${id}`), 10),
       onBanner: (title, sub) => this.hud.showBanner(title, sub, 4),
+      nightCamp: () => this.nightCamp,
     };
   }
 
@@ -290,6 +302,11 @@ export class Game {
     this.campaign = c;
     if (this.godMode) grantAllWeapons(c);
     this.world = c.worldSave ? WorldMemory.restore(c.worldSave) : null;
+    // A morning on the road was saved where the convoy stood (night camp off): carry on from there, the same day.
+    if (c.flags.savedOnRoad && legById(c.legId).open && this.world?.camp) {
+      this.beginLeg(c.legId, this.world.camp);
+      return;
+    }
     // Resume at the Ledger that was saved at dawn.
     this.beginLedger();
   }
@@ -299,6 +316,7 @@ export class Game {
 
   disposeScene() {
     this.attract = false;
+    this.resting = null;
     this.storyVoice.stop();
     if (this.tutorial) {
       this.tutorial.dispose(this.scene instanceof LegScene ? this.scene : null);
@@ -460,16 +478,82 @@ export class Game {
       this.phase = 'vote';
       const sc = this.scene;
       sc.paused = true;
-      if (sc.leg.open) {
-        const hub = sc.hubNearby();
-        this.overlays.showCampDecision(sc.leg, (siteId, hot) => this.beginCamp(siteId, hot), sc.campOptions(), hub);
-      } else this.overlays.showCampDecision(sc.leg, (siteId, hot) => this.beginCamp(siteId, hot));
+      const campVote = () => {
+        if (sc.leg.open) {
+          const hub = sc.hubNearby();
+          this.overlays.showCampDecision(sc.leg, (siteId, hot) => this.beginCamp(siteId, hot), sc.campOptions(), hub);
+        } else this.overlays.showCampDecision(sc.leg, (siteId, hot) => this.beginCamp(siteId, hot));
+      };
+      // Night camp off: the night is a choice. Rest (the Ledger at dawn), make camp for the haul, or carry on (not at the end
+      // of a road, which has nowhere further to go). Haven is behind walls: the night there is a rest.
+      if (r.type === 'dusk' && r.free) {
+        this.overlays.showNightChoice((choice) => {
+          if (choice === 'rest') this.restUntilDawn();
+          else if (choice === 'camp') campVote();
+          else this.carryOn(sc);
+        }, !!sc.leg.open, sc.hubNearby());
+        return;
+      }
+      if (r.type === 'haven' && !this.nightCamp) return this.restUntilDawn();
+      campVote();
       return;
     }
+    if (r.type === 'dawn' && this.scene instanceof LegScene) return this.morningOnRoad(this.scene);
     if (r.type === 'campDone') this.afterCamp();
   }
 
-  beginCamp(siteId: string, hot: boolean) {
+  /** The night's choice was to carry on: the leg picks up where it stopped. */
+  private carryOn(sc: LegScene) {
+    this.overlays.hideAll();
+    sc.resumeAfterNight();
+    sc.paused = false;
+    this.phase = 'leg';
+    this.startLock = 0.4;
+    this.resumeLock = 0.2;
+  }
+
+  /**
+   * Sleep the night through where the convoy stopped: the screen goes dark for a moment, the night passes quietly (no build,
+   * no raid), and dawn brings the report and the Ledger, rolling out from the same spot.
+   */
+  restUntilDawn() {
+    const sc = this.scene;
+    if (!(sc instanceof LegScene) || this.resting) return;
+    this.phase = 'vote';
+    sc.paused = true;
+    this.overlays.hideAll();
+    this.hud.setVisible(false);
+    this.nightFade.show(sc.hubNearby() === 'haven' ? 'A night behind the walls of Haven' : 'The night passes');
+    this.resting = { t: NightFade.IN + 0.25, site: (sc.leg.open ? sc.campOptions() : sc.leg.campSites)[0] };
+  }
+
+  /** The fade has gone dark: make the quiet camp, which goes straight to dawn, and let the light back in on the report. */
+  private tickRest(step: number) {
+    const r = this.resting;
+    if (!r) return;
+    r.t -= step;
+    if (r.t > 0) return;
+    this.resting = null;
+    this.beginCamp(r.site, true, true);
+    this.nightFade.hide();
+  }
+
+  /**
+   * Night camp off, and a night has been played out on the road: it is morning (the scene already turned its clock over and
+   * counted the day). The world and the run are saved where the convoy stands, so Continue carries on from here.
+   */
+  private morningOnRoad(sc: LegScene) {
+    if (sc.training) return;
+    sc.commitFleet();
+    if (this.world) {
+      sc.snapshot(this.world);
+      this.campaign.worldSave = this.world.serialize();
+    }
+    this.campaign.flags.savedOnRoad = true;
+    saveCampaign(this.campaign);
+  }
+
+  beginCamp(siteId: string, hot: boolean, rest = false) {
     const leg = this.scene instanceof LegScene ? this.scene.leg : legById(this.campaign.legId);
     // Carry over vehicle HP before the leg is torn down.
     this.snapshotVehicles();
@@ -483,15 +567,26 @@ export class Game {
     this.disposeScene();
     this.overlays.hideAll();
     this.campaign.hotCamp = hot;
-    const camp = new CampScene(this.services(), leg, siteId, hot, false, land);
+    const camp = new CampScene(this.services(), leg, siteId, hot, false, land, rest);
     camp.onResult = (r) => this.onSceneResult(r);
     camp.openWorkbench = (p, v) => this.openWorkbench(p, v);
     camp.openInventory = (p) => this.openInventory(p);
+    // A haul part the full trucks cannot take waits at the camp's spot in the open world, for the morning to find.
+    const world = leg.open ? this.world : null;
+    if (world?.camp) {
+      const at = world.camp;
+      camp.stashPart = (item) => {
+        world.drops.push({ x: at.x - Math.sin(at.yaw) * 7, z: at.z - Math.cos(at.yaw) * 7, carried: { kind: 'part', item } });
+        return true;
+      };
+    }
     this.scene = camp;
     this.phase = 'camp';
     this.paused = false;
     this.startLock = 0.5;
-    this.hud.showBanner('CAMP', camp.siteName, 5);
+    // A rest goes straight on to dawn (and the report); a camp starts building.
+    if (rest) camp.restUntilDawn();
+    else this.hud.showBanner('CAMP', camp.siteName, 5);
   }
 
   private workbench: Workbench | null = null;
@@ -564,6 +659,8 @@ export class Game {
     camp.enterLedgerMode();
     this.hud.setVisible(false);
     this.campaign.worldSave = this.world ? this.world.serialize() : undefined;
+    // This save is the Ledger's: Continue opens it, not the road.
+    delete this.campaign.flags.savedOnRoad;
     saveCampaign(this.campaign);
     this.overlays.showLedger(camp, (nextLegId) => this.rollOut(nextLegId));
   }
@@ -584,6 +681,7 @@ export class Game {
   }
 
   toTitle() {
+    this.nightFade.clear();
     this.disposeScene();
     this.phase = 'title';
     this.hud.setVisible(false);
@@ -807,6 +905,7 @@ export class Game {
     }
     if (this.focus.active) this.focus.update(this.input);
     this.overlays.tick(step);
+    this.tickRest(step);
     const sc = this.scene;
     if (!sc) return;
     if (this.benchmark) {
@@ -901,6 +1000,8 @@ export class Game {
   /** Frame one full-screen shot from a fixed camera; pass null to return to the split screen. */
   setPhoto(p: { pos: [number, number, number]; look: [number, number, number]; fov?: number } | null) {
     this.photo = p ? { ...p, fov: p.fov ?? 50 } : null;
+    // A photo shows the people from outside: nobody's body is hidden from a view of their own (see `Player.staged`).
+    for (const pl of this.scene?.players ?? []) pl.staged = !!p;
     if (!p) this.R.resize();
   }
 

@@ -451,9 +451,11 @@ export class Hud {
       h.setStyle('legdusk', 'left', '72%');
       h.setStyle('legdusk', 'display', leg.leg.open ? 'none' : '');
       const sec = leg.clock.secondsToDark;
-      h.setText('clock', leg.clock.night ? '+' + formatClock((leg.clock.t - 1) * leg.clock.dayLength) : formatClock(sec));
+      // A night that is played out on the road (night camp off) counts down to the morning instead.
+      const toDawn = leg.clock.night && leg.leg.open && leg.freeNight;
+      h.setText('clock', toDawn ? formatClock(leg.clock.secondsToDawn) : leg.clock.night ? '+' + formatClock((leg.clock.t - 1) * leg.clock.dayLength) : formatClock(sec));
       const dust = stormLabel(leg.storm, leg.stormRising) || leg.weather?.label() || heatLabel(leg.heat);
-      h.setText('daytag', leg.clock.dusk ? (leg.clock.night ? 'INTO THE NIGHT' : 'TO DARK') : dust ? `TO DUSK BELL · ${dust}` : 'TO DUSK BELL');
+      h.setText('daytag', toDawn ? 'TO DAWN' : leg.clock.dusk ? (leg.clock.night ? 'INTO THE NIGHT' : 'TO DARK') : dust ? `TO DUSK BELL · ${dust}` : 'TO DUSK BELL');
       h.setStyle('legbar', 'display', '');
     } else {
       h.setStyle('legbar', 'display', 'none');
