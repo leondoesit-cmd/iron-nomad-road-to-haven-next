@@ -35,6 +35,7 @@ import { MEDKIT_HEAL, UTILITIES, utilityName, type Player, type QuickId } from '
 import { BLEED, STAMINA, wearLabel, wearOf } from '../sim/vitals';
 import { whole } from '../sim/resources';
 import { dressOther, drugWord } from '../game/consumables';
+import { eatWildShroom } from '../game/wildShrooms';
 import type { Game } from '../game/game';
 import type { Campaign } from '../game/campaign';
 import type { Slot } from '../input/input';
@@ -486,8 +487,13 @@ export class InventoryView {
 
   /** A dose from the pack. It goes down now; the clock it comes on by starts when the game does. */
   takeDrug(id: SupplyId) {
-    if (!isDrug(id)) return;
     const p = this.p!;
+    // The unknown mushrooms: one goes down, and what it was is the lesson (the belt slot does the same).
+    if (id === 'wild') {
+      if (!eatWildShroom(p)) return this.done(false, p.notes[p.notes.length - 1]?.text ?? 'Nothing to eat');
+      return this.done(true, p.notes[p.notes.length - 1]?.text ?? 'You eat one');
+    }
+    if (!isDrug(id)) return;
     if (!p.takeDrug(id)) return this.done(false, `No ${drugWord(id)} left`);
     this.done(true, `${DRUGS[id].name} taken. ${kicksInText(DRUGS[id])}`);
   }
@@ -638,6 +644,7 @@ export class InventoryView {
     let drugs = 0;
     for (const id of supplyIds()) {
       const n = supplyCount(this.c, id);
+      if (id === 'wild' && n <= 0) continue;
       if (isDrug(id)) {
         if (n <= 0) continue;
         drugs++;

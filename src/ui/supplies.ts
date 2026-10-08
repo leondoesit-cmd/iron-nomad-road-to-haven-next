@@ -5,6 +5,7 @@ import { whole } from '../sim/resources';
 import type { Campaign } from '../game/campaign';
 import { itemIcon } from './gearIcons';
 import { drugWord } from '../game/consumables';
+import { wildTotal } from '../game/wildShrooms';
 
 /**
  * The things a survivor uses up rather than wears or holds: dressings, food, water and every drug in the pharmacy. They are
@@ -12,10 +13,11 @@ import { drugWord } from '../game/consumables';
  * their own in the inventory with what each one does, and the body's current state for the drugs.
  */
 
-export type SupplyId = 'bandage' | 'medkit' | 'ration' | 'water' | DrugId;
+/** `wild`: the mushrooms picked without knowing them (`game/wildShrooms.ts`), one tile for every lot. */
+export type SupplyId = 'bandage' | 'medkit' | 'ration' | 'water' | DrugId | 'wild';
 
 /** In the order the strip shows them: medicine, then food and water, then the pharmacy as `sim/drugs.ts` lists it. */
-export const supplyIds = (): SupplyId[] => ['bandage', 'medkit', 'ration', 'water', ...DRUG_IDS];
+export const supplyIds = (): SupplyId[] => ['bandage', 'medkit', 'ration', 'water', ...DRUG_IDS, 'wild'];
 
 export const isDrug = (id: string): id is DrugId => id in DRUGS;
 
@@ -23,6 +25,7 @@ export const isDrug = (id: string): id is DrugId => id in DRUGS;
 export function supplyCount(c: Campaign, id: SupplyId): number {
   if (id === 'ration') return whole(c.stocks.rations);
   if (id === 'water') return Math.max(0, c.items.water);
+  if (id === 'wild') return wildTotal(c);
   return c.items[id] ?? 0;
 }
 
@@ -41,6 +44,8 @@ export function supplyName(id: SupplyId): string {
       return 'Ration';
     case 'water':
       return 'Water';
+    case 'wild':
+      return 'Unknown mushrooms';
     default:
       return DRUGS[id]?.name ?? id;
   }
@@ -57,6 +62,8 @@ export function supplyBlurb(id: SupplyId): string {
       return `Fills you up by ${Math.round(NEEDS.rationFood * 100)}%. Hunger slows your recovery; starving hurts.`;
     case 'water':
       return 'Three quarters of a litre from the reserve, or free from the water you stand at (raw water can upset your stomach).';
+    case 'wild':
+      return 'Mushrooms you picked without knowing them, kept by their look. Eating one is how you learn them: food, a trip, or a very bad day.';
     default:
       return DRUGS[id]?.blurb ?? '';
   }
@@ -250,6 +257,8 @@ function drawSupply(id: SupplyId): string {
       return svg(P('M19 25 Q18 36 16 42 H30 Q28 36 27 25Z', '#efe4cc') + P('M5 27 Q8 8 24 7 Q40 8 43 27 Q24 31 5 27Z', '#a8743e') + C(17, 16, 2.4, '#f2dcae') + C(29, 13, 2, '#f2dcae') + C(34, 21, 1.8, '#f2dcae') + L('M16 33 Q23 35 30 33', '#cdbf9e', 1));
     case 'lsd':
       return svg(`<g transform="rotate(-8 24 24)">${R(8, 8, 32, 32, '#f4f0e4', 1)}${C(24, 24, 11, '#5ad6ff')}${C(24, 24, 7, '#ff7ae0')}${C(24, 24, 3, '#ffe25a')}${L('M8 19 H40 M8 29 H40 M19 8 V40 M29 8 V40', 'rgba(27,20,12,0.35)', 0.8)}</g>`);
+    case 'wild':
+      return svg(P('M14 26 Q13 36 11 42 H22 Q20 36 20 26Z', '#e6dcc4') + P('M3 27 Q6 12 17 11 Q28 12 31 27 Q17 30 3 27Z', '#8a6a4a') + P('M27 30 Q27 38 26 43 H34 Q33 38 33 30Z', '#dcd2b8') + P('M21 31 Q24 18 30 15 Q37 18 41 31 Q30 34 21 31Z', '#b39466') + `<text x="36" y="13" font-size="13" font-family="monospace" font-weight="bold" fill="${INK}">?</text>`);
     case 'ayahuasca':
       return svg(P('M7 22 H41 Q40 38 24 41 Q8 38 7 22Z', '#7a4a2a') + E(24, 22, 17, 4, '#3a2016') + L('M33 21 Q38 10 30 6 Q24 4 26 12 Q28 17 22 16', '#4a9a3a', 2) + E(36, 11, 3, 1.8, '#5cb85a') + E(23, 9, 2.6, 1.6, '#5cb85a'));
   }

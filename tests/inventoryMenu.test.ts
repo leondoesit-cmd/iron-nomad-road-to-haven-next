@@ -306,8 +306,19 @@ describe('supplies from the pack', () => {
     const html = v.columnsHtml();
     for (const id of supplyIds()) {
       if (DRUG_IDS.includes(id as never) && (s.h.campaign.items[id as keyof typeof s.h.campaign.items] ?? 0) <= 0) continue;
+      // The unknown-mushroom tile shows only while some are carried.
+      if (id === 'wild') continue;
       expect(acts.has(`sup:${id}`), id).toBe(true);
     }
+    // A few picked unknowns: their tile is there, and its menu eats one or puts them on the belt.
+    s.h.campaign.items.wildLiberty = 2;
+    v.columnsHtml();
+    expect(acts.has('sup:wild')).toBe(true);
+    v.openMenu({ kind: 'supply', id: 'wild' });
+    v.columnsHtml();
+    expect(acts.has('a-eat')).toBe(true);
+    expect(acts.has('a-quick')).toBe(true);
+    v.closeMenu();
     expect(html).toMatch(/In your system/);
     v.openMenu({ kind: 'supply', id: 'mushrooms' });
     const out = v.columnsHtml();
