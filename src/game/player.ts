@@ -282,6 +282,8 @@ export class Player implements Pilot {
   /** Whether this reload's empty magazine has dropped yet, and seconds of smoke still curling off the gun. */
   private magDropped = false;
   private smokeT = 0;
+  /** Wisps of that smoke owed so far: one leaves the muzzle each time this passes 1, an even curl rather than a dice roll. */
+  private smokeAcc = 0;
   private leisureIdle = 0;
   private doseLeisure: 'drink' | 'smoke' | null = null;
   private doseLeisureT = 0;
@@ -2632,12 +2634,16 @@ export class Player implements Pilot {
     }
     if (this.smokeT > 0) {
       this.smokeT -= dt;
-      if (this.equip === 'gun' && this.state === 'foot' && Math.random() < dt * 14 * Math.min(1, this.smokeT)) {
-        const [mx, my, mz] = this.muzzlePos();
-        const [wx, wy, wz] = this.gunPoint('muzzle', [mx, my, mz]);
-        ctx.fx.wisp(wx, wy, wz, Math.min(1, this.smokeT));
+      this.smokeAcc += dt * 14 * clamp(this.smokeT, 0, 1);
+      if (this.smokeAcc >= 1) {
+        this.smokeAcc -= 1;
+        if (this.equip === 'gun' && this.state === 'foot') {
+          const [mx, my, mz] = this.muzzlePos();
+          const [wx, wy, wz] = this.gunPoint('muzzle', [mx, my, mz]);
+          ctx.fx.wisp(wx, wy, wz, Math.min(1, this.smokeT));
+        }
       }
-    }
+    } else this.smokeAcc = 0;
   }
 
   /** The gun is opened to reload: a revolver or a break-action drops what it fired. */
