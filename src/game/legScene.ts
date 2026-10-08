@@ -449,13 +449,18 @@ export class LegScene extends Scene {
   /** Keeps each camp prompt under its player's feet, and its words true to what holding it would do. */
   private moveCampPrompts() {
     const free = this.freeNight;
+    // Who is hunting whom is looked at five times a second, and only for someone on foot after the Bell: the words can lag a
+    // moment, the hold itself checks every tick.
+    const look = free && this.clock.bellRung && this.ticks % 12 === 0;
     for (const i of this.interact.list) {
       if (!i.id.startsWith('camp:')) continue;
       const p = this.players[Number(i.id.slice(5))];
       if (!p) continue;
       i.x = p.pos.x;
       i.z = p.pos.z;
-      i.prompt = !free ? STOP_PROMPT.camp : this.clock.bellRung && hostilesNear(this, p.pos.x, p.pos.z) ? STOP_PROMPT.hostile : STOP_PROMPT.stop;
+      if (!free) i.prompt = STOP_PROMPT.camp;
+      else if (look && p.state === 'foot') i.prompt = hostilesNear(this, p.pos.x, p.pos.z) ? STOP_PROMPT.hostile : STOP_PROMPT.stop;
+      else if (i.prompt === STOP_PROMPT.camp) i.prompt = STOP_PROMPT.stop;
     }
   }
 

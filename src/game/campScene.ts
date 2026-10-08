@@ -64,6 +64,8 @@ export interface Report {
 type Phase = 'build' | 'night' | 'dawn' | 'ledger';
 
 const SECTOR_NAMES = ['n', 'nw', 'w', 'sw', 's', 'se', 'e', 'ne'];
+/** The haul's small things, set out on top of its crate (anything else is the part, on the ground). */
+const SMALL_HAUL = new Set(['ammo', 'medkit', 'bandage', 'medicine']);
 
 /** Sector k is centred at angle k * 45 deg. 0 is north (+Z); angles grow toward +X, which is west when facing north. */
 export const sectorAngle = (k: number) => (k * Math.PI) / 4;
@@ -1194,7 +1196,8 @@ export class CampScene extends Scene {
     let onTop = 0;
     for (const k of models) {
       const m = makePickup(k).group;
-      if (k.startsWith('part:')) {
+      // The part lies on the ground beside the crate; the small things sit on it.
+      if (!SMALL_HAUL.has(k)) {
         m.position.set(-0.2, 0, 0.85);
         m.rotation.y = 0.4;
       } else {

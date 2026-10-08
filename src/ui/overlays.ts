@@ -293,7 +293,7 @@ export class Overlays {
         ${row('ag', 'Aggro (enemy senses)', `${d.aggro.toFixed(2)}×`)}
         ${row('dm', 'Damage taken', `${d.damage.toFixed(2)}×`)}
         ${row('god', 'God mode (every weapon from the start)', g.godMode ? 'ON' : 'OFF')}
-        ${row('nc', 'Night camp', g.nightCamp ? 'ON · CAMP AND RAID' : 'OFF · YOUR CHOICE')}
+        ${row('nc', 'Night camp (every night: a camp and a raid)', g.nightCamp ? 'ON' : 'OFF')}
         <div style="font-size:.7em;text-transform:none;letter-spacing:0;max-width:620px">${g.nightCamp ? 'The Dusk Bell calls a camp: build defences and hold off a three-wave night raid.' : 'After the Dusk Bell, rest until dawn, push on through the dark, or make camp and hold it through a raid for the night\'s haul: ammunition, a rare part and medicine.'}</div>
         <div class="item"><button data-fid="back">Back</button><span class="mutedtxt" style="color:#c9bd9f">${solo ? '' : 'Per-player options apply to that seat.'}</span></div>
       </div></div>`;
