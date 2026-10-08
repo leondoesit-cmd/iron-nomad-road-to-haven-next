@@ -39,8 +39,9 @@ function bed(b: MeshBuilder, f: Furn) {
   b.rbox(0, 0.4, 0.04, w - 0.1, 0.24, d - 0.18, 0.05, sheet);
   b.rbox(0, 0.5, d * 0.14, w - 0.06, 0.1, d * 0.66, 0.05, blanket);
   for (const x of w > 1.2 ? [-w * 0.25, w * 0.25] : [0]) b.rbox(x, 0.55, -d / 2 + 0.3, Math.min(0.6, w * 0.4), 0.13, 0.36, 0.05, S.cloth(0xd8d4c8, 0.5));
-  b.box(0, 0.62, -d / 2 + 0.03, w, 0.7, 0.06, wood);
-  b.box(0, 0.32, d / 2 - 0.03, w, 0.36, 0.06, wood);
+  // Head and foot boards stand 5 mm proud of the frame's ends and sides, which they would otherwise share.
+  b.box(0, 0.62, -d / 2 + 0.025, w + 0.01, 0.7, 0.06, wood);
+  b.box(0, 0.32, d / 2 - 0.025, w + 0.01, 0.36, 0.06, wood);
 }
 
 function bunk(b: MeshBuilder, f: Furn) {
@@ -148,12 +149,15 @@ function tvstand(b: MeshBuilder, f: Furn) {
 function bookshelf(b: MeshBuilder, f: Furn) {
   const wood = S.wood(pickC(WOOD, f.seed), 0.6);
   const r = rnd(f.seed + 5);
-  b.box(0, f.h / 2, -f.d / 2 + 0.01, f.w, f.h, 0.02, S.wood(0x2a2018, 0.8));
+  // The back and the shelves sit between the sides, the shelves a little back from their front edges: run out to the
+  // sides' outer faces, every edge was a face shared with a side and flickered.
+  const inner = f.w - 0.06;
+  b.box(0, f.h / 2, -f.d / 2 + 0.01, inner, f.h, 0.02, S.wood(0x2a2018, 0.8));
   for (const x of [-1, 1]) b.box(x * (f.w / 2 - 0.015), f.h / 2, 0, 0.03, f.h, f.d, wood);
   const shelves = Math.max(3, Math.round(f.h / 0.38));
   for (let i = 0; i <= shelves; i++) {
     const y = (i / shelves) * (f.h - 0.03) + 0.015;
-    b.box(0, y, 0, f.w, 0.03, f.d, wood);
+    b.box(0, y, -0.005, inner, 0.03, f.d - 0.01, wood);
     if (i < shelves && r() > 0.2) {
       let x = -f.w / 2 + 0.07;
       const top = ((i + 1) / shelves) * (f.h - 0.03) - y;
@@ -271,7 +275,8 @@ function safe(b: MeshBuilder, f: Furn) {
 function gondola(b: MeshBuilder, f: Furn) {
   const r = rnd(f.seed + 11);
   const frame = S.metal(0x8a8e8e, 0.65);
-  b.box(0, 0.06, 0, f.w, 0.12, f.d, S.paint(0x4a4a48, 0.8));
+  // The kick plate is set in a little from the uprights' faces, which it would otherwise share.
+  b.box(0, 0.06, 0, f.w - 0.01, 0.12, f.d - 0.02, S.paint(0x4a4a48, 0.8));
   b.box(0, f.h / 2, 0, 0.03, f.h, f.d, frame, 0, 0, 0);
   for (const x of [-1, 1]) b.box(x * (f.w / 2 - 0.015), f.h / 2, 0, 0.03, f.h, f.d, frame);
   // Three boards, 0.4 m apart: the goods fill what the loose items leave free.
@@ -338,7 +343,8 @@ function rack(b: MeshBuilder, f: Furn) {
       const n = 1 + Math.floor(r() * 2);
       for (let k = 0; k < n; k++) {
         const bh = 0.4 + r() * 0.5;
-        b.box(x + (k - (n - 1) / 2) * 0.5, y + 0.05 + bh / 2, 0, 0.7, bh, f.d - 0.25, r() > 0.4 ? S.paint(0x9a7a52, 0.8) : S.paint(GOODS[Math.floor(r() * GOODS.length)], 0.8));
+        // Side by side the crates overlap a little: each a few centimetres shallower than the last, so their faces differ.
+        b.box(x + (k - (n - 1) / 2) * 0.5, y + 0.05 + bh / 2, 0, 0.7, bh, f.d - 0.25 - k * 0.03, r() > 0.4 ? S.paint(0x9a7a52, 0.8) : S.paint(GOODS[Math.floor(r() * GOODS.length)], 0.8));
       }
     }
   }

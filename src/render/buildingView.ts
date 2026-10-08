@@ -7,7 +7,7 @@ import { kitMaterial } from './materials';
 import { hash2 } from '../core/rng';
 import { PaneSet, paneMaterials, type PaneSpec } from './glass';
 import { mallCut, mallLevel, mallRoof } from './mallView';
-import { levelBase, paneKey, paneKind, subtractRects, wallPieces, wellRails, type BuildingPlan, type FloorMat, type Opening, type Rect, type Stair, type Wall, T_EXT } from '../world/interiors';
+import { levelBase, paneKey, paneKind, subtractRects, wallPieces, wellRails, type BuildingPlan, type FloorMat, type Opening, type Rect, type Stair, type Wall, T_EXT, T_INT } from '../world/interiors';
 import type { RuralBuilding } from '../world/settlements';
 
 /**
@@ -129,12 +129,15 @@ function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, f
         const py = base + 0.12;
         // The plinth stands 0.08 proud of the wall, so at a corner the long wall's plinth has to run that far past the
         // wall end or it stops short of the side wall's plinth and leaves a notch.
-        const lo = w.axis === 'x' && p.u0 <= w.a + 0.001 ? 0.08 : 0;
-        const hi = w.axis === 'x' && p.u1 >= w.b - 0.001 ? 0.08 : 0;
+        // The side wall's plinth runs a little way into the long wall's, so its end is buried there instead of lying in
+        // the plane of the side wall's own end face.
+        const reach = w.axis === 'x' ? 0.08 : 0.04;
+        const lo = p.u0 <= w.a + 0.001 ? reach : 0;
+        const hi = p.u1 >= w.b - 0.001 ? reach : 0;
         // Its back stays 2 cm inside the wall: flush with the inner face, it fought the plaster along the foot of every
         // outside wall indoors.
         if (w.axis === 'x') trim.box(mid + (hi - lo) / 2, py - 0.18, w.c + w.out * 0.05, along + lo + hi, 0.5, w.t + 0.06, S.concrete(0x7c7a74, 0.6));
-        else trim.box(w.c + w.out * 0.05, py - 0.18, mid, w.t + 0.06, 0.5, along, S.concrete(0x7c7a74, 0.6));
+        else trim.box(w.c + w.out * 0.05, py - 0.18, mid + (hi - lo) / 2, w.t + 0.06, 0.5, along + lo + hi, S.concrete(0x7c7a74, 0.6));
       }
     }
     // Under an exterior ground-floor doorway the foundation carries on: its face down to the ground and a threshold.
@@ -269,7 +272,8 @@ function opening(rb: RuralBuilding, plan: BuildingPlan, w: Wall, op: Opening, ba
       for (let i = 0; i < n; i++) {
         const hh = 0.3 + r(10 + i + side * 7) * Math.min(op.head, w.h) * 0.8;
         const dd = 0.08 + r(20 + i + side * 5) * 0.28;
-        boxAlong(trim, w, side < 0 ? op.a + dd / 2 : op.b - dd / 2, base + Math.min(hh, op.head) / 2, 0, dd, Math.min(hh, op.head), w.t + 0.01, col);
+        // Each lump a little thicker than the last, so the ones that overlap never share a face.
+        boxAlong(trim, w, side < 0 ? op.a + dd / 2 : op.b - dd / 2, base + Math.min(hh, op.head) / 2, 0, dd, Math.min(hh, op.head), w.t + 0.01 + i * 0.006, col);
       }
     }
     for (let i = 0; i < 5; i++) {
@@ -288,7 +292,8 @@ function opening(rb: RuralBuilding, plan: BuildingPlan, w: Wall, op: Opening, ba
   const fr = S.paint(tc, 0.35);
   for (const u of [op.a + 0.035, op.b - 0.035]) boxAlong(trim, w, u, cy, 0, 0.07, hgt, deep, fr);
   boxAlong(trim, w, mid, base + head - 0.035, 0, width, 0.07, deep, fr);
-  boxAlong(trim, w, mid, base + sill + 0.03, 0, width + 0.1, 0.06, w.t + 0.1, S.concrete(0xcfc8b8, 0.6));
+  // 4.5 cm out from each face: at 5 it was the plane of the back of a bookcase set against the wall under it.
+  boxAlong(trim, w, mid, base + sill + 0.03, 0, width + 0.1, 0.06, w.t + 0.09, S.concrete(0xcfc8b8, 0.6));
   if (op.glass === 'intact') {
     // The glass is a pane of its own, so it can crack and go; the bars across it stay in the frame.
     const out = w.out || 1;
@@ -305,9 +310,10 @@ function opening(rb: RuralBuilding, plan: BuildingPlan, w: Wall, op: Opening, ba
     }
     if (r(8) > 0.55) boxAlong(trim, w, op.a + 0.2, cy + hgt * 0.15, 0.0, 0.3, hgt * 0.6, 0.02, S.cloth([0x8a6a4a, 0x6a7a8a, 0x8a4a44][Math.floor(r(9) * 3)], 0.9), (r(11) - 0.5) * 0.15);
   } else {
+    // Each board a few millimetres further out than the last: on a small window they cross, and level they fought.
     for (let i = 0; i < 3; i++) {
       const y = base + sill + 0.16 + i * (hgt - 0.3) / 2;
-      boxAlong(trim, w, mid + (r(110 + i) - 0.5) * 0.08, y, outSide * (w.t / 2 + 0.025), width + 0.3, 0.14, 0.035, S.wood(0x5a4632 + Math.floor(r(120 + i) * 4) * 0x080604, 0.85), (r(130 + i) - 0.5) * 0.14);
+      boxAlong(trim, w, mid + (r(110 + i) - 0.5) * 0.08, y, outSide * (w.t / 2 + 0.025 + i * 0.004), width + 0.3, 0.14, 0.035, S.wood(0x5a4632 + Math.floor(r(120 + i) * 4) * 0x080604, 0.85), (r(130 + i) - 0.5) * 0.14);
     }
   }
 }
@@ -321,13 +327,18 @@ function floors(plan: BuildingPlan, L: number, base: number, fb: FacadeBuilder, 
     if (room.level !== L) continue;
     const [style, col] = FLOOR_STYLE[room.floor];
     const tint = new THREE.Color(room.floor === 'tile' && room.role === 'bath' ? 0xb4c4c4 : col);
-    for (const p of subtractRects(room, wells)) {
-      // Floor quads extend half a wall under each interior wall so no seam shows.
-      const e = 0.09;
-      const x0 = p.x0 - (p.x0 > plan.x0 + T_EXT + 0.05 ? e : 0);
-      const x1 = p.x1 + (p.x1 < plan.x1 - T_EXT - 0.05 ? e : 0);
-      const z0 = p.z0 - (p.z0 > plan.z0 + T_EXT + 0.05 ? e : 0);
-      const z1 = p.z1 + (p.z1 < plan.z1 - T_EXT - 0.05 ? e : 0);
+    // Floor quads run on under each interior wall so no seam shows, but stop short of its middle line, and the room is
+    // grown before the stairwells are cut out of it: the floors of two rooms, or two pieces of one, never lie over each
+    // other (one plane, they fought), and none reaches into a well.
+    const e = T_INT / 2 - 0.005;
+    const grown = {
+      x0: room.x0 - (room.x0 > plan.x0 + T_EXT + 0.05 ? e : 0),
+      x1: room.x1 + (room.x1 < plan.x1 - T_EXT - 0.05 ? e : 0),
+      z0: room.z0 - (room.z0 > plan.z0 + T_EXT + 0.05 ? e : 0),
+      z1: room.z1 + (room.z1 < plan.z1 - T_EXT - 0.05 ? e : 0),
+    };
+    for (const p of subtractRects(grown, wells)) {
+      const { x0, x1, z0, z1 } = p;
       fb.quad([[x0, y, z1], [x1, y, z1], [x1, y, z0], [x0, y, z0]], [0, 1, 0], [[x0, z1], [x1, z1], [x1, z0], [x0, z0]], tint, style, room.id * 0.73 + plan.seed * 0.01, 3, 2);
     }
   }

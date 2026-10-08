@@ -106,7 +106,9 @@ export function mallLevel(rb: RuralBuilding, p: BuildingPlan, L: number, inside:
   const court = mallCourt(p);
   const half: [number, number] = [(court.x1 - court.x0) / 2, (court.z1 - court.z0) / 2];
   if (L === 1) {
-    holed(inside, p, 'court', half, base, 0.3, MARBLE);
+    // The court's floor stands 4 mm proud of the storey's base, as the plain floors do: at the base itself it was one
+    // plane with the tops of the walls below and of the escalator housings.
+    holed(inside, p, 'court', half, base + 0.004, 0.3, MARBLE);
     holed(inside, p, 'court', half, base - 0.305, 0.01, CEILING);
     holed(inside, p, 'court', half, base + M.levelH - 0.006, 0.01, CEILING);
     ovalBand(inside, p, 0, base - 1.1, base - 0.3, WHITE, true, false);
@@ -161,7 +163,8 @@ function escalators(p: BuildingPlan, inside: MeshBuilder, glass: MeshBuilder) {
   // Silver cladding under the pair, following the slope, with level ends into the floor and under the upper slab.
   inside.box(mid, base + MALL.levelH / 2 - 0.55 / Math.cos(theta), (z0 + z1) / 2, pairW, 0.7, len, S.metal(0xc6cace, 0.15), -theta);
   inside.box(mid, base + 0.15, z0 - 0.7, pairW, 0.3, 1.4, S.metal(0x9ea2a6, 0.3));
-  inside.box(mid, top - 0.45, z1 + 0.3, pairW, 0.9, 0.9, S.metal(0xc6cace, 0.15));
+  // Its top a centimetre under the upper floor, so the last treads and the landing plate lie over it, not in its plane.
+  inside.box(mid, top - 0.455, z1 + 0.3, pairW, 0.89, 0.9, S.metal(0xc6cace, 0.15));
   for (const e of list) {
     const x = X(p, e.x);
     // Treads and risers in brushed steel, with yellow edges.
@@ -298,8 +301,9 @@ function greyBlock(p: BuildingPlan, roof: MeshBuilder, roofY: number) {
   cladFace(roof, (u, y) => [xb, y, lerp(zb(y), za, u)], 0, 1, 0, H);
   // The south face above the main roof, and the wedge between the leaning street face and the wall below.
   cladFace(roof, (u, y) => [lerp(xb, xf(y), u), y, za - 0.04], 0, 1, roofY + 1.3, H);
-  for (let y = 0; y < H; y += 1.1) {
-    const yb = Math.min(H, y + 1.1);
+  // Up to where that face starts: above it, the face already covers the wedge and the two were one plane.
+  for (let y = 0; y < roofY + 1.3 - 0.01; y += 1.1) {
+    const yb = Math.min(roofY + 1.3, y + 1.1);
     roof.quad([X(p, 0), y, za - 0.04], [xf(y), y, za - 0.04], [xf(yb), yb, za - 0.04], [X(p, 0), yb, za - 0.04], S.metal(0x9da3a8, 0.3));
   }
   // The lid.
@@ -338,11 +342,11 @@ function blueCorner(p: BuildingPlan, roof: MeshBuilder, roofY: number) {
   const g = S.glass(0x2e5288);
   const mull = S.paint(0xe8e8e4, 0.2);
   const top = roofY + 1.25;
-  // Along the street face.
-  roof.box(X(p, -0.06), top / 2, Z(p, 5.2), 0.04, top, 10.4, g);
+  // Along the street face. The panes stand 5 mm clear of the plinth's face (8 cm proud of the wall), not level with it.
+  roof.box(X(p, -0.065), top / 2, Z(p, 5.2), 0.04, top, 10.4, g);
   for (let z = 0; z <= 10.4; z += 1.73) roof.box(X(p, -0.1), top / 2, Z(p, z), 0.08, top, 0.08, mull);
   // Along the south face, short of the doors.
-  roof.box(X(p, 5), top / 2, Z(p, -0.06), 10, top, 0.04, g);
+  roof.box(X(p, 5), top / 2, Z(p, -0.065), 10, top, 0.04, g);
   for (let x = 0; x <= 10; x += 1.67) roof.box(X(p, x), top / 2, Z(p, -0.1), 0.08, top, 0.08, mull);
   for (let y = 2.8; y < top; y += 2.8) {
     roof.box(X(p, -0.1), y, Z(p, 5.2), 0.08, 0.08, 10.4, mull);
