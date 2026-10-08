@@ -276,6 +276,8 @@ export class ControlsMenu {
       for (let p = 0; p < 2; p++) {
         const it = inp.intents[p];
         if (it.device === 'none') continue;
+        // A keyboard's fire key drives RB and RT at once, and RT already pressed the focused row: no extra tab flip.
+        if (it.device === 'keyboard' && wasPressed(it, Btn.RT)) continue;
         const i = TABS.findIndex((x) => x.id === this.tab);
         if (wasPressed(it, Btn.LB)) switchTab(TABS[(i + TABS.length - 1) % TABS.length].id);
         else if (wasPressed(it, Btn.RB)) switchTab(TABS[(i + 1) % TABS.length].id);

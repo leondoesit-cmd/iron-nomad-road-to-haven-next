@@ -384,6 +384,8 @@ export class Overlays {
             dd.damage = clamp(Math.round((dd.damage + dir * 0.25) * 100) / 100, 0.25, 2);
             break;
         }
+        // The sliders belong to the player, not to whichever campaign is up (on the title that is only the demo's).
+        g.difficulty = { ...dd };
         g.saveSettings();
         g.audio.play('click');
         const keys = fc.keys();
@@ -593,6 +595,9 @@ export class Overlays {
     this.pauseEl = null;
     this.pauseFocus.clear();
     this.pauseFocus.active = false;
+    // A sub-screen left by Esc never ran its own teardown: its handlers would drive the next pause menu's removed page.
+    this.pauseFocus.onTick = null;
+    this.pauseFocus.onCancel = () => {};
   }
 
   tickPause(_dt: number) {

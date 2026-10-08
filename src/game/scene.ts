@@ -64,6 +64,8 @@ import { FireEngine } from './fires';
 const _flashDir = new THREE.Vector3();
 
 export interface SceneServices {
+  /** No radio sound at all (the title demo and the benchmark): their lines go nowhere, so the click and hiss must not either. */
+  quietRadio?: boolean;
   R: GameRenderer;
   audio: AudioEngine;
   input: InputManager;
@@ -474,6 +476,7 @@ export abstract class Scene implements Ctx {
 
   radio(text: string) {
     this.services.onRadio(text);
+    if (this.services.quietRadio) return;
     if ('playRadioChatter' in this.audio && typeof this.audio.playRadioChatter === 'function') {
       this.audio.playRadioChatter(text);
     } else {
