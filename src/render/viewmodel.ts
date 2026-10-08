@@ -34,13 +34,22 @@ import { ARROW_LEN, BRACE, BowRig } from './bow';
  * (`clampNear`) nothing of the viewmodel is sliced at all.
  */
 /**
- * Draw an object without the near plane cutting it: its fragments nearer than the plane are kept, their depth clamped to it
- * (EXT_depth_clamp). The arms run back past the eye to shoulders behind it, so the 0.2 m near plane slices the sleeves open
- * at the bottom of the frame; clamped, they stay whole. The far, side and behind-the-eye limits still clip as usual. Not the
- * weapon: a long gun's stock runs back into the cheek, and the near plane is what keeps it out of the picture.
+ * Keep the near plane from cutting an arm. The arms run back past the eye to shoulders behind it, so the 0.2 m near plane
+ * sliced the sleeves open at the bottom of the frame. Two parts:
+ * - In the arms' vertex shader every point nearer than `SQUASH.y` is slid out along its own line of sight into the thin
+ *   slab between `SQUASH.x` (just past the near plane) and `SQUASH.y`: it stays where it is on screen, the nearer stays in
+ *   front of the further, and nothing in front of the eye is left for the plane to cut.
+ * - Points behind the eye (the shoulders) cannot be slid; for the triangles that reach back to them the plane's cut is
+ *   switched off (EXT_depth_clamp) so they are not sliced either. The side, far and behind-the-eye limits still clip.
+ * Clamping alone left every fragment nearer than the plane at one depth, so the sleeve's own surfaces tied and the wrong
+ * one showed through as a flat patch. Not the weapon: a long gun's stock runs back into the cheek, and the near plane is
+ * what keeps it out of the picture.
  */
+const SQUASH = { value: new THREE.Vector2(0.205, 0.36) };
 function clampNear(m: THREE.Object3D) {
-  m.onBeforeRender = (r) => {
+  m.onBeforeRender = (r, _s, cam) => {
+    const near = (cam as THREE.PerspectiveCamera).near ?? 0.2;
+    SQUASH.value.set(near * 1.025, near + 0.16);
     const gl = r.getContext();
     const ext = depthClamp(gl);
     if (ext) gl.enable(ext.DEPTH_CLAMP_EXT);
@@ -61,12 +70,26 @@ const depthClamp = (gl: WebGLRenderingContext | WebGL2RenderingContext) => {
 const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: THREE.DoubleSide });
 mat.onBeforeCompile = (shader) => {
   applyKit(shader, true);
+  shader.uniforms.uSquash = SQUASH;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nuniform vec2 uSquash;')
+    .replace(
+      '#include <project_vertex>',
+      `#include <project_vertex>
+{
+  float d = -mvPosition.z;
+  if ( d > 0.0 && d < uSquash.y ) {
+    mvPosition.xyz *= ( uSquash.x + ( uSquash.y - uSquash.x ) * d / uSquash.y ) / d;
+    gl_Position = projectionMatrix * mvPosition;
+  }
+}`,
+    );
   shader.fragmentShader = shader.fragmentShader.replace(
     '#include <emissivemap_fragment>',
     '#include <emissivemap_fragment>\nif ( !gl_FrontFacing ) normal = vec3( 0.0, 0.0, 1.0 );',
   );
 };
-mat.customProgramCacheKey = () => 'kit:true:cap';
+mat.customProgramCacheKey = () => 'kit:true:cap:squash';
 shared(mat);
 
 type V3 = [number, number, number];
