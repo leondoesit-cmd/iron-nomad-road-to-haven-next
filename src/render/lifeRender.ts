@@ -266,7 +266,11 @@ function coilGeometry(): THREE.BufferGeometry {
  * Opaque critters share the kit material; the fish and the snakes get their own, which bends the body side to side down
  * its length: a fish's tail beat (growing toward the tail), a snake's travelling S (all along it).
  */
+const wiggleMats = new Map<'fish' | 'snake', THREE.MeshStandardMaterial>();
 function wiggleMaterial(kind: 'fish' | 'snake'): THREE.MeshStandardMaterial {
+  // One per kind for the whole game: every scene's renderer shares it, so it is never rebuilt (or leaked) per scene.
+  const had = wiggleMats.get(kind);
+  if (had) return had;
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: kind === 'fish' ? 0.45 : 0.6, metalness: kind === 'fish' ? 0.15 : 0.05 });
   const wave =
     kind === 'fish'
@@ -286,8 +290,11 @@ function wiggleMaterial(kind: 'fish' | 'snake'): THREE.MeshStandardMaterial {
       .replace('#include <begin_vertex>', `#include <begin_vertex>${wave}`);
   };
   m.customProgramCacheKey = () => `lifeWiggle:${kind}`;
-  return shared(m);
+  wiggleMats.set(kind, shared(m));
+  return m;
 }
+
+let wingMat: THREE.MeshStandardMaterial | null = null;
 
 interface Batch {
   mesh: THREE.InstancedMesh;
@@ -472,7 +479,7 @@ export class LifeRenderer {
     switch (kind) {
       case 'wing': {
         geo = wingGeometry();
-        mat = shared(new THREE.MeshStandardMaterial({ map: butterflyTexture(), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.8, vertexColors: true }));
+        mat = wingMat ??= shared(new THREE.MeshStandardMaterial({ map: butterflyTexture(), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.8, vertexColors: true }));
         break;
       }
       case 'dragonWing':
@@ -598,7 +605,11 @@ export class LifeRenderer {
   }
 
   dispose() {
-    for (const b of this.batches.values()) b.mesh.dispose();
+    // The geometries are this renderer's own (each carries its own instanced wiggle buffer); materials are shared.
+    for (const b of this.batches.values()) {
+      b.mesh.geometry.dispose();
+      b.mesh.dispose();
+    }
     this.batches.clear();
     this.glow.dispose();
     this.dots.dispose();

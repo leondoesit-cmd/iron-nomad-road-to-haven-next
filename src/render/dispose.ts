@@ -23,5 +23,8 @@ export function disposeTree(root: THREE.Object3D) {
     const mat = m.material as THREE.Material | THREE.Material[] | undefined;
     if (Array.isArray(mat)) mat.forEach(disposeMaterial);
     else if (mat) disposeMaterial(mat);
+    // Shadow-pass materials (a bending zombie's depth material) belong to the mesh just as much as its colour one.
+    if (m.customDepthMaterial) disposeMaterial(m.customDepthMaterial);
+    if (m.customDistanceMaterial) disposeMaterial(m.customDistanceMaterial);
   });
 }

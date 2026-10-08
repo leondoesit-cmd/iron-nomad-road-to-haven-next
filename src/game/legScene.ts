@@ -264,7 +264,7 @@ export class LegScene extends Scene {
     if (this.memory?.scorched.length) this.fires.restoreScorched(this.memory.scorched);
     for (const b of fuelDef.bends ?? []) if (b.fire) this.fires.start({ x: b.fire.x, y: b.fire.y + 0.05, z: b.fire.z, r: 0.26, fuel: 'wood', burn: Infinity, heat: 0.6, bed: false, hurts: false });
     // Cut a building away for each viewer standing inside it (roof and upper floors), per view.
-    this.R.onBeforeView[1] = (i, cam) => {
+    this.R.onBeforeView[1] = this.cutawayHook = (i, cam) => {
       const p = this.players[i];
       const v = p?.vehicle;
       const focus = p ? (v && p.state !== 'foot' ? { x: v.position.x, y: v.position.y, z: v.position.z } : { x: p.pos.x, y: p.pos.y, z: p.pos.z }) : null;
@@ -822,8 +822,17 @@ export class LegScene extends Scene {
   }
 
   /** Off to a delve, or gone for the night: the water falls silent with the rest of this place. */
+  resume() {
+    super.resume();
+    this.R.onBeforeView[1] = this.cutawayHook;
+  }
+
+  /** The per-view roof cutaway and chunk detail pass. It stands down while a delve has the screen: nothing up here is drawn. */
+  private cutawayHook: (i: number, cam: THREE.Camera) => void = () => {};
+
   suspend() {
     super.suspend();
+    if (this.R.onBeforeView[1] === this.cutawayHook) this.R.onBeforeView[1] = () => {};
     this.audio.setWaterAmbience?.(QUIET_WATER);
     this.audio.setNatureAmbience?.(QUIET_NATURE);
     this.audio.setVegetationAmbience?.(0, 0, 0);
@@ -874,7 +883,8 @@ export class LegScene extends Scene {
         prompt: `Hold to go down into ${d.name}`,
         dur: 1.0,
         priority: 2,
-        enabled: (p) => p.state === 'foot',
+        // Training has no way underground: its lesson flow drops the delve result, so the prompt would do nothing.
+        enabled: (p) => !this.training && p.state === 'foot',
         onTick: (p) => this.delveReady(p, d),
         run: () => {
           this.pendingResult = false;
@@ -1277,6 +1287,7 @@ export class LegScene extends Scene {
     if (e) {
       e.glint.removeFromParent();
       e.glint.geometry.dispose();
+      (e.glint.material as THREE.Material).dispose();
       this.activeContainers.delete(id);
     }
     this.interact.remove(id);

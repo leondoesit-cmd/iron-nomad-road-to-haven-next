@@ -24,6 +24,7 @@ import type { Surface, TerrainDef } from '../world/terrain';
 import type { Aabb } from '../world/layout';
 import type { InputManager } from '../input/input';
 import type { AudioEngine, EngineState } from '../audio/audio';
+import type { OcclusionTester } from '../audio/spatial';
 import { Campaign } from './campaign';
 import { Combat } from './combat';
 import { Gore } from './gore';
@@ -231,7 +232,7 @@ export abstract class Scene implements Ctx {
     // Uses multi-ray aperture testing (direct path, left/right diffraction flanks, and vertical clearance)
     // with 3D elevation, terrain heightfield filtering, and proximity falloff to prevent open-air obstacles
     // from causing abrupt on/off switch jumps or occluding sounds across open desert terrain.
-    this.audio.setOcclusionTester?.((fx, fz, tx, tz) => {
+    this.occlusion = (fx, fz, tx, tz) => {
       // 1. Calculate true 3D positions above local terrain
       const fy = this.groundAt(fx, fz) + 1.3; // Listener ear height
       const ty = this.groundAt(tx, tz) + 1.1; // Sound source height (engine / muzzle / torso)
@@ -361,8 +362,15 @@ export abstract class Scene implements Ctx {
       // Near field: anything within a few metres of the ear (own muzzle, mounted gun, crew mate) is not
       // "behind" the wall beside you, however the rays happen to graze it.
       return clamp(blockage * proximity * smoothstep(1.5, 6, len3D), 0, 1);
-    });
+    };
+    this.audio.setOcclusionTester?.(this.occlusion);
   }
+
+  /**
+   * This scene's audio occlusion test. The audio engine holds one tester for everyone, so a scene installs its own when it
+   * starts or resumes (coming back up from a delve) and takes it away when it goes, never leaving one that raycasts a dead world.
+   */
+  private occlusion!: OcclusionTester;
 
   /** A first-person camera sits inside its own player, so that player is hidden from that view only. */
   private beforeViewHook = (i: number) => {
@@ -370,6 +378,9 @@ export abstract class Scene implements Ctx {
     // Whatever this player is seeing that is not there goes in just for their view.
     this.ghosts.mesh.visible = this.players[i] ? this.phantoms.render(i, this.ghosts, this.time) > 0 : false;
     if (this.players[i]) this.playerFx.beginView(i, this.R.views[i].camera);
+    // Point sprites (fireflies, gnats) are sized for this view's own height and field of view: the halves can differ.
+    const v = this.R.views[i];
+    this.lr.setViewScale(v.rect.h * this.R.renderPixelRatio(), v.camera.fov);
   };
   private afterViewHook = (i: number) => {
     this.players[i]?.endOwnView();
@@ -412,6 +423,7 @@ export abstract class Scene implements Ctx {
   resume() {
     this.suspended = false;
     this.installViewHooks();
+    this.audio.setOcclusionTester?.(this.occlusion);
     this.root.visible = true;
     this.fx.smoke.points.visible = true;
     this.fx.glow.points.visible = true;
@@ -1130,6 +1142,7 @@ export abstract class Scene implements Ctx {
 
   dispose() {
     this.disposed = true;
+    if (this.audio.spatial?.occlusionTester === this.occlusion) this.audio.setOcclusionTester?.(null);
     if ('stopRadioChatter' in this.audio && typeof this.audio.stopRadioChatter === 'function') {
       this.audio.stopRadioChatter();
     }
@@ -1177,6 +1190,9 @@ export abstract class Scene implements Ctx {
     this.ar.dispose();
     this.lr.dispose();
     this.audio.silenceEngines();
+    // Rapier's worlds live in WASM memory, which only grows: a world left to the garbage collector holds its heightfields
+    // and thousands of colliders long after the scene is gone (the title demo alone rebuilds one every 80 s).
+    this.P.world.free();
   }
 }
 
