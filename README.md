@@ -408,16 +408,13 @@ them; the scene itself only gains a `training` flag that mutes the hostile syste
 | D-pad ← | Inventory: change what you wear and hold (the game pauses) | Same | Same | Same |
 | L3 / R3 | Click to sprint (stays on until you stop), or hold, per Control settings / reset camera | Camera distance / look back | | |
 | Start | Pause | Same | Same | Same |
-| Back | Tap: switch first / third person. Hold: convoy sheet | Same | Same | |
+| Back | Hold: convoy sheet (on foot it is always first person) | Tap: vehicle camera, behind or the eyes. Hold: convoy sheet | Same | |
 
-**First and third person**: tap **Back** on a pad to switch the camera between the chase view and the eyes. It works on foot (the
-camera sits at head height, you see your arms and what they hold), in the driver's seat (the camera is the driver's head: the
-right stick or the mouse looks around and springs back to the road) and at a bed gun or passenger seat. Each player has their
-own view, so one can drive from the cab while the other watches the road from behind. The choice is remembered. On a pad, view
-and the convoy sheet share Back: a quick tap switches the view, holding it (about a third of a second) shows the sheet. Getting
-in or out of a vehicle stays an instant press of Y, because it happens constantly while the view is a once-in-a-while switch.
-Rebind either one and the share goes away. On the keyboard the view keys are `B` (Player 1) and `P`
-(Player 2), and the middle mouse button.
+**First and third person**: on foot the game is always first person: you see your arms and what they hold. In a vehicle
+(driving, at a bed gun or in a passenger seat) the camera is behind the vehicle by default, and the view button switches between
+that and the eyes; the choice is remembered per player, and Control settings > Camera & play has a **Vehicle camera** row to set
+it. Getting out glides the camera into your eyes instead of cutting. On a pad the view shares **Back** with the convoy sheet (tap
+for the view, hold for the sheet); on the keyboard the view keys are `B` (Player 1) and `P` (Player 2), and the middle mouse button.
 
 **Jumping**: on foot you can jump about a metre. The take-off speed carries through the air (a sprint jump goes furthest) and the
 stick only bends it, a press just before landing or just after walking off a ledge still counts, and a ceiling stops the rise.
@@ -476,12 +473,16 @@ Find them in delve chests (caves keep mushrooms and sometimes the vine; metros k
 shelves, depot stock, medicine cabinets, coolers and safes; buy a few at a trader; make them at the Ledger's still. The numbers
 (durations, strengths, toxicity, dependence, tolerance, every blend) are all in `src/sim/drugs.ts`.
 
-**Keyboard**: solo play can use either layout below. Player 1 uses `W A S D` to move, the mouse to look (`Z X` to aim without it), left click or `T` to fire, right click to aim, `E` to interact, `Space` to jump, `F` for vehicles, `C` for
-crouch and lights, `Shift` for sprint and handbrake, `G` for the command wheel, `Q` to swap tools, `R` to reload, `H` to honk,
-`1 2` to cycle build elements, `V` for the map, `3` for the inventory, `4` to take a drug, hold `Tab` for the convoy sheet. Player 2 uses the arrow keys, `[ ]` to aim, `Right
-Shift` to fire, `/` to interact, `O` to jump, `Enter` for vehicles, `.` for crouch and lights, `Right Ctrl` for sprint and handbrake,
-`Backspace` for the wheel, `N` to swap tools, `,` to reload, `; '` to cycle build elements, `K` for the map, `I` for the inventory, `U` to take a drug, hold `\` for the convoy sheet. Keyboard players get stronger
-aim assist. `Esc` pauses.
+**Keyboard**: solo play can use either layout below. Player 1 uses `W A S D` to move, the mouse to look (`Z X` to aim without it), left
+click or `T` to fire, right click to aim, `E` to interact, `Space` to jump, `F` for vehicles, `C` for crouch and lights, `Shift` for
+sprint and handbrake, `G` for the command wheel, `Q` to swap tools, `R` to reload, `H` to honk, `B` (or the middle mouse button) for
+the vehicle camera, `1 2` to cycle build elements, `V` for the map, `Tab` for the inventory, hold `3` for the convoy sheet, `4` for the
+quick belt, `5 6 7 8` to eat, drink, piss and shit, `9` to call your ride and `0` for the drugs quick pick. Player 2 uses the arrow
+keys, `[ ]` to aim, `Right Shift` to fire, `/` to interact, `O` to jump, `Enter` for vehicles, `.` for crouch and lights, `J` for sprint
+and handbrake, `Backspace` for the wheel, `N` to swap tools, `,` to reload, `M` to honk, `P` for the vehicle camera, `; '` to cycle build
+elements, `K` for the map, `I` for the inventory, hold `\` for the convoy sheet, `U` for the quick belt, `Home End - =` to eat, drink,
+piss and shit, `Page Up` to call the ride and `Page Down` for drugs. Ctrl keys are never used (Ctrl turns the other player's keys into
+browser shortcuts). Keyboard players get stronger aim assist. `Esc` pauses (and backs out of a menu first).
 
 **Map and minimap**: each half has a round minimap under the clock, turned so up is where your camera looks and zoomed
 out as you speed up. It shows the road, the ground, both convoys and the places worth a trip: camp, Encounters, scavenge
@@ -505,6 +506,62 @@ and the in-game Controls screen and the button prompts follow whatever you bind.
 **Mouse / trackpad** (the Player 1 keyboard seat): click the game to capture the pointer, then move to aim with free
 yaw and pitch. Left click fires (a tap on a trackpad), right click (two-finger click) aims down sights. `Esc` releases the
 pointer and pauses; click again to resume aiming. Sensitivity is under Settings. Q/E still work. The in-game Controls screen has the full table.
+
+### What changed on 2026-10-08
+
+- **Map and navigation.** The big map (`V` / `K` / D-pad →) opens at once and sharpens itself (a quick coarse picture, then
+  full detail baked in the background, finer tiles near where you look), with hillshade, contour lines, water by depth, city
+  blocks and buildings, roads by class, place names, a grid, scale bar and legend. It has a cursor (mouse, or the move keys /
+  left stick on foot, the look keys / right stick while driving) and zooms (wheel, `1`/`2`, LB/RB). **Confirm** (click / `E` /
+  A) drops a **waypoint**: the route follows the roads, and it shows on the compass, the minimap and as a small marker in the
+  world; it clears when you arrive. **Mark** (right click / `R` / X) places a **point of interest** (Camp, Fuel, Loot, Danger,
+  Car, Water, Food, Note, Star), which you can name on a keyboard, pin to the compass, rename or delete; a list of marks sits on
+  the right. Waypoints and marks are saved with the campaign. On foot your feet stay put while the big map is open.
+- **Call your ride**: `9` (Player 1), `Page Up` (Player 2), or CALL RIDE on the pad's command wheel. Your vehicle drives itself to
+  you along the roads if it is within about 350 m; if it is further, stuck or you are indoors it turns up waiting behind you, out of
+  sight. Press again to call it off.
+- **Cars, hands on.** Look at any part of a car (yours or a found one) and a small card names it, with its mark, wear, key figures
+  and what it would change against the spares you carry. `X` at the boot, bed or roof opens a **storage panel** in your half of the
+  screen (the game keeps running): every spare, can and load with what it fits and whether it is better than what is fitted; take
+  one into your hands, or **Fit now** with the wrench. Hold the sheet button for a **breakdown** of every component and the car's
+  totals (power, torque, weight, top speed, 0-100, grip by ground, armour, range, space), compared with another car of yours. The
+  workbench now docks beside the car instead of covering it.
+- **Weight and torque.** Every part, the fuel, oil and coolant, the crew and whatever is stowed or loaded has a weight, and the
+  car carries it: a loaded pickup squats, pulls away slower, stops longer and drops a gear on a hill. Engines have torque curves,
+  gearboxes have real ratios with automatic shifts, and the engine sound and the small gear and rev display follow them.
+- **More varied cars.** The truck and the rig have their own models (a 6x6 with drop-side, tilt or gun-box bed; a tractor with a
+  tanker, container or scrap trailer). Found cars roll their own body style, bumpers, grille, lamps, rims, racks, paint (two-tone,
+  faded, primer, rust), numbers and scrawls; raiders get scrap armour, spikes and cages. Fitted parts show: armour by grade, blowers
+  through the bonnet, tyres by type, lifted or lowered stance. Every loose part has its own model.
+- **Water stays in its banks.** Rivers have real banks (and levees where the land behind is low), the water surface is clipped to the
+  ground as it is drawn, mouths drop over falls into lakes instead of floating above them, floods fill road dips and stay in their
+  beds, and nothing floats in the distance any more.
+- **Shooting trees.** Every hit throws chips, bark and leaves, leaves a scar and a knock; rounds landing at about the same height
+  chew a notch, and when it is deep enough the tree snaps there and the top swings over, falls and crushes what is under it. A rifle
+  takes a thin tree down in a few rounds, a big old tree needs a belt or explosives; a pistol mostly chips. Stumps and fallen tops
+  stay through the nights.
+- **The inventory** opens a small menu on whatever you pick (A / Enter / click, right click): use, apply a bandage (to yourself or a
+  hurt partner close by), eat, drink, take, put on the quick belt, hold, wear, load, customise, repair, give, drop, break down, each
+  with a fixed letter. A **supplies** strip shows dressings, food, water, every drug and the unknown mushrooms you picked, with what
+  each does; drugs show what is in your system. `0` (Player 1) or `Page Down` (Player 2) opens a **drugs quick pick** without
+  pausing.
+- **Night camp is off by default** (Settings: *Night camp*). After the Dusk Bell, hold on foot to **stop for the night**: rest until
+  dawn (then the Ledger), make camp, or keep moving through the night. Whoever chooses to make camp and holds out against the raid
+  gets **the night's haul** at dawn: ammunition, a fairly rare part (Mk2 or Mk3, or a bolt-on kit) and a medkit, bandages or a drug.
+- **Half Island mushrooms.** Liberty caps grow at the foot of every old face gum, every day. Mushrooms you do not know are always
+  picked and kept by their look; eating one is how you learn it. On a trip the faces in the gums wake up (deeper, moving, with eyes
+  that follow you) and faces show on other trees too, only in the tripping player's half of the screen.
+- **Weapons** are rebuilt as detailed models (21 guns, melee and tools) with a close-up version for first person and a light one for
+  everything else; add-on sights are see-through and replace built-in scopes, stocks replace stocks.
+- **No more z-fighting**: the depth buffer is reversed and floating point (`?depth=classic` in the URL turns it off), roads, decals
+  and tracks pull toward the eye by layer, and buildings, the mall, containers and furniture lost their overlapping faces.
+- **Faster start**: the title is up in about a third of a second, the world is prepared in the background while you look at the menu,
+  New Game reuses it behind a small loading label, shaders compile before the first frame, recordings load by priority, menus no
+  longer redraw the whole 3D scene at full rate behind them, and the download is smaller (Opus audio, no reference photos).
+- **Fixes**: positional sound came from the wrong side (left and right were swapped), the radio cut off the story narration, the
+  pad's Start never paused, quick taps and trackpad clicks were lost, retrying from the Ledger brought back later state, raider car
+  guns did double damage, burning animals stood still, wrecks threw their doors inward, the world kept moving behind the pause menu,
+  and more than thirty others (see the git log of 2026-10-08).
 
 ## How it is built
 
