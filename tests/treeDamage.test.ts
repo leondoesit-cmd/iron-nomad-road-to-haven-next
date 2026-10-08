@@ -287,16 +287,15 @@ describe('bushes under fire', () => {
 
   it('thins a bush round by round (a magazine strips it, a few shells of buckshot shred it) and tears leaves off it', () => {
     const a = shrub();
-    for (let i = 0; i < 5; i++) shoot(a.physics, 'carbine');
-    const five = a.plant.record.damage;
-    expect(five).toBeGreaterThan(0.1);
+    for (let i = 0; i < 2; i++) shoot(a.physics, 'carbine');
+    expect(a.plant.record.damage).toBeGreaterThan(0.1);
     expect(a.plant.record.broken).toBe(false);
-    for (let i = 0; i < 25; i++) shoot(a.physics, 'carbine');
+    for (let i = 0; i < 10; i++) shoot(a.physics, 'carbine');
     expect(a.plant.record.broken).toBe(true);
-    expect(a.leaves()).toBeGreaterThan(20);
+    expect(a.leaves()).toBeGreaterThan(6);
     a.field.dispose();
     const b = shrub();
-    for (let shell = 0; shell < 5 && !b.plant.record.broken; shell++) for (let k = 0; k < 9; k++) shoot(b.physics, 'pellet');
+    for (let shell = 0; shell < 2 && !b.plant.record.broken; shell++) for (let k = 0; k < 9; k++) shoot(b.physics, 'pellet');
     expect(b.plant.record.broken).toBe(true);
     b.field.dispose();
     // An unnamed round (the old path) still only grazes it.

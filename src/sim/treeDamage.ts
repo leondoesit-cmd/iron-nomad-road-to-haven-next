@@ -252,5 +252,5 @@ export function leafTear(ammo: AmmoKind): number {
  * shells of buckshot shred one. Buckshot shreds best: many small holes.
  */
 export function shredShare(ammo: AmmoKind): number {
-  return ammo === 'pellet' ? 0.6 : ammo === 'arrow' || ammo === 'bolt' ? 0.05 : 0.25;
+  return ammo === 'pellet' ? 1.8 : ammo === 'arrow' || ammo === 'bolt' ? 0.1 : 0.7;
 }
