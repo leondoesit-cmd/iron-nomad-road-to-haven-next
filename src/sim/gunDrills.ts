@@ -1,6 +1,7 @@
 import { clamp01, lerp, TAU } from '../core/math';
 import type { GunModel, MeleeModel } from '../data/gear';
 import { curve, type V3 } from './weaponanim';
+import { FRAMES } from './gunFrames';
 
 /**
  * What the hands do with a weapon besides firing and reloading it, as pure routines ("drills"). Now and then at rest a hand
@@ -759,44 +760,58 @@ const jam = (drill: Drill, note: string, cost = 1): Fault => ({ kind: 'jam', not
 
 type Holdable = GunModel | MeleeModel | 'wrench' | 'crowbar' | 'flare' | 'jerrycan';
 
-/** Spots off the models in `render/humanoid.ts`, in each gun's own frame. */
+/** Spots off each gun's frame (`gunFrames.ts`), which its model in `render/weapons` is drawn to. */
+const SP = (m: GunModel, k: string): V3 => FRAMES[m].spots![k];
+/**
+ * The ejection ports are on the guns' right; the support hand clearing one works it from the left and over the top, so
+ * its spots are the port mirrored onto the left face.
+ */
+const portL = (m: GunModel, dx = 0): V3 => {
+  const p = FRAMES[m].port;
+  return [Math.abs(p[0]) + dx, p[1], p[2]];
+};
 // A slide is gripped round its middle, toward the back.
-const PISTOL: RackSpots = { floor: [0, -0.092, 0.03], grab: over([0, 0.03, 0.05]), back: over([0, 0.032, 0.012]), side: [0.08, -0.02, 0.04], pull: 0.3 };
-const COMPACT: RackSpots = { floor: [0, -0.078, 0.025], grab: over([0, 0.028, 0.045]), back: over([0, 0.03, 0.012]), side: [0.075, -0.02, 0.035], pull: 0.3 };
-const MP: RackSpots = { floor: [0, -0.19, 0.08], grab: over([0, 0.03, 0.15]), back: over([0, 0.034, 0.07]), side: [0.08, -0.05, 0.12], pull: 0.3 };
-const SMG: RackSpots = { floor: [0, -0.185, 0.14], grab: leftSide([0.034, 0.03, 0.12]), back: leftSide([0.034, 0.03, 0.03]), side: [0.09, -0.04, 0.16], pull: 0.2 };
+const slide = (m: GunModel, side: V3): RackSpots => {
+  const s = SP(m, 'slide');
+  return { floor: SP(m, 'floor'), grab: over([s[0], s[1], s[2] + 0.005]), back: over([s[0], s[1] + 0.002, s[2] - 0.033]), side, pull: 0.3 };
+};
+const PISTOL = slide('pistol', [0.08, -0.02, 0.02]);
+const COMPACT = slide('compact', [0.075, -0.02, 0.02]);
+const MP = slide('mp', [0.08, -0.03, 0.02]);
+const SMG: RackSpots = { floor: SP('smg', 'floor'), grab: leftSide(SP('smg', 'handle')), back: leftSide(SP('smg', 'handleBack')), side: [0.09, -0.04, 0.12], pull: 0.2 };
 // A rifle's charging handle: hooked at the back of the receiver and pulled straight back (shortened in view, see `push`).
-const AR: RackSpots = { floor: [0, -0.183, 0.216], grab: { p: [0, 0.07, 0.0], a: [1, 0, 0], n: [0, -0.6, -0.8] }, back: { p: [0, 0.07, -0.05], a: [1, 0, 0], n: [0, -0.6, -0.8] }, side: [0.09, -0.03, 0.22], pull: 0.2, push: 0.15 };
-const DMR: RackSpots = { ...AR, floor: [0, -0.195, 0.24], grab: { ...AR.grab, p: [0, 0.07, 0.02] }, back: { ...AR.back, p: [0, 0.07, -0.03] } };
-const BR: RackSpots = { floor: [0, -0.195, 0.22], grab: leftSide([0.038, 0.04, 0.34]), back: leftSide([0.038, 0.04, 0.2]), side: [0.1, -0.03, 0.3], pull: 0.2 };
-const RIFLE_KNOB: V3 = [-0.075, 0.0, 0.08];
-const LEVER_LOOP: V3 = [0, -0.07, 0.12];
+const AR: RackSpots = { floor: SP('ar', 'floor'), grab: { p: SP('ar', 'handle'), a: [1, 0, 0], n: [0, -0.6, -0.8] }, back: { p: SP('ar', 'handleBack'), a: [1, 0, 0], n: [0, -0.6, -0.8] }, side: [0.09, -0.03, 0.2], pull: 0.2, push: 0.15 };
+const DMR: RackSpots = { ...AR, floor: SP('dmr', 'floor'), grab: { ...AR.grab, p: SP('dmr', 'handle') }, back: { ...AR.back, p: SP('dmr', 'handleBack') } };
+const BR: RackSpots = { floor: SP('br', 'floor'), grab: leftSide(SP('br', 'handle')), back: leftSide(SP('br', 'handleBack')), side: [0.1, -0.03, 0.3], pull: 0.2 };
+const RIFLE_KNOB: V3 = SP('rifle', 'knob');
+const SNIPER_KNOB: V3 = SP('sniper', 'knob');
+const LEVER_LOOP: V3 = SP('lever', 'loop');
 // Over the rail just above the support hand, and back along it to the latch.
-const CROSSBOW_RAIL: [V3, V3] = [[0, 0.05, 0.33], [0, 0.05, 0.19]];
+const CROSSBOW_RAIL: [V3, V3] = [SP('crossbow', 'railFront'), SP('crossbow', 'latch')];
 
 const PISTOL_HABITS = (front: V3) => [supportRegrip([0.036, -0.045, 0.005]), fireRegrip(), pressCheck(front)];
 const LONG_HABITS = (floor: V3, heavy = 1) => [foreSlide(), shoulderHike(heavy), magPat(floor)];
 
 /** The habits each weapon has: what its owner does with it at rest. */
 export const HABITS: Record<Holdable, Drill[]> = {
-  pistol: PISTOL_HABITS([0, 0.03, 0.17]),
-  compact: PISTOL_HABITS([0, 0.028, 0.14]),
-  revolver: [supportRegrip([0.036, -0.045, 0.005]), fireRegrip(), cylinderRoll([0.026, 0.03, 0.085])],
-  cannon: [supportRegrip([0.036, -0.045, 0.005]), fireRegrip([-0.018, -0.016, -0.004]), cylinderRoll([0.029, 0.035, 0.085])],
-  mp: [foreSlide(0.03, 1), fireRegrip(), magPat(MP.floor)],
+  pistol: PISTOL_HABITS(SP('pistol', 'slide')),
+  compact: PISTOL_HABITS(SP('compact', 'slide')),
+  revolver: [supportRegrip([0.036, -0.045, 0.005]), fireRegrip(), cylinderRoll(SP('revolver', 'cyl'))],
+  cannon: [supportRegrip([0.036, -0.045, 0.005]), fireRegrip([-0.018, -0.016, -0.004]), cylinderRoll(SP('cannon', 'cyl'))],
+  mp: [supportRegrip([0.036, -0.045, 0.005]), fireRegrip(), magPat(MP.floor)],
   smg: LONG_HABITS(SMG.floor),
-  smg2: LONG_HABITS([0, -0.185, 0.12]),
-  carbine: LONG_HABITS([0, -0.18, 0.175]),
+  smg2: LONG_HABITS(SP('smg2', 'floor')),
+  carbine: LONG_HABITS(SP('carbine', 'floor')),
   ar: LONG_HABITS(AR.floor),
   br: LONG_HABITS(BR.floor, 1.15),
   dmr: LONG_HABITS(DMR.floor, 1.15),
-  lmg: [foreSlide(0.05, 1.3), heave(), boxPat([0.05, -0.1, 0.18])],
-  pump: [pumpSettle(), shoulderHike(1.1), portCheck([0.03, 0.03, 0.08])],
-  combat: [pumpSettle(), shoulderHike(1.1), portCheck([0.026, 0.03, 0.1])],
+  lmg: [foreSlide(0.05, 1.3), heave(), boxPat(SP('lmg', 'box'))],
+  pump: [pumpSettle(), shoulderHike(1.1), portCheck(portL('pump'))],
+  combat: [pumpSettle(), shoulderHike(1.1), portCheck(portL('combat'))],
   sawn: [foreSlide(0.03, 1), fireRegrip(), shoulderHike(0.7, 1)],
   coach: [foreSlide(0.06), shoulderHike(1.1), fireRegrip()],
   rifle: [foreSlide(), shoulderHike(1.2), boltCheck(RIFLE_KNOB)],
-  sniper: [foreSlide(), shoulderHike(1.3), boltCheck([-0.077, -0.004, 0.08])],
+  sniper: [foreSlide(), shoulderHike(1.3), boltCheck(SNIPER_KNOB)],
   lever: [foreSlide(), shoulderHike(1.1), leverSqueeze(LEVER_LOOP)],
   crossbow: [foreSlide(0.05), railSeat(...CROSSBOW_RAIL), shoulderHike(1.1)],
   bow: [bowSettle(), bowSight()],
@@ -807,7 +822,7 @@ export const HABITS: Record<Holdable, Drill[]> = {
   pipe: [handleRoll(), haftSlide(0.12)],
   axe: [haftSlide(0.2, 1.4), handleRoll(), edgeLook(1.6)],
   sledge: [haftSlide(0.22, 1.5), handleRoll()],
-  wrench: [palmTap([0, 0, 0.44]), fireRegrip([-0.012, 0, 0.012], 0.85)],
+  wrench: [palmTap([0, 0, 0.43]), fireRegrip([-0.012, 0, 0.012], 0.85)],
   crowbar: [palmTap([0, 0.02, 0.5]), fireRegrip([-0.012, 0, 0.012], 0.85)],
   flare: [shake(0.1), fireRegrip([-0.012, 0, 0.01], 0.8)],
   jerrycan: [shake(0.16, 1.2), fireRegrip([0, -0.012, 0], 0.9)],
@@ -815,24 +830,24 @@ export const HABITS: Record<Holdable, Drill[]> = {
 
 /** How each gun fails: first its misfire, then its jams. A bow does not jam. */
 export const FAULTS: Record<GunModel, Fault[]> = {
-  pistol: [misfire(tapRack(PISTOL)), jam(stovepipe(PISTOL, [0.02, 0.05, 0.1]), 'Jammed: stovepipe'), jam(doubleFeed(PISTOL), 'Jammed: double feed')],
-  compact: [misfire(tapRack(COMPACT, 0.95)), jam(stovepipe(COMPACT, [0.02, 0.045, 0.09]), 'Jammed: stovepipe'), jam(doubleFeed(COMPACT), 'Jammed: double feed')],
+  pistol: [misfire(tapRack(PISTOL)), jam(stovepipe(PISTOL, portL('pistol')), 'Jammed: stovepipe'), jam(doubleFeed(PISTOL), 'Jammed: double feed')],
+  compact: [misfire(tapRack(COMPACT, 0.95)), jam(stovepipe(COMPACT, portL('compact')), 'Jammed: stovepipe'), jam(doubleFeed(COMPACT), 'Jammed: double feed')],
   mp: [misfire(tapRack(MP, 1.05)), jam(doubleFeed(MP, 2.3), 'Jammed: double feed')],
-  revolver: [misfire(revolverDud(), 'Misfire: next chamber'), jam(cylinderBind([0.026, 0.03, 0.085]), 'Jammed: cylinder bound')],
-  cannon: [misfire(revolverDud(0.65), 'Misfire: next chamber'), jam(cylinderBind([0.029, 0.035, 0.085], 1.8), 'Jammed: cylinder bound')],
-  smg: [misfire(tapRack(SMG, 1.1)), jam(stovepipe(SMG, [0.025, 0.03, 0.12], 1.3), 'Jammed: stovepipe')],
-  smg2: [misfire(hkSlap([0, -0.185, 0.12], [0.03, 0.05, 0.24])), jam(stovepipe({ ...SMG, floor: [0, -0.185, 0.12] }, [0.025, 0.03, 0.12], 1.3), 'Jammed: stovepipe')],
-  carbine: [misfire(rightRack([-0.04, 0.03, 0.25], [-0.04, 0.03, 0.13], 1.05, 'right-rack', [0, -0.18, 0.175])), jam(rightRack([-0.04, 0.03, 0.25], [-0.04, 0.03, 0.13], 1.5, 'mag-rock', [0, -0.18, 0.175]), 'Jammed: double feed')],
-  ar: [misfire(tapRack(AR, 1.1)), jam(stovepipe(AR, [0.03, 0.03, 0.2], 1.35), 'Jammed: stovepipe'), jam(doubleFeed(AR, 2.6), 'Jammed: double feed')],
-  dmr: [misfire(tapRack(DMR, 1.1)), jam(stovepipe(DMR, [0.03, 0.03, 0.22], 1.35), 'Jammed: stovepipe'), jam(doubleFeed(DMR, 2.6), 'Jammed: double feed')],
+  revolver: [misfire(revolverDud(), 'Misfire: next chamber'), jam(cylinderBind(SP('revolver', 'cyl')), 'Jammed: cylinder bound')],
+  cannon: [misfire(revolverDud(0.65), 'Misfire: next chamber'), jam(cylinderBind(SP('cannon', 'cyl'), 1.8), 'Jammed: cylinder bound')],
+  smg: [misfire(tapRack(SMG, 1.1)), jam(stovepipe(SMG, portL('smg'), 1.3), 'Jammed: stovepipe')],
+  smg2: [misfire(hkSlap(SP('smg2', 'floor'), SP('smg2', 'tube'))), jam(stovepipe({ ...SMG, floor: SP('smg2', 'floor') }, portL('smg2'), 1.3), 'Jammed: stovepipe')],
+  carbine: [misfire(rightRack(SP('carbine', 'handle'), SP('carbine', 'handleBack'), 1.05, 'right-rack', SP('carbine', 'floor'))), jam(rightRack(SP('carbine', 'handle'), SP('carbine', 'handleBack'), 1.5, 'mag-rock', SP('carbine', 'floor')), 'Jammed: double feed')],
+  ar: [misfire(tapRack(AR, 1.1)), jam(stovepipe(AR, portL('ar'), 1.35), 'Jammed: stovepipe'), jam(doubleFeed(AR, 2.6), 'Jammed: double feed')],
+  dmr: [misfire(tapRack(DMR, 1.1)), jam(stovepipe(DMR, portL('dmr'), 1.35), 'Jammed: stovepipe'), jam(doubleFeed(DMR, 2.6), 'Jammed: double feed')],
   br: [misfire(tapRack(BR, 1.15)), jam(doubleFeed(BR, 2.6), 'Jammed: double feed')],
-  lmg: [misfire(rightRack([-0.045, 0.02, 0.32], [-0.045, 0.02, 0.18], 1.2, 'charge'), 'Misfire: charge it'), jam(feedJam([0, 0.035, 0.3], [-0.045, 0.02, 0.32]), 'Jammed: feed jam')],
-  pump: [misfire(shortStroke(), 'Short-stroked: pump it'), jam(stuckShell([0.03, 0.03, 0.08]), 'Jammed: stuck shell')],
-  combat: [misfire(shortStroke(0.09, 0.7), 'Short-stroked: pump it'), jam(stuckShell([0.026, 0.03, 0.1], 0.09, 1.5), 'Jammed: stuck shell')],
-  sawn: [misfire(breakDud([0.016, 0.04, 0.035]), 'Dud shell: break it open')],
-  coach: [misfire(breakDud([0.016, 0.04, 0.075], 1.6), 'Dud shell: break it open')],
+  lmg: [misfire(rightRack(SP('lmg', 'handle'), SP('lmg', 'handleBack'), 1.2, 'charge'), 'Misfire: charge it'), jam(feedJam(SP('lmg', 'cover'), SP('lmg', 'handle')), 'Jammed: feed jam')],
+  pump: [misfire(shortStroke(), 'Short-stroked: pump it'), jam(stuckShell(portL('pump')), 'Jammed: stuck shell')],
+  combat: [misfire(shortStroke(0.09, 0.7), 'Short-stroked: pump it'), jam(stuckShell(portL('combat'), 0.09, 1.5), 'Jammed: stuck shell')],
+  sawn: [misfire(breakDud(SP('sawn', 'breech')), 'Dud shell: break it open')],
+  coach: [misfire(breakDud(SP('coach', 'breech'), 1.6), 'Dud shell: break it open')],
   rifle: [misfire(boltCycle(RIFLE_KNOB), 'Misfire: work the bolt'), jam(boltStuck(RIFLE_KNOB), 'Jammed: stuck case')],
-  sniper: [misfire(boltCycle([-0.077, -0.004, 0.08], 1.0), 'Misfire: work the bolt'), jam(boltStuck([-0.077, -0.004, 0.08], 1.6), 'Jammed: stuck case')],
+  sniper: [misfire(boltCycle(SNIPER_KNOB, 1.0), 'Misfire: work the bolt'), jam(boltStuck(SNIPER_KNOB, 1.6), 'Jammed: stuck case')],
   lever: [misfire(leverCycle(LEVER_LOOP), 'Misfire: work the lever'), jam(leverJam(LEVER_LOOP), 'Jammed: lever stuck')],
   crossbow: [misfire(boltReseat(...CROSSBOW_RAIL), 'Bolt slipped: reseat it', 0)],
   bow: [],

@@ -1,5 +1,6 @@
 import { clamp01 } from '../core/math';
 import type { GunModel } from '../data/gear';
+import { FRAMES } from './gunFrames';
 
 /**
  * What the hands do to a gun while it is reloaded and worked, as pure curves: how far the gun is canted, how the muzzle
@@ -144,19 +145,15 @@ export interface GunPoints {
 }
 
 /**
- * Points on each gun in its own frame (origin at the hand, +z along the barrel, +y up, +x to the left of the gun). The
- * models in `render/humanoid.ts` are built to match: the sights are the little posts on the top, and a gun with a scope
- * is aimed down the scope.
+ * Points on each gun in its own frame (origin at the hand, +z along the barrel, +y up, +x to the left of the gun), off its
+ * frame in `gunFrames.ts`: the models in `render/weapons` are drawn to the same numbers, the sights on top (a gun with a
+ * built-in scope is aimed down the scope), the ejection port on the right.
  */
-const POINTS_BASE: Record<BaseGun, GunPoints> = {
-  pistol: { rear: [0, 0.066, 0.03], front: [0, 0.073, 0.225], muzzle: [0, 0.035, 0.25], port: [0.02, 0.05, 0.1], well: [0, -0.09, 0.04] },
-  revolver: { rear: [0, 0.078, 0.05], front: [0, 0.092, 0.285], muzzle: [0, 0.04, 0.3], port: [0.03, 0.03, 0.085], well: [0, 0.03, 0.085] },
-  smg: { rear: [0, 0.082, 0.04], front: [0, 0.088, 0.3], muzzle: [0, 0.03, 0.45], port: [0.025, 0.03, 0.12], well: [0, -0.19, 0.14] },
-  sawn: { rear: [0, 0.067, 0.03], front: [0, 0.062, 0.36], muzzle: [0, 0.035, 0.37], port: [0.03, 0.03, 0.05], well: [0, 0.03, 0.05] },
-  pump: { rear: [0, 0.071, 0.05], front: [0, 0.066, 0.8], muzzle: [0, 0.042, 0.81], port: [0.03, 0.03, 0.08], well: [0, 0.0, 0.1] },
-  rifle: { rear: [0, 0.1, 0.11], front: [0, 0.1, 0.29], muzzle: [0, 0.035, 0.78], port: [0.03, 0.03, 0.2], well: [0, -0.06, 0.2] },
-};
-export const GUN_POINTS = forGuns(POINTS_BASE);
+export const GUN_POINTS = {} as Record<GunModel, GunPoints>;
+for (const m of Object.keys(FRAMES) as GunModel[]) {
+  const f = FRAMES[m];
+  GUN_POINTS[m] = { rear: f.rear, front: f.front, muzzle: [f.rear[0], f.bore, f.muzzle], port: f.port, well: f.well };
+}
 /**
  * A bow's frame has its origin in the bow hand's grip, the limbs up and down y, and the arrow along +z on the shelf to the
  * left of the grip: it leaves from the shelf ("muzzle") and is sighted along its shaft back to the nock at full draw ("rear").

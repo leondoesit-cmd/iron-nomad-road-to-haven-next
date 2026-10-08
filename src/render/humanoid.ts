@@ -8,13 +8,14 @@ import { drillPose, newDrillPose, offGrip, type Drill } from '../sim/gunDrills';
 import { shared } from './dispose';
 import { applyKit, kitMaterial } from './materials';
 import { drawMods, muzzleAt } from './gunMods';
+import { buildModel, weaponMaterial, type Lod } from './weapons';
 import { parseLooks } from '../sim/gunmods';
 import { GUN_MODELS, type GunModel, type MeleeModel } from '../data/gear';
 import type { HeroId } from '../data/heroes';
 import { HERO_LOOKS, type HeroLook } from './heroLooks';
 import { drawEars, portraitGeometry, portraitMaterial, type PortraitSpec } from './portrait';
 import { MuzzleFlash } from './muzzleFlash';
-import { BowRig, drawBow } from './bow';
+import { BowRig } from './bow';
 import { flashes } from '../sim/weaponfx';
 import { drawTropicalArmHair, drawTropicalSleeve } from './tropicalShirt';
 import { LeisureRig, type LeisurePose } from './leisure';
@@ -43,6 +44,8 @@ import {
 } from './outfit';
 
 const mat = kitMaterial();
+/** Every weapon model is drawn with the weapon material: the kit plus wood grain, stippling, parkerizing and worn edges. */
+const weaponMat = weaponMaterial();
 /**
  * A hero's body: the kit material without its dents and casting texture, which made cloth and skin look like clay, and
  * without the grime map's tone shift where there is no grime (it mottled clean cloth, and changed from one body part to
@@ -395,293 +398,19 @@ const _bm = new THREE.Matrix4();
 const _be = new THREE.Euler();
 const _dp = newDrillPose();
 
-/** A weapon's solids. `mods` is the fitted add-ons' look key (`lookKey` in `sim/gunmods.ts`), empty for a bare gun; each different set is its own cached geometry. */
-export function weaponGeometry(kind: Exclude<Held, 'none'>, mods = ''): THREE.BufferGeometry {
-  const ck = mods ? `${kind}|${mods}` : kind;
+/**
+ * A weapon's solids. `mods` is the fitted add-ons' look key (`lookKey` in `sim/gunmods.ts`), empty for a bare gun; each
+ * different set is its own cached geometry. `lod` 'hi' is the close-up model for the first-person view, 'lo' the light one
+ * for a gun in someone's hands or lying in the street (see `render/weapons`).
+ */
+export function weaponGeometry(kind: Exclude<Held, 'none'>, mods = '', lod: Lod = 'lo'): THREE.BufferGeometry {
+  const ck = `${kind}|${mods}|${lod}`;
   const hit = weaponCache.get(ck);
   if (hit) return hit;
   const looks = parseLooks(mods);
-  const b = new MeshBuilder();
-  b.jitter = 0.02;
-  const gun = S.metal(0x232426, 0.35);
-  const grip = S.plastic(0x1a1a1a, 0.3);
-  const HALF = Math.PI / 2;
-  const dark = S.metal(0x0a0a0a);
-  const rail = S.metal(0x3a3c40, 0.4);
-  const dot = S.plastic(0xe8e4d8, 0.4);
-  switch (kind) {
-    case 'pistol':
-      b.rbox(0, 0.03, 0.12, 0.034, 0.05, 0.22, 0.008, gun);
-      b.rbox(0, -0.035, 0.04, 0.03, 0.11, 0.05, 0.008, grip, -0.25, 0, 0);
-      b.box(0, -0.0, 0.085, 0.012, 0.03, 0.04, gun);
-      b.cyl(0, 0.035, 0.235, 0.014, 0.02, 0.014, S.metal(0x0a0a0a), Math.PI / 2, 0, 0, 8);
-      // Iron sights: a rear notch (two blocks) and a front post, with a pale dot on the post to find it by.
-      for (const sx of [1, -1]) b.box(sx * 0.0085, 0.063, 0.03, 0.007, 0.016, 0.012, gun);
-      b.box(0, 0.064, 0.225, 0.006, 0.018, 0.01, gun);
-      b.box(0, 0.0725, 0.2255, 0.004, 0.004, 0.004, dot);
-      break;
-    case 'revolver': {
-      const wood = S.wood(0x5a3e28, 0.5);
-      b.rbox(0, 0.035, 0.1, 0.036, 0.05, 0.17, 0.008, gun);
-      b.cyl(0, 0.04, 0.225, 0.022, 0.15, 0.022, gun, Math.PI / 2, 0, 0, 8);
-      b.cyl(0, 0.03, 0.085, 0.052, 0.07, 0.052, S.metal(0x2c2e30, 0.35), Math.PI / 2, 0, 0, 10);
-      b.rbox(0, -0.04, 0.03, 0.032, 0.105, 0.048, 0.01, wood, -0.3, 0, 0);
-      b.box(0, 0.068, 0.0, 0.012, 0.025, 0.03, gun);
-      b.box(0, 0.07, 0.2, 0.01, 0.014, 0.18, gun);
-      for (const sx of [1, -1]) b.box(sx * 0.0085, 0.075, 0.05, 0.007, 0.014, 0.012, gun);
-      b.box(0, 0.085, 0.285, 0.005, 0.016, 0.01, gun);
-      b.box(0, 0.0925, 0.2855, 0.004, 0.004, 0.004, dot);
-      break;
-    }
-    case 'smg':
-      b.rbox(0, 0.02, 0.15, 0.045, 0.075, 0.34, 0.01, gun);
-      b.cyl(0, 0.03, 0.38, 0.02, 0.14, 0.02, S.metal(0x0a0a0a), Math.PI / 2, 0, 0, 8);
-      b.rbox(0, -0.1, 0.14, 0.028, 0.17, 0.05, 0.006, gun);
-      b.rbox(0, -0.05, 0.04, 0.032, 0.105, 0.046, 0.008, grip, -0.2, 0, 0);
-      b.box(0, 0.065, 0.16, 0.014, 0.012, 0.3, S.metal(0x3a3c40, 0.4));
-      for (const sx of [1, -1]) b.box(sx * 0.009, 0.08, 0.04, 0.006, 0.018, 0.012, gun);
-      b.box(0, 0.082, 0.3, 0.006, 0.02, 0.01, gun);
-      b.box(0, 0.0915, 0.3005, 0.004, 0.004, 0.004, dot);
-      b.box(0, 0.02, -0.1, 0.018, 0.018, 0.2, gun);
-      b.rbox(0, -0.005, -0.22, 0.03, 0.09, 0.03, 0.008, gun);
-      break;
-    case 'sawn': {
-      const wood = S.wood(0x5a3e28, 0.5);
-      for (const sx of [1, -1]) b.cyl(sx * 0.016, 0.035, 0.2, 0.027, 0.34, 0.027, gun, Math.PI / 2, 0, 0, 8);
-      b.rbox(0, 0.028, 0.02, 0.06, 0.075, 0.1, 0.012, gun);
-      b.rbox(0, -0.03, -0.01, 0.04, 0.1, 0.07, 0.015, wood, 0.35, 0, 0);
-      b.rbox(0, 0.0, 0.14, 0.052, 0.035, 0.12, 0.012, wood);
-      b.box(0, 0.059, 0.36, 0.006, 0.012, 0.006, dot);
-      break;
-    }
-    case 'pump': {
-      const wood = S.wood(0x5a3e28, 0.5);
-      b.cyl(0, 0.042, 0.45, 0.026, 0.72, 0.026, gun, Math.PI / 2, 0, 0, 8);
-      b.cyl(0, 0.008, 0.38, 0.022, 0.5, 0.022, gun, Math.PI / 2, 0, 0, 8);
-      b.rbox(0, 0.0, 0.4, 0.042, 0.05, 0.2, 0.012, wood);
-      b.rbox(0, 0.03, 0.05, 0.05, 0.08, 0.22, 0.01, gun);
-      b.rbox(0, -0.01, -0.2, 0.045, 0.1, 0.3, 0.015, wood, 0.1, 0, 0);
-      b.rbox(0, -0.04, 0.0, 0.03, 0.08, 0.05, 0.008, grip, -0.15, 0, 0);
-      b.box(0, 0.074, 0.05, 0.012, 0.008, 0.02, gun);
-      b.box(0, 0.062, 0.8, 0.006, 0.012, 0.006, dot);
-      break;
-    }
-    case 'knife':
-      b.rbox(0, 0, 0.18, 0.012, 0.038, 0.22, 0.004, S.chrome(0xc4c8cc));
-      b.box(0, 0, 0.065, 0.05, 0.016, 0.014, S.metal(0x2a2a2a, 0.4));
-      b.cyl(0, 0, 0.0, 0.024, 0.12, 0.024, S.wood(0x3a2a1e, 0.5), Math.PI / 2, 0, 0, 8);
-      break;
-    case 'bat':
-      b.frustum(0, 0, 0.4, 0.04, 0.016, 0.9, S.wood(0xb98a52, 0.5), Math.PI / 2, 0, 0, 10);
-      b.cyl(0, 0, 0.1, 0.034, 0.2, 0.034, S.cloth(0x1c1c1c, 0.6), Math.PI / 2, 0, 0, 8);
-      break;
-    case 'machete':
-      b.rbox(0, 0, 0.35, 0.01, 0.07, 0.5, 0.004, S.steel(0x9aa0a4, 0.4));
-      b.box(0, 0.032, 0.62, 0.012, 0.02, 0.1, S.steel(0x9aa0a4, 0.4));
-      b.box(0, 0, 0.09, 0.06, 0.02, 0.014, S.metal(0x2a2a2a, 0.4));
-      b.cyl(0, 0, 0.0, 0.028, 0.14, 0.028, grip, Math.PI / 2, 0, 0, 8);
-      break;
-    case 'axe': {
-      b.cyl(0, 0, 0.36, 0.027, 0.84, 0.027, S.wood(0x8a6a3e, 0.5), Math.PI / 2, 0, 0, 8);
-      b.rbox(0, 0.04, 0.72, 0.042, 0.14, 0.12, 0.01, S.paint(0xb02a1c, 0.5));
-      b.rbox(0, 0.045, 0.8, 0.012, 0.22, 0.075, 0.003, S.chrome(0xc4c8cc));
-      b.box(0, 0.04, 0.63, 0.026, 0.06, 0.07, S.steel(0x8a8e92, 0.4));
-      break;
-    }
-    case 'rifle':
-      b.rbox(0, 0.02, 0.25, 0.05, 0.08, 0.5, 0.01, gun);
-      b.cyl(0, 0.035, 0.62, 0.024, 0.32, 0.024, gun, Math.PI / 2, 0, 0, 8);
-      b.rbox(0, -0.01, -0.12, 0.045, 0.1, 0.26, 0.015, S.wood(0x5a3e28, 0.5));
-      b.rbox(0, -0.06, 0.2, 0.035, 0.13, 0.05, 0.008, gun, 0.3, 0, 0);
-      // The bolt's handle, out to the right where the firing hand works it.
-      b.rod(-0.025, 0.035, 0.1, -0.07, 0.0, 0.08, 0.005, gun, 5);
-      b.sphereAt(-0.072, -0.004, 0.08, 0.01, gun);
-      // The worn scope it comes with: taken off when a better optic goes on the rail.
-      if (!looks.optic) {
-        // Scope: an open tube, so the view goes through it behind the sights, with a fine crosshair in the front lens.
-        b.lathe('scope', [[0.0165, -0.08], [0.021, -0.08], [0.021, 0.08], [0.0165, 0.08], [0.0165, -0.08]], 0, 0.1, 0.2, S.metal(0x111111, 0.3), Math.PI / 2, 0, 0, 14);
-        b.box(0, 0.1, 0.275, 0.0012, 0.033, 0.001, S.metal(0x050505, 0.3));
-        b.box(0, 0.1, 0.275, 0.033, 0.0012, 0.001, S.metal(0x050505, 0.3));
-      }
-      break;
-    case 'compact':
-      b.rbox(0, 0.028, 0.1, 0.032, 0.046, 0.17, 0.008, gun);
-      b.rbox(0, -0.03, 0.035, 0.028, 0.095, 0.045, 0.008, grip, -0.2, 0, 0);
-      b.box(0, 0.0, 0.075, 0.01, 0.025, 0.035, gun);
-      b.cyl(0, 0.032, 0.195, 0.012, 0.025, 0.012, dark, HALF, 0, 0, 8);
-      break;
-    case 'cannon': {
-      const wood = S.wood(0x4a3220, 0.5);
-      b.rbox(0, 0.04, 0.1, 0.04, 0.06, 0.2, 0.01, gun);
-      b.cyl(0, 0.045, 0.28, 0.032, 0.22, 0.032, gun, HALF, 0, 0, 8);
-      b.cyl(0, 0.035, 0.085, 0.058, 0.08, 0.058, S.metal(0x2c2e30, 0.35), HALF, 0, 0, 10);
-      b.rbox(0, -0.045, 0.03, 0.034, 0.11, 0.05, 0.01, wood, -0.3, 0, 0);
-      b.box(0, 0.08, 0.0, 0.012, 0.025, 0.03, gun);
-      b.box(0, 0.082, 0.24, 0.012, 0.012, 0.26, rail);
-      break;
-    }
-    case 'mp':
-      b.rbox(0, 0.03, 0.1, 0.04, 0.07, 0.26, 0.01, gun);
-      b.cyl(0, 0.035, 0.25, 0.016, 0.05, 0.016, dark, HALF, 0, 0, 8);
-      b.rbox(0, -0.1, 0.08, 0.026, 0.18, 0.044, 0.006, gun);
-      b.rbox(0, -0.04, 0.0, 0.03, 0.1, 0.046, 0.008, grip, -0.2, 0, 0);
-      b.box(0, 0.068, 0.1, 0.012, 0.01, 0.2, rail);
-      break;
-    case 'smg2':
-      b.rbox(0, 0.02, 0.13, 0.046, 0.08, 0.3, 0.01, gun);
-      b.cyl(0, 0.03, 0.34, 0.026, 0.12, 0.026, gun, HALF, 0, 0, 8);
-      b.cyl(0, 0.03, 0.42, 0.014, 0.04, 0.014, dark, HALF, 0, 0, 8);
-      b.rbox(0, -0.1, 0.12, 0.028, 0.17, 0.05, 0.006, gun);
-      b.rbox(0, -0.05, 0.03, 0.032, 0.1, 0.046, 0.008, grip, -0.2, 0, 0);
-      b.box(0, 0.065, 0.14, 0.014, 0.012, 0.26, rail);
-      for (const sx of [1, -1]) b.rod(sx * 0.015, 0.025, -0.02, sx * 0.015, 0.0, -0.24, 0.006, gun, 5);
-      b.rbox(0, -0.005, -0.25, 0.03, 0.09, 0.02, 0.006, gun);
-      break;
-    case 'carbine': {
-      const wood = S.wood(0x5a3e28, 0.5);
-      b.rbox(0, 0.02, 0.2, 0.045, 0.08, 0.42, 0.01, gun);
-      b.cyl(0, 0.032, 0.5, 0.022, 0.26, 0.022, gun, HALF, 0, 0, 8);
-      b.rbox(0, 0.015, 0.42, 0.052, 0.062, 0.2, 0.012, wood);
-      b.rbox(0, -0.005, -0.12, 0.042, 0.095, 0.26, 0.014, wood, 0.08, 0, 0);
-      b.rbox(0, -0.1, 0.16, 0.03, 0.16, 0.05, 0.006, gun, 0.18, 0, 0);
-      b.rbox(0, -0.05, 0.04, 0.032, 0.1, 0.046, 0.008, grip, -0.3, 0, 0);
-      b.box(0, 0.066, 0.2, 0.016, 0.012, 0.3, rail);
-      break;
-    }
-    case 'ar':
-      b.rbox(0, 0.02, 0.22, 0.05, 0.085, 0.46, 0.01, gun);
-      b.rbox(0, 0.02, 0.58, 0.056, 0.066, 0.26, 0.012, gun);
-      b.cyl(0, 0.034, 0.8, 0.018, 0.2, 0.018, dark, HALF, 0, 0, 8);
-      b.box(0, 0.07, 0.3, 0.018, 0.014, 0.4, rail);
-      b.rbox(0, 0.0, -0.16, 0.04, 0.09, 0.3, 0.012, gun, 0.05, 0, 0);
-      b.rbox(0, -0.105, 0.2, 0.03, 0.16, 0.052, 0.006, gun, 0.2, 0, 0);
-      b.rbox(0, -0.06, 0.05, 0.032, 0.11, 0.046, 0.008, grip, -0.3, 0, 0);
-      break;
-    case 'br': {
-      const wood = S.wood(0x5a3e28, 0.5);
-      b.rbox(0, 0.02, 0.24, 0.052, 0.09, 0.5, 0.01, gun);
-      b.rbox(0, 0.015, 0.62, 0.058, 0.07, 0.28, 0.014, wood);
-      b.cyl(0, 0.032, 0.85, 0.02, 0.16, 0.02, dark, HALF, 0, 0, 8);
-      b.rbox(0, -0.005, -0.18, 0.046, 0.105, 0.34, 0.014, wood, 0.08, 0, 0);
-      b.rbox(0, -0.11, 0.22, 0.034, 0.17, 0.06, 0.006, gun);
-      b.rbox(0, -0.06, 0.05, 0.032, 0.11, 0.046, 0.008, grip, -0.3, 0, 0);
-      b.box(0, 0.07, 0.26, 0.018, 0.014, 0.36, rail);
-      break;
-    }
-    case 'dmr': {
-      const poly = S.plastic(0x2a2c2e, 0.3);
-      b.rbox(0, 0.02, 0.26, 0.05, 0.085, 0.5, 0.01, gun);
-      b.rbox(0, 0.02, 0.62, 0.056, 0.06, 0.3, 0.012, gun);
-      b.cyl(0, 0.034, 0.95, 0.026, 0.3, 0.026, gun, HALF, 0, 0, 8);
-      b.rbox(0, 0.0, -0.18, 0.045, 0.11, 0.36, 0.014, poly, 0.05, 0, 0);
-      b.rbox(0, 0.06, -0.14, 0.036, 0.03, 0.2, 0.01, poly);
-      b.rbox(0, -0.11, 0.24, 0.032, 0.17, 0.056, 0.006, gun);
-      b.rbox(0, -0.06, 0.05, 0.032, 0.11, 0.046, 0.008, grip, -0.3, 0, 0);
-      b.box(0, 0.068, 0.3, 0.018, 0.014, 0.42, rail);
-      break;
-    }
-    case 'sniper':
-      b.rbox(0, 0.02, 0.3, 0.052, 0.09, 0.6, 0.01, gun);
-      b.cyl(0, 0.034, 0.9, 0.03, 0.62, 0.03, gun, HALF, 0, 0, 10);
-      b.rbox(0, -0.01, -0.2, 0.05, 0.12, 0.4, 0.016, S.plastic(0x2c3028, 0.35), 0.04, 0, 0);
-      // The bolt's handle, out to the right where the firing hand works it.
-      b.rod(-0.03, 0.04, 0.1, -0.075, 0.0, 0.08, 0.005, gun, 5);
-      b.sphereAt(-0.077, -0.004, 0.08, 0.01, gun);
-      b.rbox(0, -0.07, 0.3, 0.03, 0.07, 0.05, 0.006, gun);
-      b.box(0, 0.068, 0.3, 0.018, 0.014, 0.5, rail);
-      break;
-    case 'lever': {
-      const wood = S.wood(0x6a4a2c, 0.5);
-      const brass = S.metal(0x6a5632, 0.5);
-      b.rbox(0, 0.02, 0.22, 0.045, 0.075, 0.4, 0.01, brass);
-      b.cyl(0, 0.04, 0.6, 0.024, 0.5, 0.024, gun, HALF, 0, 0, 8);
-      b.cyl(0, 0.008, 0.6, 0.018, 0.48, 0.018, gun, HALF, 0, 0, 8);
-      b.rbox(0, 0.0, 0.55, 0.05, 0.04, 0.24, 0.012, wood);
-      b.rbox(0, -0.01, -0.12, 0.045, 0.1, 0.28, 0.015, wood, 0.1, 0, 0);
-      b.rbox(0, -0.06, 0.15, 0.01, 0.07, 0.1, 0.004, brass);
-      b.box(0, 0.062, 0.1, 0.012, 0.014, 0.04, gun);
-      break;
-    }
-    case 'crossbow': {
-      const wood = S.wood(0x5a3e28, 0.5);
-      b.rbox(0, 0.0, 0.2, 0.04, 0.07, 0.7, 0.012, wood);
-      for (const sx of [1, -1]) b.rbox(sx * 0.17, 0.035, 0.5, 0.36, 0.014, 0.03, 0.005, gun, 0, -sx * 0.35, 0);
-      b.rod(-0.31, 0.035, 0.4, 0.31, 0.035, 0.4, 0.003, S.cloth(0xd8d0b0, 0.5), 5);
-      b.torus(0, 0.03, 0.58, 0.03, 0.008, gun, 0, 0, 0, 5, 12);
-      b.box(0, 0.04, 0.25, 0.012, 0.01, 0.5, rail);
-      b.rbox(0, -0.06, 0.0, 0.03, 0.1, 0.045, 0.01, grip, -0.25, 0, 0);
-      b.rod(0, 0.05, 0.15, 0, 0.05, 0.55, 0.005, S.steel(0x8a8e92, 0.4), 5);
-      b.cyl(0, 0.05, 0.57, 0.012, 0.03, 0.012, S.chrome(0xc4c8cc), HALF, 0, 0, 5);
-      break;
-    }
-    case 'bow':
-      drawBow(b);
-      break;
-    case 'combat':
-      b.rbox(0, 0.03, 0.08, 0.052, 0.085, 0.26, 0.012, gun);
-      b.cyl(0, 0.042, 0.52, 0.026, 0.58, 0.026, gun, HALF, 0, 0, 8);
-      b.cyl(0, 0.01, 0.46, 0.022, 0.48, 0.022, gun, HALF, 0, 0, 8);
-      b.rbox(0, 0.0, 0.45, 0.05, 0.05, 0.2, 0.012, grip);
-      b.rbox(0, -0.01, -0.2, 0.045, 0.1, 0.3, 0.015, grip, 0.08, 0, 0);
-      b.rbox(0, -0.04, 0.0, 0.03, 0.08, 0.05, 0.008, grip, -0.15, 0, 0);
-      b.box(0, 0.075, 0.08, 0.016, 0.012, 0.24, rail);
-      break;
-    case 'coach': {
-      const wood = S.wood(0x5a3e28, 0.5);
-      for (const sx of [1, -1]) b.cyl(sx * 0.016, 0.035, 0.4, 0.027, 0.64, 0.027, gun, HALF, 0, 0, 8);
-      b.rbox(0, 0.028, 0.04, 0.06, 0.075, 0.1, 0.012, gun);
-      b.rbox(0, 0.0, 0.3, 0.052, 0.035, 0.16, 0.012, wood);
-      b.rbox(0, -0.03, -0.1, 0.042, 0.1, 0.28, 0.015, wood, 0.25, 0, 0);
-      for (const sx of [1, -1]) b.box(sx * 0.02, 0.07, -0.01, 0.01, 0.022, 0.02, gun);
-      break;
-    }
-    case 'lmg':
-      b.rbox(0, 0.02, 0.2, 0.06, 0.1, 0.5, 0.012, gun);
-      b.rbox(0, 0.04, 0.55, 0.05, 0.065, 0.22, 0.012, S.metal(0x2a2c2e, 0.4));
-      b.cyl(0, 0.04, 0.68, 0.026, 0.3, 0.026, dark, HALF, 0, 0, 8);
-      b.rbox(0, -0.1, 0.18, 0.1, 0.12, 0.12, 0.012, S.paint(0x4a5236, 0.5));
-      b.rbox(0, 0.09, 0.4, 0.016, 0.02, 0.2, 0.005, gun);
-      b.rbox(0, 0.0, -0.2, 0.05, 0.11, 0.36, 0.014, gun, 0.04, 0, 0);
-      b.rbox(0, -0.06, 0.05, 0.034, 0.11, 0.05, 0.008, grip, -0.25, 0, 0);
-      b.box(0, 0.082, 0.22, 0.018, 0.012, 0.3, rail);
-      break;
-    case 'pipe':
-      b.cyl(0, 0, 0.36, 0.034, 0.72, 0.034, S.metal(0x6a6e72, 0.6), HALF, 0, 0, 10);
-      b.cyl(0, 0, 0.04, 0.04, 0.16, 0.04, S.cloth(0x1c1c1c, 0.6), HALF, 0, 0, 8);
-      b.cyl(0, 0, 0.73, 0.04, 0.02, 0.04, S.steel(0x5c6266), HALF, 0, 0, 10);
-      break;
-    case 'sledge':
-      b.cyl(0, 0, 0.38, 0.03, 0.8, 0.03, S.wood(0x8a6a3e, 0.5), HALF, 0, 0, 8);
-      b.rbox(0, 0, 0.82, 0.2, 0.1, 0.1, 0.012, S.steel(0x7a7e82, 0.5));
-      b.rbox(0, 0, 0.82, 0.215, 0.08, 0.075, 0.006, S.chrome(0xa8acb0));
-      b.cyl(0, 0, 0.04, 0.036, 0.16, 0.036, S.cloth(0x1c1c1c, 0.6), HALF, 0, 0, 8);
-      break;
-    case 'katana':
-      b.rbox(0, 0, 0.47, 0.008, 0.032, 0.66, 0.003, S.chrome(0xc4c8cc));
-      b.cyl(0, 0, 0.13, 0.062, 0.01, 0.062, S.metal(0x2a2a2a, 0.4), HALF, 0, 0, 12);
-      b.cyl(0, 0, 0.0, 0.028, 0.22, 0.028, S.cloth(0x1c1c20, 0.6), HALF, 0, 0, 8);
-      b.torus(0, 0, 0.0, 0.016, 0.003, S.cloth(0x8a2a2a, 0.5), 0, HALF, 0, 4, 10);
-      break;
-    case 'wrench':
-      b.rbox(0, 0, 0.22, 0.03, 0.045, 0.44, 0.01, S.chrome(0xa8acb0));
-      b.torus(0, 0, 0.47, 0.045, 0.016, S.chrome(0xa8acb0), 0, Math.PI / 2, 0, 6, 12);
-      b.box(0, 0, -0.01, 0.034, 0.07, 0.07, S.chrome(0xa8acb0));
-      break;
-    case 'jerrycan': {
-      b.rbox(0.05, -0.12, 0.1, 0.12, 0.34, 0.26, 0.02, S.paint(C.fuel, 0.7));
-      b.box(0.05, 0.06, 0.06, 0.03, 0.03, 0.12, S.paint(C.fuel, 0.7));
-      break;
-    }
-    case 'crowbar':
-      b.pipe([[0, 0, -0.05], [0, 0, 0.5], [0, 0.04, 0.58], [0, 0.1, 0.6]], 0.014, S.paint(0x3a3f46, 0.7), 8);
-      break;
-    case 'flare':
-      b.cyl(0, 0, 0.13, 0.04, 0.26, 0.04, S.paint(0xd23a3a, 0.5), Math.PI / 2, 0, 0, 10);
-      b.cyl(0, 0, 0.27, 0.042, 0.03, 0.042, S.glow(0xffd28a, 3), Math.PI / 2, 0, 0, 10);
-      break;
-  }
-  if (mods) drawMods(b, kind as GunModel, looks);
-  const g = shared(b.build());
+  const wb = buildModel(kind, lod, looks)!;
+  if (mods && GUN_MODELS.includes(kind as GunModel)) drawMods(wb, kind as GunModel, looks);
+  const g = shared(wb.build());
   weaponCache.set(ck, g);
   return g;
 }
@@ -721,7 +450,7 @@ export class Humanoid {
   readonly flash = new MuzzleFlash();
   private weapon: THREE.Mesh | null = null;
   private held: Held = 'none';
-  private heldMods = '';
+  private heldMods_ = '';
   /** Muzzle flash size, 1 for a bare gun: a suppressor or flash hider shrinks it, a compensator or brake flares it. */
   flashK = 1;
   /** 1 at the start of a melee swing, counting down to 0: raises the weapon arm overhead and brings it down. */
@@ -1010,7 +739,7 @@ export class Humanoid {
     if (!this.weapon || !this.gunHeld) return;
     const g = GUN_POINTS[this.held as GunModel];
     this.weapon.updateWorldMatrix(true, false);
-    this.weapon.localToWorld(pts.muzzle.set(g.muzzle[0], g.muzzle[1], g.muzzle[2]));
+    this.weapon.localToWorld(pts.muzzle.copy(this.held === 'bow' ? _ra.set(g.muzzle[0], g.muzzle[1], g.muzzle[2]) : this.tip));
     this.weapon.localToWorld(pts.port.set(g.port[0], g.port[1], g.port[2]));
     this.weapon.localToWorld(pts.well.set(g.well[0], g.well[1], g.well[2]));
     this.weapon.localToWorld(_ra.set(g.rear[0], g.rear[1], g.rear[2]));
@@ -1023,9 +752,9 @@ export class Humanoid {
 
   /** Swap the item in the right hand. Cheap to call every frame: geometry is cached per item. */
   setWeapon(kind: Held, mods = '') {
-    if (kind === this.held && mods === this.heldMods) return;
+    if (kind === this.held && mods === this.heldMods_) return;
     this.held = kind;
-    this.heldMods = mods;
+    this.heldMods_ = mods;
     if (this.weapon) {
       this.weapon.removeFromParent();
       this.weapon = null;
@@ -1044,19 +773,27 @@ export class Humanoid {
       this.weapon = this.bow.riser;
       return;
     }
-    // The flash comes out of the muzzle of a gun, with its barrel and muzzle device counted in.
-    if (GUN_MODELS.includes(kind as GunModel)) {
-      const tip = muzzleAt(kind as GunModel, parseLooks(mods));
-      this.flash.group.position.set(0, tip.y, tip.z + 0.02);
-    } else this.flash.group.position.set(0, 0.03, 0.32);
-    const m = new THREE.Mesh(weaponGeometry(kind, mods), mat);
+    const m = new THREE.Mesh(weaponGeometry(kind, mods), weaponMat);
     m.castShadow = true;
     this.hand.add(m);
     this.weapon = m;
+    // The flash comes out of the muzzle of a gun, with its barrel and muzzle device counted in.
+    const gun = GUN_MODELS.includes(kind as GunModel);
+    const tip = gun ? muzzleAt(kind as GunModel, parseLooks(mods)) : null;
+    if (tip) this.tip.set(GUN_POINTS[kind as GunModel].muzzle[0], tip.y, tip.z);
     if (this.gunHeld && flashes(kind as GunModel)) {
       this.flash.setGun(kind as GunModel);
+      if (tip) this.flash.group.position.copy(this.tip).z += 0.005;
       m.add(this.flash.group);
     }
+  }
+
+  /** Where the muzzle is on the gun in hand with its add-ons on (its own frame): a suppressor moves it out. */
+  private tip = new THREE.Vector3();
+
+  /** The add-ons on the gun in hand, as their look key (`lookKey` in `sim/gunmods.ts`). */
+  get heldMods(): string {
+    return this.heldMods_;
   }
 
   private carried: THREE.Object3D | null = null;
@@ -1661,8 +1398,8 @@ export class Humanoid {
 }
 
 /** A weapon or tool as its own mesh, as held in the hand, for models that lie about the world (`render/gearModels.ts`). Geometry is shared and cached. */
-export function weaponMesh(kind: Exclude<Held, 'none'>, mods = ''): THREE.Mesh {
-  const m = new THREE.Mesh(weaponGeometry(kind, mods), mat);
+export function weaponMesh(kind: Exclude<Held, 'none'>, mods = '', lod: Lod = 'lo'): THREE.Mesh {
+  const m = new THREE.Mesh(weaponGeometry(kind, mods, lod), weaponMat);
   m.castShadow = true;
   return m;
 }

@@ -3,6 +3,7 @@ import { MeshBuilder, S } from './builder';
 import { C } from './palette';
 import { clamp, clamp01, damp, lerp } from '../core/math';
 import { GUN_BASE, GUN_POINTS, curve } from '../sim/weaponanim';
+import { FRAMES } from '../sim/gunFrames';
 import { drillPose, newDrillPose, type Drill, type HandAt } from '../sim/gunDrills';
 import { flashes } from '../sim/weaponfx';
 import { GUN_MODELS, type GunModel } from '../data/gear';
@@ -11,6 +12,9 @@ import { kitMaterial } from './materials';
 import { DEFAULT_LOOK, drawUpperArm, sleeveColor } from './outfit';
 import { weaponGeometry, type Held, type Humanoid, type Palette } from './humanoid';
 import { MuzzleFlash } from './muzzleFlash';
+import { weaponMaterial } from './weapons';
+import { muzzleAt, sightLine } from './gunMods';
+import { parseLooks } from '../sim/gunmods';
 import { ARROW_LEN, BRACE, BowRig } from './bow';
 
 /**
@@ -96,63 +100,57 @@ interface Spec {
   long?: boolean;
 }
 
-// Grips are read off the weapon models in `humanoid.ts`.
+// Grips are read off each gun's frame (`sim/gunFrames.ts`), which its model in `render/weapons` is drawn to.
 // The firing hand closes round the grip from its right side, palm onto it and a little forward, the thumb laid along the far
-// side; the support hand wraps over it from the left, its thumb along the near side under the first; a fore-end is held
-// from the left and below, the back of the hand showing.
+// side; on a handgun the support hand wraps over it from the left, its thumb along the near side under the first; a fore-end
+// is held from the left and below, the back of the hand showing.
 const GRIP_R = (p: V3, a: V3): Grip => ({ p, a, n: [1, 0, 0.35], thumb: 'far' });
-const PISTOL_L: Grip = { p: [0.013, -0.06, 0.045], a: [0, 0.97, -0.25], n: [-1, 0, 0.2], thumb: 'near' };
-const UNDER = (z: number): Grip => ({ p: [0.026, -0.022, z], a: [0, 0, 1], n: [-1, 0.6, 0], thumb: 'near' });
+const SUPPORT_HANDGUN = (p: V3, a: V3): Grip => ({ p, a, n: [-1, 0, 0.2], thumb: 'near' });
+const FORE_END = (p: V3): Grip => ({ p, a: [0, 0, 1], n: [-1, 0.6, 0], thumb: 'near' });
 const HANDLE = (z: number, n: V3 = [1, 0, 0]): Grip => ({ p: [0, 0, z], a: [0, 0, 1], n, thumb: 'wrap' });
 const MELEE_REST: V3 = [1.05, 0.3, 0.12];
+const HANDGUNS: GunModel[] = ['pistol', 'compact', 'mp', 'revolver', 'cannon'];
 
-const DRAWN_SPECS: Partial<Record<Exclude<Held, 'none'>, Spec>> = {
-  pistol: { hip: [0.075, -0.18, -0.33], ads: 0.38, scale: 1.12, r: GRIP_R([0, -0.045, 0.035], [0, 0.97, -0.25]), l: PISTOL_L },
-  revolver: { hip: [0.075, -0.18, -0.33], ads: 0.38, scale: 1.1, r: GRIP_R([0, -0.05, 0.025], [0, 0.955, -0.3]), l: { ...PISTOL_L, p: [0.013, -0.064, 0.035] } },
-  smg: { hip: [0.1, -0.24, -0.28], ads: 0.27, scale: 1.05, r: GRIP_R([0, -0.055, 0.035], [0, 0.98, -0.2]), l: UNDER(0.23), long: true },
-  sawn: { hip: [0.1, -0.24, -0.27], ads: 0.28, scale: 1.05, r: GRIP_R([0, -0.04, -0.005], [0, 0.94, 0.34]), l: UNDER(0.13), long: true },
-  pump: { hip: [0.11, -0.26, -0.23], ads: 0.27, scale: 1, r: GRIP_R([0, -0.045, 0.0], [0, 0.99, -0.15]), l: UNDER(0.32), long: true },
-  rifle: { hip: [0.11, -0.26, -0.22], ads: 0.27, scale: 1, r: GRIP_R([0, -0.035, 0.01], [0, 0.98, 0.2]), l: UNDER(0.28), long: true },
+/** How each kind of gun is carried and aimed (hip, sight distance, shouldered); the hands come from the gun's frame. */
+const CARRY: Record<'handgun' | 'smg' | 'sawn' | 'pump' | 'rifle' | 'crossbow', Pick<Spec, 'hip' | 'ads' | 'long'>> = {
+  // Shouldered, but the grip held a little further out: the bolt is seated with the hand over the rail.
+  crossbow: { hip: [0.11, -0.26, -0.26], ads: 0.3, long: true },
+  handgun: { hip: [0.075, -0.18, -0.33], ads: 0.38 },
+  smg: { hip: [0.1, -0.24, -0.28], ads: 0.27, long: true },
+  sawn: { hip: [0.1, -0.24, -0.27], ads: 0.28, long: true },
+  pump: { hip: [0.11, -0.26, -0.23], ads: 0.27, long: true },
+  rifle: { hip: [0.11, -0.26, -0.22], ads: 0.27, long: true },
+};
+/** Which way each gun is carried: by its base gun, except the shouldered crossbow and the two-handed machine pistol. */
+const carryOf = (m: GunModel) => (HANDGUNS.includes(m) ? CARRY.handgun : m === 'crossbow' ? CARRY.crossbow : CARRY[GUN_BASE[m] === 'pistol' || GUN_BASE[m] === 'revolver' ? 'handgun' : (GUN_BASE[m] as 'smg' | 'sawn' | 'pump' | 'rifle')]);
+
+const SPECS = {} as Record<Exclude<Held, 'none'>, Spec>;
+for (const m of GUN_MODELS) {
+  const f = FRAMES[m];
+  const hand = HANDGUNS.includes(m);
+  SPECS[m] = {
+    ...carryOf(m),
+    scale: 1,
+    r: GRIP_R(f.grip.p, f.grip.a),
+    l: f.support ? (hand ? SUPPORT_HANDGUN(f.support, f.grip.a) : FORE_END(f.support)) : undefined,
+  };
+}
+// A bow is placed by its grip (see `bowBase`) and its hands are its own (`bowHands`).
+SPECS.bow = { ...CARRY.handgun, r: { p: [0, 0, 0], a: [0, 1, 0], n: [0, 0, 1], thumb: 'wrap' }, l: undefined, scale: 0.92 };
+const MELEE_SPECS: Record<Exclude<Held, 'none' | GunModel>, Spec> = {
   knife: { hip: [0.2, -0.25, -0.42], ads: 0, rest: [0.75, 0.35, 0.15], scale: 1.1, r: HANDLE(0) },
   bat: { hip: [0.16, -0.22, -0.36], ads: 0, rest: [1.2, 0.35, 0.25], scale: 1, r: HANDLE(0.17), l: HANDLE(0.06, [-1, 0, 0]) },
+  pipe: { hip: [0.16, -0.22, -0.36], ads: 0, rest: [1.2, 0.35, 0.25], scale: 1, r: HANDLE(0.1), l: HANDLE(0.06, [-1, 0, 0]) },
   machete: { hip: [0.2, -0.24, -0.4], ads: 0, rest: MELEE_REST, scale: 1, r: HANDLE(0) },
+  katana: { hip: [0.2, -0.24, -0.4], ads: 0, rest: MELEE_REST, scale: 1, r: HANDLE(0) },
   axe: { hip: [0.16, -0.22, -0.36], ads: 0, rest: [1.15, 0.35, 0.25], scale: 1, r: HANDLE(0.1), l: HANDLE(-0.02, [-1, 0, 0]) },
+  sledge: { hip: [0.16, -0.22, -0.36], ads: 0, rest: [1.15, 0.35, 0.25], scale: 1, r: HANDLE(0.15), l: HANDLE(0.03, [-1, 0, 0]) },
   wrench: { hip: [0.2, -0.24, -0.4], ads: 0, rest: MELEE_REST, scale: 1, r: HANDLE(0.04) },
   crowbar: { hip: [0.2, -0.24, -0.4], ads: 0, rest: MELEE_REST, scale: 1, r: HANDLE(0.02) },
   flare: { hip: [0.2, -0.22, -0.42], ads: 0, rest: [0.35, 0.2, 0], scale: 1, r: HANDLE(0.07) },
   jerrycan: { hip: [0.24, -0.44, -0.3], ads: 0, rest: [0, 0.2, 0], scale: 1, r: { p: [0.05, 0.06, 0.06], a: [0, 0, 1], n: [0, -1, 0], thumb: 'wrap' } },
 };
-
-/** The hands were drawn for the six base guns and a few melee tools; every other model is held like the nearest of them. */
-const MELEE_LIKE: Partial<Record<Exclude<Held, 'none'>, Exclude<Held, 'none'>>> = { pipe: 'bat', sledge: 'axe', katana: 'machete' };
-const SPECS = {} as Record<Exclude<Held, 'none'>, Spec>;
-for (const k of Object.keys(DRAWN_SPECS) as Exclude<Held, 'none'>[]) SPECS[k] = DRAWN_SPECS[k]!;
-// Hands for the other guns, from where each model's own grip and fore-end sit (see `weaponGeometry`): the firing hand on the
-// grip (tilted as the grip is), the support hand under the fore-end.
-const PIST = (y: number, z: number, tilt: number): Grip => GRIP_R([0, y - 0.015, z], [0, Math.cos(tilt), -Math.sin(tilt)]);
-const GRIPS: Partial<Record<GunModel, Partial<Spec>>> = {
-  cannon: { r: PIST(-0.045, 0.03, 0.3) },
-  mp: { r: PIST(-0.04, 0, 0.2), l: UNDER(0.15) },
-  smg2: { r: PIST(-0.05, 0.03, 0.2), l: UNDER(0.2) },
-  carbine: { r: PIST(-0.05, 0.04, 0.3), l: UNDER(0.36) },
-  ar: { r: PIST(-0.06, 0.05, 0.3), l: UNDER(0.5) },
-  br: { r: PIST(-0.06, 0.05, 0.3), l: UNDER(0.55) },
-  dmr: { r: PIST(-0.06, 0.05, 0.3), l: UNDER(0.55) },
-  sniper: { l: UNDER(0.45) },
-  lever: { l: UNDER(0.5) },
-  crossbow: { r: PIST(-0.06, 0, 0.25), l: UNDER(0.35) },
-  // A bow is placed by its grip (see `bowBase`) and its hands are its own (`bowHands`).
-  bow: { r: { p: [0, 0, 0], a: [0, 1, 0], n: [0, 0, 1], thumb: 'wrap' }, l: undefined, scale: 0.92 },
-  combat: { r: PIST(-0.04, 0, 0.15), l: UNDER(0.45) },
-  coach: { l: UNDER(0.3) },
-  lmg: { r: PIST(-0.06, 0.05, 0.25), l: UNDER(0.45) },
-};
-for (const m of Object.keys(GUN_BASE) as GunModel[]) SPECS[m] ??= { ...DRAWN_SPECS[GUN_BASE[m]]!, ...GRIPS[m] };
-const MELEE_GRIPS: Partial<Record<Exclude<Held, 'none'>, Partial<Spec>>> = {
-  pipe: { r: HANDLE(0.1) },
-  sledge: { r: HANDLE(0.15), l: HANDLE(0.03, [-1, 0, 0]) },
-};
-for (const [k, like] of Object.entries(MELEE_LIKE) as [Exclude<Held, 'none'>, Exclude<Held, 'none'>][]) SPECS[k] ??= { ...DRAWN_SPECS[like]!, ...MELEE_GRIPS[k] };
+Object.assign(SPECS, MELEE_SPECS);
 
 /** Bare fists, for a punch. */
 const FIST: Spec = { hip: [0.18, -0.3, -0.36], ads: 0, rest: [0, 0, 0], scale: 1, r: HANDLE(0) };
@@ -227,7 +225,13 @@ const FINGERS = [
  * The firing hand's index finger, off the grip and through the guard onto the trigger: along the side of the frame, then
  * curled in, its pad on the blade.
  */
-const TRIGGER_FINGER: [number, number][] = [[-0.034, -0.035], [-0.069, -0.026], [-0.09, -0.011], [-0.088, 0.004]];
+const TRIGGER_FINGER: [number, number][] = [[-0.034, -0.035], [-0.065, -0.027], [-0.082, -0.012], [-0.08, 0.004]];
+/**
+ * How far each of the trigger finger's joints rises up the grip (toward the thumb) from the line of the other fingers: a
+ * grip is raked back, so the fingers round it point a little down, while the trigger finger lies along the frame, level
+ * with the bore.
+ */
+const TRIGGER_RISE = [0, 0.012, 0.02, 0.022];
 /** The middle finger held straight up out of the fist. */
 const BIRD_FINGER: [number, number][] = [[-0.034, -0.035], [-0.078, -0.037], [-0.104, -0.036], [-0.125, -0.034]];
 /** The others closed tight into the palm round nothing, and the thumb laid across them. */
@@ -288,6 +292,7 @@ function drawViewHand(b: MeshBuilder, glove: Surf, fingers: Surf, side: number, 
     const tpl = open ? OPEN_FINGER : bird ? (i === 1 ? BIRD_FINGER : FIST_FINGER) : i === 0 && thumb === 'far' ? TRIGGER_FINGER : FINGER;
     // Spread a little when open, the way a hand relaxes.
     const j = fingerJoints(tpl, sx * f.x * (open ? 1.12 : 1), f.k, f.l);
+    if (tpl === TRIGGER_FINGER) for (let n = 0; n < j.length; n++) j[n][0] += sx * TRIGGER_RISE[n];
     b.limb(j[0][0], j[0][1], j[0][2], j[1][0], j[1][1], j[1][2], f.r * 1.08, f.r, i === 0 ? glove : fingers, 10);
     b.limb(j[1][0], j[1][1], j[1][2], j[2][0], j[2][1], j[2][2], f.r, f.r * 0.93, fingers, 10);
     b.limb(j[2][0], j[2][1], j[2][2], j[3][0], j[3][1], j[3][2], f.r * 0.93, f.r * 0.84, fingers, 10);
@@ -455,9 +460,11 @@ export class ViewModel {
     this.foreL.geometry = g.fore;
   }
 
-  private setHeld(kind: Held) {
-    if (kind === this.held) return;
+  private setHeld(kind: Held, mods = '') {
+    if (kind === this.held && mods === this.mods) return;
     this.held = kind;
+    this.mods = mods;
+    this.sight = null;
     this.flash.setGun(null);
     this.flash.group.removeFromParent();
     if (this.weapon) {
@@ -477,15 +484,27 @@ export class ViewModel {
       this.weapon = this.bow.riser;
       return;
     }
-    const m = new THREE.Mesh(weaponGeometry(kind), mat);
+    // The close-up model, with the add-ons fitted: a dot or a scope on the rail is what the sights come up behind.
+    const m = new THREE.Mesh(weaponGeometry(kind, mods, 'hi'), weaponMaterial());
     m.frustumCulled = false;
     this.gun.add(m);
     this.weapon = m;
-    if (isGun(kind) && flashes(kind)) {
+    if (!isGun(kind)) return;
+    const looks = parseLooks(mods);
+    this.sight = sightLine(kind, looks);
+    const tip = muzzleAt(kind, looks);
+    this.tip.set(GUN_POINTS[kind].muzzle[0], tip.y, tip.z);
+    if (flashes(kind)) {
       this.flash.setGun(kind);
+      this.flash.group.position.copy(this.tip).z += 0.005;
       m.add(this.flash.group);
     }
   }
+
+  /** The add-ons on the weapon in hand (their look key), the line its sights or optic look along, and its muzzle's tip. */
+  private mods = '';
+  private sight: { rear: V3; front: V3 } | null = null;
+  private tip = new THREE.Vector3();
 
   /**
    * Pose the arms and the weapon for this frame, in camera space. Reads what the third-person rig was handed (the weapon,
@@ -496,7 +515,7 @@ export class ViewModel {
     this.t += dt;
     const swing = h.swing;
     const kind = h.heldKind;
-    this.setHeld(kind);
+    this.setHeld(kind, h.heldMods);
     this.active = kind !== 'none' || swing > 0;
     if (!this.active) return;
     const spec = kind === 'none' ? FIST : SPECS[kind];
@@ -518,7 +537,7 @@ export class ViewModel {
       Q.setFromRotationMatrix(_m);
       if (ads > 0) {
         // Sights up: the rear sight on the line of sight, the sight line straight down it.
-        const g = GUN_POINTS[kind];
+        const g = this.sight ?? GUN_POINTS[kind];
         const tilt = Math.atan2(g.front[1] - g.rear[1], g.front[2] - g.rear[2]);
         _q2.setFromAxisAngle(_x.set(1, 0, 0), -tilt).multiply(BASE);
         const rear = _v.set(g.rear[0], g.rear[1], g.rear[2]).multiplyScalar(s).applyQuaternion(_q2);
@@ -850,7 +869,7 @@ export class ViewModel {
     const g = GUN_POINTS[this.held];
     const w = this.weapon;
     w.updateWorldMatrix(true, false);
-    w.localToWorld(out.muzzle.set(g.muzzle[0], g.muzzle[1], g.muzzle[2]));
+    w.localToWorld(this.held === 'bow' ? out.muzzle.set(g.muzzle[0], g.muzzle[1], g.muzzle[2]) : out.muzzle.copy(this.tip));
     w.localToWorld(out.port.set(g.port[0], g.port[1], g.port[2]));
     w.localToWorld(out.well.set(g.well[0], g.well[1], g.well[2]));
     w.localToWorld(_v.set(g.rear[0], g.rear[1], g.rear[2]));
