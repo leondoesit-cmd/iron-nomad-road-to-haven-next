@@ -402,8 +402,31 @@ function glassScore(item: PartItem | null): number {
 }
 
 /**
+ * What the wear of the part in a slot costs, as the sim has it: a worn engine makes less power, a worn radiator sheds less
+ * heat and a worn gearbox slips; a tyre is fine until it is flat. Everything else works the same worn or new.
+ */
+export function wearFactor(slot: PartSlot, cond: number): number {
+  const c = clamp(cond, 0, 1);
+  switch (slot) {
+    case 'engine':
+      return 0.45 + 0.55 * c;
+    case 'cooling':
+      return 0.4 + 0.6 * c;
+    case 'gearbox':
+      return c >= 0.5 ? 1 : 0.33 + 0.67 * (c / 0.5);
+    case 'armor':
+      return 0.5 + 0.5 * c;
+    case 'wheels':
+      return c <= 0.001 ? 0.3 : 1;
+    default:
+      return 1;
+  }
+}
+
+/**
  * How much better (positive) or worse a car gets on its slot's measure with `item` put in at `at`, as a share. Null when it
- * does not go on this car at all.
+ * does not go on this car at all. A tyre is judged as a set (grip is the mean of the wheels, so one tyre moves it a quarter as
+ * much) against the most worn tyre on now; a flat one makes any sound tyre a big step up.
  */
 export function swapGain(def: VehicleDef, fit: Fit, tyres: Tyres | undefined, item: PartItem, at?: PartSlot | number, current?: PartItem | null): number | null {
   if (!fitsChassis(def, item)) return null;
@@ -415,15 +438,12 @@ export function swapGain(def: VehicleDef, fit: Fit, tyres: Tyres | undefined, it
     return now > 0 ? then / now - 1 : then > 0 ? 1 : 0;
   }
   const before = effectiveStats(def, fit, tyres);
-  const s = swapped(def, fit, tyres, item, at);
+  const s = swapped(def, fit, tyres, item, d.slot === 'wheels' ? undefined : at);
   const after = effectiveStats(def, s.fit, s.tyres);
   const a = slotScore(d.slot, def, before, fit);
   const b = slotScore(d.slot, def, after, s.fit);
-  // A worn engine or tyre is worth what is left of it.
-  const wear = (cond: number) => (isWorn(d.slot) ? 0.55 + 0.45 * cond : 1);
-  const curCond = current ? current.cond : 1;
-  const base = a * wear(curCond);
-  return base > 1e-6 ? (b * wear(item.cond)) / base - 1 : b > 0 ? 1 : 0;
+  const base = a * wearFactor(d.slot, current ? current.cond : 1);
+  return base > 1e-6 ? (b * wearFactor(d.slot, item.cond)) / base - 1 : b > 0 ? 1 : 0;
 }
 
 /** The wheels of a chassis a tyre goes on (a motorcycle wheel only on its own hub). */
@@ -446,7 +466,8 @@ export interface Delta {
  */
 export function swapDeltas(def: VehicleDef, fit: Fit, tyres: Tyres | undefined, item: PartItem, at?: PartSlot | number, max = 3): Delta[] {
   if (!fitsChassis(def, item)) return [];
-  const s = swapped(def, fit, tyres, item, at);
+  // Tyres are said as a set, as they are judged (`swapGain`).
+  const s = swapped(def, fit, tyres, item, partDef(item.id).slot === 'wheels' ? undefined : at);
   const a = carFigures(def, fit, tyres);
   const b = carFigures(def, s.fit, s.tyres);
   const out: Delta[] = [];
