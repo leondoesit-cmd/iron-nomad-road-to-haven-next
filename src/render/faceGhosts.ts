@@ -6,8 +6,9 @@ import { treeAspect, treeVariantGeometry } from './trees';
 /**
  * Faces that are not there: at the peak of a trip, the trunks of ordinary trees round the one who is tripping start to look
  * back too. Each is a decal laid onto the trunk's own bark (projected from the tree's real triangles, so it follows the flare
- * and the lumps), drawn in the shader as no more than shadow: sockets that deepen, a brow, a slit of a mouth that works
- * slowly, and at night a coal in each eye. They fade in where the tripper is looking, hold a while and fade out.
+ * and the lumps), drawn in the shader as little more than shadow: sockets with light along the brow over them, the shadows
+ * either side of a nose, a slit of a mouth that works slowly; and in each socket an amber eye round a slit of a pupil that
+ * drifts and blinks, glowing after dark. They fade in where the tripper is looking, hold a while and fade out.
  *
  * Per player and per view: each player's faces live in their own group, and only that player's view shows it (`showFor`,
  * called from the per-view hook in `game/faceTrip.ts`). The partner never sees them.
@@ -64,21 +65,31 @@ const FRAG_MAIN = /* glsl */ `
 {
   vec2 p = vGhostUv - 0.5;
   float rag = 0.75 + 0.5 * gNoise( vGhostUv * 9.0 + uGhostPh * 0.05 );
-  // Two sockets, a little lopsided, a brow's shadow over them.
+  // Two sockets, a little lopsided, a brow's shadow over them and a ridge of light along the brow; in each, an eye.
   float eyes = 0.0;
-  float coal = 0.0;
+  float ridge = 0.0;
+  float iris = 0.0;
+  float pupil = 0.0;
+  // The eyes drift as if following something, now and then; a blink every so often.
+  vec2 look = vec2( sin( uGhostPh * 0.37 ) * 0.25, sin( uGhostPh * 0.23 + 1.0 ) * 0.12 );
+  float open = 1.0 - pow( max( 0.0, sin( uGhostPh * 0.31 + 2.0 ) ), 40.0 );
   for ( int s = 0; s < 2; s++ ) {
     float sx = s == 0 ? -1.0 : 1.0;
     vec2 e = ( p - vec2( sx * 0.17, 0.1 + sx * 0.012 ) ) / vec2( 0.085, 0.062 );
     float q = length( e ) / rag;
     eyes = max( eyes, 1.0 - smoothstep( 0.55, 1.15, q ) );
-    coal = max( coal, 1.0 - smoothstep( 0.0, 0.42, q ) );
     vec2 b = ( p - vec2( sx * 0.18, 0.19 ) ) / vec2( 0.16, 0.05 );
     eyes = max( eyes, 0.45 * exp( -dot( b, b ) ) );
+    vec2 rb = ( p - vec2( sx * 0.18, 0.235 ) ) / vec2( 0.15, 0.025 );
+    ridge = max( ridge, exp( -dot( rb, rb ) ) );
+    vec2 ie = ( e - look ) * vec2( 1.0, 1.1 / max( open, 0.05 ) );
+    float d = length( ie );
+    iris = max( iris, ( 1.0 - smoothstep( 0.42, 0.52, d ) ) * open );
+    pupil = max( pupil, ( 1.0 - smoothstep( 0.17, 0.22, length( ie * vec2( 2.6, 1.0 ) ) ) ) * open );
   }
   // The mouth: a split that opens and closes, slowly, as if saying something.
   float talk = 0.5 + 0.5 * sin( uGhostPh * 1.3 ) * sin( uGhostPh * 0.41 + 1.0 );
-  vec2 m = ( p - vec2( 0.0, -0.2 - 0.03 * p.x * p.x * 30.0 ) ) / vec2( 0.17 * rag, 0.018 + 0.03 * talk );
+  vec2 m = ( p - vec2( 0.0, -0.2 - 0.03 * p.x * p.x * 30.0 ) ) / vec2( 0.17 * rag, 0.02 + 0.035 * talk );
   float mouth = exp( -pow( abs( m.x ), 4.0 ) ) * exp( -m.y * m.y );
   // The nose's shadow either side.
   float nose = 0.0;
@@ -88,10 +99,19 @@ const FRAG_MAIN = /* glsl */ `
   }
   float shadow = clamp( max( max( eyes, mouth ), nose ), 0.0, 1.0 );
   // Soft at the edge of the square, and only ever as strong as the trip.
-  float edge = smoothstep( 0.5, 0.36, max( abs( p.x ), abs( p.y ) ) );
-  float glow = coal * ( 0.18 + 0.82 * uGhostNight ) * ( 0.65 + 0.35 * sin( uGhostPh * 2.7 ) );
-  diffuseColor.rgb = mix( vec3( 0.03, 0.022, 0.016 ), vec3( 1.0, 0.5, 0.14 ) * ( 1.2 + 2.0 * uGhostNight ), clamp( glow, 0.0, 1.0 ) );
-  diffuseColor.a = clamp( shadow * 0.82 + glow, 0.0, 1.0 ) * edge * uGhostA;
+  float edge = 1.0 - smoothstep( 0.36, 0.5, max( abs( p.x ), abs( p.y ) ) );
+  float pulse = 0.75 + 0.25 * sin( uGhostPh * 2.7 );
+  // Shadow in the hollows, a little light on the brow, and in the sockets an amber eye round a slit, glowing after dark.
+  vec3 col = vec3( 0.025, 0.018, 0.013 );
+  float a = shadow * 0.85;
+  col = mix( col, vec3( 0.5, 0.38, 0.26 ), ridge * ( 1.0 - shadow ) );
+  a = max( a, ridge * 0.3 );
+  vec3 amber = vec3( 1.0, 0.56, 0.14 ) * ( 0.9 + 2.2 * uGhostNight ) * pulse;
+  col = mix( col, amber, iris * ( 1.0 - pupil ) );
+  col = mix( col, vec3( 0.0 ), pupil * iris );
+  a = max( a, iris );
+  diffuseColor.rgb = col;
+  diffuseColor.a = clamp( a, 0.0, 1.0 ) * edge * uGhostA;
   if ( diffuseColor.a < 0.004 ) discard;
 }
 `;
@@ -146,11 +166,13 @@ function trunkPatch(t: TreeSpot, y0: number, y1: number, dirX: number, dirZ: num
     const ia = idx.getX(i);
     const ib = idx.getX(i + 1);
     const ic = idx.getX(i + 2);
-    // Bark only (leaves flutter), in the band, near the axis.
+    // Bark only (leaves flutter), across the band (the trunk's triangles can be a metre or two tall), near the axis.
     if (tree.getX(ia) > 0 || tree.getX(ib) > 0 || tree.getX(ic) > 0) continue;
     const ya = pos.getY(ia);
-    if (ya < y0 || ya > y1) continue;
-    if (Math.hypot(pos.getX(ia), pos.getZ(ia)) > reach) continue;
+    const yb = pos.getY(ib);
+    const yc = pos.getY(ic);
+    if (Math.max(ya, yb, yc) < y0 || Math.min(ya, yb, yc) > y1) continue;
+    if (Math.min(Math.hypot(pos.getX(ia), pos.getZ(ia)), Math.hypot(pos.getX(ib), pos.getZ(ib)), Math.hypot(pos.getX(ic), pos.getZ(ic))) > reach) continue;
     _a.fromBufferAttribute(pos, ia).applyMatrix4(M);
     _b.fromBufferAttribute(pos, ib).applyMatrix4(M);
     _c.fromBufferAttribute(pos, ic).applyMatrix4(M);
