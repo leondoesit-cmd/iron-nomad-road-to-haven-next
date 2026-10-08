@@ -6,7 +6,12 @@ void main() {
   vDir = position;
   vec4 p = modelViewMatrix * vec4( position, 1.0 );
   gl_Position = projectionMatrix * p;
+  // Pinned just short of the far plane, whichever way the depth buffer runs (see depth.ts).
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  gl_Position.z = gl_Position.w * 0.00001;
+#else
   gl_Position.z = gl_Position.w * 0.99999;
+#endif
 }`;
 
 const FRAG = /* glsl */ `

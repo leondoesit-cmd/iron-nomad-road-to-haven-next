@@ -203,16 +203,20 @@ export function mallRoof(rb: RuralBuilding, p: BuildingPlan, roof: MeshBuilder) 
   const M = MALL;
   const roofY = levelBase(p, p.levels);
   const cream = S.paint(rb.tint, 0.3);
-  // Roof slab: bottom face just above the top ceiling, so it is the ceiling over the court.
-  holed(roof, p, 'roof', [M.w / 2, M.d / 2], roofY + 0.32, 0.32, S.concrete(0xc9c5bc, 0.6));
-  for (const [cx, cz, sx, sz] of [[M.w / 2, 0.15, M.w, 0.3], [M.w / 2, M.d - 0.15, M.w, 0.3], [0.15, M.d / 2, 0.3, M.d], [M.w - 0.15, M.d / 2, 0.3, M.d]] as const) {
-    roof.box(X(p, cx), roofY + 0.75, Z(p, cz), sx, 1.0, sz, cream);
+  // Roof slab: bottom face just above the top ceiling, so it is the ceiling over the court. Its edges stop 2 cm inside the
+  // walls' faces, behind the parapet, which comes down to the wall top: flush, the slab's edge, the parapet and the sign box
+  // were all one plane along the front and flickered through each other.
+  holed(roof, p, 'roof', [M.w / 2 - 0.02, M.d / 2 - 0.02], roofY + 0.32, 0.32, S.concrete(0xc9c5bc, 0.6));
+  // The long sides run between the ends, so no two parapets share a face at the corners.
+  for (const [cx, cz, sx, sz] of [[M.w / 2, 0.15, M.w, 0.3], [M.w / 2, M.d - 0.15, M.w, 0.3], [0.15, M.d / 2, 0.3, M.d - 0.6], [M.w - 0.15, M.d / 2, 0.3, M.d - 0.6]] as const) {
+    roof.box(X(p, cx), roofY + 0.625, Z(p, cz), sx, 1.25, sz, cream);
     roof.box(X(p, cx), roofY + 1.27, Z(p, cz), sx + 0.08, 0.05, sz + 0.08, S.metal(0x9a9ea2, 0.35));
   }
   skylight(p, roof, roofY + 0.32);
-  // The raised box over the main doors that carries the red sign, flush with the front.
+  // The raised box over the main doors that carries the red sign, standing just proud of the front (and of the parapet's
+  // coping) so it shares no face with them.
   const court = (M.court.z0 + M.court.z1) / 2;
-  roof.box(X(p, 3), roofY + 1.8, Z(p, court), 6, 3.6, 32, S.metal(0xa6aaae, 0.3));
+  roof.box(X(p, 3) - 0.03, roofY + 1.8, Z(p, court), 6.06, 3.6, 32, S.metal(0xa6aaae, 0.3));
   roof.box(X(p, 3), roofY + 3.63, Z(p, court), 6.2, 0.06, 32.2, S.metal(0x8a8e92, 0.3));
   greyBlock(p, roof, roofY);
   southWing(p, roof, roofY);
