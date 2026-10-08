@@ -1113,23 +1113,47 @@ export class Game {
     this.render(0, drawEvery ? FIXED_STEP : Math.min(Math.max(seconds, FIXED_STEP), 0.5));
   }
 
+  /** Seconds since the picture behind a menu was last drawn, and frames drawn since the menu opened (`render`). */
+  private stillAcc = 0;
+  private stillFrames = 0;
+  /** The scene whose particle view-scale hook is installed, so the hook is made once per scene and not every frame. */
+  private viewScaleScene: Scene | null = null;
+
+  /**
+   * A menu is up over a scene that is not moving: paused, an inventory, the workbench, a vote, the report, the Ledger.
+   * The picture behind it is then redrawn only a few times a second, which leaves the frame to the menu itself.
+   */
+  private menuStill(sc: Scene): boolean {
+    if (this.attract || this.benchmark || this.photo) return false;
+    return this.paused || this.phase === 'vote' || this.phase === 'report' || this.phase === 'ledger' || this.phase === 'fail' || this.phase === 'end' || sc.paused;
+  }
+
   private render(alpha: number, dt: number) {
     const renderStart = this.debug || this.benchmark ? performance.now() : 0;
     const sc = this.scene;
     if (!this.attract && this.canvasHidden) this.setCanvasShown(true);
     if (sc && !(this.attract && this.attractWarming) && (this.phase === 'benchmark' || this.phase === 'leg' || this.phase === 'camp' || this.phase === 'ledger' || this.phase === 'vote' || this.phase === 'report' || (this.phase === 'title' && this.attract))) {
+      const still = this.menuStill(sc);
+      if (still) {
+        // Behind a menu: the first frames show the menu's state, then 12 redraws a second keep the camp's fire and a
+        // repainted car alive without the scene's full cost every frame. The canvas holds its last picture meanwhile.
+        this.stillAcc += dt;
+        if (this.stillFrames >= 2 && this.stillAcc < 1 / 12) return;
+        this.stillAcc = 0;
+        this.stillFrames++;
+      } else this.stillFrames = 0;
       sc.renderFrame(this.paused ? 0 : alpha, dt);
       this.applyPhoto();
       if (!this.attract) sc.updateAudio(dt);
-      if (!this.benchmark) this.R.adapt(this.frameMs);
+      // Cheap frames behind a menu say nothing about what play costs: they would push the resolution up.
+      if (!this.benchmark && !still) this.R.adapt(this.frameMs);
       // Particles scale with the viewport.
-      for (let i = 0; i < 2; i++) {
-        const v = this.R.views[i];
+      if (this.viewScaleScene !== sc) {
+        this.viewScaleScene = sc;
         this.R.onBeforeView[0] = (idx, cam) => {
           const rect = this.R.views[idx].rect;
           sc.fx.setViewScale(rect.h * this.R.renderPixelRatio(), cam.fov);
         };
-        void v;
       }
       this.R.render(this.time);
       if (!this.attract && !this.benchmark) this.hud.update(sc, dt, this.input.slots, { legProgress: () => null });

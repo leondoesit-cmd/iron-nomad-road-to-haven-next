@@ -762,6 +762,9 @@ export class GameRenderer {
    */
   compileScene(): Promise<unknown> {
     const gl = this.gl;
+    // three r186 draws PCFSoftShadowMap as PCFShadowMap, switching the type on its first shadow pass. Settle it now, or
+    // every program compiled here is keyed to the old type and compiles again, blocking, on that first frame.
+    if (gl.shadowMap.type === THREE.PCFSoftShadowMap) gl.shadowMap.type = THREE.PCFShadowMap;
     this.scene.environment = this.sky.updateEnv(gl, 1 / 60, QUALITY[this.quality].envEvery);
     const target = gl.getRenderTarget();
     if (this.usePost && this.post) gl.setRenderTarget(this.post.hdr);
