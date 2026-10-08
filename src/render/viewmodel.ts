@@ -11,6 +11,7 @@ import { kitMaterial } from './materials';
 import { DEFAULT_LOOK, drawUpperArm, sleeveColor } from './outfit';
 import { weaponGeometry, type Held, type Humanoid, type Palette } from './humanoid';
 import { MuzzleFlash } from './muzzleFlash';
+import { weaponMaterial } from './weapons';
 import { ARROW_LEN, BRACE, BowRig } from './bow';
 
 /**
@@ -101,13 +102,17 @@ interface Spec {
 // side; the support hand wraps over it from the left, its thumb along the near side under the first; a fore-end is held
 // from the left and below, the back of the hand showing.
 const GRIP_R = (p: V3, a: V3): Grip => ({ p, a, n: [1, 0, 0.35], thumb: 'far' });
-const PISTOL_L: Grip = { p: [0.013, -0.06, 0.045], a: [0, 0.97, -0.25], n: [-1, 0, 0.2], thumb: 'near' };
+/** A pistol grip's line, raked back as the models' are (`PISTOL_RAKE` in `render/weapons/handguns.ts`, 19 degrees). */
+const PISTOL_AXIS: V3 = [0, 0.9455, 0.3256];
+const PISTOL_L: Grip = { p: [0.013, -0.044, 0.002], a: PISTOL_AXIS, n: [-1, 0, 0.2], thumb: 'near' };
+/** The firing hand high on a pistol's grip, the web of the hand up under the beavertail. */
+const PISTOL_R = GRIP_R([0, -0.0306, 0.0069], PISTOL_AXIS);
 const UNDER = (z: number): Grip => ({ p: [0.026, -0.022, z], a: [0, 0, 1], n: [-1, 0.6, 0], thumb: 'near' });
 const HANDLE = (z: number, n: V3 = [1, 0, 0]): Grip => ({ p: [0, 0, z], a: [0, 0, 1], n, thumb: 'wrap' });
 const MELEE_REST: V3 = [1.05, 0.3, 0.12];
 
 const DRAWN_SPECS: Partial<Record<Exclude<Held, 'none'>, Spec>> = {
-  pistol: { hip: [0.075, -0.18, -0.33], ads: 0.38, scale: 1.12, r: GRIP_R([0, -0.045, 0.035], [0, 0.97, -0.25]), l: PISTOL_L },
+  pistol: { hip: [0.075, -0.18, -0.33], ads: 0.38, scale: 1, r: PISTOL_R, l: PISTOL_L },
   revolver: { hip: [0.075, -0.18, -0.33], ads: 0.38, scale: 1.1, r: GRIP_R([0, -0.05, 0.025], [0, 0.955, -0.3]), l: { ...PISTOL_L, p: [0.013, -0.064, 0.035] } },
   smg: { hip: [0.1, -0.24, -0.28], ads: 0.27, scale: 1.05, r: GRIP_R([0, -0.055, 0.035], [0, 0.98, -0.2]), l: UNDER(0.23), long: true },
   sawn: { hip: [0.1, -0.24, -0.27], ads: 0.28, scale: 1.05, r: GRIP_R([0, -0.04, -0.005], [0, 0.94, 0.34]), l: UNDER(0.13), long: true },
@@ -131,8 +136,10 @@ for (const k of Object.keys(DRAWN_SPECS) as Exclude<Held, 'none'>[]) SPECS[k] = 
 // grip (tilted as the grip is), the support hand under the fore-end.
 const PIST = (y: number, z: number, tilt: number): Grip => GRIP_R([0, y - 0.015, z], [0, Math.cos(tilt), -Math.sin(tilt)]);
 const GRIPS: Partial<Record<GunModel, Partial<Spec>>> = {
+  compact: { r: GRIP_R([0, -0.0296, 0.0069], PISTOL_AXIS), l: { ...PISTOL_L, p: [0.013, -0.043, 0.002] } },
   cannon: { r: PIST(-0.045, 0.03, 0.3) },
-  mp: { r: PIST(-0.04, 0, 0.2), l: UNDER(0.15) },
+  // The machine pistol is a pistol in the hands, two of them round its grip, whatever it shares with the SMG underneath.
+  mp: { hip: [0.075, -0.18, -0.33], ads: 0.38, scale: 1, r: PISTOL_R, l: PISTOL_L, long: false },
   smg2: { r: PIST(-0.05, 0.03, 0.2), l: UNDER(0.2) },
   carbine: { r: PIST(-0.05, 0.04, 0.3), l: UNDER(0.36) },
   ar: { r: PIST(-0.06, 0.05, 0.3), l: UNDER(0.5) },
@@ -227,7 +234,13 @@ const FINGERS = [
  * The firing hand's index finger, off the grip and through the guard onto the trigger: along the side of the frame, then
  * curled in, its pad on the blade.
  */
-const TRIGGER_FINGER: [number, number][] = [[-0.034, -0.035], [-0.069, -0.026], [-0.09, -0.011], [-0.088, 0.004]];
+const TRIGGER_FINGER: [number, number][] = [[-0.034, -0.035], [-0.065, -0.027], [-0.082, -0.012], [-0.08, 0.004]];
+/**
+ * How far each of the trigger finger's joints rises up the grip (toward the thumb) from the line of the other fingers: a
+ * grip is raked back, so the fingers round it point a little down, while the trigger finger lies along the frame, level
+ * with the bore.
+ */
+const TRIGGER_RISE = [0, 0.012, 0.02, 0.022];
 /** The middle finger held straight up out of the fist. */
 const BIRD_FINGER: [number, number][] = [[-0.034, -0.035], [-0.078, -0.037], [-0.104, -0.036], [-0.125, -0.034]];
 /** The others closed tight into the palm round nothing, and the thumb laid across them. */
@@ -288,6 +301,7 @@ function drawViewHand(b: MeshBuilder, glove: Surf, fingers: Surf, side: number, 
     const tpl = open ? OPEN_FINGER : bird ? (i === 1 ? BIRD_FINGER : FIST_FINGER) : i === 0 && thumb === 'far' ? TRIGGER_FINGER : FINGER;
     // Spread a little when open, the way a hand relaxes.
     const j = fingerJoints(tpl, sx * f.x * (open ? 1.12 : 1), f.k, f.l);
+    if (tpl === TRIGGER_FINGER) for (let n = 0; n < j.length; n++) j[n][0] += sx * TRIGGER_RISE[n];
     b.limb(j[0][0], j[0][1], j[0][2], j[1][0], j[1][1], j[1][2], f.r * 1.08, f.r, i === 0 ? glove : fingers, 10);
     b.limb(j[1][0], j[1][1], j[1][2], j[2][0], j[2][1], j[2][2], f.r, f.r * 0.93, fingers, 10);
     b.limb(j[2][0], j[2][1], j[2][2], j[3][0], j[3][1], j[3][2], f.r * 0.93, f.r * 0.84, fingers, 10);
@@ -477,7 +491,7 @@ export class ViewModel {
       this.weapon = this.bow.riser;
       return;
     }
-    const m = new THREE.Mesh(weaponGeometry(kind), mat);
+    const m = new THREE.Mesh(weaponGeometry(kind, '', 'hi'), weaponMaterial());
     m.frustumCulled = false;
     this.gun.add(m);
     this.weapon = m;
