@@ -1,6 +1,12 @@
 /* ------------------------------------------------------------------ inventory: menu, supplies, body state */
 /* Loaded by ui/inventory.ts after the main stylesheet. Kept modest: paper tones, thin rules, no glow. */
 
+/* The whole panel takes the pointer (the overlay root lets clicks through to the game): a click on its paper closes an open
+   menu, and the wheel scrolls a column wherever the pointer is over it. */
+.ledger.inv {
+  pointer-events: auto;
+}
+
 /* Split screen: the panel stays inside the half of whoever opened it. */
 .ledger.inv.top {
   inset: 2% 2% 51% 2%;

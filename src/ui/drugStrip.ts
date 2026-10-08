@@ -84,6 +84,7 @@ export function updateDrugStrip(host: HTMLElement, p: Player, c: Campaign, slot:
   const kb = slot?.kind === 'kb' ? live.bindings.kb[slot.set - 1] : null;
   const fb = kb ? `${keyLabel(kb.moveUp)}/${keyLabel(kb.moveDown)}` : '';
   const choose = [digits ? '1-9' : '', p.state === 'foot' ? fb : '', live.mouseSeat === p.index ? 'wheel' : ''].filter(Boolean).join(' · ');
+  s.el.className = digits ? 'drugstrip dig' : 'drugstrip';
   s.el.innerHTML = `<div class="dshead">Drugs<span>the game keeps running</span></div>${rows}<div class="dshint">${escapeHtml(choose)} to choose · ${escapeHtml(take)} or click to take · ${escapeHtml(close)} to close</div>`;
   if (!s.shown) {
     s.el.style.display = 'flex';
