@@ -234,6 +234,10 @@ export class Traveller {
   passed = false;
   /** Someone has hurt them (or a friend of theirs). */
   provoked = false;
+  /** Seconds before they cry out again: fire hurts every tick, and one cry is enough. */
+  hurtCd = 0;
+  /** Seconds before the same vehicle bump can hurt them again: they are shoved clear, not hit every tick. */
+  plowCd = 0;
   /** They have fired on a player: killing them is self-defence. */
   hostile = false;
   /** What they asked for has been answered. */
@@ -581,6 +585,8 @@ export class TravellerSystem {
       tv.fireCd -= dt;
       tv.brainT -= dt;
       tv.stun -= dt;
+      tv.hurtCd -= dt;
+      tv.plowCd -= dt;
       if (tv.brainT <= 0) {
         tv.brainT = 0.2;
         this.think(tv);
@@ -684,7 +690,8 @@ export class TravellerSystem {
     }
 
     // A fight, or running from one.
-    if (def.armed && tv.state !== 'fight' && (tv.aimedT >= 3.2 || tv.provoked)) {
+    // Not while running from one (that would flip fight and flight every tick), and not when too hurt to stand.
+    if (def.armed && tv.state !== 'fight' && tv.state !== 'flee' && tv.hp >= def.hp * 0.3 && (tv.aimedT >= 3.2 || tv.provoked)) {
       this.startFight(tv, tv.threat ?? near);
       return;
     }
@@ -692,7 +699,11 @@ export class TravellerSystem {
       const target = tv.threat;
       if (!target || !target.alive || Math.hypot(target.pos.x - tv.x, target.pos.z - tv.z) > 90 || tv.hp < def.hp * 0.3) {
         if (tv.hp < def.hp * 0.3 || !target?.alive) this.flee(tv, tv.threatX, tv.threatZ);
-        else this.calm(tv, near);
+        else {
+          // Whoever shot at them is long gone: let it go rather than hunting a ghost across the map.
+          tv.provoked = false;
+          this.calm(tv, near);
+        }
       }
       return;
     }
@@ -1031,14 +1042,19 @@ export class TravellerSystem {
     if (tv.dead) return false;
     tv.hp -= amount;
     const ctx = this.ctx;
-    ctx.fx.blood(tv.x, tv.y + 1.2, tv.z, 3);
+    // A burn or a shove hurts a little every tick: blood and a cry once in a while, not a spray and a shout per tick.
+    const cry = tv.hurtCd <= 0;
+    if (cry || amount >= 5) ctx.fx.blood(tv.x, tv.y + 1.2, tv.z, 3);
     const by = killer >= 0 ? ctx.players[killer] : undefined;
     if (tv.hp <= 0) {
       this.kill(tv, killer);
       return true;
     }
     this.provoke(tv, by ?? null, from?.x ?? by?.pos.x ?? tv.x, from?.z ?? by?.pos.z ?? tv.z);
-    this.say(tv, 'hurt', true);
+    if (cry) {
+      tv.hurtCd = 1.6;
+      this.say(tv, 'hurt', true);
+    }
     return false;
   }
 
@@ -1051,8 +1067,11 @@ export class TravellerSystem {
       q.threatX = fromX;
       q.threatZ = fromZ;
       if (q.interact) q.interact.prompt = this.promptFor(q);
-      if (q.def.armed && by) this.startFight(q, by);
-      else this.flee(q, fromX, fromZ);
+      // One already fighting keeps its aim (a fresh start would reset its trigger with every hit it takes).
+      if (q.def.armed && by && q.hp >= q.def.hp * 0.3) {
+        if (q.state !== 'fight') this.startFight(q, by);
+        else q.threat = by;
+      } else this.flee(q, fromX, fromZ);
     }
   }
 
@@ -1068,7 +1087,8 @@ export class TravellerSystem {
     ctx.fx.blood(tv.x, tv.y + 1, tv.z, 8);
     ctx.audio.play('zdie', tv.x, tv.z, 0.6);
     this.killed++;
-    const loot = lootOf(this.rng, tv.kind);
+    // Their things go to whoever killed them; a raider's buggy or a stray fire leaves nothing in the convoy's hold.
+    const loot = killer >= 0 ? lootOf(this.rng, tv.kind) : {};
     if (Object.keys(loot).length) ctx.addLoot(loot, 'raider');
     // Everyone near saw it.
     for (const q of this.list) {
@@ -1144,14 +1164,17 @@ export class TravellerSystem {
     const front = v.def.length / 2;
     const killer = v.driver?.isPlayer ? v.driver.index : -1;
     for (const a of this.list) {
-      if (a.dead) continue;
+      if (a.dead || a.plowCd > 0) continue;
       const rx = a.x - p.x;
       const rz = a.z - p.z;
       if (Math.abs(rx) > 8 || Math.abs(rz) > 8) continue;
       const lz = rx * fx + rz * fz;
       const lx = rx * fz - rz * fx;
       if (lz < front - 1.1 || lz > front + 1.3 || Math.abs(lx) > w + 0.45) continue;
-      const dmg = (14 + sp * 9) * (v.def.tier >= 3 ? 1.5 : v.def.tier === 2 ? 1.1 : 0.8);
+      // A walking-pace bump shoves and bruises; it takes real speed to break someone.
+      const soft = clamp((sp - 3) / 4, 0, 1);
+      const dmg = (14 + sp * 9) * (v.def.tier >= 3 ? 1.5 : v.def.tier === 2 ? 1.1 : 0.8) * (0.12 + 0.88 * soft * soft);
+      a.plowCd = 0.6;
       const killed = this.damage(a, dmg, killer, { x: p.x, z: p.z });
       a.kx += fx * sp * 0.6 - fz * lx * 0.2;
       a.kz += fz * sp * 0.6 + fx * lx * 0.2;

@@ -529,8 +529,10 @@ export class WildlifeSystem {
       return true;
     }
     const ctx = this.ctx;
-    ctx.fx.blood(a.x, a.y + a.height * 0.6, a.z, 2);
-    if (!info.fire) ctx.audio.play(this.cry(a), a.x, a.z, 0.8);
+    if (!info.fire) {
+      ctx.fx.blood(a.x, a.y + a.height * 0.6, a.z, 2);
+      ctx.audio.play(this.cry(a), a.x, a.z, 0.8);
+    }
     this.provoke(a, info.fromX, info.fromZ, info.killer ?? -1);
     return false;
   }
@@ -970,7 +972,11 @@ export class WildlifeSystem {
         a.burn -= dt;
         if (ctx.fires) ctx.fires.hold(a, { x: a.x, y: a.y + a.height * 0.2, z: a.z, r: Math.max(0.14, a.height * 0.3), fuel: 'flesh', heat: Math.min(1, a.burn / 0.8), bed: false, light: 0.6, spreads: true });
         else if (Math.random() < 0.4) ctx.fx.fire(a.x, a.y + 0.4, a.z, 0.3);
-        this.damage(a, 6 * dt, { fromX: a.x, fromZ: a.z, fire: true });
+        // Burning, it bolts: away from whatever it already runs from, else straight on (never "away" from its own feet,
+        // which left it standing still in the flames).
+        const fx = a.state === 'flee' ? a.fearX : a.x - Math.sin(a.yaw) * 10;
+        const fz = a.state === 'flee' ? a.fearZ : a.z - Math.cos(a.yaw) * 10;
+        this.damage(a, 6 * dt, { fromX: fx, fromZ: fz, fire: true, killer: a.lastKiller });
         if (a.dead) continue;
       }
       // An open wound bleeds it out, and leaves a trail to follow.

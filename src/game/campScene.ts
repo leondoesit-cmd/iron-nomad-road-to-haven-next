@@ -906,7 +906,7 @@ export class CampScene extends Scene {
     this.zombies.forEachNear(s.x, s.z, 4, (z) => {
       if (Math.abs(z.x - s.x) < hx + 0.3 && Math.abs(z.z - s.z) < hz + 0.3) {
         z.slow = Math.min(z.slow, 1 - (def.slow ?? 0.6));
-        this.zombies.damage(z, (def.dps ?? 5) * dt, { fromX: s.x, fromZ: s.z, fire: false });
+        this.zombies.damage(z, (def.dps ?? 5) * dt, { fromX: s.x, fromZ: s.z, fire: false, dot: true });
       }
     });
   }
