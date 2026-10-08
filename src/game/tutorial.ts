@@ -271,7 +271,7 @@ const STEPS: Step[] = [
   {
     id: 'pack',
     title: 'Your pack',
-    body: 'Press {inventory} to open your inventory. Armour, masks and boots change what hurts you; guns and tools sit on the four-slot belt. The game waits while it is open.',
+    body: 'Press {inventory} to open your inventory. Armour, masks and boots change what hurts you; guns and tools sit on the four-slot belt. Pick anything for what you can do with it; dressings, food and drugs are under Supplies. The game waits while it is open.',
     goals: [{ id: 'open', label: 'Open the inventory', test: ({ p, d }) => d.seen('inventory', p.index) }],
   },
   {

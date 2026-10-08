@@ -7,6 +7,11 @@
   pointer-events: auto;
 }
 
+/* The pack column's three parts are redrawn on their own; to the column's layout they are not there. */
+.packcol > .pk {
+  display: contents;
+}
+
 /* Split screen: the panel stays inside the half of whoever opened it. */
 .ledger.inv.top {
   inset: 2% 2% 51% 2%;

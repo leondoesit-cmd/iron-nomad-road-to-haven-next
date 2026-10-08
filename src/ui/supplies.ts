@@ -4,6 +4,7 @@ import { NEEDS } from '../sim/needs';
 import { whole } from '../sim/resources';
 import type { Campaign } from '../game/campaign';
 import { itemIcon } from './gearIcons';
+import { drugWord } from '../game/consumables';
 
 /**
  * The things a survivor uses up rather than wears or holds: dressings, food, water and every drug in the pharmacy. They are
@@ -71,24 +72,26 @@ export interface FactLine {
 }
 
 const pct = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
+/** A multiplier too close to 1 to be worth a line. */
+const SMALL = 0.025;
 
 /** A multiplier or an additive effect, in words, and whether it is good for you. Null for what is not worth a line. */
 function effectLine(key: keyof DrugMods, v: number): FactLine | null {
   switch (key) {
     case 'speed':
-      return Math.abs(v - 1) < 0.02 ? null : { text: `${pct(v - 1)} speed`, tone: v > 1 ? 'good' : 'bad' };
+      return Math.abs(v - 1) < SMALL ? null : { text: `${pct(v - 1)} speed`, tone: v > 1 ? 'good' : 'bad' };
     case 'damage':
-      return Math.abs(v - 1) < 0.02 ? null : { text: v < 1 ? `takes ${Math.round((1 - v) * 100)}% less damage` : `takes ${Math.round((v - 1) * 100)}% more damage`, tone: v < 1 ? 'good' : 'bad' };
+      return Math.abs(v - 1) < SMALL ? null : { text: v < 1 ? `takes ${Math.round((1 - v) * 100)}% less damage` : `takes ${Math.round((v - 1) * 100)}% more damage`, tone: v < 1 ? 'good' : 'bad' };
     case 'noise':
-      return Math.abs(v - 1) < 0.02 ? null : { text: `${pct(v - 1)} noise`, tone: v < 1 ? 'good' : 'bad' };
+      return Math.abs(v - 1) < SMALL ? null : { text: `${pct(v - 1)} noise`, tone: v < 1 ? 'good' : 'bad' };
     case 'spread':
-      return Math.abs(v - 1) < 0.02 ? null : { text: `${pct(v - 1)} weapon spread`, tone: v < 1 ? 'good' : 'bad' };
+      return Math.abs(v - 1) < SMALL ? null : { text: `${pct(v - 1)} weapon spread`, tone: v < 1 ? 'good' : 'bad' };
     case 'aggro':
-      return Math.abs(v - 1) < 0.02 ? null : { text: v < 1 ? `the dead notice you ${Math.round((1 - v) * 100)}% later` : `the dead notice you ${Math.round((v - 1) * 100)}% sooner`, tone: v < 1 ? 'good' : 'bad' };
+      return Math.abs(v - 1) < SMALL ? null : { text: v < 1 ? `the dead notice you ${Math.round((1 - v) * 100)}% later` : `the dead notice you ${Math.round((v - 1) * 100)}% sooner`, tone: v < 1 ? 'good' : 'bad' };
     case 'appetite':
-      return Math.abs(v - 1) < 0.02 ? null : { text: v > 1 ? `${pct(v - 1)} hunger` : `${pct(v - 1)} hunger`, tone: v > 1 ? 'bad' : 'good' };
+      return Math.abs(v - 1) < SMALL ? null : { text: v > 1 ? `${pct(v - 1)} hunger` : `${pct(v - 1)} hunger`, tone: v > 1 ? 'bad' : 'good' };
     case 'melee':
-      return Math.abs(v - 1) < 0.02 ? null : { text: `${pct(v - 1)} melee damage`, tone: v > 1 ? 'good' : 'bad' };
+      return Math.abs(v - 1) < SMALL ? null : { text: `${pct(v - 1)} melee damage`, tone: v > 1 ? 'good' : 'bad' };
     case 'shake':
       return v > 0.04 ? { text: 'shaky hands', tone: 'bad' } : v < -0.04 ? { text: 'steadier hands', tone: 'good' } : null;
     case 'regen':
@@ -155,7 +158,7 @@ export function drugFacts(id: DrugId, s: DrugState | null): { effects: FactLine[
   if (def.dep >= 0.1) risks.push({ text: def.dep >= 0.25 ? 'Habit-forming: go without and you will crave it' : 'Mildly habit-forming', tone: 'bad' });
   if (def.tol >= 0.25) risks.push({ text: `Tolerance builds fast: each dose ${Math.round(def.tol * TOL_MAX_CUT * 100)}% weaker than the last`, tone: 'bad' });
   else if (def.tol > 0) risks.push({ text: `Each dose builds a little tolerance (${Math.round(def.tol * TOL_MAX_CUT * 100)}%)`, tone: 'muted' });
-  for (const it of INTERACTIONS) if (it.a === id || it.b === id) risks.push({ text: `With ${DRUGS[it.a === id ? it.b : it.a].name.toLowerCase()}: ${Math.round((it.tox - 1) * 100)}% more toxic`, tone: 'bad' });
+  for (const it of INTERACTIONS) if (it.a === id || it.b === id) risks.push({ text: `With ${drugWord(it.a === id ? it.b : it.a)}: ${Math.round((it.tox - 1) * 100)}% more toxic`, tone: 'bad' });
 
   // How it would land on this body, now.
   const now: FactLine[] = [];
