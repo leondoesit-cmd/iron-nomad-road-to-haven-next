@@ -116,6 +116,8 @@ export class InputManager {
   private mouseDX = 0;
   private mouseDY = 0;
   private mouseBtns = 0;
+  /** Buttons pressed since the last sample, so a trackpad tap (down and up within a few ms) is not lost between ticks. */
+  private mouseTap = 0;
   private wheelAcc = 0;
   /** Whether the game is in a state where clicking should capture the pointer (set by Game). */
   canCapture: () => boolean = () => false;
@@ -128,7 +130,7 @@ export class InputManager {
     this.bindingsChanged();
     target.addEventListener('keydown', (e) => {
       // A pending rebinding takes every key (Esc cancels it for any device), so nothing else reacts, not even the pause key.
-      if (this.pending && (this.pending.device === 'kb' || e.code === 'Escape')) {
+      if (this.pending && (this.pending.device === 'kb' || e.code === 'Escape' || (this.pending.device === 'mouse' && e.code === 'Delete'))) {
         e.preventDefault();
         if (!e.repeat) this.finishCapture(e.code === 'Escape' ? 'cancel' : e.code === 'Delete' ? 'clear' : { value: e.code });
         return;
@@ -144,6 +146,9 @@ export class InputManager {
     });
     target.addEventListener('keyup', (e) => {
       this.keys.delete(e.code);
+      // macOS sends no keyup for keys let go while Cmd is down (Cmd+Shift+4 does not even blur the window), so drop them
+      // all when Cmd comes up; any still held come straight back on the next auto-repeat.
+      if (e.code === 'MetaLeft' || e.code === 'MetaRight') this.keys.clear();
     });
     target.addEventListener('blur', () => this.keys.clear());
     target.addEventListener('gamepaddisconnected', (e) => {
@@ -186,6 +191,7 @@ export class InputManager {
         return;
       }
       this.mouseBtns |= 1 << e.button;
+      this.mouseTap |= 1 << e.button;
       e.preventDefault();
     });
     this.target.addEventListener('mouseup', (e) => {
@@ -196,8 +202,10 @@ export class InputManager {
       (e) => {
         if (!this.mouseLocked) return;
         e.preventDefault();
-        // Trackpads send many small deltas; a notch is a mouse wheel click or a swipe's worth.
-        this.wheelAcc += e.deltaMode === 0 ? e.deltaY / 60 : e.deltaY;
+        // Trackpads send many small deltas; a notch is a mouse wheel click or a swipe's worth. Firefox counts lines (3 a
+        // notch) and Windows Chrome 100 px a notch, so go through pixels and never bank more than about one step.
+        const px = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 800 : e.deltaY;
+        this.wheelAcc = Math.max(-1.2, Math.min(1.2, this.wheelAcc + px / 70));
       },
       { passive: false },
     );
@@ -512,6 +520,8 @@ export class InputManager {
           } else this.shareT[p] = 0;
           held = lt > 0.12 ? held | (1 << Btn.LT) : held & ~(1 << Btn.LT);
           held = rt > 0.12 ? held | (1 << Btn.RT) : held & ~(1 << Btn.RT);
+          // Start is reserved, never bound to an action, so it passes straight through: it pauses and starts a run.
+          if (phys & (1 << Btn.Start)) held |= 1 << Btn.Start;
           handbrake = !!(held & (1 << Btn.A));
           sprint = !!(held & (1 << Btn.L3));
         }
@@ -521,7 +531,8 @@ export class InputManager {
         const k = bind.kb[slot.set - 1];
         const key = (a: ActionId) => {
           const c = k[a];
-          return !!c && this.keys.has(c);
+          // A tap that went down and up between two ticks still counts once.
+          return !!c && (this.keys.has(c) || this.keyPressedThisTick.has(c));
         };
         const tx = (key('moveRight') ? 1 : 0) - (key('moveLeft') ? 1 : 0);
         const ty = (key('moveUp') ? 1 : 0) - (key('moveDown') ? 1 : 0);
@@ -561,7 +572,7 @@ export class InputManager {
           it.aimAssist = this.settings.aimAssist[p] * 0.6;
           for (const a of actionsFor('mouse')) {
             const mb = bind.mouse[a.id];
-            if (mb !== undefined && this.mouseBtns & (1 << mb)) apply(a.id);
+            if (mb !== undefined && (this.mouseBtns | this.mouseTap) & (1 << mb)) apply(a.id);
           }
         }
       } else {
@@ -641,6 +652,7 @@ export class InputManager {
       }
     }
     this.keyPressedThisTick.clear();
+    this.mouseTap = 0;
   }
 
   /** Rumble where the browser supports it (Chrome and Edge). Silently ignored elsewhere. */

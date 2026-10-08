@@ -169,7 +169,8 @@ export class AudioEngine {
     if (['pistol', 'shotgun', 'mg', 'sniper', 'boom', 'horn', 'crash', 'carPanel', 'glass', 'tink', 'chip', 'tirePuncture', 'ricochet', 'siren', 'alarm'].includes(id) || id.startsWith('engine') || id === 'starterFail') return 1;
     return 1 - 0.7 * (this.cabin[i] ?? 0);
   }
-  private bedDuck() { return 1 - 0.7 * Math.max(this.cabin[0], this.solo ? 0 : this.cabin[1]); }
+  /** The beds are shared by both halves, so they only give way when everyone listening sits in a running cab. */
+  private bedDuck() { return 1 - 0.7 * (this.solo ? this.cabin[0] : Math.min(this.cabin[0], this.cabin[1])); }
 
   /** Must be called from a user gesture. */
   init() {
@@ -246,6 +247,8 @@ export class AudioEngine {
 
     this.spatial = new SpatialAudioEngine(ctx);
     this.spatial.setSolo(this.solo);
+    // A scene built before the first click (the title demo) handed its occlusion test over already.
+    this.spatial.setOcclusionTester(this.occlusion);
 
     this.radio = new RadioAudioEngine(ctx, this.samples);
     this.radio.setVolume(this.volume);
@@ -321,7 +324,10 @@ export class AudioEngine {
     if (this.spatial) this.spatial.setIndoor(indoor);
   }
 
+  /** The live scene's occlusion test, kept even before the audio context exists. */
+  occlusion: OcclusionTester | null = null;
   setOcclusionTester(fn: OcclusionTester | null) {
+    this.occlusion = fn;
     if (this.spatial) this.spatial.setOcclusionTester(fn);
   }
 

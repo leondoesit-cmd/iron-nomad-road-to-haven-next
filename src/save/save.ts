@@ -59,10 +59,13 @@ export async function initSave(): Promise<void> {
 
 /** Written at every Dawn Ledger. */
 export function saveCampaign(c: Campaign) {
-  const blob: Blob = { ...c.serialize(), v: SAVE_VERSION };
+  // `serialize` hands back the live campaign's own objects: keep a frozen-in-time copy (what a reload would read), or
+  // every change made after the save would leak into "Retry from the last Ledger".
+  const json = JSON.stringify({ ...c.serialize(), v: SAVE_VERSION });
+  const blob: Blob = JSON.parse(json);
   mem = blob;
   try {
-    localStorage.setItem(KEY, JSON.stringify(blob));
+    localStorage.setItem(KEY, json);
   } catch {
     /* quota or private mode */
   }
@@ -88,7 +91,8 @@ export function savedSolo(): boolean {
 export function loadCampaign(): Campaign | null {
   if (!mem) return null;
   try {
-    return Campaign.deserialize(mem as Parameters<typeof Campaign.deserialize>[0]);
+    // A fresh copy each time: the campaign that comes back must never share objects with the stored snapshot.
+    return Campaign.deserialize(JSON.parse(JSON.stringify(mem)) as Parameters<typeof Campaign.deserialize>[0]);
   } catch {
     return null;
   }

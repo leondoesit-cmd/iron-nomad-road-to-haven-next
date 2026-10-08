@@ -1142,10 +1142,9 @@ export abstract class Scene implements Ctx {
 
   dispose() {
     this.disposed = true;
-    if (this.audio.spatial?.occlusionTester === this.occlusion) this.audio.setOcclusionTester?.(null);
-    if ('stopRadioChatter' in this.audio && typeof this.audio.stopRadioChatter === 'function') {
-      this.audio.stopRadioChatter();
-    }
+    if (this.audio.occlusion === this.occlusion) this.audio.setOcclusionTester?.(null);
+    // A radio line in flight (its voice, carrier and duck) ends with the scene that sent it.
+    this.audio.silenceRadio?.();
     // Only clear the hooks if a newer scene has not already taken them over.
     if (this.R.onBeforeView[2] === this.beforeViewHook) this.R.onBeforeView[2] = () => {};
     if (this.R.onBeforeView[3] === this.weather.beforeView) this.R.onBeforeView[3] = () => {};

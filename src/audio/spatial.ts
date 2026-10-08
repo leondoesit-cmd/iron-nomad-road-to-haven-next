@@ -68,7 +68,9 @@ export class SpatialAudioEngine {
     set(route.filter.frequency, cutoff); route.filter.Q.value = lerp(0.7, 1.2, occ);
     if (smooth) set(route.gain.gain, attenuation); else route.gain.gain.value = attenuation;
     const yaw = listener.yaw ?? 0;
-    const localX = dx * Math.cos(yaw) - dz * Math.sin(yaw);
+    // The listener faces (sin yaw, cos yaw); its right hand is (-cos yaw, sin yaw), the same as the camera's screen right.
+    // Web Audio hears +x on the right and -z ahead.
+    const localX = -dx * Math.cos(yaw) + dz * Math.sin(yaw);
     const localZ = -(dx * Math.sin(yaw) + dz * Math.cos(yaw));
     if ('positionX' in route.panner) {
       const p = route.panner as PannerNode;
