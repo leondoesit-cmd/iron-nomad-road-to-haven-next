@@ -12,7 +12,7 @@ import { WorldMemory, type WorldPose } from './worldMemory';
 import { Scene, type SceneResult, type SceneServices } from './scene';
 import { initPhysics, FIXED_STEP } from '../physics/physics';
 import { LEGS, legById, t, validateData } from '../data';
-import { Overlays } from '../ui/overlays';
+import { Overlays, loadGuide } from '../ui/overlays';
 import { CampScene } from './campScene';
 import type { CampLand } from '../render/campArena';
 import { forestAt, lushAt, woodsAt } from '../world/hydro';
@@ -234,6 +234,8 @@ export class Game {
       }
       perf.measure('prep:world', t0);
       this.worldReady = true;
+      // The illustrated guide's chunk, so How to play opens at once.
+      loadGuide().catch(() => {});
     })());
   }
 

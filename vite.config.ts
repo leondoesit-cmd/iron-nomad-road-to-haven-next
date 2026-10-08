@@ -31,6 +31,9 @@ export default defineConfig({
     writeBundle(options) {
       cpSync(publicDir, resolve(options.dir!), { recursive: true, filter: source => {
         const path = relative(publicDir, source).split('\\').join('/');
+        // The reference photographs behind the portrait tool (`&ref=` in dev) are not part of the game: 7 MB of people's
+        // pictures stay out of a release.
+        if (path === 'characters' || path.startsWith('characters/')) return false;
         return !(path.startsWith('audio/') && packed[path.slice(6)]);
       } });
     },

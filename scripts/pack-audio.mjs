@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
 // Keep recording masters and credits. Ship smaller Opus derivatives, decoded once by Web Audio.
+// 48 kbps mono / 96 kbps stereo (VBR): Opus is transparent there for effects and field recordings, and the whole bank is
+// a quarter smaller than at 64 / 128.
+const ENCODING = 'mono48-stereo96-v2';
 const root = fileURLToPath(new URL('../public/audio/', import.meta.url));
 const out = resolve(root, 'packed');
 mkdirSync(out, { recursive: true });
@@ -16,7 +19,7 @@ let originalBytes = 0, packedBytes = 0;
 for (const file of readdirSync(root).filter(f => f.endsWith('.wav')).sort()) {
   const source = resolve(root, file), sourceSha256 = hash(readFileSync(source));
   const name = file.replace(/\.wav$/, '.ogg'), target = resolve(out, name);
-  const cached = previous.find(e => e.originalFile === file && e.sourceSha256 === sourceSha256 && e.codec === 'opus' && e.encoding === 'mono64-stereo128-v1');
+  const cached = previous.find(e => e.originalFile === file && e.sourceSha256 === sourceSha256 && e.codec === 'opus' && e.encoding === ENCODING);
   if (cached && (() => { try { return hash(readFileSync(target)) === cached.sha256; } catch { return false; } })()) {
     mapping[file] = `packed/${name}`;
     entries.push(cached);
@@ -27,7 +30,7 @@ for (const file of readdirSync(root).filter(f => f.endsWith('.wav')).sort()) {
   if (!stream || stream.channels > 2) continue;
   const temp = target + '.tmp';
   try {
-    const bitrate = stream.channels === 1 ? '64k' : '128k';
+    const bitrate = stream.channels === 1 ? '48k' : '96k';
     execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', source, '-map', '0:a:0', '-map_metadata', '-1', '-c:a', 'libopus', '-b:a', bitrate,
       '-vbr', 'on', '-application', 'audio', '-compression_level', '10', '-f', 'ogg', temp]);
     const encoded = inspect(temp);
@@ -37,7 +40,7 @@ for (const file of readdirSync(root).filter(f => f.endsWith('.wav')).sort()) {
       throw new Error(`Channel count or decoded duration changed: ${file}`);
     const bytes = statSync(temp).size, sourceBytes = statSync(source).size;
     if (bytes >= sourceBytes) continue;
-    const entry = { file: `packed/${name}`, originalFile: file, sourceSha256, sha256: hash(readFileSync(temp)), codec: 'opus', encoding: 'mono64-stereo128-v1', bitrate,
+    const entry = { file: `packed/${name}`, originalFile: file, sourceSha256, sha256: hash(readFileSync(temp)), codec: 'opus', encoding: ENCODING, bitrate,
       sampleRate: Number(encoded.sample_rate), channels: encoded.channels, duration, originalBytes: sourceBytes, bytes };
     renameSync(temp, target);
     mapping[file] = entry.file; entries.push(entry);
