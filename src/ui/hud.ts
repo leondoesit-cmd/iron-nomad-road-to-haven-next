@@ -153,14 +153,21 @@ class PlayerHud {
     this.q.get(k)!.className = `${base} ${v}`.trim();
   }
 
+  private compassW = 0;
+  private compassH = 0;
   drawCompass(camYaw: number, pins: CompassPin[], from: { x: number; z: number }, partner: { x: number; z: number } | null, pcolor: string, partnerColor: string, scale: number) {
     const c = this.compass;
     // Centred between the noise panel and the minimap, so it narrows in a half-width view instead of colliding with them.
     const hostW = this.root.clientWidth || 640;
     const W = Math.round(Math.max(140, Math.min(340 * scale, hostW - 2 * 190 * scale)));
     const H = Math.round(42 * scale);
-    c.style.width = `${W}px`;
-    c.style.height = `${H}px`;
+    // Twenty times a second: only touch the canvas's box when it changes, so a still HUD costs no style work.
+    if (this.compassW !== W || this.compassH !== H) {
+      this.compassW = W;
+      this.compassH = H;
+      c.style.width = `${W}px`;
+      c.style.height = `${H}px`;
+    }
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     if (this.dpr !== dpr || c.width !== W * dpr) {
       this.dpr = dpr;

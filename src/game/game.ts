@@ -251,6 +251,8 @@ export class Game {
     this.urgent = true;
     const t0 = perf.mark(`load:${label}`);
     this.veil.show(label);
+    // The menu under the veil takes no more presses (the veil already takes the mouse).
+    this.focus.active = false;
     // The demo behind the title has nothing more to show: free the frame for the loading.
     if (this.attract) this.disposeScene();
     void (async () => {
@@ -261,7 +263,10 @@ export class Game {
         await this.warmScene(true);
       } catch (error) {
         console.error(`Loading ${label} failed`, error);
-        if (this.phase === 'title') this.attractDue = true;
+        if (this.phase === 'title') {
+          this.overlays.showTitle();
+          this.attractDue = true;
+        }
       } finally {
         this.loading = false;
         this.urgent = false;
