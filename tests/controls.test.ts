@@ -424,7 +424,7 @@ describe('saved control settings', () => {
     a.settings.lookSens = [1.7, 0.6];
     a.settings.invertLookY = [true, false];
     a.settings.toggleCrouch = [false, true];
-    a.settings.firstPerson = [true, false];
+    a.settings.vehicleView = ['first', 'third'];
     a.settings.fpFov = 90;
     assignBinding('kb', a.settings.bindings.kb[0], 'fire', 'KeyJ');
     const saved = JSON.parse(JSON.stringify(a.exportSettings()));
@@ -438,6 +438,22 @@ describe('saved control settings', () => {
     expect(c.settings.deadzone).toBe(defaultSettings().deadzone);
     expect(c.settings.toggleCrouch).toEqual([true, true]);
     expect(c.settings.toggleSprint).toEqual([true, true]);
+  });
+
+  it('an old save with the single first-person switch loads with the vehicle camera behind, and junk is ignored', () => {
+    // Before the vehicle camera, `firstPerson` was one switch for everywhere. It is not carried over: on foot is the eyes
+    // anyway, and the vehicle camera starts on the chase view, as it does for everybody.
+    const old = new InputManager(new EventTarget() as unknown as Window);
+    old.importSettings({ firstPerson: [true, true], fpFov: 95 });
+    expect(old.settings.vehicleView).toEqual(['third', 'third']);
+    expect(old.settings.fpFov).toBe(95);
+    expect('firstPerson' in old.exportSettings()).toBe(false);
+    const bad = new InputManager(new EventTarget() as unknown as Window);
+    bad.importSettings({ vehicleView: ['first', 'sideways'] });
+    expect(bad.settings.vehicleView).toEqual(['third', 'third']);
+    const good = new InputManager(new EventTarget() as unknown as Window);
+    good.importSettings({ vehicleView: ['third', 'first'] });
+    expect(good.settings.vehicleView).toEqual(['third', 'first']);
   });
 });
 
@@ -460,25 +476,123 @@ const tap = (h: ReturnType<typeof leg>, i: 0 | 1, btn: number) => {
   run(h.sc, DT);
 };
 
+/** Into the nearest seat of the player's own vehicle, through the driver's door. */
+function driveOwn(h: ReturnType<typeof leg>, i: 0 | 1) {
+  const p = h.sc.players[i];
+  const v = p.ownVehicle!;
+  const [x, , z] = v.doorPos(1);
+  p.placeAt(x, z, 0);
+  run(h.sc, 0.3);
+  expect(p.tryEnter()).toBe(true);
+  run(h.sc, 2);
+  expect(p.state).toBe('driving');
+  return v;
+}
+
 describe('first and third person', () => {
-  it('the View button switches a seat on foot, remembers it, and switches back', () => {
+  it('on foot the view is always the eyes, and the View button does not change it', () => {
     const h = leg();
     const p = h.sc.players[0];
+    expect(p.state).toBe('foot');
+    expect(p.firstPerson).toBe(true);
+    expect(h.sc.players[1].firstPerson).toBe(true);
+    tap(h, 0, Btn.View);
+    expect(p.firstPerson).toBe(true);
+    // The settings are untouched, and the first press says why, once.
+    expect(h.input.settings.vehicleView).toEqual(['third', 'third']);
+    expect(p.notes.some((n) => /own eyes/.test(n.text))).toBe(true);
+    const notes = p.notes.length;
+    tap(h, 0, Btn.View);
+    expect(p.firstPerson).toBe(true);
+    expect(p.notes.length).toBe(notes);
+    h.sc.dispose();
+  }, 60000);
+
+  it('in a vehicle the camera starts behind it, and View switches it there and back, remembered for the seat', () => {
+    const h = leg();
+    const p = h.sc.players[0];
+    driveOwn(h, 0);
     expect(p.firstPerson).toBe(false);
     tap(h, 0, Btn.View);
     expect(p.firstPerson).toBe(true);
-    expect(h.input.settings.firstPerson[0]).toBe(true);
-    expect(h.input.settings.firstPerson[1]).toBe(false);
+    expect(h.input.settings.vehicleView).toEqual(['first', 'third']);
     tap(h, 0, Btn.View);
     expect(p.firstPerson).toBe(false);
-    expect(h.input.settings.firstPerson[0]).toBe(false);
+    expect(h.input.settings.vehicleView).toEqual(['third', 'third']);
+    // Out of the car it is the eyes again, whatever the vehicle camera is.
+    p.exitVehicle(false);
+    expect(p.firstPerson).toBe(true);
+    h.sc.dispose();
+  }, 60000);
+
+  it('the vehicle camera setting decides how a seat starts in a vehicle', () => {
+    const h = fakeServices();
+    h.input.settings.vehicleView = ['first', 'third'];
+    const sc = new LegScene(h.svc, legById('L1'));
+    run(sc, 0.5);
+    expect(sc.players[0].state).toBe('driving');
+    expect(sc.players[0].firstPerson).toBe(true);
+    expect(sc.players[1].firstPerson).toBe(false);
+    sc.dispose();
+  }, 60000);
+
+  it('keeps the third-person exceptions: the inventory turntable, camp building, the title demo, staging, out cold', () => {
+    const h = leg();
+    const p = h.sc.players[0];
+    expect(p.firstPerson).toBe(true);
+    p.showcase = { a: 0, side: 0 };
+    expect(p.firstPerson).toBe(false);
+    p.showcase = null;
+    p.buildMode = true;
+    expect(p.firstPerson).toBe(false);
+    p.buildMode = false;
+    p.autopilot = { speed: 10 };
+    expect(p.firstPerson).toBe(false);
+    p.autopilot = null;
+    p.staged = true;
+    expect(p.firstPerson).toBe(false);
+    p.staged = false;
+    p.state = 'downed';
+    expect(p.firstPerson).toBe(false);
+    p.state = 'foot';
+    expect(p.firstPerson).toBe(true);
+    h.sc.dispose();
+  }, 60000);
+
+  it('getting out glides the camera from behind the car into the eyes, and only then hides the body', () => {
+    const h = leg();
+    const p = h.sc.players[0];
+    const body = (p.human as unknown as { bodyMeshes: THREE.Mesh[] }).bodyMeshes;
+    const v = driveOwn(h, 0);
+    for (let i = 0; i < 30; i++) h.sc.renderFrame(1, DT);
+    const chase = h.R.views[0].camera.position.clone();
+    expect(chase.distanceTo(v.position)).toBeGreaterThan(2.5);
+    p.exitVehicle(false);
+    run(h.sc, DT);
+    h.sc.renderFrame(1, DT);
+    const cam = h.R.views[0].camera.position;
+    // The first frame out is still near where the chase camera was, not at the head.
+    expect(cam.distanceTo(chase)).toBeLessThan(1);
+    expect(p.viewEyes).toBe(false);
+    (h.R.onBeforeView[2] as (i: number) => void)(0);
+    expect(body.every((m) => m.visible)).toBe(true);
+    (h.R.onAfterView[0] as (i: number) => void)(0);
+    expect((h.R.views[0] as { first?: boolean }).first).toBeFalsy();
+    // A moment later it is at the eyes, the body is hidden from its owner, and the renderer is in first person.
+    for (let i = 0; i < 30; i++) h.sc.renderFrame(1, DT);
+    expect(p.viewEyes).toBe(true);
+    expect(cam.y - p.pos.y).toBeGreaterThan(1.4);
+    expect(Math.hypot(cam.x - p.pos.x, cam.z - p.pos.z)).toBeLessThan(0.3);
+    (h.R.onBeforeView[2] as (i: number) => void)(0);
+    expect(body.every((m) => !m.visible)).toBe(true);
+    (h.R.onAfterView[0] as (i: number) => void)(0);
+    expect((h.R.views[0] as { first?: boolean }).first).toBe(true);
     h.sc.dispose();
   }, 60000);
 
   it('the camera sits at the eyes and looks along the aim', () => {
     const h = leg();
     const p = h.sc.players[0];
-    tap(h, 0, Btn.View);
     p.aimYaw = 0.6;
     p.aimPitch = 0.2;
     h.sc.renderFrame(1, DT);
@@ -491,16 +605,15 @@ describe('first and third person', () => {
     cam.getWorldDirection(d);
     expect(Math.atan2(d.x, d.z)).toBeCloseTo(0.6, 1);
     expect(Math.asin(d.y)).toBeCloseTo(0.2, 1);
-    // The renderer is told this view is first person.
+    // The renderer is told this view is first person (both seats are on foot, so both are).
     expect((h.R.views[0] as { first?: boolean }).first).toBe(true);
-    expect((h.R.views[1] as { first?: boolean }).first).toBeFalsy();
+    expect((h.R.views[1] as { first?: boolean }).first).toBe(true);
     h.sc.dispose();
   }, 60000);
 
   it('crouching lowers the eyes', () => {
     const h = leg();
     const p = h.sc.players[0];
-    tap(h, 0, Btn.View);
     h.sc.renderFrame(1, DT);
     const stand = h.R.views[0].camera.position.y - p.pos.y;
     tap(h, 0, Btn.B);
@@ -514,7 +627,6 @@ describe('first and third person', () => {
     const p = h.sc.players[0];
     const body = (p.human as unknown as { bodyMeshes: THREE.Mesh[] }).bodyMeshes;
     expect(body.length).toBeGreaterThan(5);
-    tap(h, 0, Btn.View);
     (h.R.onBeforeView[2] as (i: number) => void)(0);
     expect(body.every((m) => !m.visible)).toBe(true);
     (h.R.onAfterView[0] as (i: number) => void)(0);
@@ -526,25 +638,24 @@ describe('first and third person', () => {
     h.sc.dispose();
   }, 60000);
 
-  it('leaving a seat in third person never hides anyone', () => {
+  it('a seat in third person never hides anyone', () => {
     const h = leg();
     const p = h.sc.players[0];
-    const body = (p.human as unknown as { bodyMeshes: THREE.Mesh[] }).bodyMeshes;
+    const v = driveOwn(h, 0);
+    const driver = v.visual.driver!;
+    h.sc.renderFrame(1, DT);
+    expect(driver.root.visible).toBe(true);
     (h.R.onBeforeView[2] as (i: number) => void)(0);
-    expect(body.every((m) => m.visible)).toBe(true);
+    expect(driver.root.visible).toBe(true);
+    (h.R.onAfterView[0] as (i: number) => void)(0);
+    expect(p.firstPerson).toBe(false);
     h.sc.dispose();
   }, 60000);
 
   it('driving in first person puts the eyes at the driver and hides the driver; look springs back', () => {
     const h = leg();
     const p = h.sc.players[0];
-    const v = p.ownVehicle!;
-    const [x, , z] = v.doorPos(1);
-    p.placeAt(x, z, 0);
-    run(h.sc, 0.3);
-    expect(p.tryEnter()).toBe(true);
-    run(h.sc, 2);
-    expect(p.state).toBe('driving');
+    const v = driveOwn(h, 0);
     tap(h, 0, Btn.View);
     expect(p.firstPerson).toBe(true);
     h.sc.renderFrame(1, DT);

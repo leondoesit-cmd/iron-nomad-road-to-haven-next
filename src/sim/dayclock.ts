@@ -23,8 +23,15 @@ export const DUSK_BELL_AT = 0.72;
 export const DUSK_WARN_AT = 0.62;
 export const SUNSET_AT = 0.9;
 export const NIGHT_AT = 1.0;
+/**
+ * Night camp off (the default): a night played out on the road ends here, and the clock turns over to the next morning
+ * (t back to 0, a new day). About four minutes of full dark at the usual day length.
+ */
+export const DAWN_AT = 1.35;
+/** The sky starts to grey this long before `DAWN_AT`, so the light at the turnover meets the next morning's without a jump. */
+export const PREDAWN_AT = 1.24;
 
-/** The Dusk Bell clock: dawn at 0, noon around 0.42, the Bell rings at 0.72, dark at 1.0. */
+/** The Dusk Bell clock: dawn at 0, noon around 0.42, the Bell rings at 0.72, dark at 1.0 (and, played through, dawn again at 1.35). */
 export class DayClock {
   elapsed = 0;
   bellRung = false;
@@ -62,12 +69,22 @@ export class DayClock {
     }
     return { bell: false, warn };
   }
+  /** Seconds of dark left until a night played out on the road turns into the next morning. */
+  get secondsToDawn() {
+    return Math.max(0, (DAWN_AT - this.t) * this.dayLength);
+  }
   /** Jump to the Bell (used when the convoy reaches the end of the road early). */
   skipToDusk() {
     if (this.t < DUSK_BELL_AT) {
       this.elapsed = DUSK_BELL_AT * this.dayLength;
       this.warned = true;
     }
+  }
+  /** The next morning: first light again, with the heads-up and the Bell still to come. */
+  newDay() {
+    this.elapsed = 0;
+    this.bellRung = false;
+    this.warned = false;
   }
 }
 
@@ -94,8 +111,30 @@ const PAL = {
   },
 };
 
-/** Lighting for a given clock value. Pure so it can be unit-tested and reused for the camp scene. */
+/**
+ * Lighting for a given clock value. Pure so it can be unit-tested and reused for the camp scene. Past `PREDAWN_AT` (a night
+ * played out on the road) the dark greys toward the next morning's light, so the clock's turnover at `DAWN_AT` is seamless.
+ */
 export function lightAt(t: number, biome: 'wasteland' | 'city'): LightState {
+  if (t <= PREDAWN_AT) return lightCore(t, biome);
+  const k = smoothstep(PREDAWN_AT, DAWN_AT, t);
+  const a = lightCore(1.12, biome);
+  const b = lightCore(0, biome);
+  return {
+    elevation: lerp(a.elevation, b.elevation, k),
+    azimuth: lerp(a.azimuth, b.azimuth, k),
+    sunColor: mix(a.sunColor, b.sunColor, k),
+    sunIntensity: lerp(a.sunIntensity, b.sunIntensity, k),
+    hemiSky: mix(a.hemiSky, b.hemiSky, k),
+    hemiGround: mix(a.hemiGround, b.hemiGround, k),
+    hemiIntensity: lerp(a.hemiIntensity, b.hemiIntensity, k),
+    fog: mix(a.fog, b.fog, k),
+    sky: mix(a.sky, b.sky, k),
+    night: lerp(a.night, b.night, k),
+  };
+}
+
+function lightCore(t: number, biome: 'wasteland' | 'city'): LightState {
   const p = PAL[biome];
   // Sun arc: rises 0..0.08, high mid-day, sets around 0.9.
   const arc = Math.sin(clamp01((t - 0.0) / 0.95) * Math.PI);

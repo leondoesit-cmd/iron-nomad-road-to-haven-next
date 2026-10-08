@@ -72,6 +72,11 @@ export interface SceneServices {
   onSubtitle?: (text: string, secs?: number) => void;
   onTip: (id: string) => void;
   onBanner?: (title: string, sub: string) => void;
+  /**
+   * The night camp setting: true, the Dusk Bell calls a camp and a night raid as it always did; false (the default, and
+   * when missing), the night can be rested through or played out on the road, and a camp is an opt-in for the night's haul.
+   */
+  nightCamp?: () => boolean;
 }
 
 /** Shared runtime for a leg or a camp. Implements Ctx so every entity talks to one interface. */
@@ -797,6 +802,14 @@ export abstract class Scene implements Ctx {
     }
   }
 
+  /** A new day in the same scene (a night played out on the road): the day's storm and heat are looked up afresh. */
+  protected resetDayWeather() {
+    this.stormWin = undefined;
+    this.stormTold = 0;
+    this.stormForeTold = false;
+    this.heatTold = 0;
+  }
+
   private tickNight() {
     const light = lightMix(this.clock.t, this.lightCity);
     this.night = light.night;
@@ -855,7 +868,7 @@ export abstract class Scene implements Ctx {
       }
       v.active = true;
       p.cam.apply(v.camera);
-      R.setViewMode(i, p.firstPerson, this.input.settings.fpFov, this.input.settings.chaseFov, this.input.settings.fpLens);
+      R.setViewMode(i, p.viewEyes, this.input.settings.fpFov, this.input.settings.chaseFov, this.input.settings.fpLens);
       this.syncTrip(i, p, dt);
       v.focus.set(p.pos.x, p.pos.y, p.pos.z);
       if (p.vehicle) v.focus.set(p.vehicle.position.x, p.vehicle.position.y, p.vehicle.position.z);
@@ -1212,7 +1225,10 @@ export type SceneResult =
   | { type: 'campDone' }
   | { type: 'encounter'; id: string; spotId: string }
   | { type: 'traveller'; mode: 'trade' | 'request'; id: number }
-  | { type: 'dusk' }
+  /** The convoy stops for the night. `free`: night camp is off, so it is a choice (rest, camp, or carry on), not a camp vote. */
+  | { type: 'dusk'; free?: boolean }
+  /** Night camp off: a night played out on the road has turned into the next morning (the scene carries on; the game saves). */
+  | { type: 'dawn' }
   | { type: 'haven' }
   | { type: 'delveEnter'; site: DelveSite }
   | { type: 'delveExit'; reason: 'climb' | 'lift' | 'rescue' };

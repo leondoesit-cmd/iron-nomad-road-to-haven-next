@@ -135,6 +135,9 @@ describe('Iati', () => {
     const p = sc.players[0];
     p.exitVehicle(false);
     p.grounded = true;
+    // The relax idle is a third-person flourish (the first-person arms would vanish with it): on foot the view is always the
+    // eyes now, so it is seen on a staged camera (the dawn camp, the Ledger, a photo).
+    p.staged = true;
     const stocks = { ...host.svc.campaign.items };
     for (let i = 0; i < 240; i++) p.syncVisual(1, 1 / 60);
     expect(p.human.leisure).toBe('relax');

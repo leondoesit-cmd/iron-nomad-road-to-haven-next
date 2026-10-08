@@ -19,6 +19,9 @@ import {
 
 export type Slot = { kind: 'pad'; index: number } | { kind: 'kb'; set: 1 | 2 };
 
+/** The camera in a vehicle: behind it (the default) or through the eyes in the seat. On foot it is always the eyes. */
+export type VehicleView = 'third' | 'first';
+
 export interface Settings {
   /** Per-player options, per the pause menu. */
   rumble: [boolean, boolean];
@@ -35,8 +38,13 @@ export interface Settings {
   lookSens: [number, number];
   /** Turn speed of the keyboard look keys. */
   keyTurn: number;
-  /** Which seat is currently in first person; remembered between legs and runs. */
+  /**
+   * Legacy: the old single view switch. On foot the camera is always first person now, and the camera in a vehicle is
+   * `vehicleView`; this is no longer read, saved or loaded, and stays only so older code and tests that set it still compile.
+   */
   firstPerson: [boolean, boolean];
+  /** Per seat, the camera while driving, at a gun or riding along: the chase view (the default) or the eyes. */
+  vehicleView: [VehicleView, VehicleView];
   /** Horizontal field of view in first person, degrees. */
   fpFov: number;
   /** Horizontal field of view of the chase camera, degrees. */
@@ -58,6 +66,7 @@ export const defaultSettings = (): Settings => ({
   lookSens: [1, 1],
   keyTurn: 1,
   firstPerson: [false, false],
+  vehicleView: ['third', 'third'],
   fpFov: 100,
   chaseFov: 110,
   fpLens: 0.7,
@@ -413,7 +422,7 @@ export class InputManager {
       deadzone: s.deadzone,
       lookSens: s.lookSens,
       keyTurn: s.keyTurn,
-      firstPerson: s.firstPerson,
+      vehicleView: s.vehicleView,
       fpFov: s.fpFov,
       chaseFov: s.chaseFov,
       fpLens: s.fpLens,
@@ -434,7 +443,10 @@ export class InputManager {
     s.invertLookY = pair(r.invertLookY, isBool, s.invertLookY);
     s.toggleCrouch = pair(r.toggleCrouch, isBool, s.toggleCrouch);
     s.toggleSprint = pair(r.toggleSprint, isBool, s.toggleSprint);
-    s.firstPerson = pair(r.firstPerson, isBool, s.firstPerson);
+    // An old save's `firstPerson` was one switch for everything. It is not carried over: on foot is first person now
+    // whatever it said, and the vehicle camera starts on the chase view until it is chosen again.
+    const isView = (x: unknown): x is VehicleView => x === 'third' || x === 'first';
+    s.vehicleView = pair(r.vehicleView, isView, s.vehicleView);
     const aa = pair(r.aimAssist, isNum, s.aimAssist);
     s.aimAssist = [clamp(aa[0], 0, 2), clamp(aa[1], 0, 2)];
     const ls = pair(r.lookSens, isNum, s.lookSens);
