@@ -519,7 +519,7 @@ export class WB {
     const rr = Math.min(r, sx / 2 - 1e-5, sy / 2 - 1e-5, sz / 2 - 1e-5);
     if (rr <= 0.00015) return this.raw(m, (b) => b.box(x, y, z, sx, sy, sz, m, rx, ry, rz));
     // Small rounds get one bevel segment (a chamfer), and in the light model they are plain boxes.
-    if (!this.hi && rr < 0.003) return this.raw(m, (b) => b.box(x, y, z, sx, sy, sz, m, rx, ry, rz));
+    if (!this.hi && rr < 0.004) return this.raw(m, (b) => b.box(x, y, z, sx, sy, sz, m, rx, ry, rz));
     const seg = this.hi && rr >= 0.002 ? 2 : 1;
     const g = cached(`rb:${sx.toFixed(5)}:${sy.toFixed(5)}:${sz.toFixed(5)}:${rr.toFixed(5)}:${seg}`, () => {
       const rb = new RoundedBoxGeometry(sx, sy, sz, seg, rr);
@@ -557,11 +557,14 @@ export class WB {
   }
 
   sphere(x: number, y: number, z: number, r: number, m: WS, sx = 1, sy = 1, sz = 1) {
-    return this.raw(m, (b) => b.add(this.hi ? 'sphere16' : 'sphere', x, y, z, r * 2 * sx, r * 2 * sy, r * 2 * sz, m));
+    // Small beads (welds, rivets) get the coarse sphere: sixteen sides on a 2 mm bead is wasted on any screen.
+    const fine = this.hi && r >= 0.004;
+    return this.raw(m, (b) => b.add(fine ? 'sphere16' : r < 0.0025 ? 'ico' : 'sphere', x, y, z, r * 2 * sx, r * 2 * sy, r * 2 * sz, m));
   }
 
   torus(x: number, y: number, z: number, R: number, r: number, m: WS, rx = 0, ry = 0, rz = 0) {
-    return this.raw(m, (b) => b.torus(x, y, z, R, r, m, rx, ry, rz, this.hi ? 8 : 5, this.hi ? 24 : 12));
+    const fine = this.hi && r > 0.0015;
+    return this.raw(m, (b) => b.torus(x, y, z, R, r, m, rx, ry, rz, fine ? 8 : 4, fine ? 24 : 12));
   }
 
   /**

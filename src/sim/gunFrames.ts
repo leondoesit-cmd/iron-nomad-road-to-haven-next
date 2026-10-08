@@ -102,25 +102,25 @@ export const FRAMES: Record<GunModel, GunFrame> = {
   sawn: {
     bore: 0.035, muzzle: 0.335, rear: [0, 0.0535, 0.04], front: [0, 0.0535, 0.325], port: [-0.01, 0.04, 0.03], well: [0, 0.04, 0.03],
     grip: { p: [0, -0.034, -0.086], a: RAKE.shotgun }, support: [0.024, -0.008, 0.11],
-    top: { y: 0.05, z: 0.0 }, under: { y: 0.0, z: 0.13 }, mag: { y: 0.03, z: 0.0 }, stock: { y: -0.075, z: -0.125 }, side: [0.03, 0.03, 0.15], r: 0.0105, dbl: 0.0214,
+    top: { y: 0.05, z: 0.0 }, under: { y: 0.0, z: 0.13 }, mag: { y: 0.03, z: 0.0 }, stock: { y: -0.05, z: -0.12 }, side: [0.026, 0.03, 0.15], r: 0.0105, dbl: 0.0214,
     spots: { breech: [0.0107, 0.04, 0.035] },
   },
   coach: {
     bore: 0.035, muzzle: 0.545, rear: [0, 0.0535, 0.04], front: [0, 0.0535, 0.535], port: [-0.01, 0.04, 0.03], well: [0, 0.04, 0.03],
     grip: { p: [0, -0.034, -0.086], a: RAKE.shotgun }, support: [0.024, -0.008, 0.16],
-    top: { y: 0.05, z: 0.0 }, under: { y: 0.0, z: 0.17 }, mag: { y: 0.03, z: 0.0 }, stock: { y: -0.065, z: -0.39 }, side: [0.03, 0.03, 0.3], r: 0.0105, dbl: 0.0214,
+    top: { y: 0.05, z: 0.0 }, under: { y: 0.0, z: 0.17 }, mag: { y: 0.03, z: 0.0 }, stock: { y: -0.065, z: -0.39 }, side: [0.026, 0.03, 0.3], r: 0.0105, dbl: 0.0214,
     spots: { breech: [0.0107, 0.04, 0.035] },
   },
   pump: {
     bore: 0.038, muzzle: 0.66, rear: [0, 0.0555, -0.03], front: [0, 0.0515, 0.65], port: [-0.017, 0.038, 0.09], well: [0, -0.012, 0.08],
     grip: { p: [0, -0.05, -0.077], a: RAKE.shotgun }, support: [0.026, -0.022, 0.3],
-    top: { y: 0.0555, z: 0.05 }, under: { y: -0.014, z: 0.3 }, mag: { y: 0.012, z: 0.56 }, stock: { y: -0.05, z: -0.36 }, side: [0.03, 0.012, 0.46], r: 0.0105,
+    top: { y: 0.0555, z: 0.05 }, under: { y: -0.014, z: 0.3 }, mag: { y: 0.012, z: 0.56 }, stock: { y: -0.05, z: -0.36 }, side: [0.025, 0.012, 0.36], r: 0.0105,
     spots: { port: [-0.017, 0.038, 0.09] },
   },
   combat: {
     bore: 0.038, muzzle: 0.645, rear: [0, 0.0845, -0.02], front: [0, 0.0845, 0.62], port: [-0.018, 0.038, 0.08], well: [0, -0.01, 0.08],
     grip: { p: [0, -0.055, -0.06], a: RAKE.ar }, support: [0.026, -0.012, 0.31],
-    top: { y: 0.0675, z: 0.07 }, under: { y: -0.012, z: 0.32 }, mag: { y: 0.012, z: 0.58 }, stock: { y: -0.02, z: -0.36 }, side: [0.03, 0.012, 0.46], r: 0.0105,
+    top: { y: 0.0675, z: 0.07 }, under: { y: -0.012, z: 0.32 }, mag: { y: 0.012, z: 0.58 }, stock: { y: -0.02, z: -0.36 }, side: [0.025, 0.012, 0.38], r: 0.0105,
     spots: { port: [-0.018, 0.038, 0.08], handle: [-0.03, 0.03, 0.075] },
   },
   // ------------------------------------------------------------------ rifles
@@ -181,7 +181,7 @@ export const FRAMES: Record<GunModel, GunFrame> = {
     bore: 0.045, muzzle: 0.55, rear: [0, 0.09, 0.08], front: [0, 0.09, 0.47], port: [0, 0.05, 0.1], well: [0, 0.05, 0.1],
     grip: { p: [0, -0.023, -0.021], a: RAKE.polymer }, support: [0.022, -0.012, 0.3],
     top: { y: 0.07, z: 0.05 }, under: { y: -0.015, z: 0.3 }, mag: { y: 0.04, z: 0.55 }, stock: { y: 0.0, z: -0.36 }, side: [0.025, 0.03, 0.3], r: 0.01,
-    spots: { railFront: [0, 0.05, 0.3], latch: [0, 0.05, 0.09] },
+    spots: { railFront: [0, 0.05, 0.36], latch: [0, 0.05, 0.2] },
   },
   // The bow's frame is its own (see `render/bow.ts`): only its add-on anchors are used, to place the arrow's departure.
   bow: {
