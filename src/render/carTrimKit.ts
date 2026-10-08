@@ -837,11 +837,13 @@ export function taxiChecker(c: TrimCtx) {
       const lo = Math.min(a, e) + 0.03;
       const hi = Math.max(a, e) - 0.03;
       if (zi === 1) doorMark(b, sp, def, sx);
+      // A yellow band, and the dark squares over it.
+      b.box(sx * (z.hw + LIFT_TONE), y0 + s / 2, (lo + hi) / 2, SKIN, s * 2, hi - lo, light);
       for (let k = 0; Math.round(lo / s) + k <= Math.round(hi / s); k++) {
         const i = Math.round(lo / s) + k;
         const zz = i * s;
-        if (zz < lo || zz > hi) continue;
-        for (const row of [0, 1]) b.box(sx * (z.hw + LIFT_TONE), y0 + row * s, zz, SKIN, s, s, (i + row) % 2 ? dark : light);
+        if (zz - s / 2 < lo || zz + s / 2 > hi) continue;
+        b.box(sx * (z.hw + LIFT_TONE + 0.002), y0 + (i % 2) * s, zz, SKIN, s, s, dark);
       }
       if (zi === 1) b.end();
     });

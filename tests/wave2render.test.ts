@@ -138,7 +138,8 @@ describe('carried parts have a model each', () => {
       const mesh = m.children[0] as THREE.Mesh;
       expect(mesh.geometry.attributes.position.count, d.id).toBeGreaterThan(50);
     }
-    for (const k of ['gear', 'spring', 'brake', 'pipe', 'hood', 'door', 'part:eng_', 'radiator', 'tyre']) expect([...keys].some((x) => x.startsWith(k)), k).toBe(true);
+    // Every part has a model of its own now (render/gearParts.ts), keyed by its id.
+    for (const k of ['part:gbx_', 'part:sus_', 'part:brk_', 'part:exh_', 'part:hood_', 'part:door_', 'part:eng_', 'part:rad_', 'part:whl_', 'part:tyre_']) expect([...keys].some((x) => x.startsWith(k)), k).toBe(true);
     expect(partDef('gbx_race').slot).toBe('gearbox');
   });
 });

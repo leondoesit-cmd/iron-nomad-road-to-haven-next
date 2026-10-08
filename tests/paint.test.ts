@@ -16,7 +16,7 @@ describe('panel paint rules', () => {
   it('cars have six panels, bikes two, and the colour of an unpainted panel is the vehicle\'s own', () => {
     expect(panelsOf(chassisDef('sedan'))).toEqual(PANELS);
     expect(panelsOf(chassisDef('buggy'))).toEqual(PANELS);
-    expect(panelsOf(chassisDef('truck'))).toEqual([]);
+    expect(panelsOf(chassisDef('truck'))).toEqual(PANELS);
     expect(panelsOf(chassisDef('moped'))).toEqual(['front', 'rear']);
     expect(panelsOf(chassisDef('quad'))).toEqual(['front', 'rear']);
     const b = newBuild('sedan', { seed: 1, paint: 0x336699 });

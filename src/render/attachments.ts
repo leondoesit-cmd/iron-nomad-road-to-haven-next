@@ -171,12 +171,13 @@ function armorKit(b: MeshBuilder, m: Mounts, mk: number, look: KitLook) {
       // Scrap: three sheets of whatever was lying about, overlapping and out of true, wired and bolted on.
       const SHEETS = [rust, S.steel(0x7a7e82, 0.85), S.paint(0x4d6a82, 0.85), S.paint(0xc9b084, 0.9), S.paint(0x8c2e26, 0.85)];
       for (let i = 0; i < 3; i++) {
-        const w = len * (0.36 + r() * 0.12);
+        // Sizes rounded to 4 cm, so the plate outlines are shared between cars rather than made new for each.
+        const w = Math.round((len * (0.36 + r() * 0.12)) / 0.04) * 0.04;
         const z = m.side.z0 + len * (0.18 + i * 0.32) + (r() - 0.5) * 0.06;
         const sheet = SHEETS[Math.floor(r() * SHEETS.length)];
         const tilt = (r() - 0.5) * 0.12;
         if (i === 1 && r() < 0.5 && !m.narrow) signPlate(b, x + sx * 0.012, yc + (r() - 0.5) * 0.04, z, w, sideH * 0.86, [0xe8c030, 0xc2402e, 0x2a5a9a][Math.floor(r() * 3)], 0, sx * Math.PI / 2, tilt);
-        else plate(b, x + sx * i * 0.006, yc + (r() - 0.5) * 0.05, z, w, sideH * (0.8 + r() * 0.16), thick, sheet, 0, sx * Math.PI / 2, tilt, false);
+        else plate(b, x + sx * i * 0.006, yc + (r() - 0.5) * 0.05, z, w, Math.round((sideH * (0.8 + r() * 0.16)) / 0.04) * 0.04, thick, sheet, 0, sx * Math.PI / 2, tilt, false);
         rivets(b, [x + sx * (thick + 0.008), yc + sideH * 0.3, z - w * 0.35], [x + sx * (thick + 0.008), yc + sideH * 0.3, z + w * 0.35], 2, 0.016, S.steel(0x2a2c2e));
       }
       // Wire twisted round the frame where a bolt would not hold.

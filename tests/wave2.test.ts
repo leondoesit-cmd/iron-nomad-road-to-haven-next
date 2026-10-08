@@ -52,12 +52,12 @@ describe('the rest of the machine is made of real parts', () => {
   });
 
   it('carried parts get their own little models', () => {
-    expect(partModelKey('gbx_race')).toMatch(/^gear\d$/);
-    expect(partModelKey('sus_long')).toMatch(/^spring\d$/);
-    expect(partModelKey('brk_big')).toMatch(/^brake\d$/);
-    expect(partModelKey('exh_race')).toMatch(/^pipe\d$/);
-    expect(partModelKey('hood_scoop')).toMatch(/^hood\d$/);
-    expect(partModelKey('door_armor')).toMatch(/^door\d$/);
+    expect(partModelKey('gbx_race')).toBe('part:gbx_race');
+    expect(partModelKey('sus_long')).toBe('part:sus_long');
+    expect(partModelKey('brk_big')).toBe('part:brk_big');
+    expect(partModelKey('exh_race')).toBe('part:exh_race');
+    expect(partModelKey('hood_scoop')).toBe('part:hood_scoop');
+    expect(partModelKey('door_armor')).toBe('part:door_armor');
   });
 });
 

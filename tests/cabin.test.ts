@@ -238,7 +238,7 @@ describe('cabin parts: fitting and taking off', () => {
   });
   it('spare cabin parts use their own models in the hands and on the ground', () => {
     for (const p of interiorParts().filter((x) => !x.empty)) expect(partModelKey(p.id)).toBe(`part:${p.id}`);
-    expect(partModelKey('hood_std')).toBe('hood1');
+    expect(partModelKey('hood_std')).toBe('part:hood_std');
   });
 });
 

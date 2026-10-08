@@ -44,13 +44,16 @@ let tick = 0;
  */
 export function acquireShell(key: string, make: () => Shell): Shell {
   let e = cache.get(key);
+  const made = !e;
   if (!e) {
     e = { shell: make(), refs: 0, last: 0 };
     cache.set(key, e);
-    trim();
   }
   e.refs++;
   e.last = ++tick;
+  // Trim only once the new shell holds its reference: trimmed first, a fresh shell (unreferenced, oldest) was the first
+  // to go whenever the idle set was full, and the caller was handed a disposed geometry that was never cached.
+  if (made) trim();
   return e.shell;
 }
 
