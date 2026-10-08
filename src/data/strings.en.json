@@ -81,7 +81,7 @@
   "tip.car": "Abandoned cars are yours to take. Walk up and press Y to climb in. If it won't run: wrench (LB), hold A to fix what's broken. Parts and Scrap pay for repairs.",
   "tip.salvage": "Cars you can't drive still hold parts. Swap to the crowbar (LB) and hold A to strip tyres, engine and bodywork. Fuel can be siphoned with the jerrycan.",
   "tip.haul": "Nothing is picked up on its own: stand next to an item and hold A to take it. Scrap, rations and the like go straight into your stock. Parts, fuel cans and oil cans are carried: at your car, A bolts it on or pours it in, X stows it in the trunk. X anywhere else puts it down.",
-  "tip.gear": "You found gear! Open your inventory (D-pad down, or I for Player 1 and O for Player 2) to wear it or put it in hand. Armour, quiet shoes and a bigger pack all change how you play.",
+  "tip.gear": "You found gear! Open your inventory (D-pad left, or Tab for Player 1 and I for Player 2) and pick it to wear it or put it in hand. Armour, quiet shoes and a bigger pack all change how you play.",
   "tip.parts": "Parts fit any vehicle: wrench + X opens the workbench, or use the Garage tab at camp. Better engines, tyres and armour change how a car handles.",
   "tip.lake": "A lake, and a pier with boats. Climb in by holding Y: RT is the throttle, LT reverses, the stick steers. Islands out in the water hold shacks, wrecks and caves.",
   "tip.boat": "Boats run on the convoy's fuel and the engine is loud over water. A boat takes two: the second seat has the gun. Run her onto a beach and LT backs her off.",

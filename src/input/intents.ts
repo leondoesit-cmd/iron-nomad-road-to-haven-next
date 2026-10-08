@@ -24,6 +24,10 @@ export const Btn = {
   Map: 18,
   /** Not a physical button: the inventory, driven by whatever the player binds to it (D-pad left on a pad). */
   Inventory: 19,
+  /**
+   * Not a physical button: the drugs quick pick, keys only (a pad reaches drugs through the quick belt and the inventory).
+   */
+  Drugs: 25,
   /** Not physical buttons: the four chores, driven by keys. A pad reaches them through the quick belt. */
   Eat: 20,
   Drink: 21,
@@ -31,9 +35,8 @@ export const Btn = {
   Shit: 23,
   /** Not a physical button: call your ride to you, driven by a key. A pad reaches it through the command wheel. */
   Summon: 24,
-  // 25 is reserved for the drugs shortcut (the inventory work adds `Drugs: 25`).
 } as const;
-/** Logical buttons, including View, Jump, Map and Inventory. 25 is reserved. */
+/** Logical buttons, including View, Jump, Map and Inventory. */
 export const BTN_COUNT = 26;
 export type BtnName = keyof typeof Btn;
 

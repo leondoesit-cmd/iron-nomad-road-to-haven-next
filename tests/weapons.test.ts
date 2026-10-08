@@ -822,7 +822,7 @@ describe('the customise screen', () => {
     p.gear.belt[1] = ar;
     p.gear.bag.push(newMod('a_sup_r'), newMod('a_scope4'), newMod('a_sup_h'));
     p.refreshGear();
-    v.sel = ar.uid;
+    v.openMenu({ kind: 'gear', uid: ar.uid });
     let out = html();
     expect(acts.has('a-cust')).toBe(true);
     acts.get('a-cust')!(0);
@@ -856,7 +856,7 @@ describe('the customise screen', () => {
     const { p, v, acts, html } = view();
     const sup = newMod('a_sup_h');
     p.gear.bag.push(sup);
-    v.sel = sup.uid;
+    v.openMenu({ kind: 'gear', uid: sup.uid });
     const out = html();
     expect(out).toMatch(/Pistol Suppressor/);
     expect(out).toMatch(/9mm Pistol/);
@@ -872,7 +872,7 @@ describe('the customise screen', () => {
     const { p, v, acts, html } = view();
     const ar = gunWith('w_ar', { optic: 'a_scope4', muzzle: 'a_sup_r' });
     p.gear.bag.push(ar);
-    v.sel = ar.uid;
+    v.openMenu({ kind: 'gear', uid: ar.uid });
     html();
     acts.get('a-scrap')!(0);
     expect(p.gear.bag.some((b) => b.id === 'a_scope4')).toBe(true);
