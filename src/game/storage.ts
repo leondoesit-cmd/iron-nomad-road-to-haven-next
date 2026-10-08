@@ -641,6 +641,7 @@ export class StorageSession {
     if (e.kind === 'cargo' && e.cargo) {
       if (!v.cargoRig.remove(e.cargo.id)) return this.refresh();
     } else if (!ctx.campaign.takePart(item.uid)) return this.refresh();
+    v.refreshLoadNow();
     if (e.where === 'inside') this.reachIn();
     // What is in the way opens: the bonnet over an engine bay, the door in front of a seat.
     const wk = workFor(v.def, slot);
@@ -719,6 +720,7 @@ export class StorageSession {
     this.say(`${j.name} fitted${tail}`, true);
     p.note(`${j.name} fitted${tail}`, 'good');
     ctx.sig.emit(p.pos.x, p.pos.z, 22, 'noise');
+    v.refreshLoadNow();
     this.refresh();
   }
 
