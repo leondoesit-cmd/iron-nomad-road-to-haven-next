@@ -23,7 +23,10 @@ import { heldItem } from '../sim/gear';
 import type { Vehicle } from '../game/vehicle';
 import { promptLabel, type Slot } from '../input/input';
 import type { MapFrame } from './mapdata';
-import { MapPainter, PIN_COLOR } from './minimap';
+import { MapPainter, PIN_COLOR, drawPoiGlyph, drawWaypointGlyph } from './minimap';
+import { navOf } from './mapnav';
+import { distLabel } from '../render/navMarkers';
+import { keyLabel, live } from '../input/bindings';
 import { heatLabel, stormLabel, stormMapRadius, windAt } from '../sim/weather';
 import { STALK } from '../sim/hunting';
 
@@ -207,9 +210,11 @@ class PlayerHud {
       const rel = wrapAngle(Math.atan2(dx, dz) - camYaw);
       const x = clamp(xOf(rel), 10, W - 10);
       const edge = Math.abs(rel) > half;
-      g.fillStyle = PIN_COLOR[pin.kind];
+      g.fillStyle = pin.color ?? PIN_COLOR[pin.kind];
       g.globalAlpha = edge ? 0.55 : 1;
-      if (pin.kind === 'ambush') {
+      if (pin.kind === 'waypoint') drawWaypointGlyph(g, x, 11, 5, pin.color ?? '#fff');
+      else if (pin.kind === 'poi' && pin.poi) drawPoiGlyph(g, pin.poi, x, 11, 4.6, pin.color);
+      else if (pin.kind === 'ambush') {
         g.beginPath();
         g.moveTo(x, 6);
         g.lineTo(x + 5, 15);
@@ -227,7 +232,15 @@ class PlayerHud {
         g.fillRect(x - 4, 7, 8, 8);
       }
       g.globalAlpha = 1;
-      if (pin.label && d < 900 && !edge) {
+      if (pin.dist) {
+        // A waypoint, a pinned mark or a ride on its way: how far, in its own colour, at any range.
+        g.globalAlpha = edge ? 0.7 : 1;
+        g.fillStyle = pin.color ?? PIN_COLOR[pin.kind];
+        g.font = `${Math.round(10 * scale)}px Share Tech Mono, monospace`;
+        g.fillText(distLabel(d), x, 25);
+        g.font = `${Math.round(13 * scale)}px Oswald, sans-serif`;
+        g.globalAlpha = 1;
+      } else if (pin.label && d < 900 && !edge) {
         g.fillStyle = '#e9dfc7';
         g.font = `${Math.round(10 * scale)}px Share Tech Mono, monospace`;
         g.fillText(pin.label.length > 5 ? pin.label.slice(0, 5) : pin.label, x, 24);
@@ -330,18 +343,27 @@ export class Hud {
     for (const h of this.huds) h.root.style.display = v ? '' : 'none';
   }
 
+  /** The last map frame and its scene, so an open big map can be redrawn every frame between the HUD's own updates. */
+  private lastFrame: MapFrame | null = null;
+  private lastScene: Scene | null = null;
+
   update(scene: Scene | null, dt: number, slots: (Slot | null)[], extras: HudExtras = {}) {
     this.subTimer -= dt;
     this.tipTimer -= dt;
     this.bannerTimer -= dt;
     this.acc += dt;
     if (!scene) return;
-    if (this.acc < 0.05) return;
+    if (this.acc < 0.05) {
+      this.openMaps(scene, slots, dt);
+      return;
+    }
     const step = this.acc;
     this.acc = 0;
     void step;
     const basePins = scene.compassPins();
     const frame = scene.mapFrame(basePins);
+    this.lastFrame = frame;
+    this.lastScene = scene;
     const leg = scene.mode === 'leg' ? (scene as LegScene) : null;
     for (let i = 0; i < 2; i++) {
       const h = this.huds[i];
@@ -350,6 +372,40 @@ export class Hud {
       const reveal = scene.revealPins(p);
       this.updateOne(h, p, scene, reveal.length ? basePins.concat(reveal) : basePins, leg, slots[i] ?? null, extras, frame, step);
     }
+  }
+
+  /** An open big map follows its cursor every frame: only the map is redrawn, from the frame of the last full update. */
+  private openMaps(scene: Scene, slots: (Slot | null)[], dt: number) {
+    const f = this.lastFrame;
+    if (!f || this.lastScene !== scene) return;
+    for (let i = 0; i < 2; i++) {
+      const p = scene.players[i];
+      if (!p || p.mapMode === 0) continue;
+      this.updateMap(this.huds[i], p, scene, f, slots[i] ?? null, viewOf(p), dt);
+    }
+  }
+
+  /** The buttons of the big map as this seat has them, long and short (for a narrow split-screen panel). */
+  private mapHint(p: Player, slot: Slot | null, next: string): [string, string] {
+    const nav = navOf(p);
+    const pad = slot?.kind === 'pad';
+    const mouse = slot?.kind === 'kb' && live.mouseLocked && live.mouseSeat === p.index;
+    const L = (b: string) => btnLabel(slot, b).toUpperCase();
+    const map = `${L('Right')} ${next}`;
+    if (nav.naming) return ['TYPE A NAME · ENTER KEEPS IT', 'TYPE · ENTER'];
+    if (nav.menu) {
+      const pick = pad ? L('A') : mouse ? 'CLICK' : L('A');
+      const back = pad ? `${L('X')}/${L('B')}` : mouse ? 'RMB' : L('X');
+      return [`▲▼ CHOOSE · ${pick} PICK · ${back} BACK`, `${pick} PICK · ${back} BACK`];
+    }
+    if (pad) {
+      const zoom = `${L('LB')}/${L('RB')}`;
+      return [`${L('A')} WAYPOINT · ${L('X')} MARK · ${zoom} ZOOM · ${L('R3')} CENTRE · ${map}`, `${L('A')} WAYPOINT · ${L('X')} MARK · ${zoom} ZOOM`];
+    }
+    if (mouse) return [`CLICK WAYPOINT · RMB MARK · WHEEL ZOOM · DRAG PAN · ${L('R3')} CENTRE · ${map}`, 'CLICK WAYPOINT · RMB MARK · WHEEL ZOOM'];
+    const k = slot?.kind === 'kb' ? live.bindings.kb[slot.set - 1] : null;
+    const zoom = k ? `${keyLabel(k.prevBuild)}/${keyLabel(k.nextBuild)}` : '1/2';
+    return [`${L('A')} WAYPOINT · ${L('X')} MARK · ${zoom} ZOOM · ${L('R3')} CENTRE · ${map}`, `${L('A')} WAYPOINT · ${L('X')} MARK · ${zoom} ZOOM`];
   }
 
   /** The corner minimap, or the larger map when the seat has opened it. */
@@ -363,6 +419,9 @@ export class Hud {
     h.setStyle('mapfull', 'display', frame && mode > 0 ? 'block' : 'none');
     if (!frame) return;
     if (mode === 0) {
+      // Closed: the next opening starts afresh on the player.
+      const nav = navOf(p);
+      if (nav.open) nav.close();
       const size = Math.round(clamp(Math.min(150 * this.uiScale, hostH * 0.3, hostW * 0.3), 84, 200));
       h.painter.mini(h.el('minimap') as HTMLCanvasElement, frame, mv, size, dt);
     } else {
@@ -373,7 +432,8 @@ export class Hud {
       const w = Math.round(hostW * 0.9);
       const hh = Math.max(120, hostH - top - bottom);
       h.setStyle('mapfull', 'top', `${top}px`);
-      h.painter.full(h.el('mapcv') as HTMLCanvasElement, frame, mv, mode, w, hh, `${btnLabel(slot, 'Right')} · ${next}`, this.uiScale);
+      const [long, short] = this.mapHint(p, slot, next);
+      h.painter.full(h.el('mapcv') as HTMLCanvasElement, frame, mv, navOf(p), mode, w, hh, w > 760 * this.uiScale ? long : short, this.uiScale);
     }
   }
 
@@ -433,11 +493,9 @@ export class Hud {
     this.updateTrip(h, p, scene, slot);
 
     // Compass
-    const cam = p.cam;
-    const lookDx = cam.look.x - cam.pos.x;
-    const lookDz = cam.look.z - cam.pos.z;
-    const cyaw = Math.hypot(lookDx, lookDz) > 1e-3 ? Math.atan2(lookDx, lookDz) : p.cam.yaw;
-    const myPos = { x: v ? v.position.x : p.pos.x, z: v ? v.position.z : p.pos.z };
+    const view = viewOf(p);
+    const cyaw = view.yaw;
+    const myPos = { x: view.x, z: view.z };
     const pp = partner ? (partner.vehicle ? partner.vehicle.position : partner.pos) : null;
     h.drawCompass(cyaw, pins, myPos, pp ? { x: pp.x, z: pp.z } : null, PLAYER_CSS[p.index], PLAYER_CSS[1 - p.index], this.uiScale);
     this.updateMap(h, p, scene, frame, slot, { x: myPos.x, z: myPos.z, yaw: cyaw }, dt);
@@ -784,8 +842,9 @@ export class Hud {
       return;
     }
     h.setStyle('wheel', 'display', 'block');
-    const names = ['PING', 'FOLLOW', 'REGROUP', 'SPREAD', 'HOLD'];
-    const pos = [[50, 6], [88, 38], [74, 86], [26, 86], [12, 38]];
+    // Six slices, clockwise from the top (game.ts picks them by the stick's angle).
+    const names = ['PING', 'FOLLOW', 'REGROUP', 'CALL RIDE', 'SPREAD', 'HOLD'];
+    const pos = [[50, 6], [88, 30], [88, 72], [50, 96], [12, 72], [12, 30]];
     const sel = this.wheelSel[p.index];
     h.setHtml(
       'wheel',
@@ -863,6 +922,16 @@ export class Hud {
       `<h4>CONVOY SHEET · ${route}</h4><div class="stocks">${stocks}</div><div style="margin-top:4px;font-family:var(--mono)">${items}</div><h4 style="margin-top:8px">CREW</h4><div class="crew">${crew}</div><div style="margin-top:6px;opacity:.7;font-family:var(--mono)">FRAGMENTS ${c.fragments.size}/4 · CHASSIS ${c.chassis}</div>`,
     );
   }
+}
+
+/** Where a seat is and which way its camera looks (0 north), as the compass and the maps need it. */
+function viewOf(p: Player): { x: number; z: number; yaw: number } {
+  const v = p.vehicle;
+  const cam = p.cam;
+  const lookDx = cam.look.x - cam.pos.x;
+  const lookDz = cam.look.z - cam.pos.z;
+  const yaw = Math.hypot(lookDx, lookDz) > 1e-3 ? Math.atan2(lookDx, lookDz) : p.cam.yaw;
+  return { x: v ? v.position.x : p.pos.x, z: v ? v.position.z : p.pos.z, yaw };
 }
 
 export function escapeHtml(s: string) {

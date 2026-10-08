@@ -391,6 +391,8 @@ export class Game {
     this.delveParent = parent;
     const sc = new DelveScene(this.services(), parent.leg, site, parent.delveRecord(site.id), carry);
     sc.parentTick = (dt) => parent.advanceOffscreen(dt);
+    // Calling your ride from below: it is left waiting by the way out, up top.
+    sc.summon = (p) => parent.summonToDelve(p, site);
     sc.onResult = (r) => this.onSceneResult(r);
     sc.openInventory = (p) => this.openInventory(p);
     this.scene = sc;
@@ -863,8 +865,8 @@ export class Game {
           if (Math.hypot(sx, sy) > 0.45) {
             const a = Math.atan2(sx, sy); // 0 = up, + = right
             const deg = (a * 180) / Math.PI;
-            this.hud.wheelSel[p] = deg > -36 && deg <= 36 ? 0 : deg > 36 && deg <= 108 ? 1 : deg > 108 || deg <= -144 ? 2 : deg > -144 && deg <= -72 ? 3 : 4;
-            if (deg > 108 && deg <= 180) this.hud.wheelSel[p] = 2;
+            // Six slices of 60 degrees, clockwise from the top: ping, follow, regroup, call ride, spread, hold.
+            this.hud.wheelSel[p] = (((Math.round(deg / 60) % 6) + 6) % 6);
           }
         }
       } else if (this.wheelHold[p] > 0) {
@@ -874,8 +876,11 @@ export class Game {
         this.hud.wheelSel[p] = -1;
         if (held <= 0.25 || sel === 0) this.doPing(sc, p);
         else {
-          const cmd = (['ping', 'follow', 'regroup', 'spread', 'hold'] as const)[sel] ?? 'follow';
-          sc.crew.command(cmd, p);
+          const cmd = (['ping', 'follow', 'regroup', 'summon', 'spread', 'hold'] as const)[sel] ?? 'follow';
+          if (cmd === 'summon') {
+            if (sc.summon) sc.summon(pl);
+            else pl.note('No ride to call here', 'info');
+          } else sc.crew.command(cmd, p);
         }
       }
     }
