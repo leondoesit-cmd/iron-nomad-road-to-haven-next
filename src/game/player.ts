@@ -52,6 +52,7 @@ import { COOLANT_LOW, WATER_CAN, WATER_RESERVE_MAX, pourWater } from '../sim/flu
 import { TANK_DREGS, addReserve, planDrain, reserveOf, takeReserve } from '../sim/fuel';
 import { dropCarry, guide, sitePos, haulCandidate, haulKey, haulPrompt, pryCandidate, returnCarry, stashBeforeEntering } from './hauling';
 import { disposeHold, eatCarried, holdFloats, holdFrame, holdTick, lookTick, newHold, type HandHint, type LookInfo } from './grab';
+import { newDrugPick, stepDrugPick, type DrugPick } from './drugPick';
 
 /** Jobs done by hand on a car's own parts: doing one to an abandoned car makes it the convoy's. */
 const HANDS_ON = new Set(['unbolt', 'fit', 'lift', 'liftdeck', 'oil', 'fuel', 'pry', 'water', 'spray']);
@@ -391,6 +392,8 @@ export class Player implements Pilot {
   private useHold = 0;
   /** The drug belt is open: the hands are in the pockets, and the feet stay put. */
   beltOpen = false;
+  /** The drugs quick pick (`game/drugPick.ts`): a strip of what you carry, opened from its own key without stopping. */
+  drugPick: DrugPick = newDrugPick();
   private poisonT = 0;
   /** Seconds left retching, or otherwise out of it. No moving, no shooting. */
   stunT = 0;
@@ -1009,6 +1012,7 @@ export class Player implements Pilot {
     if (this.hitCooldown > 0) this.hitCooldown -= dt;
     if (this.invuln > 0) this.invuln -= dt;
     this.sinceHit += dt;
+    stepDrugPick(this, it, dt);
     this.updateDrugs(dt, it);
     if (this.relief && this.state !== 'foot') this.endRelief('quiet');
     this.sprintingNow = false;
@@ -1176,6 +1180,14 @@ export class Player implements Pilot {
       this.dressingSel = null;
       this.drugs.selected = next;
     }
+  }
+
+  /** Rest the quick belt on a slot, so the next tap of the use button takes it (the inventory's "Put on quick belt"). */
+  setQuick(id: QuickId) {
+    if (isDrugId(id)) {
+      this.dressingSel = null;
+      this.drugs.selected = id;
+    } else this.dressingSel = id;
   }
 
   /** Bandage or medkit from the stores, in the field. Returns false when it did nothing. */

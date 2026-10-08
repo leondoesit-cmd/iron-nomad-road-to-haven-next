@@ -28,6 +28,7 @@ import { TutorialDirector, TRAINING_STEPS } from './tutorial';
 import { setupStoryCampaign } from './story';
 import { CoachUI } from '../ui/coach';
 import type { Player } from './player';
+import { closeDrugPick } from './drugPick';
 import type { Vehicle } from './vehicle';
 import { BenchmarkRun, type BenchmarkReport } from './benchmark';
 import { Rng } from '../core/rng';
@@ -101,12 +102,14 @@ export class Game {
     this.hud = new Hud(halves);
     this.hud.setLayout(this.R.layout);
     this.overlays = new Overlays(this);
-    this.input.onEscape = () => this.benchmark ? this.stopBenchmark() : (this.inventory ? this.inventory.close() : this.togglePause(-1));
+    this.input.onEscape = () => this.benchmark ? this.stopBenchmark() : (this.inventory ? this.inventory.close() : this.closeDrugPicks() || this.togglePause(-1));
     // Mouse aim: click the canvas to capture the pointer. Esc (or alt-tab) releases it, which pauses.
     this.input.attachMouse(canvas);
     this.input.onChange = () => this.saveSettings();
     this.input.canCapture = () => !this.paused && !this.attract && (this.phase === 'leg' || this.phase === 'camp');
     this.input.onPointerLost = () => {
+      // Esc with the drugs quick pick open puts the strip away; it does not also pause.
+      if (this.closeDrugPicks()) return;
       if (!this.paused && !this.attract && (this.phase === 'leg' || this.phase === 'camp')) this.setPause(true, this.input.mouseSeat());
     };
     this.aimHint = document.createElement('div');
@@ -514,6 +517,13 @@ export class Game {
       this.resumeLock = 0.2;
     });
     this.inventory.open(p);
+  }
+
+  /** Put away any open drugs quick pick (Esc steps back out of it before it pauses). True if one was open. */
+  private closeDrugPicks(): boolean {
+    let any = false;
+    if (!this.paused && (this.phase === 'leg' || this.phase === 'camp')) for (const p of this.scene?.players ?? []) any = closeDrugPick(p) || any;
+    return any;
   }
 
   /** Open the field workbench for one of the convoy's vehicles. The game stands still while it is open. */
