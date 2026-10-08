@@ -145,13 +145,18 @@ function arPattern(w: WB, c: ArCfg, looks: Looks) {
     w.turn(`${K}.brake`, [[0, z0], [0.0128, z0], [0.0132, z0 + 0.003], [0.0132, z1 - 0.002], [0.0124, z1], [0.0066, z1], [0.0064, z1 - 0.06], [0, z1 - 0.06]], 0, B, steel);
     if (w.hi) for (const zz of [z0 + 0.018, z0 + 0.036]) for (const s of [1, -1]) w.box(s * 0.0128, B + 0.002, zz, 0.003, 0.012, 0.009, M.hole());
   }
-  // ---- flip-up sights on the rail ends, standing up.
+  // ---- flip-up sights on the rail ends: standing up, or folded flat under an optic.
   const crest = f.top.y;
   w.rbox(0, crest + 0.004, f.rear[2], 0.026, 0.009, 0.026, 0.0015, anod);
-  for (const s of [1, -1]) w.side(`${K}.rwing`, () => shape([[f.rear[2] - 0.01, crest + 0.006], [f.rear[2] + 0.01, crest + 0.006], [f.rear[2] + 0.007, f.rear[1] + 0.002, 0.004], [f.rear[2] - 0.007, f.rear[1] + 0.002, 0.004]]), s * 0.0105, 0.0035, 0.001, anod);
-  peep(w, f.rear[2], f.rear[1], crest + 0.008, anod, 0.0062, 0.0024);
   w.rbox(0, crest + 0.004, f.front[2], 0.026, 0.009, 0.022, 0.0015, anod);
-  post(w, `${K}.f`, f.front[2], f.front[1], crest + 0.008, anod, true, 0.026);
+  if (looks.optic) {
+    w.rbox(0, crest + 0.0105, f.rear[2] + 0.008, 0.018, 0.004, 0.03, 0.0012, anod);
+    w.rbox(0, crest + 0.0105, f.front[2] - 0.008, 0.018, 0.004, 0.028, 0.0012, anod);
+  } else {
+    for (const s of [1, -1]) w.side(`${K}.rwing`, () => shape([[f.rear[2] - 0.01, crest + 0.006], [f.rear[2] + 0.01, crest + 0.006], [f.rear[2] + 0.007, f.rear[1] + 0.002, 0.004], [f.rear[2] - 0.007, f.rear[1] + 0.002, 0.004]]), s * 0.0105, 0.0035, 0.001, anod);
+    peep(w, f.rear[2], f.rear[1], crest + 0.008, anod, 0.0062, 0.0024);
+    post(w, `${K}.f`, f.front[2], f.front[1], crest + 0.008, anod, true, 0.026);
+  }
   swivel(w, half + 0.002, B - 0.006, c.hg - 0.03, steel, false);
 }
 
@@ -270,7 +275,7 @@ export function sniper(w: WB, optic = true) {
   w.side('sn.beamU', () => shape([[-0.09, B - 0.002], [sz + 0.03, B - 0.002], [sz + 0.03, B + 0.014, 0.004], [-0.09, B + 0.014, 0.004]]), 0, 0.024, 0.002, chassis);
   w.side('sn.beamL', () => shape([[-0.09, B - 0.032], [-0.1, B - 0.02, 0.004], [sz + 0.03, -0.055, 0.006], [sz + 0.03, -0.074, 0.006], [-0.1, B - 0.04, 0.006]]), 0, 0.022, 0.002, chassis);
   w.side('sn.cheek', () => shape([[-0.115, B + 0.03], [sz + 0.06, B + 0.03], [sz + 0.055, f.rear[1] - 0.036, 0.008], [-0.11, f.rear[1] - 0.038, 0.012]]), 0, 0.034, 0.004, black);
-  for (const z of [-0.14, sz + 0.09]) w.tube(0, B + 0.022, z - 0.005, z + 0.005, 0.0035, steel);
+  if (w.hi) for (const z of [-0.14, sz + 0.09]) w.tube(0, B + 0.022, z - 0.005, z + 0.005, 0.0035, steel);
   w.side('sn.pad', () => shape([[sz, B + 0.028, 0.006], [sz + 0.032, B + 0.028, 0.004], [sz + 0.032, -0.088, 0.006], [sz, -0.088, 0.006]]), 0, 0.04, 0.004, chassis);
   w.side('sn.rubber', () => shape([[sz - 0.012, B + 0.026, 0.004], [sz + 0.001, B + 0.026], [sz + 0.001, -0.086], [sz - 0.012, -0.086, 0.004]]), 0, 0.042, 0.004, M.rubber(0x151516));
   w.rod([0, -0.06, sz + 0.07], [0, -0.115, sz + 0.07], 0.0042, steel);
@@ -608,7 +613,7 @@ export function crossbow(w: WB) {
   // Trigger housing with the latch, and a rail on top.
   w.side('xb.house', () => shape([[-0.035, B - 0.03, 0.006], [0.15, B - 0.03], [0.15, B - 0.004], [0.13, f.top.y - 0.0095, 0.004], [0.0, f.top.y - 0.0095, 0.004], [-0.03, B + 0.004, 0.01]]), 0, 0.04, 0.003, poly);
   w.rail('xb', 0, f.top.y - 0.0095, 0.005, 0.12, alloy);
-  w.rbox(0, latch[1] - 0.002, latch[2] - 0.02, 0.012, 0.008, 0.012, 0.002, M.steel(0x5a5e62, 0.3));
+  w.rbox(0, latch[1] - 0.002, latch[2] - 0.13, 0.012, 0.008, 0.012, 0.002, M.steel(0x5a5e62, 0.3));
   // Riser and limbs: the pockets either side, each limb sweeping out and back and flicking forward at the tip.
   const rz = 0.5;
   w.rbox(0, B - 0.012, rz, 0.11, 0.03, 0.04, 0.006, alloy);
@@ -626,9 +631,9 @@ export function crossbow(w: WB) {
     tips.push([s * L[L.length - 2][0], B - 0.012, L[L.length - 2][1]]);
   }
   // The string, cocked into the latch; the serving at its middle.
-  for (const t of tips) w.rod(t, [0, latch[1] - 0.004, latch[2] - 0.02], 0.0012, M.cord(0x2a2622, 0.4));
+  for (const t of tips) w.rod(t, [0, latch[1] - 0.004, latch[2] - 0.13], 0.0012, M.cord(0x2a2622, 0.4));
   // The bolt: carbon shaft, three vanes, a three-bladed broadhead.
-  const nz = latch[2] - 0.02;
+  const nz = latch[2] - 0.13;
   w.tube(0, B, nz, f.muzzle - 0.03, 0.0044, M.poly(0x161718, 0.3), 0.0004, w.hi ? 12 : 6);
   for (let i = 0; i < 3; i++) {
     const a = Math.PI / 2 + (i / 3) * Math.PI * 2;

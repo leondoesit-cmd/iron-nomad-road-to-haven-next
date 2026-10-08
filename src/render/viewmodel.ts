@@ -112,7 +112,9 @@ const MELEE_REST: V3 = [1.05, 0.3, 0.12];
 const HANDGUNS: GunModel[] = ['pistol', 'compact', 'mp', 'revolver', 'cannon'];
 
 /** How each kind of gun is carried and aimed (hip, sight distance, shouldered); the hands come from the gun's frame. */
-const CARRY: Record<'handgun' | 'smg' | 'sawn' | 'pump' | 'rifle', Pick<Spec, 'hip' | 'ads' | 'long'>> = {
+const CARRY: Record<'handgun' | 'smg' | 'sawn' | 'pump' | 'rifle' | 'crossbow', Pick<Spec, 'hip' | 'ads' | 'long'>> = {
+  // Shouldered, but the grip held a little further out: the bolt is seated with the hand over the rail.
+  crossbow: { hip: [0.11, -0.26, -0.26], ads: 0.3, long: true },
   handgun: { hip: [0.075, -0.18, -0.33], ads: 0.38 },
   smg: { hip: [0.1, -0.24, -0.28], ads: 0.27, long: true },
   sawn: { hip: [0.1, -0.24, -0.27], ads: 0.28, long: true },
@@ -120,7 +122,7 @@ const CARRY: Record<'handgun' | 'smg' | 'sawn' | 'pump' | 'rifle', Pick<Spec, 'h
   rifle: { hip: [0.11, -0.26, -0.22], ads: 0.27, long: true },
 };
 /** Which way each gun is carried: by its base gun, except the shouldered crossbow and the two-handed machine pistol. */
-const carryOf = (m: GunModel) => (HANDGUNS.includes(m) ? CARRY.handgun : m === 'crossbow' ? CARRY.rifle : CARRY[GUN_BASE[m] === 'pistol' || GUN_BASE[m] === 'revolver' ? 'handgun' : (GUN_BASE[m] as 'smg' | 'sawn' | 'pump' | 'rifle')]);
+const carryOf = (m: GunModel) => (HANDGUNS.includes(m) ? CARRY.handgun : m === 'crossbow' ? CARRY.crossbow : CARRY[GUN_BASE[m] === 'pistol' || GUN_BASE[m] === 'revolver' ? 'handgun' : (GUN_BASE[m] as 'smg' | 'sawn' | 'pump' | 'rifle')]);
 
 const SPECS = {} as Record<Exclude<Held, 'none'>, Spec>;
 for (const m of GUN_MODELS) {
