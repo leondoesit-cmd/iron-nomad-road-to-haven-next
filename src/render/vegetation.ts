@@ -454,12 +454,12 @@ export class Vegetation {
       // Motion is sampled once by PhysicsWorld, shared by all streamed vegetation chunks.
       const { sweepVelocity: velocity, speed, edgeSpeed } = source;
       if (speed + edgeSpeed < 0.08) continue;
-      // A tree coming down is not held back by the grass it falls through (and two dozen pieces of it sweeping the ground
-      // cover every step would cost more than the fall).
-      if (logs?.has(source.body.handle)) continue;
+      // A tree coming down is not held back by the grass and bushes it falls through (and two dozen pieces of it sweeping
+      // the ground cover every step would cost more than the fall); it does thrash its neighbours' crowns.
+      const log = !!logs?.has(source.body.handle);
       const reach = source.radius + speed * dt + 10;
       this.near(source.position.x, source.position.z, reach, (p) => {
-        if (p.record.broken || (!p.shape && !p.shapeSource) || p.body === source.body) return;
+        if (p.record.broken || (!p.shape && !p.shapeSource) || p.body === source.body || (log && !p.woodHulls)) return;
         if (Math.hypot(p.position.x - source.position.x, p.position.z - source.position.z) > source.radius + p.radius + speed * dt) return;
         if (source.position.y + source.radius + speed * dt < p.position.y || source.position.y - source.radius - speed * dt > p.position.y + p.height) return;
         const contact = source.collider.castCollider(velocity, this.sensor(p), ZERO, 0.015, dt, true);
