@@ -12,6 +12,7 @@ import { fuelOf } from '../sim/engines';
 import { addReserve } from '../sim/fuel';
 import { WATER_RESERVE_MAX } from '../sim/fluids';
 import { cleanPanels } from '../sim/paint';
+import { newNavMarks, restoreNavMarks, type NavMarks } from '../sim/navmarks';
 
 export interface PlayerSave {
   /** Who this seat plays: Chinsky, Leo or Nar. Their face, build and name come with it. */
@@ -148,6 +149,8 @@ export class Campaign {
   difficulty = { drain: 1, aggro: 1, damage: 1 };
   /** The open world as the last Ledger left it (see WorldMemory). */
   worldSave?: WorldSave;
+  /** Each seat's waypoint and the shared points of interest marked on the map (`sim/navmarks.ts`). */
+  nav: NavMarks = newNavMarks();
 
   /** `heroes` picks who sits in each seat; by default Chinsky left and Leo right, or Leo alone. */
   constructor(heroes?: readonly [HeroId, HeroId], solo = false) {
@@ -360,6 +363,7 @@ export class Campaign {
       drugs: this.drugs.map((d) => d.serialize()) as [DrugSave, DrugSave],
       needs: this.needs.map(serializeNeeds) as [NeedsSave, NeedsSave],
       world: this.worldSave,
+      nav: this.nav,
     };
   }
 
@@ -396,6 +400,8 @@ export class Campaign {
     c.hotCamp = d.hotCamp;
     c.difficulty = d.difficulty;
     c.worldSave = (d as { world?: WorldSave }).world;
+    // Saves from before map marks have none.
+    c.nav = restoreNavMarks((d as { nav?: unknown }).nav);
     if (Array.isArray(d.drugs)) c.drugs = [DrugState.restore(d.drugs[0]), DrugState.restore(d.drugs[1])];
     // Saves from before the body had chores have no needs: they start well fed.
     const nd = (d as { needs?: NeedsSave[] }).needs;
