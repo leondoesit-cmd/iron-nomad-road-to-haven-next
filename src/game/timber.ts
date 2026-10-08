@@ -100,7 +100,7 @@ export class Timber implements TreeEvents {
     smoke.emit(x, y, z, dx * 0.6, 0.35, dz * 0.6, 1.1, 0.12, 0.6 + amount * 0.4, w.bark[0] * 1.6, w.bark[1] * 1.5, w.bark[2] * 1.4, 0.3, 0.1, 1.2);
   }
 
-  /** Leaves out of a tree's crown, `n` of them, falling from all over its underside. */
+  /** Leaves out of a tree's crown, `n` of them, falling from all over its underside; a hard blow brings a twig down too. */
   private shake(t: TreeTarget, n: number) {
     const c = t.crown();
     const leaf = WOOD[t.wood].leaf;
@@ -110,6 +110,13 @@ export class Timber implements TreeEvents {
       const a = Math.random() * Math.PI * 2;
       const d = Math.sqrt(Math.random()) * c.r;
       this.leaf(c.x + Math.cos(a) * d, c.y + rand(-0.6, 0.2) * c.h, c.z + Math.sin(a) * d, leaf, floor, 0.4);
+    }
+    if (n >= 3 && Math.random() < 0.3) {
+      const a = Math.random() * Math.PI * 2;
+      const d = Math.sqrt(Math.random()) * c.r * 0.8;
+      const b = WOOD[t.wood].bark;
+      const s = rand(0.8, 1.4);
+      this.chips.throw('chip', c.x + Math.cos(a) * d, c.y - c.h * 0.3, c.z + Math.sin(a) * d, rand(-0.5, 0.5), 0, rand(-0.5, 0.5), s * 5, s * 1.6, s * 0.4, b[0], b[1], b[2], floor);
     }
   }
 
