@@ -69,9 +69,20 @@ function detailHtml(s: StorageSession, e: StorageEntry): string {
 }
 
 /** The whole panel, for one player's half. */
+/** The last page drawn for each open panel, and the panel's version it was drawn at: it is only rebuilt when something changed. */
+const drawn = new WeakMap<StorageSession, { version: number; html: string }>();
+
 export function trunkHtml(p: Player): string {
   const s = storageOf(p);
   if (!s) return '';
+  const hit = drawn.get(s);
+  if (hit && hit.version === s.version) return hit.html;
+  const html = pageHtml(p, s);
+  drawn.set(s, { version: s.version, html });
+  return html;
+}
+
+function pageHtml(p: Player, s: StorageSession): string {
   const v = s.v;
   const K = keys(p);
   const room = roomOf(v, s.entries);
