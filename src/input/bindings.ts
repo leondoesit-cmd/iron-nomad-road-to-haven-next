@@ -38,7 +38,8 @@ export type ActionId =
   | 'eat'
   | 'drink'
   | 'piss'
-  | 'shit';
+  | 'shit'
+  | 'summon';
 
 export interface ActionDef {
   id: ActionId;
@@ -87,6 +88,7 @@ export const ACTIONS: ActionDef[] = [
   { id: 'drink', label: 'Drink', hint: 'Drink from the water reserve, or the lake', group: 'team', btn: [Btn.Drink], devices: ['kb'], optional: true },
   { id: 'piss', label: 'Piss', hint: 'Take a piss: press again or walk off to stop', group: 'team', btn: [Btn.Piss], devices: ['kb'], optional: true },
   { id: 'shit', label: 'Shit', hint: 'Take a shit: press again or walk off to stop', group: 'team', btn: [Btn.Shit], devices: ['kb'], optional: true },
+  { id: 'summon', label: 'Call your ride', hint: 'Your car drives to you, or waits out of sight nearby when it cannot · Press again to call it off (a pad uses the command wheel)', group: 'vehicle', btn: [Btn.Summon], devices: ['kb'], optional: true },
   { id: 'sheet', label: 'Convoy sheet', hint: 'Hold for the convoy sheet · Shares the view button on a pad', group: 'team', pad: Btn.Back, btn: [Btn.Back], devices: ALL, optional: true },
   { id: 'map', label: 'Map', hint: 'Tap to open the map: a closer look, then the whole leg, then close · Hold next to a friend for a high five', group: 'team', pad: Btn.Map, btn: [Btn.Map], devices: ALL, optional: true },
 ];
@@ -143,12 +145,14 @@ const KB_DEFAULT: [KeyMap, KeyMap] = [
     turnLeft: 'KeyZ', turnRight: 'KeyX', fire: 'KeyT', interact: 'KeyE', jump: 'Space', vehicle: 'KeyF', crouch: 'KeyC',
     sprint: 'ShiftLeft', wheel: 'KeyG', reload: 'KeyR', horn: 'KeyH', swap: 'KeyQ', prevBuild: 'Digit1', nextBuild: 'Digit2',
     view: 'KeyB', camera: 'KeyY', sheet: 'Digit3', map: 'KeyV', inventory: 'Tab', use: 'Digit4', eat: 'Digit5', drink: 'Digit6', piss: 'Digit7', shit: 'Digit8',
+    summon: 'Digit9',
   },
   {
     moveUp: 'ArrowUp', moveDown: 'ArrowDown', moveLeft: 'ArrowLeft', moveRight: 'ArrowRight',
     turnLeft: 'BracketLeft', turnRight: 'BracketRight', fire: 'ShiftRight', interact: 'Slash', jump: 'KeyO', vehicle: 'Enter', crouch: 'Period',
     sprint: 'ControlRight', wheel: 'Backspace', reload: 'Comma', horn: 'KeyM', swap: 'KeyN', prevBuild: 'Semicolon', nextBuild: 'Quote',
-    view: 'KeyP', camera: 'KeyL', sheet: 'Backslash', map: 'KeyK', inventory: 'KeyI', use: 'KeyU', eat: 'Digit9', drink: 'Digit0', piss: 'Minus', shit: 'Equal',
+    view: 'KeyP', camera: 'KeyL', sheet: 'Backslash', map: 'KeyK', inventory: 'KeyI', use: 'KeyU', eat: 'Home', drink: 'End', piss: 'Minus', shit: 'Equal',
+    summon: 'PageUp',
   },
 ];
 
@@ -387,6 +391,15 @@ export function importBindings(raw: unknown): Bindings {
   if (Array.isArray(r.kb)) {
     take(r.kb[0], 'kb', b.kb[0] as AnyMap<string>, keyOk);
     take(r.kb[1], 'kb', b.kb[1] as AnyMap<string>, keyOk);
+    // Saves from before the ride could be called kept the second layout's eat and drink on 9 and 0, and 9 now calls the
+    // first layout's ride: they move to Home and End as the defaults did, so two people at one keyboard never share a key.
+    const old1 = r.kb[1];
+    if (old1 && typeof old1 === 'object' && !('summon' in old1)) {
+      const k1 = b.kb[1];
+      const used = new Set<string | undefined>([...Object.values(b.kb[0]), ...Object.values(k1)]);
+      if (k1.eat === 'Digit9' && b.kb[0].summon === 'Digit9' && !used.has('Home')) k1.eat = 'Home';
+      if (k1.drink === 'Digit0' && !used.has('End')) k1.drink = 'End';
+    }
   }
   take(r.mouse, 'mouse', b.mouse as AnyMap<number>, mouseOk);
   // A shared view needs a sheet button to ride on. (Saves from before the share moved off the vehicle button load

@@ -235,7 +235,8 @@ describe('maps in a running scene', () => {
     expect(f0.movers.map((m) => m.seat)).toEqual([0, 1]);
     expect(f0.pins.some((p) => p.kind === 'end')).toBe(true);
     expect(f0.hazards.length).toBe(sc.terrain!.minefields.length);
-    for (let i = 0; i < 400 && !f0.base!.done; i++) sc.mapFrame(sc.compassPins());
+    // The ground bakes a little each rendered frame (`bakeMap`), from the moment the leg loads.
+    for (let i = 0; i < 400 && !f0.base!.done; i++) sc.bakeMap(5);
     expect(f0.base!.done).toBe(true);
     // Drive the first player to a roadside place and it appears; drive on and it stays.
     const site = sc.terrain!.sites.find((s) => s.z > 1200 && (s.kind === 'gasStop' || s.kind === 'hamlet' || s.kind === 'motel' || s.kind === 'farm' || s.kind === 'depot'))!;

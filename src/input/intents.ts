@@ -29,9 +29,12 @@ export const Btn = {
   Drink: 21,
   Piss: 22,
   Shit: 23,
+  /** Not a physical button: call your ride to you, driven by a key. A pad reaches it through the command wheel. */
+  Summon: 24,
+  // 25 is reserved for the drugs shortcut (the inventory work adds `Drugs: 25`).
 } as const;
-/** Logical buttons, including View, Jump, Map and Inventory. */
-export const BTN_COUNT = 24;
+/** Logical buttons, including View, Jump, Map and Inventory. 25 is reserved. */
+export const BTN_COUNT = 26;
 export type BtnName = keyof typeof Btn;
 
 export type DeviceKind = 'pad' | 'keyboard';
