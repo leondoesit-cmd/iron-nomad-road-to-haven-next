@@ -1,6 +1,6 @@
-import { M, shape, type P2, type WB, type WS } from './kit';
+import { M, replacesStock, shape, type Looks, type P2, type WB, type WS } from './kit';
 import { barrel, boxMag, guard, mlok, peep, pistolGrip, post, rings, scope, swivel, trigger } from './parts';
-import { FRAMES, RAKE } from '../../sim/gunFrames';
+import { FRAMES } from '../../sim/gunFrames';
 
 /**
  * The rifles: the AR-pattern carbine and its big brother the marksman rifle, the FAL-pattern battle rifle, the hunting
@@ -34,7 +34,7 @@ interface ArCfg {
 const AR: ArCfg = { key: 'ar', k: 1, zr: -0.048, zf: 0.128, hg: 0.45, bz: 0.468, device: 'a2', barrelR: 0.0095, stock: 'ctr', mag: { len: 0.143, curve: 0.03 }, anod: M.anod(0x26272a, 0.3), poly: M.poly(0x1e1f21, 0.3) };
 const DMR: ArCfg = { key: 'dmr', k: 1.1, zr: -0.052, zf: 0.15, hg: 0.53, bz: 0.63, device: 'brake', barrelR: 0.0115, stock: 'prs', mag: { len: 0.11, curve: 0.012 }, anod: M.anod(0x2a2b2c, 0.3), poly: M.poly(0x232426, 0.3) };
 
-function arPattern(w: WB, c: ArCfg) {
+function arPattern(w: WB, c: ArCfg, looks: Looks) {
   const f = FRAMES[c.key];
   const K = c.key;
   const B = f.bore;
@@ -90,7 +90,10 @@ function arPattern(w: WB, c: ArCfg) {
   if (w.hi) w.turn(`${K}.castle`, [[tubeR, zr - 0.012], [tubeR + 0.0045, zr - 0.012], [tubeR + 0.0045, zr - 0.004], [tubeR, zr - 0.004]], 0, B, steel, w.hi ? 24 : 10);
   w.side(`${K}.endplate`, () => shape([[zr - 0.006, B + 0.012], [zr - 0.002, B + 0.012], [zr - 0.002, B - 0.024, 0.003], [zr - 0.006, B - 0.024, 0.003]]), 0, 0.03 * k, 0.0008, steel);
   const sz = f.stock.z;
-  if (c.stock === 'ctr') {
+  const own = !replacesStock(looks.stock);
+  if (!own) {
+    // A replacement stock goes on the tube (see `gunMods.ts`).
+  } else if (c.stock === 'ctr') {
     // A collapsible carbine stock, half out: a cheek weld on top of the tube, the latch under it, a rubber pad.
     w.side(
       `${K}.ctr`,
@@ -118,7 +121,7 @@ function arPattern(w: WB, c: ArCfg) {
     for (const z of [zr - 0.07, sz + 0.07]) w.tube(0, B + 0.022, z - 0.004, z + 0.004, 0.003, steel);
     w.side(`${K}.pad`, () => shape([[sz, B + 0.022, 0.004], [sz + 0.012, B + 0.022, 0.002], [sz + 0.012, f.stock.y - 0.074, 0.004], [sz, f.stock.y - 0.074, 0.004]]), 0, 0.036, 0.004, M.rubber(0x161617, 0.3));
   }
-  swivel(w, 0, f.stock.y - 0.06, sz + 0.05, steel, false);
+  if (own) swivel(w, 0, f.stock.y - 0.06, sz + 0.05, steel, false);
   // ---- handguard, barrel and muzzle device.
   const half = 0.021 * k;
   mlok(w, K, zf - 0.002, c.hg, B, half, anod);
@@ -152,8 +155,8 @@ function arPattern(w: WB, c: ArCfg) {
   swivel(w, half + 0.002, B - 0.006, c.hg - 0.03, steel, false);
 }
 
-export const ar = (w: WB) => arPattern(w, AR);
-export const dmr = (w: WB) => arPattern(w, DMR);
+export const ar = (w: WB, looks: Looks = {}) => arPattern(w, AR, looks);
+export const dmr = (w: WB, looks: Looks = {}) => arPattern(w, DMR, looks);
 
 
 
@@ -164,7 +167,7 @@ export const dmr = (w: WB) => arPattern(w, DMR);
  * guard, a 20-round steel magazine, the gas tube over the barrel with the charging handle folding out on the LEFT, the
  * gas block with its eared front sight and regulator, a long slotted flash hider, and the long straight stock.
  */
-export function br(w: WB) {
+export function br(w: WB, looks: Looks = {}) {
   const f = FRAMES.br;
   const B = f.bore;
   const steel = M.park(0x2a2c2a, 0.35);
@@ -215,9 +218,11 @@ export function br(w: WB) {
   peep(w, f.rear[2], f.rear[1], B + 0.027, steel, 0.0058, 0.0021);
   // The stock: long, straight, wooden, a steel butt plate.
   const sz = f.stock.z;
-  w.side(`br.stock`, () => shape([[-0.052, B + 0.022, 0.004], [sz + 0.012, B + 0.016, 0.01], [sz + 0.012, -0.088, 0.006], [sz + 0.03, -0.094, 0.01], [-0.14, -0.03, 0.06], [-0.065, -0.004, 0.012], [-0.052, pl - 0.006, 0.004]]), 0, 0.042, w.hi ? 0.009 : 0.004, wood);
-  w.side(`br.butt`, () => shape([[sz, B + 0.016, 0.004], [sz + 0.012, B + 0.016], [sz + 0.012, -0.092], [sz, -0.092, 0.004]]), 0, 0.04, 0.004, steel);
-  swivel(w, 0, -0.07, sz + 0.1, steel, false);
+  if (!replacesStock(looks.stock)) {
+    w.side(`br.stock`, () => shape([[-0.052, B + 0.022, 0.004], [sz + 0.012, B + 0.016, 0.01], [sz + 0.012, -0.088, 0.006], [sz + 0.03, -0.094, 0.01], [-0.14, -0.03, 0.06], [-0.065, -0.004, 0.012], [-0.052, pl - 0.006, 0.004]]), 0, 0.042, w.hi ? 0.009 : 0.004, wood);
+    w.side(`br.butt`, () => shape([[sz, B + 0.016, 0.004], [sz + 0.012, B + 0.016], [sz + 0.012, -0.092], [sz, -0.092, 0.004]]), 0, 0.04, 0.004, steel);
+    swivel(w, 0, -0.07, sz + 0.1, steel, false);
+  }
   swivel(w, 0, B - 0.012, gz + 0.02, steel, false);
 }
 
@@ -360,7 +365,7 @@ export function rifle(w: WB, optic = true) {
  * the action for a steel 30-round magazine, the bolt handle cut and welded straight out to the right, a short barrel in
  * a length of tape- and wire-wrapped water pipe, a drilled-pipe muzzle brake, and sights welded on where they would fit.
  */
-export function carbine(w: WB) {
+export function carbine(w: WB, looks: Looks = {}) {
   const f = FRAMES.carbine;
   const B = f.bore;
   const blued = M.blued(0x22252a, 0.85);
@@ -392,16 +397,12 @@ export function carbine(w: WB) {
   weld(-0.0152, B - 0.013, f.well[2], 0.05, 'z');
   boxMag(w, 'cb', wz0 + 0.001, wz1 - 0.001, f.well[1] + 0.004, f.well[1] - f.mag.y - 0.008, 0.07, 0.027, M.park(0x2c2a26, 0.8), { ribs: 1, flare: 0.006 });
   // The cut-down stock: the wrist and butt of a sporter, its fore-end sawn off under the action; tape round the wrist.
-  const pts: P2[] = [
+  const wrist: P2[] = [
     [0.08, B - 0.002],
     [-0.025, B - 0.002],
     [-0.04, B - 0.008, 0.008],
-    [-0.06, B - 0.012, 0.02],
-    [-0.11, B - 0.002, 0.03],
-    [-0.21, B - 0.002, 0.02],
-    [f.stock.z + 0.012, B - 0.014, 0.006],
-    [f.stock.z + 0.01, -0.1, 0.006],
-    [-0.15, -0.066, 0.12],
+    [-0.07, B - 0.012],
+    [-0.07, -0.05],
     [-0.05, -0.052, 0.012],
     [-0.04, -0.082, 0.004],
     [-0.008, -0.08, 0.006],
@@ -410,9 +411,14 @@ export function carbine(w: WB) {
     [0.07, -0.024],
     [0.08, -0.012],
   ];
-  w.side('cb.stock', () => shape(pts), 0, 0.038, w.hi ? 0.008 : 0.004, wood);
-  for (const [z0, z1] of [[-0.03, -0.006], [-0.22, -0.2]] as [number, number][]) w.side(`cb.tape${z0}`, () => shape([[z0, B + 0.001], [z1, B + 0.001], [z1, -0.07], [z0, -0.072]]), 0, 0.041, 0.004, tape);
-  w.side('cb.pad', () => shape([[f.stock.z - 0.006, B - 0.012, 0.004], [f.stock.z + 0.012, B - 0.014], [f.stock.z + 0.011, -0.1], [f.stock.z - 0.007, -0.1, 0.004]]), 0, 0.04, 0.004, M.rubber(0x1a1817, 0.6));
+  w.side('cb.wrist', () => shape(wrist), 0, 0.038, w.hi ? 0.008 : 0.004, wood);
+  w.side('cb.tapeW', () => shape([[-0.03, B + 0.001], [-0.006, B + 0.001], [-0.006, -0.07], [-0.03, -0.072]]), 0, 0.041, 0.004, tape);
+  if (!replacesStock(looks.stock)) {
+    const butt: P2[] = [[-0.066, B - 0.012], [-0.11, B - 0.002, 0.03], [-0.21, B - 0.002, 0.02], [f.stock.z + 0.012, B - 0.014, 0.006], [f.stock.z + 0.01, -0.1, 0.006], [-0.15, -0.066, 0.12], [-0.066, -0.05]];
+    w.side('cb.butt', () => shape(butt), 0, 0.038, w.hi ? 0.008 : 0.004, wood);
+    w.side('cb.tapeB', () => shape([[-0.22, B + 0.001], [-0.2, B + 0.001], [-0.2, -0.07], [-0.22, -0.072]]), 0, 0.041, 0.004, tape);
+    w.side('cb.pad', () => shape([[f.stock.z - 0.006, B - 0.012, 0.004], [f.stock.z + 0.012, B - 0.014], [f.stock.z + 0.011, -0.1], [f.stock.z - 0.007, -0.1, 0.004]]), 0, 0.04, 0.004, M.rubber(0x1a1817, 0.6));
+  }
   guard(w, 'cb', 0.02, 0.075, -0.024, 0.022, raw, 0.008);
   trigger(w, 'cb', 0.05, -0.024, 0.016, blued);
   // Barrel in its pipe: two wraps of tape, wire twisted round, a hose clamp; the drilled pipe brake.
@@ -431,7 +437,7 @@ export function carbine(w: WB) {
   w.turn('cb.collar', [[0.0098, 0], [0.013, 0], [0.013, 0.012], [0.0098, 0.012]], 0, B, raw, undefined, 0.7, f.front[2] - 0.006);
   w.rbox(0, (B + 0.012 + f.front[1]) / 2, f.front[2], 0.003, f.front[1] - B - 0.012, 0.004, 0.0006, raw);
   w.rbox(0, B + 0.017, f.front[2], 0.01, 0.012, 0.01, 0.002, raw);
-  swivel(w, 0, -0.085, -0.2, raw, false);
+  if (!replacesStock(looks.stock)) swivel(w, 0, -0.085, -0.2, raw, false);
 }
 
 // ---------------------------------------------------------------------------------------------------- lever action
@@ -512,7 +518,7 @@ export function lever(w: WB) {
  * handguard over the gas tube, a heat shield and carrying handle on the barrel, the folded bipod, a tall front sight and
  * a birdcage, and a fixed polymer stock.
  */
-export function lmg(w: WB) {
+export function lmg(w: WB, looks: Looks = {}) {
   const f = FRAMES.lmg;
   const B = f.bore;
   const steel = M.park(0x2d2f2c, 0.45);
@@ -552,8 +558,9 @@ export function lmg(w: WB) {
   pistolGrip(w, 'lm', 0.012, -0.026, -0.012, rakeOf(f.grip.a), 0.1, 0.03, M.stipple(0x1c1d1f, 0.3), { swell: 0.004, groove: true });
   // The fixed stock: a hollow-cored polymer butt in line with the bore.
   const sz = f.stock.z;
-  w.side('lm.stock', () => shape([[-0.105, top - 0.002, 0.004], [sz + 0.01, top - 0.008, 0.008], [sz + 0.012, -0.088, 0.008], [-0.24, -0.06, 0.03], [-0.105, -0.01, 0.006]], w.hi ? [[[-0.14, top - 0.022, 0.01], [sz + 0.05, top - 0.026, 0.01], [sz + 0.05, -0.06, 0.012], [-0.24, -0.04, 0.02], [-0.14, -0.006, 0.01]]] : []), 0, 0.042, 0.003, poly);
-  w.side('lm.pad', () => shape([[sz, top - 0.006, 0.004], [sz + 0.012, top - 0.006], [sz + 0.012, -0.09], [sz, -0.09, 0.004]]), 0, 0.044, 0.003, M.rubber(0x151516));
+  const own = !replacesStock(looks.stock);
+  if (own) w.side('lm.stock', () => shape([[-0.105, top - 0.002, 0.004], [sz + 0.01, top - 0.008, 0.008], [sz + 0.012, -0.088, 0.008], [-0.24, -0.06, 0.03], [-0.105, -0.01, 0.006]], w.hi ? [[[-0.14, top - 0.022, 0.01], [sz + 0.05, top - 0.026, 0.01], [sz + 0.05, -0.06, 0.012], [-0.24, -0.04, 0.02], [-0.14, -0.006, 0.01]]] : []), 0, 0.042, 0.003, poly);
+  if (own) w.side('lm.pad', () => shape([[sz, top - 0.006, 0.004], [sz + 0.012, top - 0.006], [sz + 0.012, -0.09], [sz, -0.09, 0.004]]), 0, 0.044, 0.003, M.rubber(0x151516));
   // Handguard under the front of the receiver, ribbed, over the gas tube.
   w.side('lm.hg', () => shape([[0.17, -0.004], [0.33, 0.0, 0.006], [0.33, -0.03, 0.01], [0.17, -0.034, 0.006]]), 0, 0.05, 0.004, poly);
   if (w.hi) for (let i = 0; i < 6; i++) w.box(0, -0.0345 + i * 0.0002, 0.19 + i * 0.024, 0.044, 0.002, 0.008, poly);
@@ -579,7 +586,7 @@ export function lmg(w: WB) {
   // Rear sight: a peep with wings on the cover's back.
   for (const s of [1, -1]) w.side('lm.rw', () => shape([[f.rear[2] - 0.012, f.top.y], [f.rear[2] + 0.012, f.top.y], [f.rear[2] + 0.008, f.rear[1] + 0.003, 0.004], [f.rear[2] - 0.008, f.rear[1] + 0.003, 0.004]]), s * 0.011, 0.003, 0.0008, steel);
   peep(w, f.rear[2], f.rear[1], f.top.y, steel, 0.006, 0.0022);
-  swivel(w, 0, -0.06, sz + 0.06, steel, false);
+  if (own) swivel(w, 0, -0.06, sz + 0.06, steel, false);
 }
 
 // ---------------------------------------------------------------------------------------------------- crossbow

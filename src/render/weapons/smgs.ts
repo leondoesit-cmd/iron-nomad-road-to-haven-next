@@ -1,4 +1,4 @@
-import { M, shape, type WB } from './kit';
+import { M, replacesStock, shape, type Looks, type WB } from './kit';
 import { barrel, boxMag, guard, peep, pistolGrip, swivel, trigger } from './parts';
 import { FRAMES } from '../../sim/gunFrames';
 
@@ -14,7 +14,7 @@ const rakeOf = (a: [number, number, number]) => a[2] / a[1];
  * under it for a straight 9 mm stick, a polymer pistol grip on a welded bracket, a bent-strap trigger guard, a perforated
  * barrel shroud, a welded wire stock with a taped cheek rod, a peep made from angle iron, and weld beads at every joint.
  */
-export function scrapSmg(w: WB) {
+export function scrapSmg(w: WB, looks: Looks = {}) {
   const f = FRAMES.smg;
   const B = f.bore;
   const tube = M.park(0x3a3a36, 0.85);
@@ -74,12 +74,14 @@ export function scrapSmg(w: WB) {
   peep(w, f.rear[2], f.rear[1], B + 0.021, raw, 0.0062, 0.0026);
   // The wire stock: two rods welded to the end cap, a flat butt plate with a strip of tyre on it, tape on the cheek rod.
   const sz = f.stock.z;
-  w.rod([0, B + 0.013, -0.106], [0, B + 0.022, sz + 0.006], 0.0042, raw);
-  w.rod([0, B - 0.013, -0.106], [0, -0.042, sz + 0.006], 0.0042, raw);
-  ring(0, B, -0.104, 0.014, 8);
-  w.side('sm.butt', () => shape([[sz, B + 0.03, 0.004], [sz + 0.006, B + 0.03, 0.002], [sz + 0.006, -0.065, 0.002], [sz, -0.065, 0.004]]), 0, 0.03, 0, raw);
-  w.side('sm.tyre', () => shape([[sz - 0.008, B + 0.028, 0.004], [sz + 0.001, B + 0.028], [sz + 0.001, -0.063], [sz - 0.008, -0.063, 0.004]]), 0, 0.034, 0.002, M.rubber(0x161616, 0.6));
-  w.turnAlong('sm.cheekT', [[0, 0], [0.0068, 0.02], [0.0068, 0.98], [0, 1]], [0, B + 0.016, -0.17], [0, B + 0.02, -0.27], M.tape(0x26282a, 0.6));
+  if (!replacesStock(looks.stock)) {
+    w.rod([0, B + 0.013, -0.106], [0, B + 0.022, sz + 0.006], 0.0042, raw);
+    w.rod([0, B - 0.013, -0.106], [0, -0.042, sz + 0.006], 0.0042, raw);
+    ring(0, B, -0.104, 0.014, 8);
+    w.side('sm.butt', () => shape([[sz, B + 0.03, 0.004], [sz + 0.006, B + 0.03, 0.002], [sz + 0.006, -0.065, 0.002], [sz, -0.065, 0.004]]), 0, 0.03, 0, raw);
+    w.side('sm.tyre', () => shape([[sz - 0.008, B + 0.028, 0.004], [sz + 0.001, B + 0.028], [sz + 0.001, -0.063], [sz - 0.008, -0.063, 0.004]]), 0, 0.034, 0.002, M.rubber(0x161616, 0.6));
+    w.turnAlong('sm.cheekT', [[0, 0], [0.0068, 0.02], [0.0068, 0.98], [0, 1]], [0, B + 0.016, -0.17], [0, B + 0.02, -0.27], M.tape(0x26282a, 0.6));
+  }
   swivel(w, 0, B - 0.019, -0.09, raw, false);
 }
 
@@ -89,7 +91,7 @@ export function scrapSmg(w: WB) {
  * handguard, a polymer trigger group with a raked grip and the selector on the left, a curved 30-round magazine, the
  * retractable stock on its two struts, and a claw-mounted rail.
  */
-export function policeSmg(w: WB) {
+export function policeSmg(w: WB, looks: Looks = {}) {
   const f = FRAMES.smg2;
   const B = f.bore;
   const steel = M.park(0x262826, 0.3);
@@ -138,8 +140,9 @@ export function policeSmg(w: WB) {
   boxMag(w, 'mp5', 0.084, 0.124, 0.002, f.well[1] - f.mag.y - 0.002, 0.032, 0.022, M.park(0x232526, 0.35), { ribs: 2, flare: 0.004 });
   // The retractable stock: two struts and the butt plate, the latch on the end cap.
   const sz = f.stock.z;
-  for (const [y, s] of [[0.05, 1], [0.05, -1], [0.016, 1], [0.016, -1]] as [number, number][]) w.box(s * 0.0155, y, (sz - 0.098) / 2 + 0.004, 0.004, 0.009, -0.098 - sz, steel);
-  w.side('mp5.butt', () => shape([[sz, 0.072, 0.008], [sz + 0.014, 0.068, 0.004], [sz + 0.016, -0.036, 0.006], [sz + 0.002, -0.044, 0.01]]), 0, 0.044, 0.004, M.rubber(0x171718, 0.3));
+  const own = !replacesStock(looks.stock);
+  if (own) for (const [y, s] of [[0.05, 1], [0.05, -1], [0.016, 1], [0.016, -1]] as [number, number][]) w.box(s * 0.0155, y, (sz - 0.098) / 2 + 0.004, 0.004, 0.009, -0.098 - sz, steel);
+  if (own) w.side('mp5.butt', () => shape([[sz, 0.072, 0.008], [sz + 0.014, 0.068, 0.004], [sz + 0.016, -0.036, 0.006], [sz + 0.002, -0.044, 0.01]]), 0, 0.044, 0.004, M.rubber(0x171718, 0.3));
   w.rbox(0, 0.06, -0.103, 0.014, 0.012, 0.008, 0.002, steel);
   swivel(w, 0, 0.0, -0.08, steel, false);
   swivel(w, 0.02, ct[1], 0.3, steel);

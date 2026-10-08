@@ -13,6 +13,8 @@ import { DEFAULT_LOOK, drawUpperArm, sleeveColor } from './outfit';
 import { weaponGeometry, type Held, type Humanoid, type Palette } from './humanoid';
 import { MuzzleFlash } from './muzzleFlash';
 import { weaponMaterial } from './weapons';
+import { muzzleAt, sightLine } from './gunMods';
+import { parseLooks } from '../sim/gunmods';
 import { ARROW_LEN, BRACE, BowRig } from './bow';
 
 /**
@@ -456,9 +458,11 @@ export class ViewModel {
     this.foreL.geometry = g.fore;
   }
 
-  private setHeld(kind: Held) {
-    if (kind === this.held) return;
+  private setHeld(kind: Held, mods = '') {
+    if (kind === this.held && mods === this.mods) return;
     this.held = kind;
+    this.mods = mods;
+    this.sight = null;
     this.flash.setGun(null);
     this.flash.group.removeFromParent();
     if (this.weapon) {
@@ -478,15 +482,27 @@ export class ViewModel {
       this.weapon = this.bow.riser;
       return;
     }
-    const m = new THREE.Mesh(weaponGeometry(kind, '', 'hi'), weaponMaterial());
+    // The close-up model, with the add-ons fitted: a dot or a scope on the rail is what the sights come up behind.
+    const m = new THREE.Mesh(weaponGeometry(kind, mods, 'hi'), weaponMaterial());
     m.frustumCulled = false;
     this.gun.add(m);
     this.weapon = m;
-    if (isGun(kind) && flashes(kind)) {
+    if (!isGun(kind)) return;
+    const looks = parseLooks(mods);
+    this.sight = sightLine(kind, looks);
+    const tip = muzzleAt(kind, looks);
+    this.tip.set(GUN_POINTS[kind].muzzle[0], tip.y, tip.z);
+    if (flashes(kind)) {
       this.flash.setGun(kind);
+      this.flash.group.position.copy(this.tip).z += 0.005;
       m.add(this.flash.group);
     }
   }
+
+  /** The add-ons on the weapon in hand (their look key), the line its sights or optic look along, and its muzzle's tip. */
+  private mods = '';
+  private sight: { rear: V3; front: V3 } | null = null;
+  private tip = new THREE.Vector3();
 
   /**
    * Pose the arms and the weapon for this frame, in camera space. Reads what the third-person rig was handed (the weapon,
@@ -497,7 +513,7 @@ export class ViewModel {
     this.t += dt;
     const swing = h.swing;
     const kind = h.heldKind;
-    this.setHeld(kind);
+    this.setHeld(kind, h.heldMods);
     this.active = kind !== 'none' || swing > 0;
     if (!this.active) return;
     const spec = kind === 'none' ? FIST : SPECS[kind];
@@ -519,7 +535,7 @@ export class ViewModel {
       Q.setFromRotationMatrix(_m);
       if (ads > 0) {
         // Sights up: the rear sight on the line of sight, the sight line straight down it.
-        const g = GUN_POINTS[kind];
+        const g = this.sight ?? GUN_POINTS[kind];
         const tilt = Math.atan2(g.front[1] - g.rear[1], g.front[2] - g.rear[2]);
         _q2.setFromAxisAngle(_x.set(1, 0, 0), -tilt).multiply(BASE);
         const rear = _v.set(g.rear[0], g.rear[1], g.rear[2]).multiplyScalar(s).applyQuaternion(_q2);
@@ -851,7 +867,7 @@ export class ViewModel {
     const g = GUN_POINTS[this.held];
     const w = this.weapon;
     w.updateWorldMatrix(true, false);
-    w.localToWorld(out.muzzle.set(g.muzzle[0], g.muzzle[1], g.muzzle[2]));
+    w.localToWorld(this.held === 'bow' ? out.muzzle.set(g.muzzle[0], g.muzzle[1], g.muzzle[2]) : out.muzzle.copy(this.tip));
     w.localToWorld(out.port.set(g.port[0], g.port[1], g.port[2]));
     w.localToWorld(out.well.set(g.well[0], g.well[1], g.well[2]));
     w.localToWorld(_v.set(g.rear[0], g.rear[1], g.rear[2]));

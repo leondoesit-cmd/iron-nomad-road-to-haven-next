@@ -24,6 +24,12 @@ import { shared } from '../dispose';
 
 export type Lod = 'hi' | 'lo';
 
+/** The fitted add-ons' looks by slot (`parseLooks` in `sim/gunmods.ts`): a model leaves off what an add-on replaces. */
+export type Looks = Partial<Record<'optic' | 'muzzle' | 'barrel' | 'under' | 'mag' | 'stock' | 'rail', string>>;
+
+/** Whether a stock add-on takes the gun's own stock off (a whole stock) rather than going on the end of it (a pad). */
+export const replacesStock = (look: string | undefined) => look === 'stock_s' || look === 'stock_h' || look === 'stock_t';
+
 /** The finishes the weapon shader knows. */
 export const F = {
   none: 0,
@@ -272,6 +278,32 @@ function finishGeo(src: THREE.BufferGeometry, crease: number, metric: Metric): T
   return r;
 }
 
+/** Turn every triangle of an indexed mesh to face away from the mesh's middle (for convex-ish hand-built parts). */
+function orientOut(g: THREE.BufferGeometry) {
+  const P = g.attributes.position;
+  const I = g.index!;
+  const c = new THREE.Vector3();
+  for (let i = 0; i < P.count; i++) c.x += P.getX(i), c.y += P.getY(i), c.z += P.getZ(i);
+  c.divideScalar(Math.max(1, P.count));
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const d = new THREE.Vector3();
+  for (let t = 0; t < I.count; t += 3) {
+    const i0 = I.getX(t);
+    const i1 = I.getX(t + 1);
+    const i2 = I.getX(t + 2);
+    a.fromBufferAttribute(P, i0);
+    b.fromBufferAttribute(P, i1).sub(a);
+    d.fromBufferAttribute(P, i2).sub(a);
+    const n = b.cross(d);
+    const m = a.add(new THREE.Vector3().fromBufferAttribute(P, i1)).add(new THREE.Vector3().fromBufferAttribute(P, i2)).divideScalar(3).sub(c);
+    if (n.dot(m) < 0) {
+      I.setX(t + 1, i2);
+      I.setX(t + 2, i1);
+    }
+  }
+}
+
 /** How much a vertex with this (local) normal sits on a rounded edge, 0 to 1. */
 function edgeOf(metric: Metric, x: number, y: number, z: number): number {
   const ax = Math.abs(x);
@@ -352,6 +384,23 @@ export class WB {
     this.tag(v0, m.f, undefined, edge);
     this.stats.set('raw', (this.stats.get('raw') ?? 0) + (this.b.idx.length - i0) / 3);
     return this;
+  }
+
+  /** An extruded outline as a template (extruded along its own z, centred), for callers that place it themselves. */
+  extruded(key: string, make: () => THREE.Shape, depth: number, bev: number) {
+    return this.extrudeTpl(`e:${key}`, make, depth, bev);
+  }
+
+  /**
+   * A hand-built mesh as a template (a blade's loft, an axe's wedge): its faces turned to face out from its middle, smooth
+   * within `crease` radians.
+   */
+  custom(key: string, make: () => THREE.BufferGeometry, crease = 0.5) {
+    return cached(`u:${key}:${this.lod}`, () => {
+      const g = make();
+      orientOut(g);
+      return finishGeo(g, crease, 'box');
+    });
   }
 
   private extrudeTpl(key: string, make: () => THREE.Shape, depth: number, bev: number) {

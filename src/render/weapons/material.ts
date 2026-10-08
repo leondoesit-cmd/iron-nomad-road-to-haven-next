@@ -181,9 +181,9 @@ if ( wFin > 0.5 && wFin < 3.5 ) {
   wMetal = 1.0;
 } else if ( wFin > 13.5 && wFin < 14.5 ) {
   // Paint over steel, chipped to the metal on the edges and here and there on the faces.
-  float chips = smoothstep( 0.7, 0.78, wNoise( wP * 260.0 + wSeed * 5.0 ) ) * clamp( vSurf.z, 0.0, 1.0 );
+  float chips = smoothstep( 0.8, 0.86, wNoise( wP * 210.0 + wSeed * 5.0 ) * 0.7 + wNoise( wP * 47.0 + wSeed ) * 0.3 ) * clamp( vSurf.z * 0.9, 0.0, 1.0 );
   float k = max( wEw, chips );
-  diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.45, 0.46, 0.47 ), k );
+  diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.3, 0.3, 0.31 ), k );
   wRough = mix( vSurf.x, 0.35, k );
   wMetal = mix( vSurf.y, 0.95, k );
   wH = -chips * 0.00005;
