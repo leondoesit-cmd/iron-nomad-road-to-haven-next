@@ -1,7 +1,7 @@
 import { clamp } from '../core/math';
 import { heightAt, waterAt, type TerrainDef } from '../world/terrain';
 import type { WaterStyle } from '../world/lakes';
-import { shadeGround, type GroundShade, type MapRect, type MapTile, type TileSource } from './mapdata';
+import { shadeGround, type CoverRect, type GroundShade, type MapRect, type MapTile, type TileSource } from './mapdata';
 
 /**
  * The map's close-up ground: square tiles baked at a few metres a pixel around wherever a map is looking, drawn over the
@@ -12,7 +12,7 @@ import { shadeGround, type GroundShade, type MapRect, type MapTile, type TileSou
 
 /** Pixels per side of a tile's own square. Its image has one more all round, so neighbours blend into each other. */
 const SIZE = 64;
-const KEPT = 80;
+const KEPT = 140;
 /** Frames a tile stays wanted after the last ask (the minimap asks only every few frames). */
 const STALE = 8;
 const key = (ti: number, tj: number) => (ti + 4096) * 8192 + (tj + 4096);
@@ -49,12 +49,14 @@ export class MapTiles implements TileSource {
     /** The whole-leg bake's colouring, once its coarse pass has fixed the height range. */
     private shade: () => GroundShade | null,
     private bounds: MapRect,
-    readonly cell = 4,
-    baseCell = 12,
+    readonly cell: number,
+    /** Pixels per metre above which these tiles are drawn and baked. */
+    minScale: number,
+    /** Roofs, a district's ground and its blocks, painted over the shaded ground as the whole-leg bake does. */
+    private cover: CoverRect[] = [],
   ) {
     this.span = SIZE * cell;
-    // Worth it once a base pixel would be three or more screen pixels across.
-    this.minScale = 3 / baseCell;
+    this.minScale = minScale;
   }
 
   want(r: MapRect) {
@@ -62,8 +64,8 @@ export class MapTiles implements TileSource {
     const ti1 = Math.floor((Math.min(r.x1, this.bounds.x1) - this.bounds.x0) / this.span);
     const tj0 = Math.floor((Math.max(r.z0, this.bounds.z0) - this.bounds.z0) / this.span);
     const tj1 = Math.floor((Math.min(r.z1, this.bounds.z1) - this.bounds.z0) / this.span);
-    // A view so wide it would want dozens of tiles is not zoomed in enough for them to matter.
-    if ((ti1 - ti0 + 1) * (tj1 - tj0 + 1) > 36) return;
+    // A view so wide it would want a hundred tiles is not zoomed in enough for them to matter.
+    if ((ti1 - ti0 + 1) * (tj1 - tj0 + 1) > 100) return;
     this.focus.push({ x: (r.x0 + r.x1) / 2, z: (r.z0 + r.z1) / 2 });
     for (let tj = tj0; tj <= tj1; tj++) {
       for (let ti = ti0; ti <= ti1; ti++) {
@@ -84,6 +86,12 @@ export class MapTiles implements TileSource {
       if (t.x0 + this.span < r.x0 || t.x0 > r.x1 || t.z0 + this.span < r.z0 || t.z0 > r.z1) continue;
       cb(t);
     }
+  }
+
+  /** Is a tile someone asked for lately still unbaked? */
+  get pending(): boolean {
+    for (const t of this.tiles.values()) if (!t.done && this.frame - t.used <= STALE) return true;
+    return false;
   }
 
   /** Finished tiles, for tests. */
@@ -210,6 +218,7 @@ export class MapTiles implements TileSource {
       t.hrow++;
       if (performance.now() >= end && t.hrow < n) return false;
     }
+    this.paintCover(t);
     t.hs = null;
     t.depth = null;
     t.styles = [];
@@ -217,6 +226,30 @@ export class MapTiles implements TileSource {
     this.upload(t);
     this.version++;
     return true;
+  }
+
+  /** Pixel (i, j) of the image covers x0 + (i - 1) * cell onward: fill whole pixels whose centres lie in each patch. */
+  private paintCover(t: Tile) {
+    const n = SIZE + 2;
+    const cell = this.cell;
+    const x0 = t.x0 - cell;
+    const z0 = t.z0 - cell;
+    for (const r of this.cover) {
+      if (r.x1 < x0 || r.x0 > x0 + n * cell || r.z1 < z0 || r.z0 > z0 + n * cell) continue;
+      const i0 = Math.max(0, Math.ceil((r.x0 - x0) / cell - 0.5));
+      const i1 = Math.min(n - 1, Math.floor((r.x1 - x0) / cell - 0.5));
+      const j0 = Math.max(0, Math.ceil((r.z0 - z0) / cell - 0.5));
+      const j1 = Math.min(n - 1, Math.floor((r.z1 - z0) / cell - 0.5));
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          const o = (j * n + i) * 4;
+          t.data[o] = r.rgb[0];
+          t.data[o + 1] = r.rgb[1];
+          t.data[o + 2] = r.rgb[2];
+          t.data[o + 3] = 255;
+        }
+      }
+    }
   }
 
   private upload(t: Tile) {

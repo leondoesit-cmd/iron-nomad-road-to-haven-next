@@ -397,8 +397,11 @@ export function findRoute(g: RoadGraph | null, ax: number, az: number, bx: numbe
   const straight = Math.hypot(bx - ax, bz - az);
   const direct: Route = { pts: [ax, az, bx, bz], length: straight, offStart: 1, offEnd: 0, direct: true };
   if (!g || g.n === 0 || straight < 30) return direct;
-  const from = nearestRoads(g, ax, az, reach, 4);
-  const into = nearestRoads(g, bx, bz, reach, 4);
+  // An end far out in the open still uses the roads to get closer: the search looks wider for a road to leave from.
+  let from = nearestRoads(g, ax, az, reach, 4);
+  if (!from.length) from = nearestRoads(g, ax, az, reach * 4, 4);
+  let into = nearestRoads(g, bx, bz, reach, 4);
+  if (!into.length) into = nearestRoads(g, bx, bz, reach * 4, 4);
   if (!from.length || !into.length) return direct;
   // Node ids: the graph's own, then the start (n), the goal (n + 1), then the entry and exit points on the roads.
   const n = g.n;

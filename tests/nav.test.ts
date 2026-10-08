@@ -82,7 +82,7 @@ describe('the open world bake and its close-up tiles', () => {
     log(`W coarse pass ${coarse.toFixed(1)} ms for ${b.base.w}x${b.base.h}`);
     // Generous for a loaded test machine: in a browser this is a frame or two.
     expect(coarse).toBeLessThan(600);
-    const tiles = new MapTiles(T, () => b.shade, b.bounds, 4, b.base.cell);
+    const tiles = new MapTiles(T, () => b.shade, b.bounds, 6, 0.25);
     const x = roadX(T, 400);
     const r = { x0: x - 100, x1: x + 100, z0: 300, z1: 500 };
     let frames = 0;
@@ -95,7 +95,7 @@ describe('the open world bake and its close-up tiles', () => {
     expect(tiles.doneAt(x, 400)).toBe(true);
     const px = tiles.pixelAt(x, 400)!;
     expect(px[3]).toBe(255);
-    // A view so wide it would want dozens of tiles gets none.
+    // A view so wide it would want a hundred tiles or more gets none.
     const before = tiles.count;
     tiles.want({ x0: -2000, x1: 2000, z0: -1000, z1: 4000 });
     tiles.step(5);
