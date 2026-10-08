@@ -8,7 +8,7 @@ import { drillPose, newDrillPose, type Drill, type HandAt } from '../sim/gunDril
 import { flashes } from '../sim/weaponfx';
 import { GUN_MODELS, type GunModel } from '../data/gear';
 import { shared } from './dispose';
-import { kitMaterial } from './materials';
+import { applyKit } from './materials';
 import { DEFAULT_LOOK, drawUpperArm, sleeveColor } from './outfit';
 import { weaponGeometry, type Held, type Humanoid, type Palette } from './humanoid';
 import { MuzzleFlash } from './muzzleFlash';
@@ -28,10 +28,46 @@ import { ARROW_LEN, BRACE, BowRig } from './bow';
  */
 
 /**
- * Both faces drawn: an arm runs back past the eye, and where the near plane slices a sleeve the inside of the cloth closes
- * the cut instead of leaving it open.
+ * The arms' kit, both faces drawn and the inside lit as a face square to the eye. An arm runs back past the eye, and where
+ * the near plane slices a sleeve, what shows through the cut is the inside of the far wall: lit like that it closes the
+ * cut as a solid end of the arm (the backfaces exactly fill the slice). That is the fallback: where the GPU can clamp depth
+ * (`clampNear`) nothing of the viewmodel is sliced at all.
  */
-const mat = kitMaterial({ side: THREE.DoubleSide });
+/**
+ * Draw an object without the near plane cutting it: its fragments nearer than the plane are kept, their depth clamped to it
+ * (EXT_depth_clamp). The arms run back past the eye to shoulders behind it, so the 0.2 m near plane slices the sleeves open
+ * at the bottom of the frame; clamped, they stay whole. The far, side and behind-the-eye limits still clip as usual. Not the
+ * weapon: a long gun's stock runs back into the cheek, and the near plane is what keeps it out of the picture.
+ */
+function clampNear(m: THREE.Object3D) {
+  m.onBeforeRender = (r) => {
+    const gl = r.getContext();
+    const ext = depthClamp(gl);
+    if (ext) gl.enable(ext.DEPTH_CLAMP_EXT);
+  };
+  m.onAfterRender = (r) => {
+    const gl = r.getContext();
+    const ext = depthClamp(gl);
+    if (ext) gl.disable(ext.DEPTH_CLAMP_EXT);
+  };
+}
+const clampExt = new WeakMap<object, { DEPTH_CLAMP_EXT: number } | null>();
+const depthClamp = (gl: WebGLRenderingContext | WebGL2RenderingContext) => {
+  let e = clampExt.get(gl);
+  if (e === undefined) clampExt.set(gl, (e = gl.getExtension('EXT_depth_clamp') as { DEPTH_CLAMP_EXT: number } | null));
+  return e;
+};
+
+const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: THREE.DoubleSide });
+mat.onBeforeCompile = (shader) => {
+  applyKit(shader, true);
+  shader.fragmentShader = shader.fragmentShader.replace(
+    '#include <emissivemap_fragment>',
+    '#include <emissivemap_fragment>\nif ( !gl_FrontFacing ) normal = vec3( 0.0, 0.0, 1.0 );',
+  );
+};
+mat.customProgramCacheKey = () => 'kit:true:cap';
+shared(mat);
 
 type V3 = [number, number, number];
 
@@ -516,6 +552,7 @@ export class ViewModel {
     const mk = (geo: THREE.BufferGeometry) => {
       const m = new THREE.Mesh(geo, mat);
       m.frustumCulled = false;
+      clampNear(m);
       this.root.add(m);
       return m;
     };
