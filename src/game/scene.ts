@@ -1020,7 +1020,9 @@ export abstract class Scene implements Ctx {
       if (v.pedal) continue;
       const running = v.engineOn && v.fuel > .001 && !v.stats.noEngine;
       if (v.wreck || (!running && Math.abs(v.speed) < .3 && v.temp < .73)) continue;
-      const rpm = clamp(Math.abs(v.speed) / Math.max(6, v.topSpeed), 0, 1);
+      // The drivetrain's own revs and gear when it has one, so the sound follows the shifts.
+      const dr = v.powertrain ? v.drive : null;
+      const rpm = dr && dr.redline > 0 ? clamp(dr.rpmFrac, 0, 1) : clamp(Math.abs(v.speed) / Math.max(6, v.topSpeed), 0, 1);
       const throttle = running ? clamp(v.lastIntent.throttle, 0, 1) : 0;
       const lateralG = clamp((v.body.steerAngle * v.speed) / 5, -1.5, 1.5);
       const fit = v.build?.fit ?? {};
@@ -1036,6 +1038,7 @@ export abstract class Scene implements Ctx {
         x: v.position.x,
         z: v.position.z,
         rpm,
+        gear: dr && dr.redline > 0 ? dr.gear : undefined,
         throttle,
         tier: v.def.tier,
         model: v.def.id,
