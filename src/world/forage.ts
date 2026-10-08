@@ -17,8 +17,8 @@ import { FORAGE_KINDS, type ForageKind, type Shroom } from '../sim/forage';
  * - Prickly pear in the hedges round the old places (every village had its sabra) and here and there along the roads in
  *   dry country.
  * - Za'atar on the open dry hillsides and the grass; yarrow in the meadows.
- * - Mushrooms under the trees in the woods; and liberty caps, every day, in the grass round the old gums of a river's bend
- *   (`world/millBend.ts`).
+ * - Mushrooms under the trees in the woods (liberty caps mostly where it is damp, by water); and liberty caps, every day, in
+ *   the grass round the old gums of a river's bend, a troop at the foot of every face (`world/millBend.ts`).
  */
 
 export interface ForageSpot {
@@ -181,7 +181,8 @@ export function plantForage(def: TerrainDef, cx: number, cz: number, b: ForageBl
         v: Math.floor(hash2(ix, iz, seed + 6) * 3),
         h,
       };
-      if (kind === 'mushroom') spot.shroom = h < 0.48 ? 'field' : h < 0.68 ? 'liberty' : 'deathcap';
+      // Liberty caps want it damp: by the water they are common, in a dry wood rarer than either of the others.
+      if (kind === 'mushroom') spot.shroom = h < 0.46 ? 'field' : h < (byRiver || shore || fen || spring ? 0.74 : 0.58) ? 'liberty' : 'deathcap';
       out.push(spot);
     }
   }

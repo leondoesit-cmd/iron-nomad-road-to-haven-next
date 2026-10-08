@@ -1,12 +1,15 @@
 import { hash2, hashString } from '../core/rng';
 import { NEEDS } from '../sim/needs';
 import { bind, openWound } from '../sim/vitals';
+import { promptLabel } from '../input/input';
+import { knowsShroom, learnShroom, selectWildLot, sortStash } from './wildShrooms';
 import {
   DEATHCAP,
   FORAGE,
   FORAGE_RULES,
   SHROOMS,
-  SHROOM_NAME,
+  SHROOM_LOOK,
+  WILD_ITEM,
   coverOf,
   handfulsLeft,
   handsSafe,
@@ -129,12 +132,13 @@ export class Foraging {
   /** What one person knows of the mushrooms. Kept on the campaign's flags, so it is saved, and it is theirs alone. */
   known(p: Player): Set<Shroom> {
     const out = new Set<Shroom>();
-    for (const sp of SHROOMS) if (this.host.campaign.flags[`forage.${p.hero}.${sp}`]) out.add(sp);
+    for (const sp of SHROOMS) if (knowsShroom(this.host.campaign, p.hero, sp)) out.add(sp);
     return out;
   }
 
   private learn(p: Player, sp: Shroom) {
-    this.host.campaign.flags[`forage.${p.hero}.${sp}`] = true;
+    learnShroom(this.host.campaign, p.hero, sp);
+    sortStash(this.host.campaign, this.host.players);
   }
 
   private blade(p: Player): boolean {
@@ -155,7 +159,7 @@ export class Foraging {
         if (sp === 'liberty') return `Pick liberty caps${count}`;
         return `${wantsToEat(p.needs, 'mushroom') ? 'Eat' : 'Pick'} field mushrooms${count}`;
       }
-      return wantsToEat(p.needs, 'mushroom') ? `Eat the mushrooms? (unknown)${count}` : `Look over the mushrooms (unknown)${count}`;
+      return `Pick ${SHROOM_LOOK[sp]} (unknown)${count}`;
     }
     if (s.kind === 'yarrow') return p.bleed.level > 0 ? 'Pack the wound with yarrow' : 'Pick yarrow (a field dressing)';
     if (s.kind === 'zaatar') return `Cut za'atar (medicine)${count}`;
@@ -247,7 +251,6 @@ export class Foraging {
       p.takeDrug('mushrooms');
     }
     if (o.poison && !this.sick.has(p.index)) this.sick.set(p.index, newSickness());
-    if (o.learn) this.learn(p, o.learn);
     if (o.took) {
       const was = this.picked.get(s.id);
       const fresh = !was || this.day - was.day >= FORAGE[s.kind].regrow;
@@ -256,6 +259,34 @@ export class Foraging {
       if (this.left(s) <= 0) this.unregister(s.id);
     }
     p.note(o.note, o.tone);
+    // Unknown ones go in the stash by their look, the quick belt's mushroom slot pointing at them: eating one is the gamble.
+    if (b.wild) this.stashWild(p, b.wild);
+    if (o.learn) this.learn(p, o.learn);
+  }
+
+  private stashWild(p: Player, sp: Shroom) {
+    const c = this.host.campaign;
+    c.items[WILD_ITEM[sp]]++;
+    this.host.audio.play('pickup', p.pos.x, p.pos.z, 0.4);
+    selectWildLot(p, sp);
+    const key = promptLabel(this.host.input.slots?.[p.index] ?? null, 'Down');
+    const first = !c.flags[`tip.wild.${p.hero}`];
+    if (first) {
+      c.flags[`tip.wild.${p.hero}`] = true;
+      p.selectQuick('wild');
+      p.note(`Kept in the stash, by their look. Tap ${key} to eat one and find out what they are: food, a trip, or poison`, 'info');
+    } else p.note(`${SHROOM_LOOK[sp].charAt(0).toUpperCase() + SHROOM_LOOK[sp].slice(1)} ×${c.items[WILD_ITEM[sp]]} in the stash (quick belt, ${key})`, 'info');
+  }
+
+  /** Death caps eaten from the stash (anywhere) leave a flag; here it becomes the poisoning. */
+  private pickUpSickness() {
+    const c = this.host.campaign;
+    for (const p of this.host.players) {
+      const key = `forage.sick.${p.hero}`;
+      if (!c.flags[key]) continue;
+      delete c.flags[key];
+      if (!this.sick.has(p.index)) this.sick.set(p.index, newSickness());
+    }
   }
 
   // ------------------------------------------------------------------ tick
@@ -285,6 +316,8 @@ export class Foraging {
 
   /** Register the plants near anyone on foot, drop the rest; and the first time someone comes close to one, say what it is. */
   private scan() {
+    this.pickUpSickness();
+    sortStash(this.host.campaign, this.host.players);
     let broken = 0;
     for (const s of this.byId.values()) if (this.vegetationMemory.get(`forage:${s.id}`)?.broken) broken++;
     if (broken !== this.brokenCount) { this.brokenCount = broken; this.dirty = true; }
@@ -319,7 +352,10 @@ export class Foraging {
         continue;
       }
       const t = tickSickness(s, dt, p.hp, p.maxHp);
-      if (t.started) p.note('Cramps, then the sweats. Those mushrooms were death caps', 'bad');
+      if (t.started) {
+        p.note('Cramps, then the sweats. Those mushrooms were death caps', 'bad');
+        this.learn(p, 'deathcap');
+      }
       if (t.hp > 0) p.hp = Math.max(1, p.hp - t.hp);
       p.needs.water = Math.max(0, p.needs.water - t.water);
       p.needs.food = Math.max(0, p.needs.food - t.food);

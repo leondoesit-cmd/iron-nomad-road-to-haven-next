@@ -13,22 +13,32 @@ import { LEAF_ATLAS, LEAF_CELL, leafAtlas } from './proctex';
  * On the foot of each, a face or two: eye sockets where knots fell out, a ridge of a nose, the crack of a mouth, brows and
  * cheeks in the burls, a little lopsided, the way a face is in bark. Sober, they are hardly there.
  *
- * Tripping (`FACE_TRIP.k`, set per view from the viewer's own trip in `GameRenderer`), they come forward: the sockets sink,
- * the brows and nose stand out, the cheeks fill, the mouths work slowly as if saying something, and deep in the eyes there is
- * a glow. Everything the trip adds rides in vertex attributes, so it costs nothing sober and needs no rebuild.
+ * Tripping (`FACE_TRIP.k`, set per view from the viewer's own trip by `game/faceTrip.ts`), they come forward: the sockets
+ * sink and darken, the brows and nose and cheekbones stand out and catch the light, the cheeks fill and empty like breath,
+ * the brows lift and knit, the mouths open and close slowly in phrases as if saying something, and now and then an eye
+ * blinks shut. At the peak there is an eye in each socket, a wet amber iris round a black pupil, and it turns to follow the
+ * one who is tripping; at night a faint glow comes up from deep in the eyes and the mouth. Everything the trip adds rides in
+ * vertex attributes and a handful of uniforms, so it costs nothing sober and never needs a rebuild.
  *
  * Each foot is a `THREE.LOD`: the full mesh (dense round the faces) up close, a plain one beyond, nothing far off.
  */
 
-/** The trip, as the faces see it: strength 0..1 and the trip's own clock. Set per view before it is drawn. */
-export const FACE_TRIP = { k: { value: 0 }, ph: { value: 0 } };
+/**
+ * The trip, as the faces see it, set per view before it is drawn (only the tripping player's view has `k` above 0): strength
+ * 0..1, the trip's own clock, where the viewer's head is (the eyes follow it), and how dark it is (the glow).
+ */
+export const FACE_TRIP = { k: { value: 0 }, ph: { value: 0 }, look: { value: new THREE.Vector3() }, night: { value: 0 } };
 
-/** How strongly a trip brings the faces out: mushrooms most of all, any of the deep psychedelics. */
+/** How strongly a trip brings the faces out: mushrooms most of all, LSD and ayahuasca nearly as much, the rest a little. */
 export function faceStrength(l: Look): number {
   return clamp(l.mush * 0.8 + l.breathe * 0.45 + l.kaleido * 0.7 + l.eye * 0.9 + l.warp * 0.25, 0, 1);
 }
 
-const FINE_TO = 34;
+/** From what strength the eyes open in the sockets and follow the viewer (full by `EYES_FULL`). */
+export const EYES_FROM = 0.45;
+export const EYES_FULL = 0.85;
+
+const FINE_TO = 40;
 const HIDE_AT = 260;
 
 // ---------------------------------------------------------------------------------------------------------------- bark
@@ -83,43 +93,123 @@ function barkTexture(): THREE.DataTexture {
 
 let mat: THREE.MeshStandardMaterial | null = null;
 
-/** The feet's material: bark map over vertex colours, and the trip's displacement, darkening and glow. */
+/**
+ * The faces' vertex work. Attributes (all zero away from a face, and on the stumps):
+ *  - `aFace`: what the trip adds along the normal (m), the holes' darkness, the mouth's working (m), the eye socket's floor;
+ *  - `aMorph`: the brows' and cheeks' motion (m), the wider shading a trip brings, the face's own 0..1 seed (its rhythm);
+ *  - `aEye`: where this point is in the nearest eye (eye radii, across and up), which way the face looks (azimuth), and how
+ *    far a blink pushes the socket's floor out to close it (m);
+ *  - `aNormal2`: the normal of the face at its strongest, blended in with the trip.
+ */
+const FACE_VERTEX = /* glsl */ `#include <begin_vertex>
+{
+  float fk = uFaceK;
+  float fk2 = fk * fk;
+  float fSeed = aMorph.w * 6.2832;
+  float fPh = uFacePh;
+  // Speech in phrases: a while of slow working, a while still.
+  float fPhrase = smoothstep( 0.1, 0.8, 0.5 + 0.5 * sin( fPh * 0.37 + fSeed ) );
+  float fTalk = fPhrase * ( 0.5 + 0.5 * sin( fPh * 2.1 + fSeed * 1.7 + position.y * 2.0 ) );
+  // The brows lift and knit; the cheeks fill and empty; an eye shuts for a moment now and then.
+  float fBrow = sin( fPh * 0.53 + fSeed * 2.3 ) * 0.7 + sin( fPh * 1.31 + fSeed ) * 0.3;
+  float fBreath = sin( fPh * 0.71 + fSeed * 0.9 );
+  float fBlink = pow( max( 0.0, sin( fPh * 0.29 + fSeed * 3.1 ) ), 30.0 );
+  // At the peak an eyeball comes up into each socket (and a blink closes it over).
+  float fOpen = smoothstep( ${EYES_FROM.toFixed(2)}, ${EYES_FULL.toFixed(2)}, fk );
+  float fBall = max( 0.85 * fOpen, fBlink );
+  // Out from the trunk's axis, the way the foot was built (not along the normal: in a deep socket that points sideways, and
+  // the walls would fold across the hole).
+  vec3 fOut = normalize( vec3( position.x, 0.0, position.z ) + vec3( 1e-5, 0.0, 0.0 ) );
+  transformed += fOut * ( aFace.x * fk - aFace.z * fk2 * ( 0.35 + 0.95 * fTalk ) + aMorph.x * fk2 * fBrow + aMorph.y * fk2 * fBreath + aEye.w * fk2 * fBall );
+  transformed.y += aMorph.x * fk2 * fBrow * 0.6;
+  // The eyes turn to the one looking: the viewer's head, in the face's own frame (across, up).
+  vec3 fW = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
+  vec3 fTo = normalize( uFaceLook - fW );
+  float fCa = cos( aEye.z );
+  float fSa = sin( aEye.z );
+  vec2 fLook = vec2( dot( fTo, vec3( -fSa, 0.0, fCa ) ), fTo.y );
+  // From behind, they strain round as far as they go.
+  if ( dot( fTo.xz, vec2( fCa, fSa ) ) < 0.0 ) fLook = normalize( fLook + vec2( 1e-4 ) );
+  vFaceEye = vec4( aEye.xy, clamp( fLook * 0.45, vec2( -0.32 ), vec2( 0.32 ) ) );
+  vFaceMisc = vec2( fOpen * ( 1.0 - fBlink ), aFace.z );
+  vFace = vec4( aFace.y, aFace.w, aMorph.z, clamp( ( aMorph.x + aMorph.y ) * 30.0, 0.0, 1.0 ) );
+}`;
+
+const FACE_COLOUR = /* glsl */ `#include <color_fragment>
+float faceIris = 0.0;
+float faceBall = 0.0;
+float faceWet = 0.0;
+{
+  float fk = uFaceK;
+  // Shadow deep in the holes, darker on a trip, and a wider shading round them; brows and cheekbones catch the light.
+  diffuseColor.rgb *= 1.0 - vFace.x * ( 0.55 + 0.3 * fk );
+  diffuseColor.rgb *= 1.0 - vFace.z * 0.32 * fk;
+  diffuseColor.rgb *= 1.0 + vFace.w * 0.4 * fk;
+  // At the peak an eye in each socket: dark and wet, an amber iris round a slit of a pupil, turned to the viewer, a glint
+  // on it.
+  if ( vFaceMisc.x > 0.002 ) {
+    float r = length( vFaceEye.xy );
+    faceBall = ( 1.0 - smoothstep( 0.46, 0.62, r ) ) * vFaceMisc.x;
+    faceWet = ( 1.0 - smoothstep( 0.25, 0.42, r ) ) * vFaceMisc.x;
+    vec2 e = ( vFaceEye.xy - vFaceEye.zw ) * vec2( 1.0, 1.1 );
+    float d = length( e );
+    float iris = 1.0 - smoothstep( 0.33, 0.39, d );
+    float pupil = 1.0 - smoothstep( 0.16, 0.2, length( e * vec2( 2.8, 1.0 ) ) );
+    vec3 irisC = mix( vec3( 0.95, 0.58, 0.12 ), vec3( 0.5, 0.75, 0.2 ), 0.5 + 0.5 * sin( uFacePh * 0.31 ) ) * ( 0.5 + 0.8 * smoothstep( 0.08, 0.36, d ) );
+    vec3 eyeC = mix( vec3( 0.24, 0.14, 0.07 ) * ( 0.55 + 0.6 * ( 1.0 - r ) ), irisC, iris );
+    eyeC = mix( eyeC, vec3( 0.006 ), pupil );
+    eyeC += ( 1.0 - smoothstep( 0.035, 0.07, length( e - vec2( 0.12, 0.13 ) ) ) ) * 0.8;
+    diffuseColor.rgb = mix( diffuseColor.rgb, eyeC, faceBall );
+    faceIris = iris * ( 1.0 - pupil ) * faceBall;
+  }
+}`;
+
+const FACE_WET = /* glsl */ `#include <roughnessmap_fragment>
+roughnessFactor = mix( roughnessFactor, 0.3, faceWet );`;
+
+const FACE_GLOW = /* glsl */ `#include <emissivemap_fragment>
+{
+  float fk = uFaceK;
+  float fPulse = 0.6 + 0.4 * sin( uFacePh * 2.3 );
+  // The irises glow a little by day and burn at night; deep in the sockets and the mouth an ember comes up after dark.
+  totalEmissiveRadiance += faceIris * vec3( 1.0, 0.58, 0.16 ) * fk * ( 0.35 + 1.6 * uFaceNight );
+  float deep = vFace.y * ( 1.0 - vFaceMisc.x ) + clamp( vFaceMisc.y * 14.0, 0.0, 1.0 ) * vFace.x;
+  totalEmissiveRadiance += deep * fk * fPulse * vec3( 1.0, 0.4, 0.1 ) * ( 0.12 + 1.1 * uFaceNight );
+}`;
+
+/** The feet's material: bark map over vertex colours, and the trip's carving, darkening, motion, eyes and glow. */
 export function faceGumMaterial(): THREE.MeshStandardMaterial {
   if (mat) return mat;
   const m = new THREE.MeshStandardMaterial({ map: barkTexture(), vertexColors: true, roughness: 0.93, metalness: 0 });
   m.onBeforeCompile = (shader) => {
     shader.uniforms.uFaceK = FACE_TRIP.k;
     shader.uniforms.uFacePh = FACE_TRIP.ph;
+    shader.uniforms.uFaceLook = FACE_TRIP.look;
+    shader.uniforms.uFaceNight = FACE_TRIP.night;
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
         `#include <common>
 attribute vec4 aFace;
+attribute vec4 aMorph;
+attribute vec4 aEye;
 attribute vec3 aNormal2;
 uniform float uFaceK;
 uniform float uFacePh;
-varying vec2 vFace;`,
+uniform vec3 uFaceLook;
+varying vec4 vFace;
+varying vec4 vFaceEye;
+varying vec2 vFaceMisc;`,
       )
       .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = normalize( mix( normal, aNormal2, uFaceK ) );\n#ifdef USE_TANGENT\nvec3 objectTangent = vec3( tangent.xyz );\n#endif')
-      .replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-{
-  // aFace: what the trip adds along the normal, the hollows' darkness, the mouth's working, the glow in the eyes.
-  float talk = 0.5 + 0.5 * sin( uFacePh * 1.7 + position.y * 3.1 + position.x * 0.7 );
-  transformed += normal * ( aFace.x * uFaceK - aFace.z * uFaceK * talk );
-  vFace = vec2( aFace.y, aFace.w );
-}`,
-      );
+      .replace('#include <begin_vertex>', FACE_VERTEX);
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float uFaceK;\nuniform float uFacePh;\nvarying vec2 vFace;')
-      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= 1.0 - vFace.x * ( 0.55 + 0.4 * uFaceK );')
-      .replace(
-        '#include <emissivemap_fragment>',
-        '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vFace.y * uFaceK * vec3( 1.0, 0.42, 0.1 ) * ( 0.55 + 0.45 * sin( uFacePh * 2.3 ) ) * 1.4;',
-      );
+      .replace('#include <common>', '#include <common>\nuniform float uFaceK;\nuniform float uFacePh;\nuniform float uFaceNight;\nvarying vec4 vFace;\nvarying vec4 vFaceEye;\nvarying vec2 vFaceMisc;')
+      .replace('#include <color_fragment>', FACE_COLOUR)
+      .replace('#include <roughnessmap_fragment>', FACE_WET)
+      .replace('#include <emissivemap_fragment>', FACE_GLOW);
   };
-  m.customProgramCacheKey = () => 'faceGum';
+  m.customProgramCacheKey = () => 'faceGum2';
   return (mat = shared(m));
 }
 
@@ -167,12 +257,43 @@ function faceShape(f: OldGum['faces'][number]): FaceShape {
   };
 }
 
+/** What the faces of a foot do to one point of its bark, summed over them (see `faceAt`). */
+interface FacePt {
+  /** Displacement along the normal sober, and what the trip adds at full strength (m). */
+  rest: number;
+  trip: number;
+  /** Shadow deep in a hole (0..0.72), the mouth's working (m), the eye socket's floor (0..1). */
+  hole: number;
+  mouth: number;
+  eye: number;
+  /** The brows' and cheeks' motion (m), the wider shading a trip brings (0..1), a blink's push (m). */
+  brow: number;
+  cheek: number;
+  shade: number;
+  lid: number;
+  /** The nearest face's own 0..1 seed (its rhythm) and how near its middle is (for picking it). */
+  seed: number;
+  sd: number;
+  /** Where this point is in its nearest eye (eye radii, across and up), how near that eye is, and its face's azimuth. */
+  eu: number;
+  ev: number;
+  eq: number;
+  az: number;
+}
+
+const newPt = (): FacePt => ({ rest: 0, trip: 0, hole: 0, mouth: 0, eye: 0, brow: 0, cheek: 0, shade: 0, lid: 0, seed: 0, sd: Infinity, eu: 0, ev: 0, eq: Infinity, az: 0 });
+
+function clearPt(p: FacePt) {
+  p.rest = p.trip = p.hole = p.mouth = p.eye = p.brow = p.cheek = p.shade = p.lid = p.seed = p.eu = p.ev = p.az = 0;
+  p.eq = p.sd = Infinity;
+}
+
 /**
- * What a face does to one point of the bark: rest displacement, what the trip adds, darkness, mouth, eye glow. Sober it is
- * carved, not painted: the eyes are knot holes with the bark rolled up in a lip round them, the mouth a split with lips, the
- * nose a burl; the dark is only the shadow deep in a hole. The trip deepens and swells all of it.
+ * What a face does to one point of the bark. Sober it is carved, not painted: the eyes are knot holes with the bark rolled up
+ * in a lip round them, the mouth a split with lips, the nose a burl; the dark is only the shadow deep in a hole. The trip
+ * deepens and swells all of it (`trip`), shades it wider, and gives the brows, cheeks, mouth and eyelids room to move.
  */
-function faceAt(fs: FaceShape, arcR: number, theta: number, y: number, out: number[]) {
+function faceAt(fs: FaceShape, arcR: number, theta: number, y: number, out: FacePt) {
   const s = fs.s;
   const U = (wrap(theta - fs.az) * arcR) / s;
   const V = (y - fs.h) / s;
@@ -185,8 +306,11 @@ function faceAt(fs: FaceShape, arcR: number, theta: number, y: number, out: numb
   let rest = 0;
   let trip = 0;
   let hole = 0;
-  let mouth = 0;
   let eye = 0;
+  let brow = 0;
+  let cheek = 0;
+  let shade = 0;
+  let lid = 0;
   for (const e of fs.eyes) {
     const ct = Math.cos(e.tilt);
     const st = Math.sin(e.tilt);
@@ -198,29 +322,45 @@ function faceAt(fs: FaceShape, arcR: number, theta: number, y: number, out: numb
     // The hole: steep sided, its floor deep in the wood.
     const pit = 1 - smoothstep(0.55, 1.05, q);
     rest -= 0.095 * pit;
-    trip -= 0.1 * pit;
+    trip -= 0.15 * pit;
     hole = Math.max(hole, smoothstep(0.25, 0.85, pit));
     eye = Math.max(eye, smoothstep(0.6, 1, pit));
+    // How far the eyeball comes up into it at the peak, and a blink closes it right over (`FACE_VERTEX`).
+    lid = Math.max(lid, 0.24 * pit);
+    // The socket's shadow, wider than the hole, on a trip.
+    shade = Math.max(shade, 1 - smoothstep(0.9, 1.7, q));
+    // Where the pupil sits: this eye's own frame, without the ragged edge.
+    if (q < out.eq) {
+      out.eq = q;
+      out.eu = (dx * ct + dy * st) / e.rx;
+      out.ev = (-dx * st + dy * ct) / e.ry;
+      out.az = fs.az;
+    }
     // The lip of rolled bark round it.
     const lip = Math.exp(-Math.pow((q - 1.3) / 0.3, 2));
     rest += 0.02 * lip * broken;
-    trip += 0.035 * lip;
-    // The brow: a burl over it.
+    trip += 0.05 * lip;
+    // The brow: a burl over it, that lifts and knits.
     const b = g(U - e.x * 1.05, V - e.y - 0.15, 0.16, 0.05);
     rest += 0.016 * b * (0.5 + broken);
-    trip += 0.055 * b;
+    trip += 0.075 * b;
+    brow = Math.max(brow, 0.045 * g(U - e.x * 1.05, V - e.y - 0.13, 0.2, 0.08));
+    // Under the brow, in its shadow.
+    shade = Math.max(shade, 0.6 * g(U - e.x, V - e.y - 0.06, 0.16, 0.06));
   }
-  // The nose: a ridge down from between the eyes to a rounded burl of a tip.
+  // The nose: a ridge down from between the eyes to a rounded burl of a tip, shadowed either side.
   const nv = clamp((V + 0.02) / -0.26, 0, 1);
   const nd = Math.hypot(U, V - (-0.02 - 0.26 * nv));
   const ridge = Math.exp(-(nd * nd) / (0.06 * 0.06)) * fs.nose;
   const tip = g(U, V + 0.29, 0.08, 0.065) * fs.nose;
   rest += 0.025 * ridge + 0.03 * tip;
-  trip += 0.06 * ridge + 0.07 * tip;
+  trip += 0.075 * ridge + 0.085 * tip;
   for (const sx of [-1, 1]) {
     const n = g(U - sx * 0.05, V + 0.34, 0.025, 0.02);
     rest -= 0.02 * n;
+    trip -= 0.02 * n;
     hole = Math.max(hole, n * 0.5);
+    shade = Math.max(shade, 0.55 * g(U - sx * 0.1, V + 0.17, 0.035, 0.13));
   }
   // The mouth: a split in the wood, flat-ended and a little curved, with the bark swollen above and below it.
   const m = fs.mouth;
@@ -229,29 +369,41 @@ function faceAt(fs: FaceShape, arcR: number, theta: number, y: number, out: numb
   const along = Math.exp(-Math.pow(Math.abs(mu), 4));
   const mk = along * Math.exp(-(mvc * mvc) / (0.034 * 0.034));
   rest -= 0.06 * mk;
-  trip -= 0.07 * mk;
+  trip -= 0.09 * mk;
   hole = Math.max(hole, smoothstep(0.35, 0.9, mk));
-  mouth = 0.07 * mk;
+  const mouth = 0.08 * along * Math.exp(-(mvc * mvc) / (0.045 * 0.045));
+  shade = Math.max(shade, 0.8 * along * Math.exp(-(mvc * mvc) / (0.08 * 0.08)));
   for (const sy of [-1, 1]) {
     const l = along * Math.exp(-Math.pow((mvc - sy * 0.07) / 0.04, 2));
     rest += 0.012 * l * broken;
-    trip += 0.03 * l;
+    trip += 0.045 * l;
   }
-  // Cheeks and the swell of the chin.
+  // Cheeks and the swell of the chin; the cheeks breathe.
   for (const sx of [-1, 1]) {
     const c = g(U - sx * 0.25, V + 0.26, 0.11, 0.1);
     rest += 0.015 * c;
-    trip += 0.035 * c;
+    trip += 0.05 * c;
+    cheek = Math.max(cheek, 0.028 * c);
   }
   const chin = g(U - m.x, V - m.y + 0.17, 0.16, 0.08);
   rest += 0.015 * chin;
-  trip += 0.025 * chin;
-  out[0] += rest * s;
-  out[1] += trip * s;
+  trip += 0.035 * chin;
+  out.rest += rest * s;
+  out.trip += trip * s;
   // Shadow only deep in a hole: the floor of a knot, the inside of the split.
-  out[2] = Math.max(out[2], Math.pow(hole, 1.8) * 0.72);
-  out[3] += mouth * s;
-  out[4] = Math.max(out[4], eye);
+  out.hole = Math.max(out.hole, Math.pow(hole, 1.8) * 0.72);
+  out.mouth += mouth * s;
+  out.eye = Math.max(out.eye, eye);
+  out.brow = Math.max(out.brow, brow * s);
+  out.cheek = Math.max(out.cheek, cheek * s);
+  out.shade = Math.max(out.shade, clamp(shade, 0, 1));
+  out.lid = Math.max(out.lid, lid * s);
+  // The face this point belongs to, for its rhythm: the one whose middle is nearest.
+  const near = Math.hypot(U, V + 0.2);
+  if (near < out.sd) {
+    out.sd = near;
+    out.seed = ((fs.seed % 997) + 1) / 998;
+  }
 }
 
 const C_DARK = new THREE.Color(0x4e3324);
@@ -339,7 +491,11 @@ export function gumFootGeometry(g: OldGum, fine: boolean): THREE.BufferGeometry 
   const col: number[] = [];
   const uv: number[] = [];
   const face: number[] = [];
-  const f5 = [0, 0, 0, 0, 0];
+  const morph: number[] = [];
+  const eyes: number[] = [];
+  const fp = newPt();
+  // Each face's arc radius, once (it is the same for every point of it).
+  const arcR = faces.map((f) => radius(f.az, f.h));
   const uRep = Math.max(2, Math.round((TAU * r) / 1.3));
   for (let j = 0; j < nRing; j++) {
     const cap = j >= YS.length ? 0 : 1;
@@ -372,13 +528,13 @@ export function gumFootGeometry(g: OldGum, fine: boolean): THREE.BufferGeometry 
           rot = -lens;
         }
       }
-      f5[0] = f5[1] = f5[2] = f5[3] = f5[4] = 0;
-      if (cap === 1) for (const f of faces) faceAt(f, radius(f.az, f.h), th, y, f5);
+      clearPt(fp);
+      if (cap === 1) faces.forEach((f, k) => faceAt(f, arcR[k], th, y, fp));
       const c = Math.cos(th);
       const s = Math.sin(th);
-      const R0 = R + f5[0];
+      const R0 = R + fp.rest;
       pos.push(c * R0, y, s * R0);
-      pos2.push(c * (R0 + f5[1]), y, s * (R0 + f5[1]));
+      pos2.push(c * (R0 + fp.trip), y, s * (R0 + fp.trip));
       // Bark: dark, red-brown and rough below, pale smooth patches spreading up toward the stems, black where fire
       // took it, the rotten heartwood in a split.
       const n = noise2(c * 2.2 + y * 0.55, s * 2.2 - y * 0.75, seed + 5);
@@ -395,7 +551,12 @@ export function gumFootGeometry(g: OldGum, fine: boolean): THREE.BufferGeometry 
       if (y < 0.15) _c.multiplyScalar(0.72 + 0.28 * smoothstep(-0.3, 0.15, y));
       col.push(_c.r, _c.g, _c.b);
       uv.push((th / TAU) * uRep, y / 1.6);
-      face.push(f5[1], f5[2], f5[3], f5[4]);
+      // The plain mesh far off keeps the carving but not the moving parts: its points are too far apart for eyes.
+      face.push(fp.trip, fp.hole, fp.mouth, fine ? fp.eye : 0);
+      morph.push(fine ? fp.brow : 0, fine ? fp.cheek : 0, fp.shade, fp.seed);
+      // Eye coordinates only in and round a socket, far out (9) elsewhere: between the two eyes the nearest one flips, and
+      // a triangle across the flip would otherwise blend through 0 and draw an eye on the bridge of the nose.
+      eyes.push(fine && fp.eq < 1.25 ? fp.eu : 9, fine && fp.eq < 1.25 ? fp.ev : 9, fp.az, fine ? fp.lid : 0);
     }
   }
   const idx: number[] = [];
@@ -417,6 +578,8 @@ export function gumFootGeometry(g: OldGum, fine: boolean): THREE.BufferGeometry 
   col.push(C_RED.r * 0.8, C_RED.g * 0.8, C_RED.b * 0.8);
   uv.push(0, ty / 1.6);
   face.push(0, 0, 0, 0);
+  morph.push(0, 0, 0, 0);
+  eyes.push(9, 9, 0, 0);
   const last = (nRing - 1) * row;
   for (let i = 0; i < nT; i++) idx.push(last + i, centre, last + i + 1);
   const geo = new THREE.BufferGeometry();
@@ -430,7 +593,11 @@ export function gumFootGeometry(g: OldGum, fine: boolean): THREE.BufferGeometry 
   geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geo.setAttribute('aFace', new THREE.Float32BufferAttribute(face, 4));
+  geo.setAttribute('aMorph', new THREE.Float32BufferAttribute(morph, 4));
+  geo.setAttribute('aEye', new THREE.Float32BufferAttribute(eyes, 4));
   geo.computeBoundingSphere();
+  // Room for the trip's swelling and the blinks, so a foot is never culled while it still shows.
+  geo.boundingSphere!.radius += 0.3;
   return geo;
 }
 
@@ -488,6 +655,10 @@ export function stumpGeometry(stumps: Stump[], ox: number, oz: number): THREE.Bu
   geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geo.setAttribute('aFace', new THREE.Float32BufferAttribute(new Float32Array((pos.length / 3) * 4), 4));
+  geo.setAttribute('aMorph', new THREE.Float32BufferAttribute(new Float32Array((pos.length / 3) * 4), 4));
+  const noEye = new Float32Array((pos.length / 3) * 4);
+  for (let i = 0; i < noEye.length; i += 4) noEye[i] = noEye[i + 1] = 9;
+  geo.setAttribute('aEye', new THREE.Float32BufferAttribute(noEye, 4));
   geo.computeBoundingSphere();
   return geo;
 }
