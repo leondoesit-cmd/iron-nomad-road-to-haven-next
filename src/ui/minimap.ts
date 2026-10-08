@@ -955,7 +955,7 @@ export class MapPainter {
         if (pin.kind === 'river' || pin.kind === 'ping' || pin.kind === 'ambush') continue;
         const name = PIN_NAME[pin.kind];
         if (!name) continue;
-        const label = pin.label && pin.label.length > 1 ? `${name}: ${pin.label}` : name;
+        const label = pin.label && pin.label.length > 1 && !name.toLowerCase().includes(pin.label.toLowerCase()) ? `${name}: ${pin.label}` : name;
         consider({ kind: 'pin', label, id: 0, x: pin.x, z: pin.z }, P.x(pin.x, pin.z), P.y(pin.x, pin.z));
       }
     }

@@ -373,7 +373,7 @@ export function mapNavInput(host: MapNavHost, p: Player, it: PlayerIntent, dt: n
   }
   if (nav.naming) {
     // Typing: the game hears nothing from this seat but the pedals.
-    strip(it, driving);
+    strip(it, driving, true);
     return;
   }
   const s = host.input.settings;
@@ -415,7 +415,7 @@ export function mapNavInput(host: MapNavHost, p: Player, it: PlayerIntent, dt: n
     }
   } else if (confirm) {
     const h = nav.hover;
-    if (!acts) nav.say('Waypoints work on the surface');
+    if (!acts) nav.say('No waypoints on this map');
     else if (h?.kind === 'list') {
       // A row of the list: go and look at that mark, cursor on it.
       nav.cx = h.x;
@@ -432,7 +432,7 @@ export function mapNavInput(host: MapNavHost, p: Player, it: PlayerIntent, dt: n
     }
   } else if (mark) {
     const h = nav.hover;
-    if (!acts) nav.say('Marks work on the surface');
+    if (!acts) nav.say('No marks on this map');
     else if (h && (h.kind === 'poi' || h.kind === 'list')) {
       const poi = acts.pois().find((q) => q.id === h.id);
       if (poi) {
@@ -451,7 +451,7 @@ export function mapNavInput(host: MapNavHost, p: Player, it: PlayerIntent, dt: n
     p.mapMode = 0;
     nav.close();
   }
-  strip(it, driving);
+  strip(it, driving, !!nav.menu || !!nav.naming);
 }
 
 /**
@@ -459,9 +459,10 @@ export function mapNavInput(host: MapNavHost, p: Player, it: PlayerIntent, dt: n
  * menus' own buttons; driving, only the look and the map's buttons, so the car is still driven (on keys the move keys are
  * throttle and steering, on a pad the triggers and the left stick).
  */
-function strip(it: PlayerIntent, driving: boolean) {
+function strip(it: PlayerIntent, driving: boolean, menu = false) {
   const pad = it.device === 'pad';
-  const mask = !driving ? TAKE_FOOT : pad ? TAKE_DRIVE_PAD : TAKE_DRIVE_KB;
+  // With a menu open, the D-pad steps through it: it must not also open the quick belt or the wheel.
+  const mask = (!driving ? TAKE_FOOT : pad ? TAKE_DRIVE_PAD : TAKE_DRIVE_KB) | (menu && pad ? bit(Btn.Up) | bit(Btn.Down) : 0);
   it.held &= ~mask;
   it.pressed &= ~mask;
   it.released &= ~mask;

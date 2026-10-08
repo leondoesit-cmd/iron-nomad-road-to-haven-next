@@ -1009,6 +1009,8 @@ export class Player implements Pilot {
     if (this.hitCooldown > 0) this.hitCooldown -= dt;
     if (this.invuln > 0) this.invuln -= dt;
     this.sinceHit += dt;
+    // The open big map takes the cursor's input before anything reads it (and, on foot, keeps the feet still): ui/mapnav.ts.
+    if (this.mapMode > 0 && this.state !== 'dead') this.ctx.mapInput?.(this, it, dt);
     this.updateDrugs(dt, it);
     if (this.relief && this.state !== 'foot') this.endRelief('quiet');
     this.sprintingNow = false;
@@ -1027,8 +1029,6 @@ export class Player implements Pilot {
       if (!beltBusy) this.offerFive();
     }
     if (this.mapMode >= this.ctx.mapModes) this.mapMode = 0;
-    // The open big map takes the cursor's input (and, on foot, keeps the feet still): see ui/mapnav.ts.
-    if (this.mapMode > 0 && this.state !== 'dead') this.ctx.mapInput?.(this, it, dt);
     if (wasPressed(it, Btn.Summon) && this.state !== 'dead') {
       if (this.ctx.summon) this.ctx.summon(this);
       else this.note('No ride to call here', 'info');

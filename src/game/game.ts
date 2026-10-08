@@ -27,6 +27,7 @@ import { InventoryScreen } from '../ui/inventory';
 import { TutorialDirector, TRAINING_STEPS } from './tutorial';
 import { setupStoryCampaign } from './story';
 import { CoachUI } from '../ui/coach';
+import { navOf } from '../ui/mapnav';
 import type { Player } from './player';
 import type { Vehicle } from './vehicle';
 import { BenchmarkRun, type BenchmarkReport } from './benchmark';
@@ -856,6 +857,11 @@ export class Game {
       const it = this.input.intents[p];
       const pl = sc.players[p];
       if (!pl || pl.state === 'dead') continue;
+      // A menu open on the big map has the D-pad (ui/mapnav.ts).
+      if (pl.mapMode > 0 && navOf(pl).menu) {
+        this.wheelHold[p] = 0;
+        continue;
+      }
       if (isHeld(it, Btn.Up)) {
         this.wheelHold[p] += FIXED_STEP;
         if (this.wheelHold[p] > 0.25) {
