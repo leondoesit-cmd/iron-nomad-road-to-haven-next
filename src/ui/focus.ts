@@ -24,6 +24,8 @@ export class FocusUI {
   /** Extra per-tick hook so panels can read other buttons (e.g. LB/RB tab switching). */
   onTick: ((input: InputManager) => void) | null = null;
   private clickHandlers = new WeakMap<HTMLElement, (e: MouseEvent) => void>();
+  /** The element each player's ring is drawn on now, so `paint` only touches the DOM when a ring moves. */
+  private painted: [HTMLElement | null, HTMLElement | null] = [null, null];
 
   setItems(items: FocusItem[], keepFocusByKey?: (string | null)[]) {
     this.items = items.filter((i) => i.el.isConnected);
@@ -55,14 +57,22 @@ export class FocusUI {
   clear() {
     for (const it of this.items) it.el.classList.remove('focusable', 'f0', 'f1');
     this.items = [];
+    this.painted = [null, null];
   }
 
+  /**
+   * Put each player's ring on their focused item. Runs every tick a menu is open, so it writes classes only when a ring
+   * has moved (or its element was replaced): an unchanged menu costs no style work at all.
+   */
   paint() {
-    for (const it of this.items) it.el.classList.remove('f0', 'f1');
-    for (let p = 0; p < this.seats; p++) {
-      if (!this.active || (this.owner !== null && p !== this.owner)) continue;
-      const cur = this.items[this.cursor[p]];
-      cur?.el.classList.add(`f${p}`);
+    for (let p = 0; p < 2; p++) {
+      const on = p < this.seats && this.active && (this.owner === null || p === this.owner);
+      const el = on ? (this.items[this.cursor[p]]?.el ?? null) : null;
+      const was = this.painted[p];
+      if (el === was && (!el || el.classList.contains(`f${p}`))) continue;
+      was?.classList.remove(`f${p}`);
+      el?.classList.add(`f${p}`);
+      this.painted[p] = el;
     }
   }
 
