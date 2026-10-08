@@ -1,4 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
+import type { AmmoKind } from '../sim/ballistics';
+import type { WoodKind } from '../sim/treeDamage';
 
 export { RAPIER };
 export type Collider = RAPIER.Collider;
@@ -61,6 +63,63 @@ export interface PhysicsImpact {
   energy: number;
   kind: 'contact' | 'bullet' | 'blast' | 'cut' | 'blunt';
   radius?: number;
+  /** For a bullet: the round, which decides how it tears leaves and wood. */
+  ammo?: AmmoKind;
+}
+
+/**
+ * A tree's wood as weapons see it: a standing trunk (rounds cut a notch in it until it goes over), its stump, or its
+ * fallen top (those only chip). Registered by `render/vegetation.ts` against the collider's handle in `PhysicsWorld.trees`.
+ */
+export interface TreeTarget {
+  readonly wood: WoodKind;
+  readonly standing: boolean;
+  /** True while it moves (a falling top): a mark laid on it would be left hanging in the air. */
+  moving(): boolean;
+  /** Radius of the stem at a point, m, for the size of the marks (0 when unknown). */
+  stemRadius(x: number, y: number, z: number): number;
+  /** The crown, for leaves shaken out of it: its centre, half width and half height. Null for bare wood. */
+  crown(): { x: number; y: number; z: number; r: number; h: number } | null;
+  /** How hard the wood is now (charred wood is weaker), for how far a round goes through it. */
+  hardness(): number;
+  /** A round has worked the wood here. Returns the share of the section gone at that height (0 when it cannot be notched). */
+  shot(s: TreeShot): number;
+}
+
+export interface TreeShot {
+  ammo: AmmoKind;
+  /** Speed it struck at and left the far side at (0 if it stayed in), m/s. */
+  speed: number;
+  exit: number;
+  x: number; y: number; z: number;
+  dx: number; dy: number; dz: number;
+  /** Player index of whoever fired it, or -1. */
+  by: number;
+}
+
+/** A tree going over: its top as a rigid body, and what the scene needs to follow it down. */
+export interface TreeFall {
+  wood: WoodKind;
+  body: RigidBody;
+  /** Ends of its trunk in the body's own frame (m): the break and the top. */
+  butt: [number, number, number];
+  tip: [number, number, number];
+  /** Trunk radius at the break and the crown's radius, m. */
+  radius: number;
+  crown: number;
+  mass: number;
+  /** Where it broke (world) and which way it is going over. */
+  x: number; y: number; z: number;
+  dx: number; dz: number;
+  by: number;
+}
+
+/** What the scene does when trees break and land, and when leaves are torn off (`game/timber.ts`). */
+export interface TreeEvents {
+  snapped(f: TreeFall): void;
+  landed(f: TreeFall, x: number, y: number, z: number, speed: number): void;
+  /** `n` leaves torn loose round a point, `spread` metres across, in a colour. */
+  leaves(x: number, y: number, z: number, n: number, rgb: readonly [number, number, number], spread: number): void;
 }
 
 export interface MovingCollider {
@@ -105,6 +164,10 @@ export class PhysicsWorld {
   kinematicVelocity = new Map<number, RAPIER.Vector>();
   private events?: RAPIER.EventQueue;
   contactForces: { a: number; b: number; x: number; y: number; z: number }[] = [];
+  /** Wood that rounds can work, by collider handle (see `TreeTarget`). */
+  trees = new Map<number, TreeTarget>();
+  /** The scene's effects for trees breaking and leaves torn off; absent in bare physics. */
+  treeEvents: TreeEvents | null = null;
 
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -228,6 +291,7 @@ export class PhysicsWorld {
   removeCollider(c: Collider) {
     this.surfaces.delete(c.handle);
     this.impactHandlers.delete(c.handle);
+    this.trees.delete(c.handle);
     this.world.removeCollider(c, false);
   }
 

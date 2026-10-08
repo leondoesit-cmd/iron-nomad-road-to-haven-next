@@ -62,6 +62,12 @@ export interface VegetationRecord {
   /** Fallen pose: position and quaternion; retained when its chunk sleeps or a save is loaded. */
   pose?: [number, number, number, number, number, number, number];
   direction?: [number, number];
+  /** Rounds have chewed a notch: the share of the section gone in each band up the trunk (`sim/treeDamage.ts`). */
+  notch?: number[];
+  /** Which way the rounds that cut it were going (x, z): the notch faces back along it. */
+  notchDir?: [number, number];
+  /** Snapped there by gunfire, at this height up its own model (model units): its stump stands, its top lies at `pose`. */
+  cut?: number;
 }
 export type VegetationMemory = Map<string, VegetationRecord>;
 export const vegetationKey = (kind: string, x: number, z: number) => `${kind}:${Math.round(x * 100)}:${Math.round(z * 100)}`;
