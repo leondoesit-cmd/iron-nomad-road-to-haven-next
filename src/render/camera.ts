@@ -43,6 +43,11 @@ const _lookAt = new THREE.Vector3();
 const _from = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 
+/** Seconds the camera takes to glide from a chase view into the eyes (getting out of a car, closing the inventory). */
+const EYE_GLIDE = 0.38;
+/** A chase camera further than this from the eyes was teleported with its player (a respawn, a new scene): cut, don't glide. */
+const EYE_GLIDE_MAX = 22;
+
 /**
  * Chase camera tuned for the short, wide strip each player gets: it sits far back and high,
  * pulls back with speed, and uses a shoulder offset on foot.
@@ -64,6 +69,14 @@ export class ChaseCamera {
   groundAt: (x: number, z: number) => number = () => 0;
   fovKick = 0;
   private kick: CamParams['kick'] = undefined;
+  /** The last update was at the eyes. */
+  private wasEye = false;
+  /** An update has placed this camera at all (a fresh camera has no pose to glide from). */
+  private posed = false;
+  /** Glide into the eyes still to go: 1 just after a chase view handed over, 0 once there. */
+  private glide = 0;
+  private glideFrom = new THREE.Vector3();
+  private glideLook = new THREE.Vector3();
 
   addShake(a: number) {
     this.shake = Math.min(1.2, this.shake + a);
@@ -73,13 +86,32 @@ export class ChaseCamera {
     this.initialized = false;
   }
 
+  /**
+   * How far into the eyes the view has come: 1 when it is there (or was never anywhere else), less while it is still gliding
+   * in from a chase view. The owner's body and the first-person arms swap over near the end of the glide.
+   */
+  get eyeBlend(): number {
+    return 1 - this.glide;
+  }
+
   update(dt: number, t: CamTarget, mode: CamMode, p: CamParams) {
     this.mode = mode;
     this.kick = p.kick;
     if (p.eye) {
+      // Coming from a chase view, ease into the eyes instead of cutting, unless the camera was somewhere else entirely.
+      if (!this.wasEye && this.posed && this.pos.distanceTo(p.eye) < EYE_GLIDE_MAX) {
+        this.glide = 1;
+        this.glideFrom.copy(this.pos);
+        this.glideLook.copy(this.look);
+      } else if (!this.wasEye) this.glide = 0;
+      this.wasEye = true;
+      this.posed = true;
       this.updateFirst(dt, t, mode, p, p.eye);
       return;
     }
+    this.wasEye = false;
+    this.posed = true;
+    this.glide = 0;
     const speedFrac = clamp(t.speed / Math.max(1, t.topSpeed), 0, 1);
     const targetDist = (p.dist ?? 5) * (1 + 0.25 * speedFrac);
     const targetHeight = p.height ?? 2;
@@ -181,6 +213,14 @@ export class ChaseCamera {
     const cp = Math.cos(pitch);
     this.pos.copy(eye);
     this.look.set(eye.x + Math.sin(yaw) * cp * 25, eye.y + Math.sin(pitch) * 25, eye.z + Math.cos(yaw) * cp * 25);
+    if (this.glide > 0) {
+      // Smootherstep from where the chase view was to the eyes, position and aim point alike: the move starts and lands softly.
+      this.glide = Math.max(0, this.glide - dt / EYE_GLIDE);
+      const x = 1 - this.glide;
+      const w = x * x * x * (x * (x * 6 - 15) + 10);
+      this.pos.lerpVectors(this.glideFrom, this.pos, w);
+      this.look.lerpVectors(this.glideLook, this.look, w);
+    }
     this.initialized = true;
     this.fwd.set(Math.sin(yaw), 0, Math.cos(yaw));
     // Keep the orbit distances warm so leaving first person eases out instead of jumping.
