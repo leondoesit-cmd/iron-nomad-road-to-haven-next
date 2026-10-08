@@ -13,8 +13,9 @@ import type { Zone } from '../sim/cargo';
 /**
  * Cargo you can see on a car: what was put on the roof, in the bed or in the rear cage (`sim/cargo.ts` says what each place
  * holds and whether it is secure). Each item is drawn as itself, at a spot in that place's deck, in the chassis frame. What
- * is stowed INSIDE (boot, cab, panniers) is not drawn at all, and the jerrycan rack and the spare-wheel carrier draw their own
- * cans and tyre as part of the fitted model.
+ * is stowed INSIDE (a boot, a cab) is drawn smaller on its own spot of the boot floor (`buildStowedMesh`, spots from
+ * `bootDeck.ts`); a bike's panniers are closed bags. The jerrycan rack and the spare-wheel carrier draw their own cans and
+ * tyre as part of the fitted model.
  */
 
 /** A flat area cargo can sit on, in the chassis frame. */
@@ -115,6 +116,37 @@ export function buildCargoMesh(decks: { deck: Deck; entries: { id: string; c: Ca
   if (!n) return null;
   const mesh = new THREE.Mesh(b.build(), bodyMat);
   mesh.castShadow = true;
+  return mesh;
+}
+
+/** Stowed things are drawn smaller still: a boot holds a handful side by side. */
+const STOW_SCALE = 0.42;
+
+/**
+ * The things stowed inside a vehicle, each on its spot of the boot floor (chassis frame), small: what you see through the glass
+ * and when the lid comes up. Null when there is nothing to draw.
+ */
+export function buildStowedMesh(items: { kind: 'part' | 'fuel' | 'diesel' | 'oil' | 'water' | 'crate'; partId?: string; x: number; y: number; z: number; yaw: number }[]): THREE.Mesh | null {
+  const b = new MeshBuilder();
+  b.jitter = 0.02;
+  let n = 0;
+  for (const it of items) {
+    if (it.kind === 'part' && it.partId) {
+      const pm = new MeshBuilder();
+      buildPartModel(pm, it.partId);
+      b.appendMatrix(pm, new THREE.Matrix4().compose(new THREE.Vector3(it.x, it.y, it.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), it.yaw), new THREE.Vector3(STOW_SCALE, STOW_SCALE, STOW_SCALE)));
+    } else if (it.kind === 'fuel' || it.kind === 'diesel' || it.kind === 'water' || it.kind === 'oil') {
+      // A reserve can, a little smaller than the one in your hands.
+      const cm = new MeshBuilder();
+      if (it.kind === 'oil') oilCan(cm, 0, 0, 0, 0);
+      else jerryCan(cm, 0, 0, 0, it.kind === 'diesel' ? C.diesel : it.kind === 'water' ? 0x3a6ea5 : C.fuel, 0);
+      b.appendMatrix(cm, new THREE.Matrix4().compose(new THREE.Vector3(it.x, it.y, it.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), it.yaw), new THREE.Vector3(0.62, 0.62, 0.62)));
+    } else continue;
+    n++;
+  }
+  if (!n) return null;
+  const mesh = new THREE.Mesh(b.build(), bodyMat);
+  mesh.castShadow = false;
   return mesh;
 }
 

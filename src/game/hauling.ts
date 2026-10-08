@@ -4,6 +4,7 @@ import { loadSpots, planLoad, surfacesOf, type CargoEntry, type LoadPlan, type Z
 import { MK_CSS, SLOT_SITE, modelKey, type Site } from '../render/workFx';
 import { panelAnchor, socketDistance, socketFor, type Anchor, type Socket } from '../render/sockets';
 import { accessPointsOf } from '../render/accessPoints';
+import { bootDeck, bootSpot } from '../render/bootDeck';
 import { PANEL_NAME, colorName, panelColor, paintPanel, panelsOf, type PanelId } from '../sim/paint';
 import { OIL_RESERVE_MAX } from './campaign';
 import { FOODS, carriedName, carryModelKey, inspectLines, liftSecs, partInspect, planFit, planStow, pourFuel, type Carried, type FitPlan, type FitTarget } from '../sim/carry';
@@ -647,9 +648,10 @@ export function stowCarry(p: Player, quiet = false): boolean {
   }
   const camp = p.ctx.campaign;
   if (near && !quiet) {
-    // It flies into the boot (or the cab) and is gone: stowed things are inside, not sitting on the car.
-    const [bx, by, bz] = near.body.toWorld(0, 0.8, -near.def.length * 0.42);
-    p.ctx.work.stow(c.kind === 'part' ? modelKey(c.item) : carryModelKey(c), handPos(p), new THREE.Vector3(bx, by, bz));
+    // It flies into the boot (or the cab), onto the spot of the floor it will lie on (`render/bootDeck.ts`).
+    const [lx, ly, lz] = bootSpot(bootDeck(near.def), near.stowedParts().length);
+    const [bx, by, bz] = near.body.toWorld(lx, ly, lz);
+    p.ctx.work.stow(c.kind === 'part' ? modelKey(c.item) : carryModelKey(c), handPos(p), new THREE.Vector3(bx, by, bz), () => near.refreshLoadNow());
   }
   switch (c.kind) {
     case 'part':
