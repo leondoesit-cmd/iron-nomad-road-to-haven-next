@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { atmoUniforms } from './atmosphere';
 import { GLOBALS } from './materials';
-import { DEPTH_UNIFORMS, PULL, depthPullGlsl } from './depth';
+import { COPLANAR, DEPTH_UNIFORMS, PULL, coplanarOffset, depthPullGlsl } from './depth';
 
 /**
  * Marks left on the world and kept: blood that sprays onto walls and pools on the road, and the holes bullets leave.
@@ -354,10 +354,8 @@ export class Decals {
       transparent: true,
       depthWrite: false,
       fog: true,
-      polygonOffset: true,
-      polygonOffsetFactor: -3,
-      polygonOffsetUnits: -3,
     });
+    coplanarOffset(mat, COPLANAR.decal);
     this.mesh = new THREE.InstancedMesh(geo, mat, capacity);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 2;

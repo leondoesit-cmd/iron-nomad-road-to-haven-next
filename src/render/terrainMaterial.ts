@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLOBALS, WET_PARS } from './materials';
 import { macroTexture, meadowTexture, roadTextures, terrainTextures } from './proctex';
-import { DEPTH_UNIFORMS, PULL, depthPullGlsl } from './depth';
+import { COPLANAR, DEPTH_UNIFORMS, PULL, coplanarOffset, depthPullGlsl } from './depth';
 
 /**
  * Ground shading: four detail materials (wind-rippled sand, cracked earth, layered rock, gravel) blended
@@ -371,7 +371,7 @@ const ROAD_LOD = /* glsl */ `
 /** Road material for a biome. `lod` makes the far variant, which is cut away over chunks drawn in detail. */
 export function makeRoadMaterial(biome: 'wasteland' | 'city', lod?: TerrainUniforms): THREE.MeshStandardMaterial {
   const rt = roadTextures(biome);
-  const m = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+  const m = coplanarOffset(new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 }), COPLANAR.ground);
   const uniforms = {
     tRoad: { value: rt.map },
     tRoadS: { value: rt.surface },
@@ -428,7 +428,7 @@ vec4 rSrf = vec4( 0.5, 0.5, 0.88 - pJ * 0.1 - smoothstep( 0.7, 0.85, pMac.b ) * 
 /** Concrete sidewalk slabs (1.5 m), with joints, per-slab tone, grime and damp patches. */
 export function makePavingMaterial(): THREE.MeshStandardMaterial {
   const rt = roadTextures('city');
-  const m = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+  const m = coplanarOffset(new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 }), COPLANAR.ground);
   const uniforms = {
     tRoad: { value: rt.surface },
     tRoadS: { value: rt.surface },
