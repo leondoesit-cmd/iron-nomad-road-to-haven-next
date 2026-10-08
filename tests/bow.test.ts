@@ -360,9 +360,11 @@ describe('shooting a bow', () => {
     zb.x += 2;
     const a1 = at();
     expect(a1.x - a0.x).toBeCloseTo(2, 3);
-    zb.yaw = Math.PI;
+    // The hit wakes it and it turns toward the shot, so turn it half round from wherever it faces now.
+    zb.yaw += Math.PI;
     const a2 = at();
     expect(a2.z - zb.z).toBeCloseTo(-(a1.z - zb.z), 2);
+    expect(a2.x - zb.x).toBeCloseTo(-(a1.x - zb.x), 2);
     // Nobody can pull it out of a living body.
     p.pos.set(a2.x, zb.y, a2.z);
     const before = sc.campaign.items.arrow;
