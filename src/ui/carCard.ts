@@ -84,6 +84,9 @@ export interface HudHalf {
   el(k: string): HTMLElement;
 }
 
+/** The breakdown last drawn for each seat, what it was of, and when. */
+const details: ({ key: string; t: number; html: string } | null)[] = [null, null];
+
 /** What the car screens took over this update, so the HUD can hide what they replace. */
 export interface CarHudState {
   /** A part card is showing: the car readout under the prompts hides. */
@@ -111,10 +114,16 @@ export function updateCarHud(h: HudHalf, p: Player): CarHudState {
     const camp = p.ctx.campaign;
     const own = camp.buildOf(p.index);
     const mine = det.v.build.uid === own.uid;
-    const ownLive = p.ctx.vehicles.find((q) => q.build?.uid === own.uid);
-    const car = breakdownCar(det.v.build, carName(p.ctx, det.v.build), det.v.health.comp);
-    const compare = mine ? null : breakdownCar(own, carName(p.ctx, own), ownLive?.health.comp);
-    h.setHtml('carbk', breakdownHtml(car, { focus: det.focus, compare, title: `${car.name}${det.v.faction !== 'convoy' ? ' · not yours yet' : ''}` }));
+    // Rebuilt twice a second at most, or when what it shows changes: the totals step a launch to work out the sprint.
+    const key = `${det.v.build.uid}:${det.focus?.slot ?? ''}:${det.focus?.wheel ?? ''}:${mine ? '' : own.uid}`;
+    const last = details[p.index];
+    if (!last || last.key !== key || p.ctx.time - last.t > 0.5) {
+      const ownLive = p.ctx.vehicles.find((q) => q.build?.uid === own.uid);
+      const car = breakdownCar(det.v.build, carName(p.ctx, det.v.build), det.v.health.comp);
+      const compare = mine ? null : breakdownCar(own, carName(p.ctx, own), ownLive?.health.comp);
+      details[p.index] = { key, t: p.ctx.time, html: breakdownHtml(car, { focus: det.focus, compare, title: `${car.name}${det.v.faction !== 'convoy' ? ' · not yours yet' : ''}` }) };
+    }
+    h.setHtml('carbk', details[p.index]!.html);
   }
   // The card beside the crosshair.
   const L = foot && !panel && !det ? carLookOf(p) : null;

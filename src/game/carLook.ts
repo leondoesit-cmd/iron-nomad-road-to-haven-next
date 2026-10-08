@@ -337,8 +337,9 @@ function actionsFor(p: Player, L: CarLook, cand: Cand | null): CardModel['action
   const key = (b: string) => keyName(p, b);
   const aboutCar = candAbout(cand, v, L.part);
   if (cand && aboutCar) out.push({ key: `Hold ${key('A')}`, text: shortPrompt(cand.prompt), ok: cand.ok });
-  if (p.promptAlt?.button === 'X') out.push({ key: key('X'), text: shortPrompt(p.promptAlt.text), ok: p.promptAlt.ok });
-  else if (!p.prompt && p.promptAlt === null && L.part?.slot === 'boot') out.push({ key: key('X'), text: 'Storage', ok: true });
+  // What X does here (the storage, or stowing), wherever the prompts have put it.
+  const x = p.promptAlt?.button === 'X' ? p.promptAlt : p.prompt?.button === 'X' ? { text: p.prompt.text, ok: true } : null;
+  if (x) out.push({ key: key('X'), text: shortPrompt(x.text), ok: x.ok });
   // The wrench takes off what is bolted on: say so when it is on the belt but not in hand.
   const s = L.part?.slot;
   if (s && s !== 'boot' && p.equip !== 'wrench' && p.equip !== 'crowbar' && idAt(v, s, L.part!.index) && !aboutCar) out.push({ key: key('LB'), text: 'Wrench out to unbolt it', ok: true });
@@ -453,6 +454,12 @@ function cardFor(p: Player, L: CarLook, cand: Cand | null): CardModel {
       // The factory part's change, turned round: what this one gives over it.
       const items = s.map((x) => ({ text: flip(x.text), good: !x.good, w: x.w }));
       if (items.length) vs = { head: 'Over the factory part', items };
+    } else if (slot !== 'wheels') {
+      // A bolt-on with no factory part under it: what it adds over a bare mount.
+      const bare = { ...b.fit };
+      delete bare[slot];
+      const items = swapDeltas(v.def, bare, b.tyres, m.item, slot, 3);
+      if (items.length) vs = { head: 'What it adds', items };
     }
   }
   const hint = hints.find((h) => h.slot && mountsFor(h.slot).includes(slot)) ?? null;

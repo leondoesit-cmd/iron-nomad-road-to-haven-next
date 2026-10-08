@@ -520,9 +520,11 @@ export class Game {
   /** Esc with a car's storage panel open (the keyboard seat's): it closes, and nothing pauses. */
   private closeCarPanel(): boolean {
     const sc = this.scene;
-    const seat = this.input.mouseSeat();
-    const p = sc && seat >= 0 ? sc.players[seat] : null;
-    if (!p || !storageOf(p) || this.paused) return false;
+    if (!sc || this.paused) return false;
+    // The mouse's seat first, then any other keyboard seat with one open.
+    const seats = [this.input.mouseSeat(), 0, 1].filter((s, i, a) => s >= 0 && a.indexOf(s) === i && this.input.slots[s]?.kind === 'kb');
+    const p = seats.map((s) => sc.players[s]).find((q) => !!q && !!storageOf(q));
+    if (!p) return false;
     closeStorage(p);
     return true;
   }
