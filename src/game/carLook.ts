@@ -68,6 +68,11 @@ export interface CarLook {
   rowsT: number;
   /** The brackets' boxes in the world, reused tick to tick. */
   hl: GhostAnchor[];
+  /**
+   * Where the part is on this player's view, in normalised device coordinates (-1 to 1, y up): the card sits beside it, never
+   * over it. Null when it is behind the camera.
+   */
+  screen: { x0: number; x1: number; y0: number; y1: number } | null;
 }
 
 const looks = new WeakMap<Player, CarLook>();
@@ -268,7 +273,7 @@ export function carLookTick(p: Player, cand: Cand | null) {
     const rows = L && L.v === hit.v ? L.rows : null;
     const rowsT = L && L.v === hit.v ? L.rowsT : 0;
     const hl: GhostAnchor[] = (hit.part?.boxes ?? []).map((a) => ({ pos: new THREE.Vector3(), quat: new THREE.Quaternion(), size: [a.sx, a.sy, a.sz] as [number, number, number] }));
-    L = { v: hit.v, part: hit.part, t: 0, key, card: null, cardT: 0, rows, rowsT, hl };
+    L = { v: hit.v, part: hit.part, t: 0, key, card: null, cardT: 0, rows, rowsT, hl, screen: null };
     looks.set(p, L);
   }
   const dt = 1 / 60;
@@ -290,11 +295,37 @@ export function carLookTick(p: Player, cand: Cand | null) {
     });
     bindHighlightViews(p.ctx.R.views);
     p.ctx.work.highlight(p.index, L.hl, 'idle');
+    L.screen = screenBounds(p, L);
     if (!L.card || L.cardT <= 0) {
       L.card = cardFor(p, L, cand);
       L.cardT = 0.25;
     } else L.card.actions = actionsFor(p, L, cand);
   } else L.card = null;
+}
+
+const _c = new THREE.Vector3();
+
+/** The part's boxes as they fall on the player's view: the bounds of their corners, projected. */
+function screenBounds(p: Player, L: CarLook): CarLook['screen'] {
+  const cam = p.ctx.R.views[p.index]?.camera;
+  if (!cam || !L.part) return null;
+  let x0 = Infinity;
+  let x1 = -Infinity;
+  let y0 = Infinity;
+  let y1 = -Infinity;
+  for (let i = 0; i < L.part.boxes.length; i++) {
+    const a = L.part.boxes[i];
+    const h = L.hl[i];
+    for (let k = 0; k < 8; k++) {
+      _c.set((k & 1 ? 0.5 : -0.5) * a.sx, (k & 2 ? 0.5 : -0.5) * a.sy, (k & 4 ? 0.5 : -0.5) * a.sz).applyQuaternion(h.quat).add(h.pos).project(cam);
+      if (_c.z > 1) continue;
+      x0 = Math.min(x0, _c.x);
+      x1 = Math.max(x1, _c.x);
+      y0 = Math.min(y0, _c.y);
+      y1 = Math.max(y1, _c.y);
+    }
+  }
+  return Number.isFinite(x0) ? { x0, x1, y0, y1 } : null;
 }
 
 // ------------------------------------------------------------------------------------------------ the card
@@ -383,7 +414,7 @@ function cardFor(p: Player, L: CarLook, cand: Cand | null): CardModel {
       cond: null,
       facts: [
         { label: 'Space', text: `${room.used}/${room.max} inside` },
-        ...(room.outsideMax ? [{ label: 'Outside', text: `${room.outside} item${room.outside === 1 ? '' : 's'}` }] : []),
+        ...(room.outside ? [{ label: 'Outside', text: `${room.outside} item${room.outside === 1 ? '' : 's'}` }] : []),
         ...(room.kg > 0 ? [{ label: 'Load', text: `≈${Math.round(room.kg)} kg` }] : []),
       ],
       vs: null,

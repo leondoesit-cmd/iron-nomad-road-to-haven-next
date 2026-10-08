@@ -75,7 +75,11 @@ export function totalsHtml(car: BreakdownCar, other?: BreakdownCar | null): stri
   return `<table class="bk-t">${head}${body}</table>`;
 }
 
-const shortName = (s: string) => (s.length > 18 ? `${s.slice(0, 17)}…` : s);
+/** A column head: the car's own name, without whose it is ("Leo's 50cc Scrap Moped" is "50cc Scrap Moped"), kept short. */
+const shortName = (s: string) => {
+  const t = s.replace(/^.*?'s /, '');
+  return t.length > 14 ? `${t.slice(0, 13)}…` : t;
+};
 
 /** The whole breakdown: a title, the components and the totals. `compact` drops the component numbers except the focused one's. */
 export function breakdownHtml(car: BreakdownCar, opts: { focus?: Focus | null; compare?: BreakdownCar | null; title?: string } = {}): string {

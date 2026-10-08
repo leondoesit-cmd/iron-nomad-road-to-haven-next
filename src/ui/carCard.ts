@@ -6,6 +6,7 @@ import { breakdownCar, breakdownHtml, esc, type Focus } from './breakdown';
 import { bindTrunk, trunkHtml } from './trunk';
 import { slotIcon } from './partIcons';
 import type { PartSlot } from '../data';
+import { promptLabel } from '../input/input';
 
 /**
  * The car screens on the HUD, for one player's half: the card beside the crosshair for the part being looked at, the storage
@@ -37,7 +38,7 @@ export function glanceVehicle(p: Player): Vehicle | null {
 export const partCardShowing = (p: Player) => !!carLookOf(p)?.part;
 
 /** Rows kept per car for the readout's extra line, a second at a time. */
-const glanceRows = new WeakMap<Vehicle, { t: number; html: string }>();
+const glanceRows = new WeakMap<Vehicle, { t: number; html: string }[]>();
 
 /**
  * The car readout's extra line: what the car carries and the one thing a mechanic would point out (a spare for a flat, an
@@ -46,18 +47,20 @@ const glanceRows = new WeakMap<Vehicle, { t: number; html: string }>();
 export function glanceExtras(p: Player, v: Vehicle): string {
   if (!v.build || v.faction !== 'convoy' || v.wreck) return '';
   const now = p.ctx.time;
-  const hit = glanceRows.get(v);
+  const cache = glanceRows.get(v) ?? [];
+  const hit = cache[p.index];
   if (hit && now - hit.t < 1) return hit.html;
   const rows = storageEntries(v);
   const room = roomOf(v, rows);
   const parts = rows.filter((e) => e.kind === 'part').length;
-  const hint = needHints(v, rows, 'E')[0];
+  const hint = needHints(v, rows, promptLabel(p.ctx.input.slots?.[p.index] ?? null, 'A'))[0];
   const chips: string[] = [];
   chips.push(`<span class="chip">${esc(v.insideRoom().name.toUpperCase())} ${room.used}/${room.max}${parts ? ` · ${parts} SPARE${parts > 1 ? 'S' : ''}` : ''}</span>`);
   if (room.outside) chips.push(`<span class="chip">${room.outside} ON THE OUTSIDE</span>`);
   if (hint) chips.push(`<span class="chip ${hint.tone === 'good' ? 'good' : hint.tone === 'bad' ? 'bad' : 'warn'}">${esc(hint.text.toUpperCase())}</span>`);
   const html = `<div class="chips">${chips.join('')}</div>`;
-  glanceRows.set(v, { t: now, html });
+  cache[p.index] = { t: now, html };
+  glanceRows.set(v, cache);
   return html;
 }
 
@@ -96,13 +99,13 @@ export function updateCarHud(h: HudHalf, p: Player): CarHudState {
   const foot = p.state === 'foot';
   // The storage panel.
   const panel = foot && !!storageOf(p);
-  h.setStyle('trunk', 'display', panel ? 'block' : 'none');
-  if (panel) {
+  // The breakdown, while the sheet button is held over a car (it stands in for the storage panel while it shows).
+  const det = foot && p.sheet ? detailsCar(p) : null;
+  h.setStyle('trunk', 'display', panel && !det ? 'block' : 'none');
+  if (panel && !det) {
     bindTrunk(h.el('trunk'), () => p);
     h.setHtml('trunk', trunkHtml(p));
   }
-  // The breakdown, while the sheet button is held over a car.
-  const det = foot && p.sheet ? detailsCar(p) : null;
   h.setStyle('carbk', 'display', det ? 'block' : 'none');
   if (det?.v.build) {
     const camp = p.ctx.campaign;
@@ -117,7 +120,17 @@ export function updateCarHud(h: HudHalf, p: Player): CarHudState {
   const L = foot && !panel && !det ? carLookOf(p) : null;
   const card = !!L?.card && !!L.part && L.t > 0.08;
   h.setStyle('carcard', 'display', card ? 'block' : 'none');
-  if (card) h.setHtml('carcard', cardHtml(L!.card!));
+  if (card) {
+    h.setHtml('carcard', cardHtml(L!.card!));
+    // Beside the part on the screen, never over it: to its right, or to its left when it reaches the right edge of the view.
+    const sb = L!.screen;
+    const right = !sb || sb.x1 < 0.42;
+    const edge = sb ? (right ? (Math.max(sb.x1, 0) + 1) / 2 : (Math.min(sb.x0, 0) + 1) / 2) : 0.5;
+    const mid = sb ? Math.min(0.55, Math.max(-0.55, (sb.y0 + sb.y1) / 2)) : 0;
+    h.setStyle('carcard', 'left', right ? `calc(${(edge * 100).toFixed(1)}% + 14px)` : 'auto');
+    h.setStyle('carcard', 'right', right ? 'auto' : `calc(${((1 - edge) * 100).toFixed(1)}% + 14px)`);
+    h.setStyle('carcard', 'top', `${(((1 - mid) / 2) * 100).toFixed(1)}%`);
+  }
   return { card: card || (!!L?.part && L.t <= 0.08), panel, details: !!det };
 }
 
