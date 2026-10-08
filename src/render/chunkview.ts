@@ -673,7 +673,8 @@ export class ChunkView {
   private roadRibbon(def: TerrainDef, mats: ChunkMaterials, road: RoadPath, ri: number, run: number[], x0: number, z0: number, us: number[], cols: number, half: number, crown: number, tmp: [number, number, number]) {
     const p = road.pts;
     const n = p.length / 2;
-    const lift = roadLayer(def.open!, ri) * ROAD_STACK;
+    const layer = roadLayer(def.open!, ri);
+    const lift = layer * ROAD_STACK;
     const verts: number[] = [];
     const nors: number[] = [];
     const uvs: number[] = [];
@@ -720,6 +721,8 @@ export class ChunkView {
     g.setAttribute('normal', new THREE.Float32BufferAttribute(nors, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     g.setAttribute('rtan', new THREE.Float32BufferAttribute(tans, 3));
+    // Each layer is drawn nearer the eye than the roads it crosses, in proportion to the distance (see terrainMaterial).
+    g.setAttribute('rlayer', new THREE.Float32BufferAttribute(new Float32Array(verts.length / 3).fill(layer), 1));
     g.setIndex(idx);
     g.computeBoundingSphere();
     const m = this.addMesh(g, mats.road, false, true);

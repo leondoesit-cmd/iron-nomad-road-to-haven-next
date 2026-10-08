@@ -849,7 +849,7 @@ export abstract class Scene implements Ctx {
       if (p.vehicle) v.focus.set(p.vehicle.position.x, p.vehicle.position.y, p.vehicle.position.z);
       v.camera.updateMatrixWorld();
       this.pm.multiplyMatrices(v.camera.projectionMatrix, v.camera.matrixWorldInverse);
-      this.frustums[i].setFromProjectionMatrix(this.pm);
+      this.frustums[i].setFromProjectionMatrix(this.pm, THREE.WebGLCoordinateSystem, v.camera.reversedDepth);
     }
     // Light and headlights, after the weather has had its say. The fires lay out their flames for cameras now placed.
     this.weather.frame(dt);

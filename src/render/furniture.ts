@@ -313,7 +313,8 @@ function cooler(b: MeshBuilder, f: Furn) {
       x += 0.13;
     }
   }
-  b.box(0, f.h - 0.04, 0, f.w + 0.02, 0.08, f.d + 0.02, S.paint(0x9aa0a0, 0.55));
+  // The top trim stands a centimetre proud of the cabinet's top, so the two never share a face.
+  b.box(0, f.h - 0.035, 0, f.w + 0.02, 0.09, f.d + 0.02, S.paint(0x9aa0a0, 0.55));
 }
 
 function rack(b: MeshBuilder, f: Furn) {

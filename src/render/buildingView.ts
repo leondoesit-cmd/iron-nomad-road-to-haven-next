@@ -29,6 +29,8 @@ const FLOOR_STYLE: Record<FloorMat, [number, number]> = {
 };
 
 const TRIM = [0xd8d4c8, 0xc8c0a8, 0x5a4630, 0x8a8a84];
+/** Height of the cap laid along the top of every wall piece. */
+const CAP_H = 0.04;
 const DOOR_COL = [0x6a5238, 0xa89a80, 0x4a5a58, 0x7a3a2c, 0x8a8478];
 
 export interface BuildingGeometry {
@@ -108,15 +110,18 @@ function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, f
       // Close the piece into a solid, as 3dhome extrudes its walls: the full-height pieces get end faces (the
       // building's corners, free wall ends and the jambs of every opening), a lintel gets its soffit.
       if (p.v0 === 0 && p.v1 >= w.h - 0.001) {
-        for (const [u, dir] of [[p.u0, -1], [p.u1, 1]] as const) reveal(fb, w, u, dir, foot, yTop, revStyle, revTint, seed, base);
+        // The end face stops under the cap along the top (below), whose own end face closes the last 4 cm: carried up to
+        // the top, the two were one plane at every corner and free wall end and flickered.
+        const revTop = p.v1 > 0.05 ? yTop - CAP_H : yTop;
+        for (const [u, dir] of [[p.u0, -1], [p.u1, 1]] as const) reveal(fb, w, u, dir, foot, revTop, revStyle, revTint, seed, base);
       }
       if (p.v0 > 0.001) soffit(fb, w, p.u0, p.u1, yBot, -1, revStyle, revTint, seed, base);
       // Top edge so a cut-away wall reads as solid.
       if (p.v1 > 0.05) {
         const along = p.u1 - p.u0;
         const sillCap = p.v1 < w.h - 0.01;
-        if (w.axis === 'x') trim.box(mid, yTop - 0.02, w.c, along, 0.04, w.t + (sillCap ? 0.1 : 0.01), cap);
-        else trim.box(w.c, yTop - 0.02, mid, w.t + (sillCap ? 0.1 : 0.01), 0.04, along, cap);
+        if (w.axis === 'x') trim.box(mid, yTop - CAP_H / 2, w.c, along, CAP_H, w.t + (sillCap ? 0.1 : 0.01), cap);
+        else trim.box(w.c, yTop - CAP_H / 2, mid, w.t + (sillCap ? 0.1 : 0.01), CAP_H, along, cap);
       }
       // Plinth at the foot of exterior ground-floor walls.
       if (L === 0 && w.ext && p.v0 === 0 && p.solid) {
@@ -126,8 +131,10 @@ function walls(rb: RuralBuilding, plan: BuildingPlan, L: number, base: number, f
         // wall end or it stops short of the side wall's plinth and leaves a notch.
         const lo = w.axis === 'x' && p.u0 <= w.a + 0.001 ? 0.08 : 0;
         const hi = w.axis === 'x' && p.u1 >= w.b - 0.001 ? 0.08 : 0;
-        if (w.axis === 'x') trim.box(mid + (hi - lo) / 2, py - 0.18, w.c + w.out * 0.04, along + lo + hi, 0.5, w.t + 0.08, S.concrete(0x7c7a74, 0.6));
-        else trim.box(w.c + w.out * 0.04, py - 0.18, mid, w.t + 0.08, 0.5, along, S.concrete(0x7c7a74, 0.6));
+        // Its back stays 2 cm inside the wall: flush with the inner face, it fought the plaster along the foot of every
+        // outside wall indoors.
+        if (w.axis === 'x') trim.box(mid + (hi - lo) / 2, py - 0.18, w.c + w.out * 0.05, along + lo + hi, 0.5, w.t + 0.06, S.concrete(0x7c7a74, 0.6));
+        else trim.box(w.c + w.out * 0.05, py - 0.18, mid, w.t + 0.06, 0.5, along, S.concrete(0x7c7a74, 0.6));
       }
     }
     // Under an exterior ground-floor doorway the foundation carries on: its face down to the ground and a threshold.
@@ -372,8 +379,17 @@ function slab(plan: BuildingPlan, L: number, base: number, inside: MeshBuilder) 
       }
     }
   }
-  for (const p of pieces) inside.box((p.x0 + p.x1) / 2, base - 0.15, (p.z0 + p.z1) / 2, p.x1 - p.x0, 0.3, p.z1 - p.z0, S.concrete(0xb8ae98, 0.8));
+  // The slab stops a little inside the outer faces of the walls: run out to the plan's edge, its side was the same plane as
+  // the facade over the storey below, and the two flickered through each other in a band along every floor line.
+  const e = SLAB_INSET;
+  for (const q of pieces) {
+    const p = { x0: q.x0 + (q.x0 <= plan.x0 + 0.001 ? e : 0), x1: q.x1 - (q.x1 >= plan.x1 - 0.001 ? e : 0), z0: q.z0 + (q.z0 <= plan.z0 + 0.001 ? e : 0), z1: q.z1 - (q.z1 >= plan.z1 - 0.001 ? e : 0) };
+    inside.box((p.x0 + p.x1) / 2, base - 0.15, (p.z0 + p.z1) / 2, p.x1 - p.x0, 0.3, p.z1 - p.z0, S.concrete(0xb8ae98, 0.8));
+  }
 }
+
+/** How far a floor slab's edge stays inside the outer face of the exterior walls (they are T_EXT thick, so it is hidden). */
+export const SLAB_INSET = 0.06;
 
 function stairs(plan: BuildingPlan, s: Stair, base: number, inside: MeshBuilder) {
   const wood = S.wood(0x6a4a30, 0.7);
@@ -383,12 +399,13 @@ function stairs(plan: BuildingPlan, s: Stair, base: number, inside: MeshBuilder)
   for (let i = 1; i < s.steps; i++) {
     const c = (i - 1) * s.tread * sign;
     const h = i * s.rise;
+    // The tread board's top stands 5 mm over the step it caps: level with it, the two tops fought.
     if (axisX) {
       inside.box(s.x + c, base + h / 2, s.z, s.tread, h, s.width, wood);
-      inside.box(s.x + c - sign * 0.01, base + h - 0.015, s.z, s.tread + 0.03, 0.03, s.width + 0.02, nose);
+      inside.box(s.x + c - sign * 0.01, base + h - 0.01, s.z, s.tread + 0.03, 0.03, s.width + 0.02, nose);
     } else {
       inside.box(s.x, base + h / 2, s.z + c, s.width, h, s.tread, wood);
-      inside.box(s.x, base + h - 0.015, s.z + c - sign * 0.01, s.width + 0.02, 0.03, s.tread + 0.03, nose);
+      inside.box(s.x, base + h - 0.01, s.z + c - sign * 0.01, s.width + 0.02, 0.03, s.tread + 0.03, nose);
     }
   }
   // Banister on the sides that face open floor.
@@ -498,11 +515,15 @@ function roofGeometry(rb: RuralBuilding, plan: BuildingPlan, roof: MeshBuilder, 
     const parapet = S.concrete(new THREE.Color(rb.tint).multiplyScalar(0.92).getHex(), 0.7);
     // Quarter slabs so a collapse can take one away.
     const gone = state === 'partial' ? Math.floor(rnd(6) * 4) : state === 'gone' ? 9 : -1;
+    // They meet edge to edge on the middle lines (overlapping there, their tops and undersides were one plane) and
+    // overhang the walls by 0.15 m.
+    const qw = w / 2 + 0.15;
+    const qd = d / 2 + 0.15;
     for (let q = 0; q < 4; q++) {
       if (q === gone || gone === 9) continue;
       const sx = q % 2 ? 1 : -1;
       const sz = q < 2 ? -1 : 1;
-      roof.box(cx + sx * w / 4, y + 0.07, cz + sz * d / 4, w / 2 + 0.3, 0.14, d / 2 + 0.3, slabMat);
+      roof.box(cx + (sx * qw) / 2, y + 0.07, cz + (sz * qd) / 2, qw, 0.14, qd, slabMat);
     }
     for (const [px, pz, sx, sz] of [[cx, plan.z1 - 0.1, w, 0.25], [cx, plan.z0 + 0.1, w, 0.25], [plan.x1 - 0.1, cz, 0.25, d - 0.5], [plan.x0 + 0.1, cz, 0.25, d - 0.5]] as const) {
       roof.box(px, y + 0.5, pz, sx, 0.7, sz, parapet);
