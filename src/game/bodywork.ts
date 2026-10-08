@@ -170,6 +170,8 @@ export class Bodywork {
   release() {
     for (const j of this.joints) {
       if (j.hang) {
+        // The hanging piece holds its own extracted geometry, which the model's teardown no longer reaches.
+        (j.hang.children[0] as THREE.Mesh | undefined)?.geometry?.dispose();
         j.hang.removeFromParent();
         j.hang = null;
       }
@@ -378,7 +380,8 @@ export class Bodywork {
         const dist = Math.hypot(j.centre![0] - at[0], j.centre![1] - at[1], j.centre![2] - at[2]);
         const load = 16 * o.blast * Math.exp(-dist / 2.2);
         const add = stressFromShock(load, j.tol, dist < 1.6);
-        if (add > 0) this.strain(j, add, [-(o.srcX - t.x), 0, -(o.srcZ - t.z)], load);
+        // `kick` is the way the car is shoved; the part flies against it, so away from the blast means kick toward it.
+        if (add > 0) this.strain(j, add, [o.srcX - t.x, 0, o.srcZ - t.z], load);
       }
     } else if (o.smash) {
       hull.dent(at, push, 0.1, 0.45);
@@ -392,7 +395,7 @@ export class Bodywork {
         const dist = Math.hypot(j.centre![0] - at[0], j.centre![1] - at[1], j.centre![2] - at[2]);
         if (dist > Math.max(...j.half) + 0.35) continue;
         const add = stressFromShock(3.4 + o.dmg * 0.07, j.tol, true);
-        if (add > 0) this.strain(j, add, [t.x - o.srcX, 0, t.z - o.srcZ], 4);
+        if (add > 0) this.strain(j, add, [o.srcX - t.x, 0, o.srcZ - t.z], 4);
       }
     }
     this.lampsDirty = true;
@@ -590,7 +593,8 @@ export class Bodywork {
       if (j.gone || (left < 5 && Math.random() < 0.35)) continue;
       this.geom(j);
       const [x, , z] = v.body.toWorld(j.pivot[0], j.pivot[1], j.pivot[2]);
-      this.detach(j, [x - v.position.x, 0, z - v.position.z], 14);
+      // Kick inward so the part is thrown outward, away from the burst car.
+      this.detach(j, [v.position.x - x, 0, v.position.z - z], 14);
       left--;
     }
     // The shell is buckled by the blast.

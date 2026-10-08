@@ -234,10 +234,11 @@ export class ZombieSystem {
   }
 
   /** Apply damage; returns true if the zombie died. */
-  damage(zb: Zombie, amount: number, info: { fromX: number; fromZ: number; head?: boolean; killer?: number; explosive?: boolean; fire?: boolean }): boolean {
+  damage(zb: Zombie, amount: number, info: { fromX: number; fromZ: number; head?: boolean; killer?: number; explosive?: boolean; fire?: boolean; dot?: boolean }): boolean {
     if (zb.dead) return false;
     zb.hp -= amount;
-    zb.stun = Math.max(zb.stun, zb.kind === 'brute' ? 0 : 0.12);
+    // A hit makes them flinch. Burning or wire, which hurt a little every tick, would keep them flinching for good.
+    if (!info.fire && !info.dot) zb.stun = Math.max(zb.stun, zb.kind === 'brute' ? 0 : 0.12);
     // Hit zombies know where it came from.
     if (!zb.chasing && !zb.dead) this.alert(zb, info.fromX, info.fromZ, info.killer ?? -1);
     if (zb.hp <= 0) {
@@ -966,7 +967,8 @@ export class ZombieSystem {
     // The dead do not swim: deep water stops them at the shore, shallows slow them.
     const wet = ctx.waterAt(p.x, p.z);
     if (wet) {
-      if (wet.depth > 1.0) {
+      // A flood that rose round one can still be walked out of: only a step into deeper water is refused.
+      if (wet.depth > 1.0 && wet.depth >= (ctx.waterAt(zb.x, zb.z)?.depth ?? 0) - 0.02) {
         p.x = zb.x;
         p.z = zb.z;
         zb.vx *= 0.3;

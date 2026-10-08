@@ -416,7 +416,8 @@ export class RaiderPilot implements Pilot {
     dx /= l;
     dy /= l;
     dz /= l;
-    const dmg = this.def.dps * 0.11 * 3.4 * ctx.campaign.difficulty.damage;
+    // Difficulty is applied where the round lands (Player.hurt, the vehicle hit in combat), never here as well.
+    const dmg = this.def.dps * 0.11 * 3.4;
     ctx.combat.shoot(mx, my, mz, dx, dy, dz, {
       side: 'raider',
       ownVehicle: v,
@@ -933,13 +934,20 @@ export class RaiderSystem {
             wantX = -vx / vd;
             wantZ = -vz / vd;
             spd = u.speed * 1.1;
-            if (u.stateT > 5) u.state = 'approach';
+            if (u.stateT > 5) {
+              u.state = 'approach';
+              u.stateT = 0;
+            }
           } else if (vd > bestV.def.length * 0.5 + 1.2) {
             wantX = vx / vd;
             wantZ = vz / vd;
             spd = u.speed;
           } else {
-            u.state = 'sabotage';
+            // The job takes three seconds from when they reach the car, not from whenever they last changed their mind.
+            if (u.state !== 'sabotage') {
+              u.state = 'sabotage';
+              u.stateT = 0;
+            }
             u.moveSpeed = 0;
             if (u.stateT > 3) {
               u.stateT = 0;
@@ -1005,6 +1013,13 @@ export class RaiderSystem {
     }
     u.moveSpeed = damp(u.moveSpeed, spd, 10, dt);
     const p = { x: u.x + wantX * u.moveSpeed * dt, z: u.z + wantZ * u.moveSpeed * dt };
+    // Raiders do not swim with a rifle: deep water stops them at the edge (unless they are already in it and getting out).
+    const wet = ctx.waterAt(p.x, p.z);
+    if (wet && wet.depth > 1.1 && wet.depth >= (ctx.waterAt(u.x, u.z)?.depth ?? 0) - 0.02) {
+      p.x = u.x;
+      p.z = u.z;
+      u.moveSpeed *= 0.3;
+    }
     ctx.obs.resolveCircle(p, 0.4);
     u.x = p.x;
     u.z = p.z;
