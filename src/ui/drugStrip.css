@@ -33,13 +33,16 @@
 }
 .drugstrip .dsrow {
   display: grid;
-  grid-template-columns: auto 1.7em auto auto 1fr;
+  grid-template-columns: 1.7em auto auto 1fr;
   align-items: center;
   column-gap: 6px;
   padding: 2px 4px;
   border-left: 3px solid transparent;
   pointer-events: auto;
   cursor: pointer;
+}
+.drugstrip.dig .dsrow {
+  grid-template-columns: auto 1.7em auto auto 1fr;
 }
 .drugstrip .dsrow.on {
   border-left-color: var(--dc);
