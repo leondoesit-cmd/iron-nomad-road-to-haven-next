@@ -768,6 +768,27 @@ export class GameRenderer {
   }
 
   /**
+   * Compile every material in the scene the way frames will draw it, without blocking where the driver compiles in
+   * parallel (KHR_parallel_shader_compile): into the HDR target when post-processing is on (no tone mapping, linear
+   * output, as `render` draws), with the sky's environment map in place. Compiling for the canvas instead would build
+   * other program variants and leave the real ones to compile, blocking, on the first frame. Resolves when all are ready.
+   */
+  compileScene(): Promise<unknown> {
+    const gl = this.gl;
+    // three r186 draws PCFSoftShadowMap as PCFShadowMap, switching the type on its first shadow pass. Settle it now, or
+    // every program compiled here is keyed to the old type and compiles again, blocking, on that first frame.
+    if (gl.shadowMap.type === THREE.PCFSoftShadowMap) gl.shadowMap.type = THREE.PCFShadowMap;
+    this.scene.environment = this.sky.updateEnv(gl, 1 / 60, QUALITY[this.quality].envEvery);
+    const target = gl.getRenderTarget();
+    if (this.usePost && this.post) gl.setRenderTarget(this.post.hdr);
+    try {
+      return gl.compileAsync(this.scene, this.views[0].camera);
+    } finally {
+      gl.setRenderTarget(target);
+    }
+  }
+
+  /**
    * Past the fog's far end everything is fog colour, the same as the sky's horizon, so the view stops there and
    * nothing beyond it is culled, sorted or drawn. Never inside the sky dome (radius 1000).
    */

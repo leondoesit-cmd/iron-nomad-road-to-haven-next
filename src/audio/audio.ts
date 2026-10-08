@@ -422,11 +422,21 @@ export class AudioEngine {
     const ctx = this.ctx;
     if (!ctx || this.muted || !this.samples) return;
     const bank = opts.bank && this.samples.all(opts.bank).length ? opts.bank : id;
-    if (!this.samples.all(bank).length) return;
+    const emitterKey = x === undefined || z === undefined ? id : `${id}:${Math.round(x / 4)}:${Math.round(z / 4)}`;
+    if (!this.samples.all(bank).length) {
+      // Recordings load by priority after the first click. A cue asked for before its bank has arrived jumps the queue
+      // and plays when it lands, if that is soon enough still to belong to the moment (a menu click may come late; a
+      // gunshot may not). Repeats while it loads collapse into one.
+      const asked = ctx.currentTime;
+      const late = x === undefined || z === undefined ? 0.8 : 0.35;
+      this.samples.whenReady(bank, emitterKey, () => {
+        if (this.ctx && this.ctx.currentTime - asked <= late) this.play(id, x, z, vol, opts);
+      });
+      return;
+    }
 
     // Rate-limiting identical rapid cues
     const t0 = ctx.currentTime;
-    const emitterKey = x === undefined || z === undefined ? id : `${id}:${Math.round(x / 4)}:${Math.round(z / 4)}`;
     const last = this.lastPlay.get(emitterKey) ?? -Infinity;
     const minGap =
       id === 'mg'
