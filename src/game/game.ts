@@ -23,6 +23,7 @@ import { resolveTravellerRequest } from './travellerFx';
 import { saveCampaign, loadCampaign } from '../save/save';
 import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { Workbench } from '../ui/garage';
+import { closeStorage, storageOf } from './storage';
 import { InventoryScreen } from '../ui/inventory';
 import { TutorialDirector, TRAINING_STEPS } from './tutorial';
 import { setupStoryCampaign } from './story';
@@ -101,7 +102,7 @@ export class Game {
     this.hud = new Hud(halves);
     this.hud.setLayout(this.R.layout);
     this.overlays = new Overlays(this);
-    this.input.onEscape = () => this.benchmark ? this.stopBenchmark() : (this.inventory ? this.inventory.close() : this.togglePause(-1));
+    this.input.onEscape = () => this.benchmark ? this.stopBenchmark() : this.inventory ? this.inventory.close() : this.closeCarPanel() ? undefined : this.togglePause(-1);
     // Mouse aim: click the canvas to capture the pointer. Esc (or alt-tab) releases it, which pauses.
     this.input.attachMouse(canvas);
     this.input.onChange = () => this.saveSettings();
@@ -516,6 +517,16 @@ export class Game {
     this.inventory.open(p);
   }
 
+  /** Esc with a car's storage panel open (the keyboard seat's): it closes, and nothing pauses. */
+  private closeCarPanel(): boolean {
+    const sc = this.scene;
+    const seat = this.input.mouseSeat();
+    const p = sc && seat >= 0 ? sc.players[seat] : null;
+    if (!p || !storageOf(p) || this.paused) return false;
+    closeStorage(p);
+    return true;
+  }
+
   /** Open the field workbench for one of the convoy's vehicles. The game stands still while it is open. */
   openWorkbench(p: Player, v: Vehicle) {
     const sc = this.scene;
@@ -853,7 +864,8 @@ export class Game {
     for (let p = 0; p < 2; p++) {
       const it = this.input.intents[p];
       const pl = sc.players[p];
-      if (!pl || pl.state === 'dead') continue;
+      // A car's storage panel has this seat's D-pad.
+      if (!pl || pl.state === 'dead' || storageOf(pl)) continue;
       if (isHeld(it, Btn.Up)) {
         this.wheelHold[p] += FIXED_STEP;
         if (this.wheelHold[p] > 0.25) {
