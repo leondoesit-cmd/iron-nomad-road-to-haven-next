@@ -44,7 +44,7 @@ import { LegMapBaker, SITE_LABEL, groundCover, legBaker, mapBuildings, minefield
 import { MapTiles } from '../ui/mapTiles';
 import { Navigation } from './navigation';
 import { Summoner } from './summon';
-import type { RoadLine } from './route';
+import { roadGraphFor, type RoadLine } from './route';
 import { courseAt, forestAt, lushAt, swampQ, type Waterfall } from '../world/hydro';
 import type { NatureAmbience, WaterAmbience } from '../audio/audio';
 import { AmbientLife } from './ambientLife';
@@ -2445,8 +2445,8 @@ export class LegScene extends Scene {
       if (this.mapBaker.base.cell >= 12) this.mapTiles.push(new MapTiles(T, shade, bounds, 6, 0.25, cover));
       this.mapTiles.push(new MapTiles(T, shade, bounds, 3, this.mapBaker.base.cell >= 12 ? 0.75 : 0.4, cover));
     }
-    const lines: RoadLine[] = T.open ? openRoadLines(T).map((r) => ({ pts: r.pts, kind: r.kind, half: r.half })) : [{ pts: roadLine(T), kind: 'highway', half: T.roadHalf }];
-    this.navigation = new Navigation(this, leg.id, lines);
+    const lines = (): RoadLine[] => (T.open ? openRoadLines(T).map((r) => ({ pts: r.pts, kind: r.kind, half: r.half })) : [{ pts: roadLine(T), kind: 'highway', half: T.roadHalf }]);
+    this.navigation = new Navigation(this, leg.id, roadGraphFor(`${leg.id}:${leg.seed}`, lines));
     this.navActions = this.navigation;
     const self = this;
     this.summoner = new Summoner({

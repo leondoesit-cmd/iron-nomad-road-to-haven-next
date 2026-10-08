@@ -262,6 +262,20 @@ export function buildRoadGraph(lines: RoadLine[]): RoadGraph {
   return { n, x: Float64Array.from(xs), z: Float64Array.from(zs), start, to, len, cls, segA: Int32Array.from(ea), segB: Int32Array.from(eb), grid };
 }
 
+/** Graphs kept across scenes by key (a leg's id and seed): the next day on the same roads needs no rebuild. */
+const GRAPHS = new Map<string, RoadGraph>();
+
+/** The road graph for a key, built from `lines()` the first time it is asked for. */
+export function roadGraphFor(key: string, lines: () => RoadLine[]): RoadGraph {
+  let g = GRAPHS.get(key);
+  if (!g) {
+    g = buildRoadGraph(lines());
+    GRAPHS.set(key, g);
+    while (GRAPHS.size > 3) GRAPHS.delete(GRAPHS.keys().next().value!);
+  }
+  return g;
+}
+
 /** Where along a-b the point nearest p lies, 0..1. */
 function projT(ax: number, az: number, bx: number, bz: number, px: number, pz: number) {
   const dx = bx - ax;

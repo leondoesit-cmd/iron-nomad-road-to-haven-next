@@ -3,7 +3,7 @@ import { PLAYER_CSS } from '../render/palette';
 import { WaypointMarker, distLabel } from '../render/navMarkers';
 import { POI_DEF, addPoi, poiLabel, removePoi, renamePoi, toggleWaypoint, type NavMarks, type Poi, type PoiKind, type Waypoint } from '../sim/navmarks';
 import type { NavLayer } from '../ui/mapdata';
-import { buildRoadGraph, findRoute, offRoute, type RoadGraph, type RoadLine, type Route } from './route';
+import { findRoute, offRoute, type RoadGraph, type Route } from './route';
 import type { CompassPin } from './scene';
 import type { Player } from './player';
 
@@ -55,7 +55,6 @@ interface RouteState {
 const where = (p: Player) => (p.vehicle ? p.vehicle.position : p.pos);
 
 export class Navigation implements NavActions {
-  readonly graph: RoadGraph | null;
   private routes: (RouteState | null)[] = [null, null];
   private markers: (WaypointMarker | null)[] = [null, null];
   private labelT = 0;
@@ -65,10 +64,9 @@ export class Navigation implements NavActions {
   constructor(
     private host: NavHost,
     readonly leg: string,
-    roads: RoadLine[],
-  ) {
-    this.graph = roads.length ? buildRoadGraph(roads) : null;
-  }
+    /** The leg's roads joined up (`game/route.ts`), or null where there are none to follow. */
+    readonly graph: RoadGraph | null,
+  ) {}
 
   private get marks(): NavMarks {
     return this.host.campaign.nav;

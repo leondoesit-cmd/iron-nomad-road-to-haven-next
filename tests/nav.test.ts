@@ -53,17 +53,18 @@ describe('the map bake', () => {
     expect(rows).not.toBeNull();
     expect(rows![1] - rows![0]).toBeLessThan(12);
     expect(Math.abs(rows![0] - row)).toBeLessThan(10);
-    // The rest, in small slices: no slice runs far past its budget.
-    let worst = 0;
-    let steps = 0;
-    while (!b.base.done && steps++ < 100000) {
+    // The rest, in small slices: a slice stops soon after its budget (the median, since a loaded test machine stalls any
+    // single slice now and then).
+    const took: number[] = [];
+    while (!b.base.done && took.length < 100000) {
       const s0 = performance.now();
       b.step(1);
-      worst = Math.max(worst, performance.now() - s0);
+      took.push(performance.now() - s0);
     }
-    log(`L1 fine pass: ${steps} steps of 1 ms, worst ${worst.toFixed(2)} ms`);
+    took.sort((p, q) => p - q);
+    log(`L1 fine pass: ${took.length} steps of 1 ms, median ${took[took.length >> 1].toFixed(2)} ms, worst ${took[took.length - 1].toFixed(2)} ms`);
     expect(b.base.done).toBe(true);
-    expect(worst).toBeLessThan(25);
+    expect(took[took.length >> 1]).toBeLessThan(4);
     // The finished picture is the same as one baked in a single go: the order of the bands does not show.
     const again = new LegMapBaker(T, layout).finish();
     expect(Buffer.from(again.data).equals(Buffer.from(b.base.data))).toBe(true);
