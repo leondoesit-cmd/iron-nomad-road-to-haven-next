@@ -106,7 +106,7 @@ export interface VegetationPlant {
   /** The hinge of uncut wood the top swings over on as it goes, until it tears. */
   hinge?: RAPIER.ImpulseJoint;
   /** The top coming down, until it has landed and settled. */
-  fall?: TreeFall & { t: number; tipVy: number; landedAt: number };
+  fall?: TreeFall & { t: number; tipVy: number; landedAt: number; stuck: number; nudges: number };
 }
 
 /** An upright stretch of a stem between two of its rings, model units: heights, ring centres (x, z) and radii. */
@@ -119,6 +119,25 @@ interface StemSeg { ya: number; yb: number; ax: number; az: number; bx: number; 
 const NOTCH_TOP: Record<WoodKind, number> = { oak: 2.9, pine: 4, willow: 2.3, poplar: 2, palm: 6, acacia: 1.6, cypress: 4, snag: 3.5, eucalyptus: 5, deadTree: 2 };
 /** A falling top passes through people (it hurts and throws them instead, see `game/timber.ts`) until it has landed. */
 const FALLING = groups(G.LOOSE, G.STATIC | G.ROAD | G.VEHICLE | G.FURN | G.BUILD | G.LOOSE);
+
+/** Mean radius of a tube piece's two rings (or half its widest extent, for a piece that is not one). */
+function pieceRadius(v: Float32Array): number {
+  const n = v.length / 3;
+  if (n < 6 || n % 2) {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < n; i++) { lo = Math.min(lo, v[i * 3]); hi = Math.max(hi, v[i * 3]); }
+    return (hi - lo) / 2;
+  }
+  const h = n / 2;
+  let r = 0;
+  for (const o of [0, h]) {
+    let cx = 0, cy = 0, cz = 0;
+    for (let i = o; i < o + h; i++) { cx += v[i * 3]; cy += v[i * 3 + 1]; cz += v[i * 3 + 2]; }
+    cx /= h; cy /= h; cz /= h;
+    for (let i = o; i < o + h; i++) r += Math.hypot(v[i * 3] - cx, v[i * 3 + 1] - cy, v[i * 3 + 2] - cz);
+  }
+  return r / n;
+}
 
 /** The rings of each tube piece of a model's wood as stem stretches: only those standing more upright than not. */
 function stemSegments(hulls: Float32Array[]): StemSeg[] {
@@ -189,7 +208,7 @@ class TreeWood implements TreeTarget {
 }
 
 const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), V = new THREE.Vector3();
-const Q2 = new THREE.Quaternion(), V2 = new THREE.Vector3(), C = new THREE.Color();
+const Q2 = new THREE.Quaternion(), V2 = new THREE.Vector3(), V3 = new THREE.Vector3(), C = new THREE.Color();
 const ZERO = { x: 0, y: 0, z: 0 };
 const CELL = 8;
 const NOTCH_STEP = NOTCH.step;
@@ -649,7 +668,8 @@ export class Vegetation {
     HIT.done = done;
     HIT.hard = this.hardness(p);
     const gain = notchGain(HIT);
-    const j = addNotch(bands, h, gain, NOTCH_TOP[p.wood] * sy);
+    // A small tree's stems still count as its trunk up to where a man aims from the hip or the shoulder.
+    const j = addNotch(bands, h, gain, Math.min(p.height * 0.5, Math.max(NOTCH_TOP[p.wood] * sy, 1.9)));
     if (j < 0) return 0;
     for (let k = Math.max(0, j1 - 1); k <= j1 && k < bands.length; k++) bands[k] = Math.round(bands[k] * 1e4) / 1e4;
     // Which way the rounds have been going, weighted by what each took: the notch faces back along it.
@@ -674,10 +694,10 @@ export class Vegetation {
   private fallWay(p: VegetationPlant, s: TreeShot): [number, number] {
     const d = p.record.notchDir ?? [s.dx, s.dz];
     const up = V2.set(0, 1, 0).applyQuaternion(p.rotation);
-    let x = d[0] * 0.6 + up.x * 8;
-    let z = d[1] * 0.6 + up.z * 8;
+    let x = d[0] + up.x * 6;
+    let z = d[1] + up.z * 6;
     const k = Math.sin(p.position.x * 12.9898 + p.position.z * 78.233) * 43758.5453;
-    const a = (k - Math.floor(k) - 0.5) * 0.7;
+    const a = (k - Math.floor(k) - 0.5) * 0.6;
     const c = Math.cos(a), sn = Math.sin(a);
     [x, z] = [x * c - z * sn, x * sn + z * c];
     const l = Math.hypot(x, z) || 1;
@@ -742,7 +762,10 @@ export class Vegetation {
       .setLinearDamping(0.2).setAngularDamping(0.35).setCcdEnabled(true).setSleeping(!!saved));
     p.body = body;
     const topWood = new TreeWood(this, p, p.wood!, false, 'top');
+    // Only the trunk and the main limbs are solid: twigs and thin boughs would snag the top in its neighbours' branches.
+    const thin = Math.max(0.05, r * 0.3) * sx;
     for (const v of pieces) {
+      if (pieceRadius(v) < thin) continue;
       const above = clipHull(v, yCut, true);
       const desc = above && RAPIER.ColliderDesc.convexHull(above);
       if (!desc) continue;
@@ -776,7 +799,7 @@ export class Vegetation {
       p.fall = {
         wood: p.wood!, body, butt: [cx * sx, yCut, cz * sz], tip: tip ? [tip.bx * sx, tip.yb * sy, tip.bz * sz] : [cx * sx, p.height, cz * sz],
         radius: r * sx, crown: TREE_DIMS[p.wood as keyof typeof TREE_DIMS].crown * sx, mass, x: V.x, y: V.y, z: V.z, dx: dir[0], dz: dir[1],
-        by: s?.by ?? -1, t: 0, tipVy: 0, landedAt: -1,
+        by: s?.by ?? -1, t: 0, tipVy: 0, landedAt: -1, stuck: 0, nudges: 0,
       };
       this.falling.add(p);
       this.physics.treeEvents?.snapped(p.fall);
@@ -798,7 +821,9 @@ export class Vegetation {
     Q.set(r.x, r.y, r.z, r.w);
     if (p.hinge) {
       const up = V.set(0, 1, 0).applyQuaternion(Q).dot(V2.set(0, 1, 0).applyQuaternion(p.rotation));
-      if (up < 0.85 || f.t > 5) {
+      const w = b.angvel();
+      // Torn through, or stopped against a neighbour (it will slide off it, below).
+      if (up < 0.85 || f.t > 5 || (f.t > 1.2 && Math.hypot(w.x, w.y, w.z) < 0.12)) {
         if (p.hinge.isValid()) this.physics.world.removeImpulseJoint(p.hinge, true);
         p.hinge = undefined;
       }
@@ -806,6 +831,19 @@ export class Vegetation {
     const t = b.translation();
     V.set(f.tip[0], f.tip[1], f.tip[2]).applyQuaternion(Q).add(V2.set(t.x, t.y, t.z));
     const v = b.velocityAtPoint({ x: V.x, y: V.y, z: V.z });
+    // Hung up in a neighbour's limbs: it slides and twists off a little at a time until it is down.
+    const tilt = V3.set(0, 1, 0).applyQuaternion(Q).dot(V2.set(0, 1, 0).applyQuaternion(p.rotation));
+    const lv = b.linvel(), av = b.angvel();
+    if (!p.hinge && tilt > 0.5 && f.nudges < 8 && Math.hypot(lv.x, lv.y, lv.z) + Math.hypot(av.x, av.y, av.z) < 0.35) {
+      f.stuck += dt;
+      if (f.stuck > 1.2) {
+        f.stuck = 0;
+        f.nudges++;
+        const len2 = (f.tip[0] - f.butt[0]) ** 2 + (f.tip[1] - f.butt[1]) ** 2 + (f.tip[2] - f.butt[2]) ** 2;
+        const k = (0.35 * f.mass * len2) / 3;
+        b.applyTorqueImpulse({ x: f.dz * k, y: (f.nudges % 2 ? 0.25 : -0.25) * k, z: -f.dx * k }, true);
+      }
+    } else f.stuck = 0;
     if (f.landedAt < 0) {
       if ((f.tipVy < -3.5 && v.y > f.tipVy * 0.35) || f.t > 9) {
         f.landedAt = f.t;
@@ -814,7 +852,7 @@ export class Vegetation {
         this.physics.treeEvents?.landed(f, V.x, V.y, V.z, -f.tipVy);
       }
       f.tipVy = v.y;
-    } else if (f.t - f.landedAt > 1.5 || b.isSleeping()) {
+    } else if ((f.t - f.landedAt > 1.5 || b.isSleeping()) && (tilt < 0.5 || f.nudges >= 8)) {
       for (const c of p.colliders) if (c.isValid()) c.setCollisionGroups(GROUPS.loose);
       this.falling.delete(p);
     }
