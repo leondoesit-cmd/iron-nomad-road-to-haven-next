@@ -38,9 +38,14 @@ export interface Focus {
 
 const isFocus = (r: ComponentRow, f?: Focus | null) => !!f && r.slot === f.slot && (r.slot !== 'wheels' || f.wheel === undefined || f.wheel < 0 || r.wheel === f.wheel);
 
-/** The component list, grouped, with the focused one opened up to its numbers. */
-export function componentsHtml(car: BreakdownCar, focus?: Focus | null, max = 99): string {
-  const rows = componentRows(car.def, car.fit, car.tyres, car.comp, car.idIn, car.tyreId, car.glass);
+/**
+ * The component list, grouped, with the focused one opened up to its numbers. `only` keeps the focused one alone (a garage
+ * already lists every mount as a button: its breakdown only needs the one under the cursor).
+ */
+export function componentsHtml(car: BreakdownCar, focus?: Focus | null, max = 99, only = false): string {
+  const all = componentRows(car.def, car.fit, car.tyres, car.comp, car.idIn, car.tyreId, car.glass);
+  const rows = only ? all.filter((r) => isFocus(r, focus)) : all;
+  if (only && !rows.length) return '<div class="bk-list one"><div class="bk-g">Point at a mount to read it</div></div>';
   let group = '';
   const out: string[] = [];
   let n = 0;
@@ -58,7 +63,7 @@ export function componentsHtml(car: BreakdownCar, focus?: Focus | null, max = 99
       `<div class="bk-r${on ? ' on' : ''}${r.state === 'empty' ? ' empty' : ''}" data-bk="${r.slot}${r.wheel !== undefined ? `:${r.wheel}` : ''}"><span class="bk-i" style="color:${r.css}">${slotIcon(r.slot)}</span><span class="bk-l">${esc(r.label)}</span><span class="bk-n" style="color:${r.css}">${esc(r.name)}</span><span class="bk-m">${esc(r.state === 'factory' ? 'factory' : r.mark)}</span>${cond}${facts}</div>`,
     );
   }
-  return `<div class="bk-list">${out.join('')}</div>`;
+  return `<div class="bk-list${only ? ' one' : ''}">${out.join('')}</div>`;
 }
 
 /** The totals table: this car, the factory car, and another for comparison. */
@@ -82,6 +87,6 @@ const shortName = (s: string) => {
 };
 
 /** The whole breakdown: a title, the components and the totals. `compact` drops the component numbers except the focused one's. */
-export function breakdownHtml(car: BreakdownCar, opts: { focus?: Focus | null; compare?: BreakdownCar | null; title?: string } = {}): string {
-  return `<div class="bk"><div class="bk-h">${esc(opts.title ?? car.name)}${opts.compare ? `<small> vs ${esc(opts.compare.name)}</small>` : ''}</div><div class="bk-cols">${componentsHtml(car, opts.focus)}${totalsHtml(car, opts.compare)}</div></div>`;
+export function breakdownHtml(car: BreakdownCar, opts: { focus?: Focus | null; compare?: BreakdownCar | null; title?: string; only?: boolean } = {}): string {
+  return `<div class="bk"><div class="bk-h">${esc(opts.title ?? car.name)}${opts.compare ? `<small> vs ${esc(opts.compare.name)}</small>` : ''}</div><div class="bk-cols">${componentsHtml(car, opts.focus, 99, opts.only)}${totalsHtml(car, opts.compare)}</div></div>`;
 }

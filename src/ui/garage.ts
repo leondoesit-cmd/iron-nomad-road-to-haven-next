@@ -82,6 +82,8 @@ export class GarageView {
   compare: Record<number, string | null> = {};
   /** The mount under the mouse or a cursor: what the breakdown opens up. */
   hover: { i: number; slot: PartSlot; wheel?: number } | null = null;
+  /** The host draws the breakdown itself, outside the scrolling page (the docked workbench keeps it in view at its foot). */
+  detachedDetail = false;
 
   constructor(private h: GarageHost) {}
 
@@ -94,7 +96,12 @@ export class GarageView {
 
   html(): string {
     const cols = this.h.players.map((i) => this.vehicleCard(i)).join('');
-    return `<div class="gtop">${cols}</div><div class="gfoot">${this.pickerHtml()}<div class="gpanel gdetail" data-gdetail>${this.detailHtml()}</div>${this.stockHtml()}${this.field ? '' : this.yardHtml()}</div>`;
+    return `<div class="gtop">${cols}</div><div class="gfoot">${this.pickerHtml()}${this.detachedDetail ? '' : this.detailPane()}${this.stockHtml()}${this.field ? '' : this.yardHtml()}</div>`;
+  }
+
+  /** The breakdown's pane, for wherever the host puts it. */
+  detailPane(): string {
+    return `<div class="gpanel gdetail" data-gdetail>${this.detailHtml()}</div>`;
   }
 
   // ------------------------------------------------------------------ breakdown
@@ -113,7 +120,7 @@ export class GarageView {
     const focus: Focus | null = f.slot ? { slot: f.slot, wheel: f.wheel } : null;
     const other = this.compare[i] ? this.c.buildByUid(this.compare[i]!) : undefined;
     const compare = other && other.uid !== this.h.build(i).uid ? breakdownCar(other, defOf(other).name) : null;
-    return breakdownHtml(this.bdCar(i), { focus, compare, title: `Breakdown · ${defOf(this.h.build(i)).name}` });
+    return breakdownHtml(this.bdCar(i), { focus, compare, only: true, title: `Breakdown · ${defOf(this.h.build(i)).name}` });
   }
 
   /** The other cars of the convoy as chips: pick one to measure this car against. */
@@ -154,11 +161,15 @@ export class GarageView {
     }
     const mv = (e: Event) => show(e.target as HTMLElement);
     root.addEventListener('mouseover', mv);
-    // A pad or keys move a focus ring (the f0 / f1 classes): follow it.
-    const mo = new MutationObserver((list) => {
-      for (const m of list) {
-        const el = m.target as HTMLElement;
-        if (el.classList?.contains('f0') || el.classList?.contains('f1')) show(el);
+    // A pad or keys move a focus ring (the f0 / f1 classes, repainted every tick): follow it when it moves to a new button,
+    // so a mouse over another mount is not snatched back on the next repaint.
+    const last: (Element | null)[] = [null, null];
+    const mo = new MutationObserver(() => {
+      for (let k = 0; k < 2; k++) {
+        const el = root.querySelector<HTMLElement>(`.f${k}`);
+        if (!el || el === last[k]) continue;
+        last[k] = el;
+        show(el);
       }
     });
     mo.observe(root, { subtree: true, attributes: true, attributeFilter: ['class'] });
@@ -716,6 +727,7 @@ export class Workbench {
     const last = v.build ? Workbench.last.get(v.build.uid) : undefined;
     this.view.sel = last ? { ...last, i: owner } : null;
     this.view.hover = null;
+    this.view.detachedDetail = true;
     this.msg = '';
     this.dock(true);
     this.game.focus.active = true;
@@ -738,6 +750,8 @@ export class Workbench {
    */
   private dock(on: boolean) {
     const R = this.game.R;
+    // The opener's HUD stands still with the game: the parts of it over their view strip step aside while the bench is open.
+    this.game.hud?.huds[this.owner]?.root.classList.toggle('benched', on);
     if (!on) return R.resize?.();
     const W = R.width;
     const H = R.height;
@@ -791,9 +805,11 @@ export class Workbench {
     this.root.classList.add('on');
     // Docked beside the car, inside the opener's own half, so the other player's view stays visible too.
     const place = this.placeCss();
-    this.root.innerHTML = `<div class="ledger panel paper bench docked" style="${place}">
+    const short = !g.campaign.solo && g.R.layout === 'horizontal';
+    this.root.innerHTML = `<div class="ledger panel paper bench docked${short ? ' short' : ''}" style="${place}">
       <h2><span>Workbench · ${escapeHtml(v.def.name)}</span><small>${escapeHtml(g.campaign.players[this.owner].name.toUpperCase())} · THE GAME IS PAUSED</small></h2>
       <div class="gbody">${body}</div>
+      ${this.view.detailPane()}
       <div class="benchfoot"><span class="mutedtxt">${escapeHtml(this.msg)}</span>${this.btnHtml('benchdone', 'Back to the road', () => this.close())}</div>
     </div>`;
     this.root.querySelectorAll<HTMLElement>('button').forEach((b) => (b.style.pointerEvents = 'auto'));

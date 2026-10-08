@@ -3367,9 +3367,13 @@ kbd {
 }
 .gdetail .bk-h,
 .gdetail .bk-f b,
-.gdetail .bk-t td,
-.gdetail .bk-n {
+.gdetail .bk-t td {
   color: #2a2016;
+}
+/* On paper the mark colours are too pale to read: names and icons go dark, the mark says the quality. */
+.gdetail .bk-n,
+.gdetail .bk-i {
+  color: #2a2016 !important;
 }
 .gdetail .bk-g,
 .gdetail .bk-l,
@@ -3391,6 +3395,10 @@ kbd {
 }
 .gdetail .bk-list {
   column-count: 1;
+  overflow: visible;
+}
+.gdetail .bk-cols {
+  overflow: visible;
 }
 .gdetail .bk-r.on {
   background: rgba(255, 180, 84, 0.18);
@@ -3405,6 +3413,37 @@ kbd {
 .ledger.bench.docked {
   font-size: 0.74em;
   padding: 10px 12px 10px;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+}
+.ledger.bench.docked > .gdetail {
+  max-height: 34vh;
+  overflow: hidden;
+}
+.ledger.gmode {
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+}
+.ledger.gmode .gbody {
+  overflow-y: auto;
+  pointer-events: auto;
+}
+.ledger.gmode > .gdetail {
+  max-height: 28vh;
+  overflow: hidden;
+}
+.ledger.bench.docked.short > .gdetail {
+  max-height: 22vh;
+}
+.hud.benched .carcard,
+.hud.benched .trunk,
+.hud.benched .carbk,
+.hud.benched .bc,
+.hud.benched .lookinfo,
+.hud.benched .handhints,
+.hud.benched .handdot,
+.hud.benched .reticle,
+.hud.benched .msgs,
+.hud.benched .banner {
+  display: none !important;
 }
 .ledger.bench.docked .gbody {
   overflow-y: auto;
