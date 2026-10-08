@@ -96,9 +96,10 @@ export interface DrivetrainEffects {
 
 /**
  * How the gearbox, exhaust, brakes and springs change a chassis, given the engine in it. `topMult` is the speed the
- * vehicle will really reach with this engine, since faster means more to stop.
+ * vehicle will really reach with this engine, since faster means more to stop. `curb` is the weight of the whole fit
+ * (`sim/massModel.ts`); without it only the engine and the gearbox are counted against the table's weight.
  */
-export function drivetrainEffects(def: VehicleDef, fit: Fit, ef: EngineEffects, topMult: number): DrivetrainEffects {
+export function drivetrainEffects(def: VehicleDef, fit: Fit, ef: EngineEffects, topMult: number, curb?: number): DrivetrainEffects {
   const gb = gearboxSpec(def, fit);
   const sus = suspensionSpec(def, fit);
   const brk = brakeSpec(def, fit);
@@ -108,7 +109,7 @@ export function drivetrainEffects(def: VehicleDef, fit: Fit, ef: EngineEffects, 
   // Short gears launch harder and run out of speed sooner; tall gears do the opposite. The exhaust adds breathing.
   const force = noDrive ? 0 : (1 + 0.3 * g) * (1 + exh.flow);
   const top = 1 - 0.18 * g;
-  const mass = def.physics.mass + ef.massDelta + (gb.mass - stockGearbox(def).mass);
+  const mass = curb ?? def.physics.mass + ef.massDelta + (gb.mass - stockGearbox(def).mass);
   const overload = sus.load > 0 ? mass / sus.load : 9;
   const over = Math.max(0, overload - 1);
   const travel = clamp(sus.travel * (overload > 1 ? 1 / Math.pow(overload, 0.8) : 1), 0.3, 1.8);

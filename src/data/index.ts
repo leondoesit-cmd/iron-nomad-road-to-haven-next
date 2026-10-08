@@ -242,6 +242,15 @@ export interface GearboxSpec {
   rating: number;
   gearing: number;
   mass: number;
+  /**
+   * Forward ratios, first gear first (`sim/powertrain.ts`). The final drive is matched to the engine and the chassis, so
+   * what these set is how many gears there are and how widely they are spread. A CVT gives its lowest and highest ratio.
+   */
+  ratios?: number[];
+  /** A belt-and-pulley box (a scooter's, a quad's): no steps, it holds the engine where it pulls best. */
+  cvt?: boolean;
+  /** Seconds a shift takes, during which the drive is cut. */
+  shift?: number;
 }
 export interface SuspensionSpec {
   load: number;

@@ -12,6 +12,8 @@ export interface EngineParams {
   gearboxCondition?: number; gearing?: number; strain?: number; exhaustNoise?: number;
   topSpeed?: number; wheelRadius?: number; tires?: AudioTire[]; surface?: string;
   grounded?: boolean; slip?: number;
+  /** The gear the drivetrain is really in (-1 reverse). When set, `rpm` is the engine's real revs across idle..redline. */
+  gear?: number;
   /** 0..1 how much of the hull or wheels is in water, and whether this is a boat (which keeps lapping while it idles). */
   water?: number; boat?: boolean;
 
@@ -86,7 +88,8 @@ export class VehicleAudioEngine {
       const bike = character.family === 'bike';
       // A scooter's belt drive slips: with the throttle held the motor sits high in its power band whatever the road speed.
       const held = bike && e.running !== false ? Math.pow(throttle,.6)*.9 : 0;
-      const targetRpm = Math.max(e.topSpeed === undefined ? rpm : bandRpm, held) - (shifted && !bike ? .16 : 0);
+      // A simulated drivetrain gives the real revs (and its own dip across a shift); otherwise they are guessed from speed.
+      const targetRpm = e.gear !== undefined ? Math.max(.08, rpm) : Math.max(e.topSpeed === undefined ? rpm : bandRpm, held) - (shifted && !bike ? .16 : 0);
       v.rpmLag = damp(v.rpmLag,targetRpm,throttle>.05 || Math.abs(e.speed ?? 0)>2 ? 8 : 2.2,dt);
       const acousticRpm = clamp(v.rpmLag + v.wander*(bike ? .05 : .025)*(1.2-throttle*.9),.08,1);
       const load = clamp(throttle * .78 + acousticRpm * .22,0,1);
