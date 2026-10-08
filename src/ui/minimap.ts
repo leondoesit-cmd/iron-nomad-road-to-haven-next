@@ -501,7 +501,7 @@ export class MapPainter {
     const cw = Math.round(bw + MARGIN * 2);
     const ch = Math.round(bh + MARGIN * 2);
     const key = `${f.staticVersion}|${f.labels.length}|${overview ? 1 : 0}|${f.title}`;
-    const bake = `${f.base?.version ?? 0}|${f.tiles?.version ?? 0}`;
+    const bake = `${f.base?.version ?? 0}|${f.under?.version ?? 0}|${f.tiles?.version ?? 0}`;
     let c = this.cache;
     let redraw = !c || c.w !== cw || c.h !== ch || c.dpr !== dpr || c.heading !== P.heading || c.key !== key;
     if (c && !redraw) {
@@ -570,6 +570,18 @@ export class MapPainter {
   private ground(g: CanvasRenderingContext2D, P: MapProjection, f: MapFrame) {
     const base = f.base;
     if (!base) return;
+    // While the leg is still baking, its quick coarse picture underneath: the gaps in the real one are never empty.
+    const under = !base.done ? f.under : null;
+    const uc = under ? groundCanvas(under) : null;
+    if (under && uc) {
+      g.save();
+      g.imageSmoothingEnabled = true;
+      g.imageSmoothingQuality = 'high';
+      const [a, b, cc, d, e, ff] = P.matrix(under.x0, under.z0, under.cell);
+      g.transform(a, b, cc, d, e, ff);
+      g.drawImage(uc, 0, 0);
+      g.restore();
+    }
     const c = groundCanvas(base);
     if (!c) return;
     g.save();

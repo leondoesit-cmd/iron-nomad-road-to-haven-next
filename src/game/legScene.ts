@@ -2510,6 +2510,7 @@ export class LegScene extends Scene {
     // In the open world the same map is a city one block over and a desert one block back.
     f.radiusMin = this.biome === 'city' ? 80 : 150;
     f.radiusMax = this.biome === 'city' ? 170 : 320;
+    f.under = this.mapBaker.base.done ? null : this.mapBaker.coarse;
     this.navigation.fill(f.nav);
     this.fillMapActors(f, true, f.radiusMax);
     // Places show once someone has been near enough to see them, and stay.

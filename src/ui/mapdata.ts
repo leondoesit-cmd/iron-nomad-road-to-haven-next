@@ -186,6 +186,8 @@ export interface MapFrame {
   mode: 'leg' | 'delve' | 'camp';
   title: string;
   base: MapBase | null;
+  /** A coarse first picture drawn smoothed under `base` while the base is still being baked (`LegMapBaker.coarse`). */
+  under: MapBase | null;
   /** Road centre-line as a flat [x, z, x, z, ...] list, for legs. */
   road: number[] | null;
   roadHalf: number;
@@ -222,6 +224,7 @@ export function newFrame(mode: MapFrame['mode']): MapFrame {
     mode,
     title: '',
     base: null,
+    under: null,
     road: null,
     roadHalf: 4,
     roads: [],
@@ -498,7 +501,7 @@ const OPEN_CELL = 12;
 /** How far past the corridor edge the ground is still drawn. */
 const EDGE = 24;
 /** The quick first pass samples at most about this many points, so a usable picture is there within a frame or two. */
-const COARSE_SAMPLES = 3600;
+const COARSE_SAMPLES = 2000;
 /** Rows per band of the fine pass: bands nearest the convoy are baked first. */
 const BAND = 8;
 /** Columns sampled or shaded between looks at the clock. */
@@ -566,34 +569,41 @@ export function roadLine(def: TerrainDef, step = 24): number[] {
 
 type BakeLayout = Pick<LegLayout, 'lots' | 'rural' | 'slots'>;
 
+/** Water styles by a small number, so the fine pass can keep one per pixel in a byte array. */
+const STYLES: WaterStyle[] = [];
+function styleId(s: WaterStyle): number {
+  let i = STYLES.indexOf(s);
+  if (i < 0) i = STYLES.push(s) - 1;
+  return i + 1;
+}
+
 /**
- * Bakes a leg's ground into an image without stalling a frame. First a quick coarse pass (a few thousand samples, blended
- * up to full size) so the map is usable at once, then the full-detail pass a band of rows at a time, nearest the convoy
- * first, each band overwriting the coarse picture under it. Every change marks its rows dirty so a drawn copy uploads only
- * those. Wasteland is shaded relief with water and buildings; a city is its blocks, lots and streets.
+ * Bakes a leg's ground into an image without stalling a frame. First a quick coarse pass (a few thousand samples into a
+ * small image of its own, `coarse`, which the map draws smoothed under the real one) so the map is usable at once, then
+ * the full-detail pass a band of rows at a time, nearest the convoy first, each band covering the coarse picture under it.
+ * Every change marks its rows dirty so a drawn copy uploads only those. Wasteland is shaded relief with water and
+ * buildings; a city is its blocks, lots and streets.
  */
 export class LegMapBaker {
   readonly base: MapBase;
   readonly bounds: MapRect;
+  /** The quick first picture: one pixel per K x K of the base, drawn under it until the base is done. */
+  coarse: MapBase | null = null;
   /** Height range and colouring, fixed by the coarse pass so the bands agree whichever order they are baked in. */
   shade: GroundShade | null = null;
   private def: TerrainDef | null;
   private layout: BakeLayout | null;
-  private stage: 'coarse' | 'paint' | 'fine' | 'done' = 'coarse';
+  private stage: 'coarse' | 'fine' | 'done' = 'coarse';
   // Coarse pass: one sample per K x K cells.
   private K = 1;
-  private cw = 0;
-  private ch = 0;
   private cRow = 0;
   private cH: Float32Array | null = null;
   private cDepth: Float32Array | null = null;
-  private cStyle: (WaterStyle | null)[] = [];
-  private cRgb: Float32Array | null = null;
-  private paintRow = 0;
+  private cStyle: Uint8Array | null = null;
   // Fine pass.
   private heights: Float32Array | null = null;
   private depth: Float32Array | null = null;
-  private styles: (WaterStyle | null)[] = [];
+  private styles: Uint8Array | null = null;
   private sampled: Uint8Array | null = null;
   private bandDone: Uint8Array;
   private bandsLeft: number;
@@ -645,12 +655,13 @@ export class LegMapBaker {
       const [i0, i1] = this.span(j);
       cells += Math.max(0, i1 - i0 + 1) * 4;
     }
-    this.K = Math.max(2, Math.ceil(Math.sqrt(cells / COARSE_SAMPLES)));
-    this.cw = Math.ceil(w / this.K);
-    this.ch = Math.ceil(h / this.K);
-    this.cH = new Float32Array(this.cw * this.ch).fill(NaN);
-    this.cDepth = new Float32Array(this.cw * this.ch).fill(-1);
-    this.cStyle = new Array(this.cw * this.ch).fill(null);
+    const K = (this.K = Math.max(2, Math.ceil(Math.sqrt(cells / COARSE_SAMPLES))));
+    const cw = Math.ceil(w / K);
+    const ch = Math.ceil(h / K);
+    this.coarse = { x0, z0, cell: cell * K, w: cw, h: ch, data: new Uint8ClampedArray(cw * ch * 4), version: 0, done: false, dirty0: 0, dirty1: 0 };
+    this.cH = new Float32Array(cw * ch).fill(NaN);
+    this.cDepth = new Float32Array(cw * ch).fill(-1);
+    this.cStyle = new Uint8Array(cw * ch);
   }
 
   /** The columns of row j that hold ground (all of them in the open world; the corridor and its edge in a wasteland leg). */
@@ -666,9 +677,8 @@ export class LegMapBaker {
 
   get progress() {
     if (this.base.done) return 1;
-    if (this.stage === 'coarse') return (this.cRow / Math.max(1, this.ch)) * 0.06;
-    if (this.stage === 'paint') return 0.06 + (this.paintRow / this.base.h) * 0.04;
-    return 0.1 + (1 - this.bandsLeft / this.bandDone.length) * 0.9;
+    if (this.stage === 'coarse') return (this.cRow / Math.max(1, this.coarse?.h ?? 1)) * 0.05;
+    return 0.05 + (1 - this.bandsLeft / this.bandDone.length) * 0.95;
   }
 
   /** True once the quick coarse picture is in (or the whole bake is done). */
@@ -676,9 +686,10 @@ export class LegMapBaker {
     return this.base.done || this.stage === 'fine';
   }
 
-  /** Bake the bands nearest this point next. */
+  /** Bake the bands nearest this point next (a band under way far from it is left, to be finished later). */
   focus(z: number) {
     this.focusRow = clamp(Math.floor((z - this.base.z0) / this.base.cell), 0, this.base.h - 1);
+    if (this.band >= 0 && Math.abs(this.band * BAND + BAND / 2 - this.focusRow) > BAND * 3) this.band = -1;
   }
 
   /** Does up to `ms` of baking. Returns true once the ground is finished. */
@@ -688,7 +699,6 @@ export class LegMapBaker {
     const end = performance.now() + ms;
     do {
       if (this.stage === 'coarse') this.coarseRow();
-      else if (this.stage === 'paint') this.coarsePaint();
       else if (this.stage === 'fine') this.fineChunk();
       else break;
     } while (performance.now() < end && !b.done);
@@ -705,117 +715,76 @@ export class LegMapBaker {
 
   private coarseRow() {
     const b = this.base;
+    const c = this.coarse!;
     const def = this.def!;
     const K = this.K;
     const cj = this.cRow++;
-    const j = Math.min(b.h - 1, cj * K + (K >> 1));
-    const z = b.z0 + (j + 0.5) * b.cell;
-    const [i0, i1] = this.span(j);
-    for (let ci = 0; ci < this.cw; ci++) {
-      const i = Math.min(b.w - 1, ci * K + (K >> 1));
+    const z = c.z0 + (cj + 0.5) * c.cell;
+    const [i0, i1] = this.span(Math.min(b.h - 1, Math.floor((cj + 0.5) * K)));
+    for (let ci = 0; ci < c.w; ci++) {
+      const i = Math.floor((ci + 0.5) * K);
       if (i < i0 - K || i > i1 + K) continue;
-      const x = b.x0 + (i + 0.5) * b.cell;
+      const x = c.x0 + (ci + 0.5) * c.cell;
       const h = heightAt(def, x, z);
-      this.cH![cj * this.cw + ci] = h;
+      const k = cj * c.w + ci;
+      this.cH![k] = h;
       if (h < this.hMin) this.hMin = h;
       if (h > this.hMax) this.hMax = h;
       const wt = waterAt(def, x, z);
       if (wt) {
-        this.cDepth![cj * this.cw + ci] = wt.depth;
-        this.cStyle[cj * this.cw + ci] = wt.style;
+        this.cDepth![k] = wt.depth;
+        this.cStyle![k] = styleId(wt.style);
       }
     }
-    if (this.cRow >= this.ch) this.coarseShade();
+    if (this.cRow >= c.h) this.coarseShade();
   }
 
-  /** Colour each coarse sample, then blend the colours up to full size, row by row. */
+  /** Colour each coarse sample into the small image, and start the fine pass. */
   private coarseShade() {
     // A little headroom: the fine pass finds peaks and hollows the coarse one stepped over.
     const pad = (this.hMax - this.hMin) * 0.04 + 0.5;
     this.shade = groundShade(this.def!, this.hMin - pad, this.hMax + pad);
     const s = { ...this.shade, interval: 0 };
-    const cw = this.cw;
-    const ch = this.ch;
+    const c = this.coarse!;
+    const cw = c.w;
+    const ch = c.h;
     const H = this.cH!;
-    const cell = this.base.cell * this.K;
-    const rgb = (this.cRgb = new Float32Array(cw * ch * 4));
-    const px = new Uint8ClampedArray(4);
     const at = (ci: number, cj: number, h: number) => {
       const v = H[clamp(cj, 0, ch - 1) * cw + clamp(ci, 0, cw - 1)];
       return Number.isNaN(v) ? h : v;
     };
+    const districts = this.def!.open?.districts ?? [];
     for (let cj = 0; cj < ch; cj++) {
       for (let ci = 0; ci < cw; ci++) {
         const k = cj * cw + ci;
         const h = H[k];
         if (Number.isNaN(h)) continue;
-        const i = Math.min(this.base.w - 1, ci * this.K + (this.K >> 1));
-        const j = Math.min(this.base.h - 1, cj * this.K + (this.K >> 1));
-        const x = this.base.x0 + (i + 0.5) * this.base.cell;
-        const z = this.base.z0 + (j + 0.5) * this.base.cell;
-        shadeGround(px, 0, s, h, at(ci - 1, cj, h), at(ci + 1, cj, h), at(ci, cj - 1, h), at(ci, cj + 1, h), cell, x, z, this.cDepth![k], this.cStyle[k]);
-        rgb[k * 4] = px[0];
-        rgb[k * 4 + 1] = px[1];
-        rgb[k * 4 + 2] = px[2];
-        rgb[k * 4 + 3] = 1;
+        const x = c.x0 + (ci + 0.5) * c.cell;
+        const z = c.z0 + (cj + 0.5) * c.cell;
+        const st = this.cStyle![k];
+        shadeGround(c.data, k * 4, s, h, at(ci - 1, cj, h), at(ci + 1, cj, h), at(ci, cj - 1, h), at(ci, cj + 1, h), c.cell, x, z, this.cDepth![k], st ? STYLES[st - 1] : null);
+        // A city district reads as its dark ground even this coarse.
+        for (const d of districts) {
+          if (x < d.x0 || x > d.x1 || z < d.z0 || z > d.z1) continue;
+          c.data[k * 4] = CITY_GROUND[0] + 14;
+          c.data[k * 4 + 1] = CITY_GROUND[1] + 12;
+          c.data[k * 4 + 2] = CITY_GROUND[2] + 10;
+        }
       }
     }
-    this.stage = 'paint';
-  }
-
-  private coarsePaint() {
+    c.done = true;
+    markDirty(c, 0, ch);
+    c.version++;
+    this.cH = null;
+    this.cDepth = null;
+    this.cStyle = null;
     const b = this.base;
-    const j = this.paintRow++;
-    const K = this.K;
-    const cw = this.cw;
-    const ch = this.ch;
-    const rgb = this.cRgb!;
-    const [i0, i1] = this.span(j);
-    const v = (j + 0.5) / K - 0.5;
-    const cj0 = clamp(Math.floor(v), 0, ch - 1);
-    const cj1 = Math.min(ch - 1, cj0 + 1);
-    const tv = clamp(v - cj0, 0, 1);
-    for (let i = i0; i <= i1; i++) {
-      const u = (i + 0.5) / K - 0.5;
-      const ci0 = clamp(Math.floor(u), 0, cw - 1);
-      const ci1 = Math.min(cw - 1, ci0 + 1);
-      const tu = clamp(u - ci0, 0, 1);
-      let r = 0;
-      let g = 0;
-      let bl = 0;
-      let wsum = 0;
-      for (let q = 0; q < 4; q++) {
-        const ci = q & 1 ? ci1 : ci0;
-        const cj = q & 2 ? cj1 : cj0;
-        const k = (cj * cw + ci) * 4;
-        if (!rgb[k + 3]) continue;
-        const w = (q & 1 ? tu : 1 - tu) * (q & 2 ? tv : 1 - tv) + 1e-4;
-        r += rgb[k] * w;
-        g += rgb[k + 1] * w;
-        bl += rgb[k + 2] * w;
-        wsum += w;
-      }
-      if (wsum <= 0) continue;
-      const o = (j * b.w + i) * 4;
-      b.data[o] = r / wsum;
-      b.data[o + 1] = g / wsum;
-      b.data[o + 2] = bl / wsum;
-      b.data[o + 3] = 255;
-    }
-    this.overlays(j);
-    markDirty(b, j, j + 1);
+    this.heights = new Float32Array(b.w * b.h).fill(NaN);
+    this.depth = new Float32Array(b.w * b.h).fill(-1);
+    this.styles = new Uint8Array(b.w * b.h);
+    this.sampled = new Uint8Array(b.h);
+    this.stage = 'fine';
     b.version++;
-    if (this.paintRow >= b.h) {
-      this.cH = null;
-      this.cDepth = null;
-      this.cStyle = [];
-      this.cRgb = null;
-      this.heights = new Float32Array(b.w * b.h).fill(NaN);
-      this.depth = new Float32Array(b.w * b.h).fill(-1);
-      this.styles = new Array(b.w * b.h).fill(null);
-      this.sampled = new Uint8Array(b.h);
-      this.stage = 'fine';
-    }
   }
 
   // ---------------------------------------------------------------- fine pass
@@ -880,7 +849,7 @@ export class LegMapBaker {
       const wt = waterAt(def, x, z);
       if (wt) {
         this.depth![k] = wt.depth;
-        this.styles[k] = wt.style;
+        this.styles![k] = styleId(wt.style);
       }
     }
     this.col = stop + 1;
@@ -909,7 +878,8 @@ export class LegMapBaker {
       const h = hs[k];
       if (Number.isNaN(h)) continue;
       const x = b.x0 + (i + 0.5) * b.cell;
-      shadeGround(b.data, k * 4, s, h, at(i - 1, j, h), at(i + 1, j, h), at(i, j - 1, h), at(i, j + 1, h), b.cell, x, z, this.depth![k], this.styles[k]);
+      const st = this.styles![k];
+      shadeGround(b.data, k * 4, s, h, at(i - 1, j, h), at(i + 1, j, h), at(i, j - 1, h), at(i, j + 1, h), b.cell, x, z, this.depth![k], st ? STYLES[st - 1] : null);
     }
     this.col = stop + 1;
     if (this.col > i1) {
@@ -941,8 +911,9 @@ export class LegMapBaker {
   private finishFine() {
     this.heights = null;
     this.depth = null;
-    this.styles = [];
+    this.styles = null;
     this.sampled = null;
+    this.coarse = null;
     this.def = null;
     this.layout = null;
     this.stage = 'done';
