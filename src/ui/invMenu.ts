@@ -18,7 +18,7 @@ import {
 import { canFit, fitted, kitOf, slotsOfGun } from '../sim/gunmods';
 import { UTILITIES, utilityName, type Player, type QuickId } from '../game/player';
 import { dressCheck, dressOtherCheck, drinkCheck, drugCheck, drugWord, eatCheck, type Check } from '../game/consumables';
-import { isDrug, supplyName, type SupplyId } from './supplies';
+import { isDrug, supplyCount, supplyName, type SupplyId } from './supplies';
 import type { Campaign } from '../game/campaign';
 
 /**
@@ -225,6 +225,12 @@ function supplyMenu(h: MenuHost, id: SupplyId): MenuItem[] {
   const out: MenuItem[] = [];
   const quickId: QuickId = id === 'ration' ? 'eat' : id === 'water' ? 'drink' : id;
   const onBelt = p.quickSel === quickId;
+  if (id === 'wild') {
+    const n = supplyCount(h.c, 'wild');
+    out.push(item('a-eat', 'Eat one and find out', K.use, n > 0 ? ok() : { ok: false, reason: 'None left' }, () => h.takeDrug('wild')));
+    out.push(item('a-quick', 'Put on quick belt', K.quick, onBelt ? { ok: false, reason: 'It is on the quick belt already' } : ok(), () => h.setQuick('wild')));
+    return out;
+  }
   if (id === 'bandage' || id === 'medkit') {
     out.push(item('a-use', id === 'bandage' ? 'Apply a bandage' : 'Use a medkit', K.use, dressCheck(p, id), () => h.useDressing(id)));
     if (!h.c.solo) {
