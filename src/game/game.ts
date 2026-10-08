@@ -31,6 +31,11 @@ import type { Player } from './player';
 import type { Vehicle } from './vehicle';
 import { BenchmarkRun, type BenchmarkReport } from './benchmark';
 import { Rng } from '../core/rng';
+import { perf } from '../core/perfMarks';
+import { delay, nextPaint, quietSlot } from '../core/idle';
+import { planMade, preparePlan } from '../world/planCache';
+import { WARMUPS } from '../render/warmup';
+import { LoadingVeil } from '../ui/loading';
 
 export type Phase =
   | 'boot'
@@ -91,11 +96,14 @@ export class Game {
   private benchmarkMeta: Omit<BenchmarkReport, 'results'> | null = null;
   private benchmarkRestore: { solo: boolean; layout: GameRenderer['layout']; slots: InputManager['slots']; campaign: Campaign; volume: number; scale: number; slowMo: number } | null = null;
   private benchmarkRng = new Rng(4242);
+  /** A load whose first drawn frame is still to be timed (`core/perfMarks.ts`). */
+  private firstFrame: { name: string; t0: number } | null = null;
 
   constructor() {
     this.debug = new URLSearchParams(location.search).has('debug');
     const canvas = document.getElementById('gl') as HTMLCanvasElement;
     this.R = new GameRenderer(canvas);
+    perf.mark('boot:renderer');
     this.input = new InputManager(window);
     const halves = [document.getElementById('half0')!, document.getElementById('half1')!];
     this.hud = new Hud(halves);
@@ -140,33 +148,161 @@ export class Game {
       }
     });
     this.applySettings();
+    // Any control touched: the title does its heavy background work only while nobody is using the menu.
+    const touch = () => (this.lastInputAt = performance.now());
+    for (const ev of ['pointerdown', 'pointermove', 'keydown', 'wheel'] as const) window.addEventListener(ev, touch, { passive: true });
   }
 
+  /**
+   * Boot: the title goes up and answers at once; everything heavy comes after it. Physics loads in the background, then
+   * the open world's plan and the caches its first scene needs are made a slice at a time while nobody is using the menu
+   * (`prepareWorld`), and the demo convoy behind the menu fades in once it is built and its shaders are compiled.
+   * A press that needs the world before then shows a loading veil and waits for it (`load`).
+   */
   async start() {
-    await initPhysics();
-    if (this.debug) {
-      const errs = validateData();
-      if (errs.length) console.error('Data validation failed:', errs);
-    }
     this.phase = 'title';
     this.hud.setVisible(false);
     this.overlays.showTitle();
     this.layout();
-    this.startAttract();
+    document.getElementById('splash')?.remove();
+    perf.mark('title:dom');
+    this.firstFrame = { name: 'title', t0: perf.marks.get('title:dom')! };
+    this.last = performance.now();
+    requestAnimationFrame((n) => this.frame(n));
+    await initPhysics();
+    perf.mark('boot:physics');
+    if (this.debug) {
+      const errs = validateData();
+      if (errs.length) console.error('Data validation failed:', errs);
+    }
     // Shortcut for checking a map without playing up to it: ?leg=L3P starts a fresh run on that leg.
     const jump = new URLSearchParams(location.search).get('leg');
     if (jump && LEGS.legs.some((l) => l.id === jump)) {
       this.input.autoJoinKeyboard();
       this.newCampaign();
       this.beginLeg(jump);
+      return;
     }
     // ?training goes straight into the lessons, the way ?leg skips to a map.
     if (new URLSearchParams(location.search).has('training')) {
       this.input.autoJoinKeyboard();
       this.startTraining();
+      return;
     }
-    this.last = performance.now();
-    requestAnimationFrame((n) => this.frame(n));
+    this.attractDue = this.phase === 'title';
+    void this.prepareWorld();
+  }
+
+  // ------------------------------------------------------------------ loading
+
+  /** The loading veil shown while a menu's choice is being made ready. */
+  private veil = new LoadingVeil();
+  /** Set while a menu's choice is loading: further loads are refused until it is done. */
+  loading = false;
+  /** Frames neither simulate nor draw while a new scene's shaders compile behind the veil. */
+  private hold = false;
+  /** Last time anyone touched a control: the title's heavy work waits for a quiet moment. */
+  private lastInputAt = 0;
+  /** A press is waiting on the background preparation: it stops waiting for quiet moments. */
+  private urgent = false;
+  private worldPrep: Promise<void> | null = null;
+  /** `prepareWorld` has finished. */
+  private worldReady = false;
+  /** The title demo should be (re)built: at boot, back at the title, after seats or heroes change, or when it ran its course. */
+  private attractDue = false;
+  /** The title demo is built but its shaders are still compiling: it is simulated but not drawn yet. */
+  private attractWarming = false;
+
+  /**
+   * Make the open world's plan (`world/planCache.ts`) and fill the caches its first scene needs (`render/warmup.ts`), one
+   * slice per quiet, idle moment, so the menu never stalls for long while someone is using it. Runs once per page; a
+   * press that needs it (`load`) makes the rest run straight away.
+   */
+  prepareWorld(): Promise<void> {
+    return (this.worldPrep ??= (async () => {
+      const t0 = perf.mark('prep:start');
+      await initPhysics();
+      const quiet = () => quietSlot(() => this.lastInputAt, 700, () => this.urgent);
+      const leg = legById('W');
+      if (!planMade(leg)) {
+        await quiet();
+        perf.time('prep:plan', () => preparePlan(leg));
+      }
+      for (const [name, step] of WARMUPS) {
+        await quiet();
+        perf.time(`prep:${name}`, step);
+      }
+      perf.measure('prep:world', t0);
+      this.worldReady = true;
+    })());
+  }
+
+  /**
+   * Start something heavy from a menu (a new run, a reload, training, the next morning). The press answers at once: a
+   * loading veil goes up and is painted before the main thread goes busy. Then the world's plan and caches are made ready,
+   * `work` builds the scene, its shaders compile behind the veil and one frame is drawn there, and the veil fades out on a
+   * scene that runs smoothly from its first visible frame. Further loads are refused until this one is done.
+   */
+  load(label: string, work: () => void): boolean {
+    if (this.loading) return false;
+    this.loading = true;
+    this.urgent = true;
+    const t0 = perf.mark(`load:${label}`);
+    this.veil.show(label);
+    // The demo behind the title has nothing more to show: free the frame for the loading.
+    if (this.attract) this.disposeScene();
+    void (async () => {
+      try {
+        await nextPaint();
+        await this.prepareWorld();
+        work();
+        await this.warmScene(true);
+      } catch (error) {
+        console.error(`Loading ${label} failed`, error);
+        if (this.phase === 'title') this.attractDue = true;
+      } finally {
+        this.loading = false;
+        this.urgent = false;
+        this.veil.hide();
+        perf.measure(`load:${label}`, t0);
+      }
+    })();
+    return true;
+  }
+
+  /**
+   * Compile the current scene's shaders without blocking (`compileAsync`, parallel where the GPU driver allows), then draw
+   * it once, which picks up what compile cannot see (shadow depth programs, post passes). With `hold` the scene stands
+   * still meanwhile (a load, behind the veil); without, it keeps running unseen (the title demo, behind the menu).
+   */
+  private async warmScene(hold: boolean) {
+    const sc = this.scene;
+    if (!sc) return;
+    if (hold) this.hold = true;
+    const t0 = performance.now();
+    try {
+      await Promise.race([this.R.compileScene(), delay(5000)]);
+      perf.measure('warm:compile', t0);
+      if (this.scene !== sc) return;
+      this.attractWarming = false;
+      const t1 = performance.now();
+      this.render(0, FIXED_STEP);
+      perf.measure('warm:frame', t1);
+    } finally {
+      if (hold) {
+        this.hold = false;
+        this.last = performance.now();
+        this.acc = 0;
+      }
+    }
+  }
+
+  /** On the title: build the demo when it is due, the world is ready and nobody has touched the menu for a moment. */
+  private tickAttract() {
+    if (!this.attractDue || !this.worldReady || this.loading || this.benchmark) return;
+    if (performance.now() - this.lastInputAt < 1200) return;
+    this.attractDue = false;
+    this.startAttract();
   }
 
   layout() {
@@ -316,6 +452,7 @@ export class Game {
   }
 
   beginLeg(legId: string, start?: WorldPose, story = false) {
+    const t0 = perf.mark('leg:begin');
     this.disposeScene();
     this.overlays.hideAll();
     this.campaign.legId = legId;
@@ -326,6 +463,8 @@ export class Game {
     sc.onResult = (r) => this.onSceneResult(r);
     sc.openWorkbench = (p, v) => this.openWorkbench(p, v);
     sc.openInventory = (p) => this.openInventory(p);
+    perf.measure('leg:build', t0);
+    this.firstFrame = { name: 'leg', t0 };
     this.scene = sc;
     this.phase = 'leg';
     this.paused = false;
@@ -565,7 +704,7 @@ export class Game {
     this.hud.setVisible(false);
     this.campaign.worldSave = this.world ? this.world.serialize() : undefined;
     saveCampaign(this.campaign);
-    this.overlays.showLedger(camp, (nextLegId) => this.rollOut(nextLegId));
+    this.overlays.showLedger(camp, (nextLegId) => this.load(legById(nextLegId).name, () => this.rollOut(nextLegId)));
   }
 
   /** Leave the Ledger for the next morning. In the open world that is wherever the convoy slept. */
@@ -580,7 +719,7 @@ export class Game {
   fail(reason: string) {
     if (this.phase === 'fail') return;
     this.phase = 'fail';
-    this.overlays.showFail(reason, () => this.continueGame(), () => this.toTitle());
+    this.overlays.showFail(reason, () => this.load('Continue', () => this.continueGame()), () => this.toTitle());
   }
 
   toTitle() {
@@ -589,16 +728,20 @@ export class Game {
     this.hud.setVisible(false);
     this.overlays.showTitle();
     this.audio.setMusic('none');
-    this.startAttract();
+    // The demo comes back once the title has been quiet for a moment (`tickAttract`).
+    this.attractDue = true;
+    void this.prepareWorld();
   }
 
   /** Rebuild the title demo, for when the number of seats changed under it. */
   restartAttract() {
-    if (this.phase === 'title') this.startAttract();
+    // Not now: a rebuild stalls the menu for a moment, so it waits until nobody is pressing anything (`tickAttract`).
+    if (this.phase === 'title') this.attractDue = true;
   }
 
   /** A looping demo behind the title: one autopilot convoy per seat on the first road. */
   private startAttract() {
+    const t0 = performance.now();
     this.disposeScene();
     this.setSolo(this.solo);
     const c = new Campaign(this.overlays.heroes(), this.solo);
@@ -620,6 +763,23 @@ export class Game {
     if (sc.players[1]) sc.players[1].autopilot = { speed: 15 };
     this.scene = sc;
     this.attract = true;
+    perf.measure('attract:build', t0);
+    // Unseen until its shaders have compiled in the background; then it fades in behind the menu.
+    this.attractWarming = true;
+    this.setCanvasShown(false);
+    void this.warmScene(false).then(() => {
+      if (this.scene === sc && this.phase === 'title') this.setCanvasShown(true, 0.9);
+    });
+  }
+
+  private canvasHidden = false;
+  /** Show or hide the 3D picture (the title demo fades in over `fade` seconds once it is ready to draw smoothly). */
+  private setCanvasShown(on: boolean, fade = 0) {
+    if (this.canvasHidden === !on) return;
+    this.canvasHidden = !on;
+    const st = this.R.canvas.style;
+    st.transition = on && fade > 0 ? `opacity ${fade}s ease-out` : 'none';
+    st.opacity = on ? '1' : '0';
   }
 
   /** Title-only, disposable scenes: never writes campaign or settings saves. */
@@ -736,6 +896,12 @@ export class Game {
   // ------------------------------------------------------------------ loop
 
   private frame(now: number) {
+    if (this.hold) {
+      // A new scene's shaders are compiling behind the loading veil: nothing moves or draws until they are done.
+      this.last = now;
+      requestAnimationFrame((n) => this.frame(n));
+      return;
+    }
     if (this.benchmark) {
       if (this.R.contextLost) this.stopBenchmark('Graphics context was lost. Run again after it recovers.');
       else if (document.hidden) {
@@ -777,6 +943,15 @@ export class Game {
       + Math.floor(Math.max(0, benchmarkFrameMs / 1000 - raw) / FIXED_STEP);
     if (steps === MAX_STEPS) this.acc = 0;
     this.render(this.acc / FIXED_STEP, raw);
+    perf.frame(this.frameMs);
+    if (this.firstFrame) {
+      // From the start of a load to the end of the first frame drawn after it; then watch the next seconds for hitches.
+      const f = this.firstFrame;
+      this.firstFrame = null;
+      perf.measure(`${f.name}:firstFrame`, f.t0);
+      perf.mark(`${f.name}:firstFrame`);
+      perf.watchFrames(`${f.name}:first10s`, 10);
+    }
     this.storyVoice.setPaused(this.paused || document.hidden);
     if (this.benchmark) {
       const info = this.R.gl.info.render;
@@ -796,6 +971,10 @@ export class Game {
     if (this.phase === 'title') {
       this.input.pollJoin();
       this.overlays.tickTitle(step);
+      for (const it of this.input.intents) {
+        if (it.held || it.nav || Math.abs(it.move[0]) + Math.abs(it.move[1]) + Math.abs(it.look[0]) + Math.abs(it.look[1]) > 0.4) this.lastInputAt = performance.now();
+      }
+      this.tickAttract();
     }
     // The pointer is only captured during live play; menus and overlays need the cursor back.
     const live = !this.paused && !this.attract && (this.phase === 'leg' || this.phase === 'camp');
@@ -828,7 +1007,7 @@ export class Game {
         sc.tick(step);
         // Restart the demo when it runs long, or when the convoy has crashed out.
         const dead = sc.players.every((p) => !p.vehicle || p.vehicle.wreck);
-        if (sc.time > 80 || dead) this.startAttract();
+        if (sc.time > 80 || dead) this.attractDue = true;
       }
       return;
     }
@@ -937,7 +1116,8 @@ export class Game {
   private render(alpha: number, dt: number) {
     const renderStart = this.debug || this.benchmark ? performance.now() : 0;
     const sc = this.scene;
-    if (sc && (this.phase === 'benchmark' || this.phase === 'leg' || this.phase === 'camp' || this.phase === 'ledger' || this.phase === 'vote' || this.phase === 'report' || (this.phase === 'title' && this.attract))) {
+    if (!this.attract && this.canvasHidden) this.setCanvasShown(true);
+    if (sc && !(this.attract && this.attractWarming) && (this.phase === 'benchmark' || this.phase === 'leg' || this.phase === 'camp' || this.phase === 'ledger' || this.phase === 'vote' || this.phase === 'report' || (this.phase === 'title' && this.attract))) {
       sc.renderFrame(this.paused ? 0 : alpha, dt);
       this.applyPhoto();
       if (!this.attract) sc.updateAudio(dt);
