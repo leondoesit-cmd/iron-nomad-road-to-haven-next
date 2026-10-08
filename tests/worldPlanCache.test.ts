@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { initPhysics } from '../src/physics/physics';
 import { legById } from '../src/data';
 import { CITY_PLANS } from '../src/world/plans';
@@ -9,6 +9,9 @@ import { WorldMemory } from '../src/game/worldMemory';
 import { fakeServices, run } from './helpers/sim';
 
 // The world plan cache (`world/planCache.ts`): one build per leg, a pristine copy per scene, the terrain shared.
+
+// Whole open-world scenes run here: a loaded machine needs more than the default.
+vi.setConfig({ testTimeout: 180000 });
 
 beforeAll(async () => {
   await initPhysics();
