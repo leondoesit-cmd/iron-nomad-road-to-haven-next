@@ -1,5 +1,6 @@
 import { PARTS, gearDef, mountsFor, partDef, type PartDef } from '../data';
 import { allItems } from '../sim/gear';
+import { partModelKey } from '../sim/carry';
 import { defOf, tyreFits } from '../sim/garage';
 import { newPart, slotsOf, type PartItem } from '../sim/parts';
 import { haulExtraName, rollNightHaul, type HaulGrade, type HaulRoll } from '../sim/nightHaul';
@@ -75,7 +76,9 @@ export function grantNightHaul(c: Campaign, grade: HaulGrade, waves: number, o: 
     const d = partDef(item.id);
     const what = `${d.name} (${PARTS.rarity[d.mk] ?? `Mk${d.mk}`}, ${PARTS.labels[d.slot].toLowerCase()})`;
     out.part = item;
-    out.models.push(`part:${item.id}`);
+    // The part's own model as it would lie on the ground (an engine, a disc, a tyre); the bolt-on kit by its own shape.
+    const key = partModelKey(item.id);
+    out.models.push(/^part\d$/.test(key) ? `part:${item.id}` : key);
     if (c.stowPart(item)) {
       out.stowed = 'trucks';
       out.lines.push(`A rare find: ${what}, stowed in the trucks.`);

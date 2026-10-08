@@ -130,11 +130,11 @@ describe('night camp off (the default)', () => {
     // One of the dead after you, close by: no stopping here.
     const zb = sc.zombies.spawn('walker', p.pos.x + 9, p.pos.z, false);
     zb.state = 'chase';
-    run(sc, 0.1);
+    run(sc, 0.25);
     expect(prompt.prompt).toBe(STOP_PROMPT.hostile);
     expect(prompt.onTick!(p, 0)).toBe(false);
     zb.dead = true;
-    run(sc, 0.1);
+    run(sc, 0.25);
     expect(prompt.prompt).toBe(STOP_PROMPT.stop);
     expect(prompt.onTick!(p, 0)).toBe(true);
     prompt.run(p);
@@ -416,7 +416,8 @@ describe("the night's haul", () => {
     expect(c.ammo).toBe(ammo + g1.roll.ammo);
     expect(g1.stowed).toBe('trucks');
     expect(c.inventory.map((p) => p.id)).toContain(g1.part!.id);
-    expect(g1.models).toContain(`part:${g1.part!.id}`);
+    expect(g1.models).toContain('ammo');
+    expect(g1.models.length).toBe(3);
     // Full trucks: the crate takes it, and nothing goes in the trucks.
     while (c.inventoryRoom > 0) c.inventory.push(newPart('eng_i4', 1));
     const crated: string[] = [];

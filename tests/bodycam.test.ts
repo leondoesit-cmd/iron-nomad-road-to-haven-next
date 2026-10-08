@@ -823,7 +823,8 @@ describe('the first-person view moves with the body', () => {
 
   it('the third-person camera is not bobbed', () => {
     const { h, sc, p } = scene();
-    p.viewFirst = false;
+    // On foot the view is always the eyes now; a third-person camera there is only ever a staged one (a photo, the dawn camp).
+    p.staged = true;
     walk(h, p);
     runFor(sc, 1);
     expect(p.firstPerson).toBe(false);
