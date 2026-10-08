@@ -14,6 +14,7 @@ import {
   type Surface,
 } from '../sim/ballistics';
 import { structuralMul } from '../sim/breach';
+import { throughTrunk } from '../sim/treeDamage';
 import { IMPACT_SOUND, MUZZLE_LIGHT_AHEAD, MUZZLE_LIGHT_LIFE, MUZZLE_LIGHT_POWER, SKIP_DAMAGE, TRACER, skipOf, tracerTint } from '../sim/weaponfx';
 import { windAt } from '../sim/weather';
 import { sticks } from '../sim/archery';
@@ -277,7 +278,7 @@ export class Combat {
       const h = this.firstHit(b, cx, cy, cz, dx, dy, dz, left);
       const speed = Math.hypot(b.vx, b.vy, b.vz);
       ctx.P.hitAlongRay({ x: cx, y: cy, z: cz, dx, dy, dz, impulse: b.spec.mass * speed,
-        energy: 0.5 * b.spec.mass * speed * speed, kind: 'bullet' }, h?.dist ?? left);
+        energy: 0.5 * b.spec.mass * speed * speed, kind: 'bullet', ammo: b.kind }, h?.dist ?? left);
       if (!h) {
         cx += dx * left;
         cy += dy * left;
@@ -466,6 +467,8 @@ export class Combat {
           ctx.structureHit?.(h.handle, o.damage * frac * ctx.campaign.difficulty.damage);
         }
         const tagged = v ? undefined : (ctx.P.surfaces.get(h.handle) as Surface | undefined);
+        // A tree's wood (a standing trunk, a stump, a fallen top): it takes the round its own way (`game/timber.ts`).
+        const wood = tagged === 'wood' && b.kind !== 'arrow' && b.kind !== 'bolt' ? ctx.P.trees.get(h.handle) : undefined;
         // A tagged collider (a prop, a stone) is its own thing: not the box of the world that happens to stand beside it.
         const box = v || tagged ? null : this.boxAt(h.x, h.y, h.z);
         const boxThin = box ? Math.min(box.maxX - box.minX, box.maxZ - box.minZ) : 0;
@@ -484,6 +487,7 @@ export class Combat {
         const floorImpact = ground || (!v && exact && h.ny > 0.6 && (surface === 'stone' || surface === 'concrete' || surface === 'dirt'));
         const floorMaterial: GroundMaterial = ground || surface === 'dirt' ? groundMaterial : surface === 'stone' ? 'stone' : 'concrete';
         if (floorImpact) ctx.gore.groundStrike(b.kind, floorMaterial, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dy, dz, speed);
+        else if (wood) ctx.gore.timber.impact(wood, b.kind, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dy, dz, speed);
         else ctx.gore.impact(surface, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dz, (speed / spec.speed) * (o.damage / 30), { moving: !!v, size: spec.hole, heavy: spec.hole >= 0.15, mark: exact, shaft: b.kind === 'arrow' || b.kind === 'bolt' });
         // How far through it goes is worked out before the blow is dealt: a pane that breaks or a wall that gives way is
         // not there to be measured afterwards, and the round should carry on through it.
@@ -507,11 +511,11 @@ export class Combat {
               let sp = speed;
               for (let k = 0; k < (hollow ? 2 : 1) && sp > 0; k++) sp = throughSlab(spec, sp, surface, info.ref);
               exit = sp;
-            } else if (geo < MAX_SLAB) exit = throughSlab(spec, speed, surface, geo);
+            } else if (geo < MAX_SLAB) exit = wood ? throughTrunk(b.kind, speed, geo, wood.hardness()) : throughSlab(spec, speed, surface, geo);
           }
         }
         this.onImpact?.({ surface, x: h.x, y: h.y, z: h.z, speed, penetrated: exit > 0 });
-        const sound = floorImpact ? undefined : b.kind === 'arrow' || b.kind === 'bolt' ? (sticks(surface) ? 'thunk' : 'tink') : IMPACT_SOUND[surface];
+        const sound = floorImpact || wood ? undefined : b.kind === 'arrow' || b.kind === 'bolt' ? (sticks(surface) ? 'thunk' : 'tink') : IMPACT_SOUND[surface];
         if (box?.kind === 'tree') ctx.audio.play('rustle', h.x, h.z, 0.25);
         if (sound && (speed > 60 || b.kind === 'arrow')) ctx.audio.play(sound, h.x, h.z, 0.2 + 0.3 * Math.min(1, o.damage / 60), { intensity: Math.min(1, o.damage / 60) });
         // Whatever it hit may give way: glass breaks, a plank wall opens, a barricade splinters. A pistol cannot bring down a
@@ -519,7 +523,9 @@ export class Combat {
         // takes them with it.
         const strike = () => {
           ctx.P.hitCollider(h.handle, { x: h.x, y: h.y, z: h.z, dx, dy, dz,
-            impulse: spec.mass * Math.max(0, speed - exit), energy: 0.5 * spec.mass * Math.max(0, speed * speed - exit * exit), kind: 'bullet' });
+            impulse: spec.mass * Math.max(0, speed - exit), energy: 0.5 * spec.mass * Math.max(0, speed * speed - exit * exit), kind: 'bullet', ammo: b.kind });
+          // Into the wood: the notch it cuts (it may bring the tree down).
+          if (wood) ctx.gore.timber.shot(wood, b.kind, speed, exit, h.x, h.y, h.z, dx, dy, dz, owner);
           if (!box || !ctx.world) return;
           const mul = box.kind === 'barricade' ? 1 : structuralMul(b.kind, surface);
           if (mul > 0) ctx.world.hit(box, o.damage * frac * mul, 'bullet', { x: h.x, y: h.y, z: h.z, nx: h.nx, ny: h.ny, nz: h.nz });
@@ -540,7 +546,8 @@ export class Combat {
           b.vz = ndz * exit;
           const run = geo + 0.04;
           // The hole it leaves on the far face.
-          if (!v && exact) ctx.gore.exitHole(surface, h.x + dx * geo, h.y + dy * geo, h.z + dz * geo, dx, dy, dz, (exit / spec.speed) * (o.damage / 30), spec.hole);
+          if (wood) ctx.gore.timber.exit(wood, b.kind, h.x + dx * geo, h.y + dy * geo, h.z + dz * geo, dx, dy, dz, exit);
+          else if (!v && exact) ctx.gore.exitHole(surface, h.x + dx * geo, h.y + dy * geo, h.z + dz * geo, dx, dy, dz, (exit / spec.speed) * (o.damage / 30), spec.hole);
           const px = h.x + dx * run;
           const py = h.y + dy * run;
           const pz = h.z + dz * run;
