@@ -38,6 +38,18 @@ export function buildShopFrontPanel(): THREE.BufferGeometry {
   return g;
 }
 
+let panelGeo: THREE.BufferGeometry | null = null;
+const detailGeos = new Map<ShopId, THREE.BufferGeometry>();
+/**
+ * A copy of a shop's front, its panel and its modelled details, ready to be moved into place. Every placement of a shop
+ * is alike, so each is built once (the details are a few hundred boxes) and copied after.
+ */
+export function shopFrontGeometry(id: ShopId): { panel: THREE.BufferGeometry; details: THREE.BufferGeometry } {
+  let details = detailGeos.get(id);
+  if (!details) detailGeos.set(id, (details = buildShopFrontDetails(id)));
+  return { panel: (panelGeo ??= buildShopFrontPanel()).clone(), details: details.clone() };
+}
+
 /** Where an optional photograph of the front is looked for. */
 export const shopImageUrl = (id: ShopId) => `/shops/${id}.png`;
 

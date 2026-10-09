@@ -38,6 +38,7 @@ import {
   type V3,
 } from '../sim/bodywork';
 import { removePart } from '../sim/garage';
+import { tyreScrub } from '../sim/tyreModel';
 import { partName, type PartItem } from '../sim/parts';
 import { clamp } from '../core/math';
 import type { PartSlot } from '../data';
@@ -666,15 +667,19 @@ export class Bodywork {
       if (!cp) continue;
       const surf = ctx.surfaceAt(cp.x, cp.z);
       const wet = GLOBALS.uWet.value;
-      const skid = skidAmount({ lateral, speed, throttle: it.throttle, brake: it.brake, handbrake: it.handbrake, rear: b.rear[i] });
-      const style = markStyle(surf.name, skid, speed, wet);
+      // The tyre's own scrub when the wheel model measures it (sliding, spinning, locked); a guess from the pedals otherwise.
+      const skid = b.slipSide ? tyreScrub(b.slipSide[i], b.slipSpin[i]) : skidAmount({ lateral, speed, throttle: it.throttle, brake: it.brake, handbrake: it.handbrake, rear: b.rear[i] });
+      let style = markStyle(surf.name, skid, speed, wet);
       if (!style || ctx.waterAt(cp.x, cp.z)) {
         ctx.marks.lift(key);
         continue;
       }
+      // Loose ground has a real rut pressed in it (groundWork.ts): the ribbon is only its tread print, laid on its floor.
+      const loose = ctx.ground ? ctx.ground.heightAt(cp.x, cp.z) : 0;
+      if (style.kind === 'groove' && ctx.ground?.soilAt(cp.x, cp.z)) style = { ...style, depth: 0, alpha: style.alpha * 0.8 };
       // The tyre's own contact height (the road it is on, or the ground as drawn), carried across the ribbon by the ground's slope.
       const drawn = ctx.drawnGroundAt ? (x: number, z: number) => ctx.drawnGroundAt!(x, z) : (x: number, z: number) => ctx.groundAt(x, z);
-      const g0 = cp.y - drawn(cp.x, cp.z);
+      const g0 = cp.y - (drawn(cp.x, cp.z) - loose);
       ctx.marks.lay(key, cp.x, cp.z, halfW, style, (x, z) => drawn(x, z) + g0);
     }
     void dt;

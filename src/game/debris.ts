@@ -13,7 +13,7 @@ import type { Ctx } from './ctx';
 
 const MAX_PIECES = 32;
 /** Scrap is heavier than it looks, and a knock has to be felt: pieces weigh this much more than the parts they were. */
-const HEFT = 2.2;
+export const HEFT = 2.2;
 /** Seconds before a launched piece collides with vehicles, so it does not spring off the chassis it was bolted to. */
 const ARM_AFTER = 0.45;
 /** How long a piece without a part in it lies about before it is cleared, seconds. */
@@ -35,6 +35,10 @@ export interface DebrisIn {
   /** A thing that is not a fitted part but can still be lifted once it lies still: a can that fell off a roof. */
   carried?: Carried | null;
   tag: string;
+  /** Seconds before it collides with vehicles (default `ARM_AFTER`): something thrown has no chassis to spring off. */
+  armAfter?: number;
+  /** Part of the world, not scrap: it is never cleared away with age (a stone knocked off its place). */
+  keep?: boolean;
 }
 
 export interface Piece {
@@ -49,6 +53,9 @@ export interface Piece {
   item: PartItem | null;
   carried: Carried | null;
   armed: boolean;
+  armAfter: number;
+  /** Never cleared away with age (`DebrisIn.keep`). */
+  keep: boolean;
   /** 1 while it exists, falling to 0 as scrap is cleared away. */
   fade: number;
   prev: { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number };
@@ -110,6 +117,8 @@ export class DebrisField {
       item: o.item ?? null,
       carried: o.carried ?? null,
       armed: false,
+      armAfter: o.armAfter ?? ARM_AFTER,
+      keep: !!o.keep,
       fade: 1,
       prev: { x: o.pos.x, y: o.pos.y, z: o.pos.z, qx: o.quat.x, qy: o.quat.y, qz: o.quat.z, qw: o.quat.w },
     };
@@ -121,7 +130,7 @@ export class DebrisField {
   /** Which piece goes when there are too many: scrap that has stopped moving, then scrap, then anything but a part. */
   private oldest(): Piece {
     const pick = (f: (p: Piece) => boolean) => this.pieces.find(f);
-    return pick((p) => !p.item && !p.carried && p.rest > 1) ?? pick((p) => !p.item && !p.carried) ?? pick((p) => p.rest > 1) ?? this.pieces[0];
+    return pick((p) => !p.item && !p.carried && !p.keep && p.rest > 1) ?? pick((p) => !p.item && !p.carried && !p.keep) ?? pick((p) => !p.item && !p.carried && p.rest > 1) ?? pick((p) => p.rest > 1) ?? this.pieces[0];
   }
 
   /** Take a piece out of the world. A piece that still carries a part is not simply lost: it becomes an ordinary pickup where it lies, when `keep` is set. */
@@ -157,7 +166,7 @@ export class DebrisField {
       p.prev.qz = r.z;
       p.prev.qw = r.w;
       p.age += dt;
-      if (!p.armed && p.age > ARM_AFTER) {
+      if (!p.armed && p.age > p.armAfter) {
         p.armed = true;
         p.collider.setCollisionGroups(GROUPS.prop);
       }
@@ -165,7 +174,7 @@ export class DebrisField {
       const av = p.body.angvel();
       if (Math.hypot(lv.x, lv.y, lv.z) < 0.25 && Math.hypot(av.x, av.y, av.z) < 0.45) p.rest += dt;
       else p.rest = 0;
-      if (!p.item && !p.carried && p.age > SCRAP_LIFE) {
+      if (!p.item && !p.carried && !p.keep && p.age > SCRAP_LIFE) {
         p.fade -= dt / 3;
         p.mesh.scale.setScalar(Math.max(0.01, p.fade));
         if (p.fade <= 0) {
@@ -195,7 +204,11 @@ export class DebrisField {
     for (const p of this.pieces) {
       const t = p.body.translation();
       const r = p.body.rotation();
-      p.mesh.position.set(p.prev.x + (t.x - p.prev.x) * alpha, p.prev.y + (t.y - p.prev.y) * alpha, p.prev.z + (t.z - p.prev.z) * alpha);
+      const x = p.prev.x + (t.x - p.prev.x) * alpha;
+      const z = p.prev.z + (t.z - p.prev.z) * alpha;
+      // Down in the dent it made in soft ground, or in a rut or a crater (it rests on the ground's collider over them).
+      const sunk = this.ctx.ground ? Math.min(0, this.ctx.ground.heightAt(x, z)) : 0;
+      p.mesh.position.set(x, p.prev.y + (t.y - p.prev.y) * alpha + sunk, z);
       _q.set(p.prev.qx, p.prev.qy, p.prev.qz, p.prev.qw);
       _q2.set(r.x, r.y, r.z, r.w);
       p.mesh.quaternion.copy(_q.slerp(_q2, alpha));

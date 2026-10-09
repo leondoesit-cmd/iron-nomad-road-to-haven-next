@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
-import { GLOBALS, kitMaterial } from './materials';
+import { kitMaterial } from './materials';
+import { PLANT_SWAY_GLSL, plantUniforms, WIND_GLSL, windUniforms } from './wind';
+import { PLANT_MECHANICS, type PlantKind } from '../sim/vegetation';
 import { bushTexture, caneTexture, fernTexture, flowerTexture, grassTexture, hornwortTexture, irisTexture, lilyTexture, oleanderTexture, papyrusTexture, pondweedTexture, reedTexture, siltTexture, tapeTexture, weedTexture } from './proctex';
 import { shared } from './dispose';
 import { COPLANAR, coplanarOffset } from './depth';
@@ -28,8 +30,12 @@ import { bendClear, bendGround, caneThicket, caneTunnelNear, nearMill, nearPath,
 
 // ---------------------------------------------------------------------------------------- geometry
 
-/** Crossed vertical cards. `dome` gives normals that bulge outward (bushes); otherwise they point up (grass). */
-function cardGeometry(cards: number, W: number, H: number, dome: boolean): THREE.BufferGeometry {
+/**
+ * Crossed vertical cards. `dome` gives normals that bulge outward (bushes); otherwise they point up (grass). Each card is a
+ * `cols` x `rows` grid, so the stem can curve as it bends and the leaves in different parts of a card can each move in the
+ * wind on their own.
+ */
+function cardGeometry(cards: number, W: number, H: number, dome: boolean, cols = 1, rows = 1): THREE.BufferGeometry {
   const pos: number[] = [];
   const uv: number[] = [];
   const nor: number[] = [];
@@ -39,19 +45,27 @@ function cardGeometry(cards: number, W: number, H: number, dome: boolean): THREE
     const cx = Math.cos(a) * W * 0.5;
     const cz = Math.sin(a) * W * 0.5;
     const base = pos.length / 3;
-    pos.push(-cx, 0, -cz, cx, 0, cz, cx, H, cz, -cx, H, -cz);
-    // Sprite textures are DataTextures (no flipY) with the plant base on the last row, so v runs top-down.
-    uv.push(0, 1, 1, 1, 1, 0, 0, 0);
-    for (let i = 0; i < 4; i++) {
-      const vx = pos[(base + i) * 3];
-      const vy = pos[(base + i) * 3 + 1];
-      const vz = pos[(base + i) * 3 + 2];
-      if (dome) {
-        const n = new THREE.Vector3(vx, (vy - H * 0.25) * 1.2 + H * 0.35, vz).normalize();
-        nor.push(n.x, n.y, n.z);
-      } else nor.push(0, 1, 0);
+    for (let j = 0; j <= rows; j++) {
+      for (let i = 0; i <= cols; i++) {
+        const f = (i / cols) * 2 - 1;
+        const vx = cx * f;
+        const vy = (H * j) / rows;
+        const vz = cz * f;
+        pos.push(vx, vy, vz);
+        // Sprite textures are DataTextures (no flipY) with the plant base on the last row, so v runs top-down.
+        uv.push(i / cols, 1 - j / rows);
+        if (dome) {
+          const n = new THREE.Vector3(vx, (vy - H * 0.25) * 1.2 + H * 0.35, vz).normalize();
+          nor.push(n.x, n.y, n.z);
+        } else nor.push(0, 1, 0);
+      }
     }
-    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const v = base + j * (cols + 1) + i;
+        idx.push(v, v + 1, v + cols + 2, v, v + cols + 2, v + cols + 1);
+      }
+    }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -62,23 +76,23 @@ function cardGeometry(cards: number, W: number, H: number, dome: boolean): THREE
 }
 
 let grassGeo: THREE.BufferGeometry | null = null;
-const grassGeometry = () => (grassGeo ??= cardGeometry(3, 1.0, 0.62, false));
+const grassGeometry = () => (grassGeo ??= cardGeometry(3, 1.0, 0.62, false, 1, 2));
 let bushGeo: THREE.BufferGeometry | null = null;
-const bushGeometry = () => (bushGeo ??= cardGeometry(4, 1.5, 1.15, true));
+const bushGeometry = () => (bushGeo ??= cardGeometry(4, 1.5, 1.15, true, 2, 3));
 let flowerGeo: THREE.BufferGeometry | null = null;
-const flowerGeometry = () => (flowerGeo ??= cardGeometry(2, 0.7, 0.55, false));
+const flowerGeometry = () => (flowerGeo ??= cardGeometry(2, 0.7, 0.55, false, 1, 2));
 let fernGeo: THREE.BufferGeometry | null = null;
-const fernGeometry = () => (fernGeo ??= cardGeometry(3, 1.5, 0.95, true));
+const fernGeometry = () => (fernGeo ??= cardGeometry(3, 1.5, 0.95, true, 2, 2));
 let reedGeo: THREE.BufferGeometry | null = null;
-const reedGeometry = () => (reedGeo ??= cardGeometry(3, 1.1, 1.9, false));
+const reedGeometry = () => (reedGeo ??= cardGeometry(3, 1.1, 1.9, false, 1, 3));
 let papyrusGeo: THREE.BufferGeometry | null = null;
-const papyrusGeometry = () => (papyrusGeo ??= cardGeometry(3, 1.5, 3.0, false));
+const papyrusGeometry = () => (papyrusGeo ??= cardGeometry(3, 1.5, 3.0, false, 1, 3));
 let caneGeo: THREE.BufferGeometry | null = null;
-const caneGeometry = () => (caneGeo ??= cardGeometry(3, 1.9, 4.4, false));
+const caneGeometry = () => (caneGeo ??= cardGeometry(3, 1.9, 4.4, false, 1, 4));
 let irisGeo: THREE.BufferGeometry | null = null;
-const irisGeometry = () => (irisGeo ??= cardGeometry(3, 1.0, 0.95, false));
+const irisGeometry = () => (irisGeo ??= cardGeometry(3, 1.0, 0.95, false, 1, 2));
 let oleanderGeo: THREE.BufferGeometry | null = null;
-const oleanderGeometry = () => (oleanderGeo ??= cardGeometry(4, 2.1, 2.0, true));
+const oleanderGeometry = () => (oleanderGeo ??= cardGeometry(4, 2.1, 2.0, true, 2, 3));
 let weedGeo: THREE.BufferGeometry | null = null;
 /** A ribbon of weed lying along +z from its root, in eight lengths so the current can wave it. */
 function weedGeometry(): THREE.BufferGeometry {
@@ -242,13 +256,31 @@ function renormal(g: THREE.BufferGeometry) {
   return g;
 }
 
+/** The rock colour each pebble variant is built in (before its instance's tint). */
+export const PEBBLE_BASE = [0x8f7a66, 0x7a6a5c, 0x9c8a74];
+
+/**
+ * The stones a pebble variant is made of, in its own frame: each one's centre, its full size along x, y and z, and its
+ * turn about y (as `pebbleGeometry` lays them, before the lumps). A round breaks them one at a time (`game/stones.ts`).
+ */
+export function pebbleParts(v: number): { c: [number, number, number]; s: [number, number, number]; yaw: number }[] {
+  const n = v === 2 ? 1 : 3;
+  const out: { c: [number, number, number]; s: [number, number, number]; yaw: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = i * 2.3 + v;
+    const r = v === 2 ? 0.55 : 0.12 + (i % 2) * 0.1;
+    out.push({ c: [Math.cos(a) * (i ? 0.35 : 0), r * 0.35, Math.sin(a) * (i ? 0.3 : 0)], s: [r * 2, r * 1.3, r * 1.7], yaw: a });
+  }
+  return out;
+}
+
 const rockGeos: THREE.BufferGeometry[] = [];
 function pebbleGeometry(v: number): THREE.BufferGeometry {
   if (rockGeos[v]) return rockGeos[v];
   const b = new MeshBuilder();
   b.seed(17 + v);
   b.jitter = 0.08;
-  const base = [0x8f7a66, 0x7a6a5c, 0x9c8a74][v % 3];
+  const base = PEBBLE_BASE[v % 3];
   const n = v === 2 ? 1 : 3;
   for (let i = 0; i < n; i++) {
     const a = i * 2.3 + v;
@@ -284,31 +316,39 @@ function boulderGeometry(v: number): THREE.BufferGeometry {
 
 // ---------------------------------------------------------------------------------------- materials
 
-/** The wind every swaying plant shares (the trees too): x and z its direction and strength, w a master scale. */
-export const WIND = {
-  uWind: { value: new THREE.Vector4(0.8, 0.0, 0.6, 1.0) },
-};
+export { WIND } from './wind';
 
 type CardKind = 'grass' | 'bush' | 'flower' | 'fern' | 'reed' | 'cane' | 'pad' | 'papyrus' | 'iris' | 'oleander' | 'weed' | 'tape' | 'pondweed' | 'hornwort' | 'silt';
 
-/** Per kind: texture, alpha cut, fade-out range (m), sway, and whether normals point up (a mat) or bulge out (a clump). */
-const CARD: Record<CardKind, { tex: () => THREE.Texture; cut: number; fade: [number, number]; sway: number; up: boolean }> = {
-  grass: { tex: grassTexture, cut: 0.42, fade: [55, 85], sway: 0.55, up: true },
-  bush: { tex: bushTexture, cut: 0.38, fade: [120, 170], sway: 0.12, up: false },
-  flower: { tex: flowerTexture, cut: 0.42, fade: [50, 80], sway: 0.6, up: true },
-  fern: { tex: fernTexture, cut: 0.4, fade: [95, 140], sway: 0.18, up: false },
-  reed: { tex: reedTexture, cut: 0.4, fade: [140, 185], sway: 0.07, up: true },
-  cane: { tex: caneTexture, cut: 0.4, fade: [180, 230], sway: 0.035, up: true },
-  pad: { tex: lilyTexture, cut: 0.45, fade: [150, 190], sway: 0, up: true },
-  papyrus: { tex: papyrusTexture, cut: 0.4, fade: [150, 190], sway: 0.05, up: true },
-  iris: { tex: irisTexture, cut: 0.4, fade: [75, 110], sway: 0.25, up: true },
-  oleander: { tex: oleanderTexture, cut: 0.4, fade: [130, 180], sway: 0.08, up: false },
-  weed: { tex: weedTexture, cut: 0.35, fade: [40, 68], sway: 0, up: true },
-  tape: { tex: tapeTexture, cut: 0.35, fade: [50, 80], sway: 0, up: true },
-  pondweed: { tex: pondweedTexture, cut: 0.4, fade: [50, 80], sway: 0, up: true },
-  hornwort: { tex: hornwortTexture, cut: 0.38, fade: [35, 60], sway: 0, up: false },
-  silt: { tex: siltTexture, cut: 0.3, fade: [55, 85], sway: 0, up: true },
+/**
+ * How a kind of card plant takes the wind: `lean` is how far (rad) its stems lie over in a gale, `leaf` how far (card units,
+ * at the top) its leaves and blades flutter, `leafHz` how quickly. The stem rocks at the natural pace of its plant kind
+ * (`PLANT_MECHANICS`, the same spring a passing car bends it with).
+ */
+interface CardWind { plant: PlantKind; lean: number; leaf: number; leafHz: number }
+
+/** Per kind: texture, alpha cut, fade-out range (m), wind, and whether normals point up (a mat) or bulge out (a clump). */
+const CARD: Record<CardKind, { tex: () => THREE.Texture; cut: number; fade: [number, number]; wind?: CardWind; up: boolean }> = {
+  grass: { tex: grassTexture, cut: 0.42, fade: [55, 85], wind: { plant: 'grass', lean: 1.1, leaf: 0.035, leafHz: 1.9 }, up: true },
+  bush: { tex: bushTexture, cut: 0.38, fade: [120, 170], wind: { plant: 'shrubs', lean: 0.22, leaf: 0.06, leafHz: 2.6 }, up: false },
+  flower: { tex: flowerTexture, cut: 0.42, fade: [50, 80], wind: { plant: 'flowers', lean: 0.9, leaf: 0.05, leafHz: 2.1 }, up: true },
+  fern: { tex: fernTexture, cut: 0.4, fade: [95, 140], wind: { plant: 'ferns', lean: 0.45, leaf: 0.09, leafHz: 1.7 }, up: false },
+  reed: { tex: reedTexture, cut: 0.4, fade: [140, 185], wind: { plant: 'reeds', lean: 0.55, leaf: 0.06, leafHz: 1.3 }, up: true },
+  cane: { tex: caneTexture, cut: 0.4, fade: [180, 230], wind: { plant: 'cane', lean: 0.3, leaf: 0.14, leafHz: 1.0 }, up: true },
+  pad: { tex: lilyTexture, cut: 0.45, fade: [150, 190], up: true },
+  papyrus: { tex: papyrusTexture, cut: 0.4, fade: [150, 190], wind: { plant: 'papyrus', lean: 0.45, leaf: 0.12, leafHz: 1.15 }, up: true },
+  iris: { tex: irisTexture, cut: 0.4, fade: [75, 110], wind: { plant: 'iris', lean: 0.5, leaf: 0.05, leafHz: 2.0 }, up: true },
+  oleander: { tex: oleanderTexture, cut: 0.4, fade: [130, 180], wind: { plant: 'oleander', lean: 0.16, leaf: 0.07, leafHz: 2.3 }, up: false },
+  weed: { tex: weedTexture, cut: 0.35, fade: [40, 68], up: true },
+  tape: { tex: tapeTexture, cut: 0.35, fade: [50, 80], up: true },
+  pondweed: { tex: pondweedTexture, cut: 0.4, fade: [50, 80], up: true },
+  hornwort: { tex: hornwortTexture, cut: 0.38, fade: [35, 60], up: false },
+  silt: { tex: siltTexture, cut: 0.3, fade: [55, 85], up: true },
 };
+
+/** A card plant in the wind (`plantSway`): the card's v runs from 1 at the root to 0 at its top. */
+const CARD_WIND = /* glsl */ `
+  transformed = plantSway( transformed, 1.0 - uv.y );`;
 
 /** The plants that live under water sway with it, slowly, whatever the wind is doing. */
 const UNDER: Partial<Record<CardKind, number>> = { tape: 0.14, pondweed: 0.09, hornwort: 0.05 };
@@ -358,6 +398,35 @@ const UNDER_SWAY = (amp: number) => /* glsl */ `
 
 const cardMats = new Map<string, THREE.MeshStandardMaterial>();
 
+/**
+ * A card plant's vertex work: wind or current, the same in its colour and its shadow, and in colour the shrink with
+ * distance (a shadow camera's distance means nothing to it).
+ */
+function cardVertex(shader: THREE.WebGLProgramParametersWithUniforms, kind: CardKind, shadow = false) {
+  const k = CARD[kind];
+  const w = k.wind;
+  if (w) plantUniforms(shader, { lean: w.lean, rate: PLANT_MECHANICS[w.plant].frequency, leaf: w.leaf, leafHz: w.leafHz });
+  else windUniforms(shader);
+  shader.uniforms.uFade = { value: new THREE.Vector2(k.fade[0], k.fade[1]) };
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>\n${w ? PLANT_SWAY_GLSL : WIND_GLSL}\nuniform vec2 uFade;`)
+    .replace(
+      '#include <begin_vertex>',
+      /* glsl */ `#include <begin_vertex>
+#ifdef USE_INSTANCING
+  vec3 gO = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
+  mat3 gR = mat3( instanceMatrix );
+#else
+  vec3 gO = ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
+  mat3 gR = mat3( 1.0 );
+#endif
+  float gD = distance( gO, cameraPosition );
+  float gKeep = 1.0 - smoothstep( uFade.x, uFade.y, gD );
+${w ? CARD_WIND : ''}${kind === 'weed' ? WEED_SWAY : ''}${UNDER[kind] ? UNDER_SWAY(UNDER[kind]!) : ''}
+  ${shadow ? '' : 'transformed *= gKeep;'}`,
+    );
+}
+
 /** Alpha-tested foliage card material: wind sway, distance shrink, and normals that ignore the face side. */
 function cardMaterial(kind: CardKind): THREE.MeshStandardMaterial {
   const hit = cardMats.get(kind);
@@ -370,32 +439,8 @@ function cardMaterial(kind: CardKind): THREE.MeshStandardMaterial {
     coplanarOffset(m, COPLANAR.ground);
     m.roughness = 0.6;
   }
-  const fade = new THREE.Vector2(k.fade[0], k.fade[1]);
   m.onBeforeCompile = (shader) => {
-    shader.uniforms.uTime = GLOBALS.uTime;
-    shader.uniforms.uWind = WIND.uWind;
-    shader.uniforms.uFade = { value: fade };
-    shader.uniforms.uSway = { value: k.sway };
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uTime;\nuniform vec4 uWind;\nuniform vec2 uFade;\nuniform float uSway;')
-      .replace(
-        '#include <begin_vertex>',
-        /* glsl */ `#include <begin_vertex>
-#ifdef USE_INSTANCING
-  vec3 gO = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
-  mat3 gR = mat3( instanceMatrix );
-#else
-  vec3 gO = ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
-  mat3 gR = mat3( 1.0 );
-#endif
-  float gD = distance( gO, cameraPosition );
-  float gKeep = 1.0 - smoothstep( uFade.x, uFade.y, gD );
-  float gH = transformed.y;
-  float gS = sin( uTime * 1.6 + gO.x * 0.21 + gO.z * 0.17 ) * 0.6 + sin( uTime * 3.7 + gO.x * 0.9 - gO.z * 0.6 ) * 0.25;
-  vec3 gWind = transpose( gR ) * vec3( uWind.x, 0.0, uWind.z );
-  transformed += gWind * gS * gH * gH * uSway * uWind.w;${kind === 'weed' ? WEED_SWAY : ''}${UNDER[kind] ? UNDER_SWAY(UNDER[kind]!) : ''}
-  transformed *= gKeep;`,
-      );
+    cardVertex(shader, kind);
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <normal_fragment_begin>',
       k.up ? '#include <normal_fragment_begin>\nnormal = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );' : '#include <normal_fragment_begin>\nnormal = normalize( vNormal );',
@@ -404,6 +449,13 @@ function cardMaterial(kind: CardKind): THREE.MeshStandardMaterial {
     if (kind === 'oleander') shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', OLEANDER_MAP).replace('#include <color_fragment>', '');
   };
   m.customProgramCacheKey = () => `card:${kind}`;
+  // Its shadow sways with it (three copies the map and the alpha cut in).
+  if (k.wind) {
+    const d = new THREE.MeshDepthMaterial();
+    d.onBeforeCompile = (shader) => cardVertex(shader, kind, true);
+    d.customProgramCacheKey = () => `card-depth:${kind}`;
+    m.userData.cardDepth = shared(d);
+  }
   cardMats.set(kind, shared(m));
   return m;
 }
@@ -465,6 +517,7 @@ const _straw = new THREE.Color(0.8, 0.7, 0.46);
 function instanced(geo: THREE.BufferGeometry, mat: THREE.Material, spots: Spot[], tint?: (i: number, s: Spot) => THREE.Color): THREE.InstancedMesh | null {
   if (!spots.length) return null;
   const im = new THREE.InstancedMesh(geo, mat, spots.length);
+  if (mat.userData.cardDepth) im.customDepthMaterial = mat.userData.cardDepth;
   spots.forEach((s, i) => {
     _p.set(s.x, s.y, s.z);
     _e.set(s.tilt[0], s.yaw, s.tilt[1], 'YXZ');
@@ -1250,6 +1303,7 @@ export function* buildScatterSteps(def: TerrainDef, cx: number, cz: number, aabb
   boulders.forEach((list, v) => {
     const im = instanced(boulderGeometry(v), kitMaterial(), list, rockTint);
     if (im) {
+      im.userData.stone = { kind: 'boulder', v };
       im.castShadow = true;
       im.receiveShadow = true;
       set.boulders.push(im);
@@ -1258,7 +1312,10 @@ export function* buildScatterSteps(def: TerrainDef, cx: number, cz: number, aabb
   yield;
   pebbles.forEach((list, v) => {
     const im = instanced(pebbleGeometry(v), kitMaterial(), list, rockTint);
-    if (im) set.pebbles.push(im);
+    if (im) {
+      im.userData.stone = { kind: 'pebble', v };
+      set.pebbles.push(im);
+    }
   });
   if (set.shrubs) set.shrubs.castShadow = true;
   if (set.ferns) set.ferns.receiveShadow = true;

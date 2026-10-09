@@ -221,29 +221,35 @@ const WEAPON_KIT = { value: new THREE.Vector4(7, 2.4, 0.75, 0) };
 
 let cachedMat: THREE.MeshStandardMaterial | null = null;
 
-/** The one material every weapon model is drawn with (held, in first person, on the ground and on racks). */
+/** The one material every weapon model is drawn with (held, on the ground and on racks; first person has its own twin). */
 export function weaponMaterial(): THREE.MeshStandardMaterial {
   if (cachedMat) return cachedMat;
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
-  m.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\n${VERT_PARS}`)
-      .replace('#include <project_vertex>', `vWpn = wpn;\n#include <project_vertex>`);
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\n${FRAG_PARS}`)
-      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\n${FRAG_ROUGH}`)
-      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>\n${FRAG_METAL}`)
-      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FRAG_NORMAL}`)
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>`);
-    applyKit(shader, false);
-    // The finish runs after the kit's grime colour (applyKit has put that in place of the colour include).
-    shader.fragmentShader = shader.fragmentShader
-      .replace('diffuseColor.rgb *= 0.9 + kitG.g * 0.2;', `diffuseColor.rgb *= 0.95 + kitG.g * 0.1;\n${FRAG_COLOR}`)
-      // The grime map's rain streaks are for walls and car doors: on a gun they read as grain.
-      .replace('kitG.a * kitSide * kitWear * 0.4', 'kitG.a * kitSide * kitWear * 0.04');
-    shader.uniforms.uKit = WEAPON_KIT;
-  };
+  m.onBeforeCompile = weaponShader;
   m.customProgramCacheKey = () => 'kit:weapon';
   cachedMat = shared(m);
   return cachedMat;
+}
+
+/**
+ * Turn a standard material's shader into the weapons' (finish, grime, machining relief): for a twin of `weaponMaterial`
+ * with more of its own on top, the first-person gun's (`viewmodel.ts`).
+ */
+export function weaponShader(shader: THREE.WebGLProgramParametersWithUniforms) {
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>\n${VERT_PARS}`)
+    .replace('#include <project_vertex>', `vWpn = wpn;\n#include <project_vertex>`);
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `#include <common>\n${FRAG_PARS}`)
+    .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\n${FRAG_ROUGH}`)
+    .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>\n${FRAG_METAL}`)
+    .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FRAG_NORMAL}`)
+    .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>`);
+  applyKit(shader, false);
+  // The finish runs after the kit's grime colour (applyKit has put that in place of the colour include).
+  shader.fragmentShader = shader.fragmentShader
+    .replace('diffuseColor.rgb *= 0.9 + kitG.g * 0.2;', `diffuseColor.rgb *= 0.95 + kitG.g * 0.1;\n${FRAG_COLOR}`)
+    // The grime map's rain streaks are for walls and car doors: on a gun they read as grain.
+    .replace('kitG.a * kitSide * kitWear * 0.4', 'kitG.a * kitSide * kitWear * 0.04');
+  shader.uniforms.uKit = WEAPON_KIT;
 }

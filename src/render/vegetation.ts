@@ -36,10 +36,14 @@ export function treeCollisionMesh(sp: number, variant: number, foliage = false):
   return mesh;
 }
 
-const hullCache = new WeakMap<THREE.BufferGeometry, Float32Array[]>();
+/** By the vertex data, so every placement of one prop variant (each its own geometry over shared buffers) shares the work. */
+const hullCache = new WeakMap<ArrayLike<number>, Float32Array[]>();
+const indexCache = new WeakMap<ArrayLike<number>, Uint32Array>();
+/** A drawn plant's contact-shape source, one per vertex buffer (and the index it was read with). */
+const shapeSources = new WeakMap<ArrayLike<number>, { vertices: Float32Array; indices: Uint32Array; index: ArrayLike<number> | null }>();
 /** Weld coincident render corners and collect the separate limbs of a wood-only prop. */
 function woodPieces(geo: THREE.BufferGeometry): Float32Array[] {
-  const cached = hullCache.get(geo);
+  const cached = hullCache.get(geo.getAttribute('position').array);
   if (cached) return cached;
   const pos = geo.getAttribute('position'), idx = geo.index!;
   const parent = Array.from({ length: pos.count }, (_, i) => i);
@@ -66,7 +70,7 @@ function woodPieces(geo: THREE.BufferGeometry): Float32Array[] {
     groups.set(key, vertices);
   }
   const hulls = [...groups.values()].filter((v) => v.length >= 12).map((v) => Float32Array.from(v));
-  hullCache.set(geo, hulls);
+  hullCache.set(pos.array, hulls);
   return hulls;
 }
 
@@ -195,6 +199,24 @@ export function clipHull(v: Float32Array, c: number, above: boolean): Float32Arr
 /** Bodies of fallen trees and snapped tops, by physics world: ground cover does not drag on them. */
 const LOGS = new WeakMap<PhysicsWorld, Set<number>>();
 
+/** Every streamed chunk's vegetation, by physics world, for a swung blade to find what it cuts (`game/bladeSwing.ts`). */
+const FIELDS = new WeakMap<PhysicsWorld, Set<Vegetation>>();
+export function vegetationIn(physics: PhysicsWorld): Iterable<Vegetation> {
+  return FIELDS.get(physics) ?? [];
+}
+
+/** A chop of a blade into a tree's wood (`Vegetation.chopTree`): where, which way, the work in it and how it bites. */
+export interface TreeChop {
+  x: number;
+  y: number;
+  z: number;
+  dx: number;
+  dz: number;
+  /** Share of the section this chop takes out at that height (`sim/blade.ts` `chopGain`), worked out from `section`. */
+  gain: (section: number, diameter: number, done: number, hard: number) => number;
+  by: number;
+}
+
 /** A tree's wood as the weapons see it: notched while it stands, chipped once it is a stump or a fallen top. */
 class TreeWood implements TreeTarget {
   constructor(private veg: Vegetation, private p: VegetationPlant, readonly wood: WoodKind, readonly standing: boolean, private part: 'tree' | 'stump' | 'top') {}
@@ -268,6 +290,9 @@ export class Vegetation {
     physics.afterStep.add(this.after);
     physics.areaImpactHandlers.add(this.area);
     physics.rayImpactHandlers.add(this.ray);
+    let fields = FIELDS.get(physics);
+    if (!fields) FIELDS.set(physics, (fields = new Set()));
+    fields.add(this);
   }
 
   private add(p: VegetationPlant) {
@@ -350,8 +375,12 @@ export class Vegetation {
     geo.computeBoundingBox();
     geo.computeBoundingSphere();
     const positions = geo.getAttribute('position').array as Float32Array;
-    const indices = geo.index ? Uint32Array.from(geo.index.array) : Uint32Array.from({ length: positions.length / 3 }, (_, i) => i);
-    const shapeSource = { vertices: positions.slice(), indices };
+    let shapeSource = shapeSources.get(positions);
+    if (!shapeSource || shapeSource.index !== (geo.index?.array ?? null)) {
+      const indices = geo.index ? Uint32Array.from(geo.index.array) : Uint32Array.from({ length: positions.length / 3 }, (_, i) => i);
+      shapeSource = { vertices: positions.slice(), indices, index: geo.index?.array ?? null };
+      shapeSources.set(positions, shapeSource);
+    }
     for (let index = 0; index < mesh.count; index++) {
       mesh.getMatrixAt(index, M);
       const base = M.clone(), position = new THREE.Vector3(), rotation = new THREE.Quaternion(), scale = new THREE.Vector3();
@@ -377,7 +406,7 @@ export class Vegetation {
         this.screens.set(key, bin);
       }
       out.push(p);
-      if (p.record.damage > 0 || p.record.broken || p.record.burnt) this.draw(p);
+      if (p.record.damage > 0 || p.record.broken || p.record.burnt || p.record.trim !== undefined) this.draw(p);
     }
     return out;
   }
@@ -398,8 +427,17 @@ export class Vegetation {
     p.shape = null;
     p.shapeSource = undefined;
     p.woodHulls = woodPieces(mesh.geometry);
-    const vertices = (mesh.geometry.getAttribute('position').array as Float32Array).map((v, i) => v * [p.scale.x, p.scale.y, p.scale.z][i % 3]);
-    p.solid = this.physics.tag(this.physics.world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, Uint32Array.from(mesh.geometry.index!.array))
+    const source = mesh.geometry.getAttribute('position').array as Float32Array;
+    const vertices = new Float32Array(source.length);
+    for (let i = 0; i < source.length; i += 3) {
+      vertices[i] = source[i] * p.scale.x;
+      vertices[i + 1] = source[i + 1] * p.scale.y;
+      vertices[i + 2] = source[i + 2] * p.scale.z;
+    }
+    const idx = mesh.geometry.index!.array;
+    let indices = indexCache.get(idx);
+    if (!indices) indexCache.set(idx, (indices = Uint32Array.from(idx)));
+    p.solid = this.physics.tag(this.physics.world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices)
       .setTranslation(p.position.x, p.position.y, p.position.z).setRotation(p.rotation).setCollisionGroups(GROUPS.furn)
       .setFriction(0.7).setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(0)), 'wood');
     p.colliders.push(p.solid);
@@ -701,6 +739,97 @@ export class Vegetation {
     return bands[j];
   }
 
+  // ------------------------------------------------------------------ a blade
+
+  /** Plants a swung blade could reach near (x, z): the standing ones, and the stumps of snapped trees. */
+  bladeNear(x: number, z: number, r: number, f: (p: VegetationPlant) => void) {
+    this.near(x, z, r, (p) => {
+      if ((p.body || p.record.broken) && !p.stump) return;
+      if (p.record.burnt && !p.woodHulls) return;
+      if (Math.hypot(p.position.x - x, p.position.z - z) > r + Math.min(p.radius, 3)) return;
+      f(p);
+    });
+  }
+
+  /** How tall a soft plant stands now (m): less where it has been trampled or cut. */
+  standing(p: VegetationPlant): number {
+    return p.height * (p.record.damage > 0 && !p.woodHulls ? flatten(p.record.damage) : 1) * (p.record.trim ?? 1);
+  }
+
+  /**
+   * A blade has gone right through a soft plant at world height `y`: what stood above the cut is gone, down to `floor` (a
+   * share of its height: the stubble). Returns the share of its height still standing.
+   */
+  trimPlant(p: VegetationPlant, y: number, floor: number): number {
+    if (p.woodHulls) return 1;
+    const full = p.height * (p.record.damage > 0 ? flatten(p.record.damage) : 1);
+    const was = p.record.trim ?? 1;
+    const trim = Math.min(was, Math.max(floor, (y - p.position.y) / Math.max(0.05, full)));
+    if (trim >= was) return was;
+    p.record.trim = Math.round(trim * 1000) / 1000;
+    this.memory.set(p.key, p.record);
+    this.draw(p);
+    return p.record.trim;
+  }
+
+  /** A tree's trunk for a blade: its radius (m) a metre up and the height (world y) its limbs part at. Null for a soft plant. */
+  trunkOf(p: VegetationPlant): { r: number; top: number } | null {
+    if (!p.woodHulls || !p.wood) return null;
+    const r = this.stemRadius(p, p.position.x, p.position.y + 1, p.position.z) || 0.15 * p.scale.x;
+    if (p.stump && p.record.cut !== undefined) return { r, top: p.position.y + p.record.cut * p.scale.y };
+    return { r, top: p.position.y + Math.min(p.height * 0.5, Math.max(NOTCH_TOP[p.wood] * p.scale.y, 1.9)) };
+  }
+
+  /** The tree (or the stump of one) a collider belongs to, for a blade that has struck its wood. */
+  plantByCollider(handle: number): VegetationPlant | null {
+    const p = this.treeByCollider.get(handle);
+    if (p) return p;
+    for (const t of this.trees) if (t.stump?.colliders.some((c) => c.handle === handle)) return t;
+    return null;
+  }
+
+  /** The tree's wood as weapons see it (the standing tree, or its stump), for the chips and the knock a chop makes. */
+  woodOf(p: VegetationPlant): TreeTarget | null {
+    const c = p.solid ?? p.stump?.colliders[0];
+    return (c && this.physics.trees.get(c.handle)) ?? null;
+  }
+
+  /**
+   * A blade chops into a standing tree's trunk: like a round, the chop takes its share of the section out of the notch at
+   * that height, and once the notch has eaten enough of it the tree goes over there. Returns the share gone at that height
+   * (0 for a stump or where the trunk has already been cut).
+   */
+  chopTree(p: VegetationPlant, c: TreeChop): number {
+    if (p.record.broken || p.body || !p.woodHulls || !p.wood) return 0;
+    const m = this.toModel(p, c.x, c.y, c.z, V2);
+    const sy = p.scale.y;
+    const h = m.y * sy;
+    if (!this.section(p, m.y, m.x, m.z)) return 0;
+    const bands = (p.record.notch ??= []);
+    const j1 = Math.floor(h / NOTCH_STEP);
+    let done = 0;
+    for (let j = Math.max(0, j1 - 1); j <= j1 && j < bands.length; j++) done = Math.max(done, bands[j]);
+    const gain = c.gain(SEC.area, 2 * Math.sqrt(SEC.area / Math.PI), done, this.hardness(p));
+    const j = addNotch(bands, h, gain, Math.min(p.height * 0.5, Math.max(NOTCH_TOP[p.wood] * sy, 1.9)));
+    if (j < 0) return 0;
+    for (let k = Math.max(0, j1 - 1); k <= j1 && k < bands.length; k++) bands[k] = Math.round(bands[k] * 1e4) / 1e4;
+    // The notch faces back along the chops that cut it.
+    const l = Math.hypot(c.dx, c.dz) || 1;
+    const was = p.record.notchDir;
+    const w = Math.min(1, done * 4);
+    const nx = (was ? was[0] * w : 0) + (c.dx / l) * (gain + 0.01), nz = (was ? was[1] * w : 0) + (c.dz / l) * (gain + 0.01);
+    const nl = Math.hypot(nx, nz) || 1;
+    if (was) { was[0] = nx / nl; was[1] = nz / nl; } else p.record.notchDir = [nx / nl, nz / nl];
+    if (!p.notchStem) p.notchStem = [SEC.cx, SEC.cz, SEC.r];
+    this.memory.set(p.key, p.record);
+    this.wound(p);
+    if (bands[j] >= snapShare(this.leanOf(p))) {
+      const s: TreeShot = { ammo: 'pistol', speed: 0, exit: 0, x: c.x, y: c.y, z: c.z, dx: c.dx, dy: 0, dz: c.dz, by: c.by };
+      this.snap(p, bandMid(j) / sy, this.fallWay(p, s), s);
+    }
+    return bands[j];
+  }
+
   /**
    * Which way a snapped tree goes over: away from the guns that cut it, unless it already leans hard (a gum over the river
    * goes the way it leans), and a little either side as the hinge tears.
@@ -987,6 +1116,8 @@ export class Vegetation {
     for (const ref of p.refs) {
       M.copy(delta).multiply(ref.base);
       if (!p.woodHulls && p.record.damage > 0) M.scale(V.set(1, flatten(p.record.damage), 1));
+      // Cut down by a blade: only the stubble or the stems below the cut stand.
+      if (!p.woodHulls && p.record.trim !== undefined) M.scale(V.set(1, p.record.trim, 1));
       // Burnt to the ground: a black stub of what it was.
       if (p.record.burnt) M.scale(V.set(0.55, 0.06, 0.55));
       ref.mesh.setMatrixAt(ref.index, M);
@@ -1118,7 +1249,7 @@ export class Vegetation {
           if (s1 <= s0) continue;
           const t = Math.min(1, Math.max(0, along / L));
           const y = ay + (by - ay) * t;
-          const top = p.position.y + p.height * LEAF_FILL * (p.record.damage > 0 ? flatten(p.record.damage) : 1);
+          const top = p.position.y + p.height * LEAF_FILL * (p.record.damage > 0 ? flatten(p.record.damage) : 1) * (p.record.trim ?? 1);
           if (y < p.position.y || y > top) continue;
           clear *= Math.exp(-s.k * (s1 - s0));
         }
@@ -1135,6 +1266,7 @@ export class Vegetation {
     this.physics.afterStep.delete(this.after);
     this.physics.areaImpactHandlers.delete(this.area);
     this.physics.rayImpactHandlers.delete(this.ray);
+    FIELDS.get(this.physics)?.delete(this);
     for (const p of this.plants) {
       if (p.body) this.savePose(p);
       if (p.sensor?.isValid()) this.physics.removeCollider(p.sensor);

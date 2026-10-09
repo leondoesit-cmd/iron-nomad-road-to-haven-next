@@ -24,6 +24,11 @@ RECORDINGS.plop = RECORDINGS.splash;
 RECORDINGS.toke = RECORDINGS.gasp;
 RECORDINGS.ricochet = RECORDINGS.tink;
 RECORDINGS.chirp = ['chirp.wav'];
+// The flesh engine's foley, from recordings already here, as a foley stage would: a bone snapping is wood cracking, meat
+// tearing is a wet mouthful and a soft blow, the gut spilling out is a sloppy splash.
+RECORDINGS.boneCrack = ['wood_cracking_01.ogg', 'wood_cracking_02.ogg', 'wood_cracking_03.ogg', 'wood_cracking_04.ogg'];
+RECORDINGS.squelch = ['munch.wav', 'munch-take2.wav', 'munch-take3.wav', ...variants('impactSoft_medium')];
+RECORDINGS.gutSpill = ['splash.wav', 'splash-take2.wav', 'splash-take3.wav'];
 
 RECORDINGS.flood = RECORDINGS.waterfall;
 RECORDINGS.wind = ['wind.wav'];

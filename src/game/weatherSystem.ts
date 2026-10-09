@@ -3,7 +3,9 @@ import { TAU, clamp01, smoothstep } from '../core/math';
 import { catchChance, Wildfire, type FireHooks } from './wildfire';
 import { dayPlan, fireDanger, groundHeat, hydrograph, panFill, rainLabel, sampleHydro, skyAt, type DayPlan, type Hydrograph, type Sky } from '../sim/climate';
 import { windAt } from '../sim/weather';
+import { TUNING } from '../sim/tuning';
 import { RainFx } from '../render/rain';
+import { setPlantWind } from '../render/wind';
 import { LightningFx } from '../render/lightning';
 import { buildFloodWater, HYDRO, setHydroTexture, type FloodWater } from '../render/floodWater';
 import { MAX_RIVERS, RIVER_RISE, riseTaper } from '../render/riverWater';
@@ -130,7 +132,7 @@ export class WeatherSystem {
     this.plan = dayPlan(c.seed, c.day);
     this.hydro = hydrograph(c.seed, c.day);
     this.told.clear();
-    setHydroTexture(this.hydro, this.sc.clock.dayLength);
+    setHydroTexture(this.hydro);
   }
 
   /** The clock line's word for the weather now, or ''. */
@@ -168,8 +170,9 @@ export class WeatherSystem {
     this.panLive = sampleHydro(h.pan, t) > 0.004 || sampleHydro(h.pan, t - 0.2) > 0.004 || sampleHydro(h.pan, t - FLOOD_TAIL) > 0.004;
     // The wind: the day's breeze and dust, and the gust front a thunderstorm pushes out ahead of it.
     const w = windAt(sc.storm, sc.time);
-    const out = this.gust * 15;
+    const out = this.gust * 15 * TUNING.wind;
     this.wind = [w[0] - Math.sin(this.towerDir) * out, w[1] - Math.cos(this.towerDir) * out];
+    setPlantWind(this.wind[0], this.wind[1], dt);
     this.lightning(dt, s);
     for (let i = this.thunder.length - 1; i >= 0; i--) {
       if (sc.time < this.thunder[i].at) continue;

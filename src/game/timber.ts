@@ -178,6 +178,22 @@ export class Timber implements TreeEvents {
   }
 
   /**
+   * A blade has chopped into wood at (x, y, z), on a face looking along (nx, ny, nz), the edge going along (dx, dy, dz)
+   * with `work` joules in it: chips knocked out of the cut (sized `size`, out of the face and on the way the edge was going),
+   * a puff of sawdust, the bark scarred, the crown shaken, and the knock of it. `t` is the tree, when it is one.
+   */
+  chop(t: TreeTarget | null, wood: WoodKind, x: number, y: number, z: number, nx: number, ny: number, nz: number, dx: number, dy: number, dz: number, work: number, chips: number, bark: number, size: number) {
+    const ctx = this.ctx;
+    const floor = this.floor(x, z);
+    const fling = 2 + Math.min(5, work / 30);
+    this.burst(wood, x + nx * 0.03, y + ny * 0.03, z + nz * 0.03, nx * 0.6 + dx * 0.55, ny * 0.6 + dy * 0.3 + 0.35, nz * 0.6 + dz * 0.55, chips, bark, fling, size, floor);
+    this.dust(wood, x + nx * 0.05, y + ny * 0.05, z + nz * 0.05, nx, ny, nz, Math.min(1, work / 160));
+    if (t && !t.moving()) this.scar(t, x, y, z, nx, ny, nz, 0.05 + Math.min(0.12, work / 1200));
+    if (t?.standing) this.shake(t, Math.round(WOOD[wood].shed * Math.min(4, work / 45)));
+    ctx.audio.play('treeHit', x, z, Math.min(0.85, 0.3 + work / 260), { pitch: rand(0.78, 0.95), intensity: Math.min(1, work / 150) });
+  }
+
+  /**
    * Hand the round to the tree (it cuts its notch, and may snap it). As the notch deepens the tree shakes more and the
    * wood starts to groan.
    */

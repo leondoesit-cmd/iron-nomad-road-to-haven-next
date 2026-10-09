@@ -1,6 +1,14 @@
 import { M, replacesStock, shape, type Looks, type P2, type WB, type WS } from './kit';
-import { barrel, boxMag, guard, mlok, peep, pistolGrip, post, rings, scope, swivel, trigger } from './parts';
+import { barrel, boxMag, cartridge, guard, mlok, peep, pistolGrip, post, rings, scope, swivel, trigger } from './parts';
 import { FRAMES } from '../../sim/gunFrames';
+import { ROUND_SEAT } from '../../sim/gunActions';
+
+/** A bolt's body behind the action, bright where it rides, seen once the bolt is drawn back. */
+function boltBody(w: WB, B: number, z0: number, z1: number, r: number) {
+  w.tube(0, B, z0, z1, r, M.bright(0x8e9296, 0.35));
+  // The extractor's groove and a gas port down its side.
+  if (w.hi) w.box(-r + 0.0004, B + 0.002, z0 + (z1 - z0) * 0.7, 0.0012, 0.003, 0.03, M.hole());
+}
 
 /**
  * The rifles: the AR-pattern carbine and its big brother the marksman rifle, the FAL-pattern battle rifle, the hunting
@@ -56,9 +64,12 @@ function arPattern(w: WB, c: ArCfg, looks: Looks) {
   }
   w.side(`${K}.deflect`, () => shape([[p0 - 0.016, pl + 0.006], [p0 - 0.002, pl + 0.006], [p0 - 0.002, railBase - 0.004, 0.002], [p0 - 0.012, railBase - 0.006, 0.006]]), -0.0127 * k - 0.0022, 0.0046, 0.0012, anod);
   if (w.hi) w.turnAlong(`${K}.fa`, [[0, 0], [0.0062, 0], [0.0062, 0.4], [0.0048, 0.45], [0.0048, 0.75], [0.0058, 0.8], [0.0058, 1], [0, 1]], [-0.009 * k, B + 0.002, p0 - 0.004], [-0.019 * k, B + 0.006, p0 - 0.032], anod);
-  // ---- charging handle: a T in the channel at the back, under the rail.
-  w.rbox(0, railBase - 0.0035, zr - 0.002, 0.016, 0.006, 0.014, 0.0015, anod);
-  w.rbox(0, railBase - 0.0035, zr - 0.007, 0.036 * k, 0.0065, 0.008, 0.0025, anod);
+  // ---- charging handle: a T in the channel at the back, under the rail; its shaft runs on forward in the channel.
+  w.piece('handle', () => {
+    w.rbox(0, railBase - 0.0035, zr - 0.002, 0.016, 0.006, 0.014, 0.0015, anod);
+    w.rbox(0, railBase - 0.0035, zr - 0.007, 0.036 * k, 0.0065, 0.008, 0.0025, anod);
+    w.inner(() => w.rbox(0, railBase - 0.0035, zr + 0.04, 0.011, 0.005, 0.08, 0.001, anod));
+  });
   // ---- lower receiver: the body, the flared magazine well, the guard, trigger, grip and controls.
   const yl = B - 0.034 * k;
   const mw0 = f.well[2] - 0.037 * k;
@@ -83,7 +94,9 @@ function arPattern(w: WB, c: ArCfg, looks: Looks) {
   w.pin(0.0113 * k, yl + 0.01, gz0 + 0.014 * k, 0.0016, steel);
   // ---- magazine: a curved 30-rounder (or a straighter 20 for the .308), ribbed, a polymer floor plate.
   const mag = c.key === 'ar' ? M.poly(0x1d1d1f, 0.3) : M.anod(0x232426, 0.35);
-  boxMag(w, K, mw0 + 0.002, mw1 - 0.002, f.well[1] + 0.006, c.mag.len + 0.006, c.mag.curve, 0.0225 * k, mag, { ribs: 2, plate: M.poly(0x1a1a1c), flare: 0.006 });
+  w.piece('mag', () =>
+    boxMag(w, K, mw0 + 0.002, mw1 - 0.002, f.well[1] + 0.006, c.mag.len + 0.006, c.mag.curve, 0.0225 * k, mag, { ribs: 2, plate: M.poly(0x1a1a1c), flare: 0.006, top: 0.024 * k, round: c.key === 'ar' ? [0.0048, 0.045, 0.012] : [0.006, 0.051, 0.018] }),
+  );
   // ---- buffer tube and stock.
   const tubeR = 0.0146 * k;
   w.turn(`${K}.buffer`, [[0, zr - 0.21], [tubeR, zr - 0.21], [tubeR, zr - 0.004], [tubeR + 0.002, zr - 0.004], [tubeR + 0.002, zr], [0, zr]], 0, B, anod);
@@ -197,7 +210,7 @@ export function br(w: WB, looks: Looks = {}) {
   w.rbox(0, f.well[1] + 0.006, wz0 - 0.004, 0.012, 0.008, 0.006, 0.0015, steel);
   w.pin(0.014, pl - 0.006, -0.045, 0.003, steel);
   // The 20-round magazine.
-  boxMag(w, 'br', wz0 + 0.002, wz1 - 0.002, f.well[1] + 0.006, f.well[1] - f.mag.y - 0.01, 0.014, 0.025, M.park(0x2a2b2a, 0.4), { ribs: 1, flare: 0.004 });
+  w.piece('mag', () => boxMag(w, 'br', wz0 + 0.002, wz1 - 0.002, f.well[1] + 0.006, f.well[1] - f.mag.y - 0.01, 0.014, 0.025, M.park(0x2a2b2a, 0.4), { ribs: 1, flare: 0.004, top: 0.026, round: [0.006, 0.051, 0.018] }));
   // Barrel, gas block with its front sight and regulator, gas tube with the folding charging handle on the left.
   barrel(w, 'br', B, [[0.0135, 0.19], [0.0125, 0.24], [0.0098, 0.5], [0.0095, 0.735]], 0.0035, M.park(0x2a2c2a, 0.35));
   const gz = 0.47;
@@ -205,9 +218,11 @@ export function br(w: WB, looks: Looks = {}) {
   post(w, 'br.f', f.front[2], f.front[1], B + 0.026, steel, true, 0.022);
   w.turnAlong('br.reg', [[0, 0], [0.006, 0], [0.006, 1], [0, 1]], [0.012, B + 0.016, gz + 0.01], [0.02, B + 0.016, gz + 0.01], M.knurl(0x2a2c2e));
   w.tube(0, B + 0.018, 0.2, gz - 0.01, 0.0068, steel);
-  w.rbox(0.012, B + 0.018, f.spots!.handle[2], 0.014, 0.008, 0.012, 0.002, steel);
-  w.rod([0.016, B + 0.018, f.spots!.handle[2]], [0.034, B + 0.016, f.spots!.handle[2] - 0.004], 0.0028, steel);
-  w.sphere(0.036, B + 0.016, f.spots!.handle[2] - 0.004, 0.005, steel, 1, 0.8, 1);
+  w.piece('handle', () => {
+    w.rbox(0.012, B + 0.018, f.spots!.handle[2], 0.014, 0.008, 0.012, 0.002, steel);
+    w.rod([0.016, B + 0.018, f.spots!.handle[2]], [0.034, B + 0.016, f.spots!.handle[2] - 0.004], 0.0028, steel);
+    w.sphere(0.036, B + 0.016, f.spots!.handle[2] - 0.004, 0.005, steel, 1, 0.8, 1);
+  });
   // The long slotted flash hider.
   w.turn('br.hider', [[0, 0.73], [0.0115, 0.73], [0.0118, 0.735], [0.0118, f.muzzle - 0.002], [0.011, f.muzzle], [0.0074, f.muzzle], [0.0072, f.muzzle - 0.06], [0, f.muzzle - 0.06]], 0, B, steel);
   if (w.hi) for (let i = 0; i < 6; i++) {
@@ -246,11 +261,15 @@ export function sniper(w: WB, optic = true) {
   const steel = M.park(0x2b2d2b, 0.3);
   // The action, its bolt shroud and the bolt handle with its big knob.
   w.turn('sn.action', [[0, -0.02], [0.0175, -0.02], [0.0185, -0.016], [0.0185, 0.205], [0.0175, 0.21], [0, 0.21]], 0, B, steel);
-  w.turn('sn.shroud', [[0, -0.062], [0.006, -0.062], [0.0105, -0.05], [0.0125, -0.03], [0.0125, -0.019], [0, -0.019]], 0, B, black);
   w.box(-0.0182, B + 0.007, f.port[2], 0.0012, 0.013, 0.06, M.hole());
   const k = f.spots!.knob;
-  w.turnAlong('sn.handle', [[0, 0], [0.0042, 0], [0.0036, 0.6], [0.0032, 1], [0, 1]], [-0.012, B + 0.003, k[2] + 0.012], [k[0] + 0.006, k[1] + 0.008, k[2] + 0.002], steel);
-  w.turnAlong('sn.knob', [[0, 0], [0.006, 0.02], [0.0105, 0.15], [0.0115, 0.45], [0.0108, 0.8], [0.006, 0.97], [0, 1]], [k[0] + 0.006, k[1] + 0.008, k[2] + 0.002], [k[0] - 0.012, k[1] - 0.006, k[2] - 0.001], M.knurl(0x232426, 0.3));
+  // The bolt: its shroud, handle and knob turn up and come back on their own in the close-up model, the bolt's body behind.
+  w.piece('bolt', () => {
+    w.turn('sn.shroud', [[0, -0.062], [0.006, -0.062], [0.0105, -0.05], [0.0125, -0.03], [0.0125, -0.019], [0, -0.019]], 0, B, black);
+    w.turnAlong('sn.handle', [[0, 0], [0.0042, 0], [0.0036, 0.6], [0.0032, 1], [0, 1]], [-0.012, B + 0.003, k[2] + 0.012], [k[0] + 0.006, k[1] + 0.008, k[2] + 0.002], steel);
+    w.turnAlong('sn.knob', [[0, 0], [0.006, 0.02], [0.0105, 0.15], [0.0115, 0.45], [0.0108, 0.8], [0.006, 0.97], [0, 1]], [k[0] + 0.006, k[1] + 0.008, k[2] + 0.002], [k[0] - 0.012, k[1] - 0.006, k[2] - 0.001], M.knurl(0x232426, 0.3));
+    w.inner(() => boltBody(w, B, -0.02, 0.1, 0.0102));
+  });
   w.rail('sn', 0, f.top.y - 0.0095, -0.03, 0.215, black);
   // Chassis centre: under the action, the magazine well, the guard.
   const yb = B - 0.018;
@@ -258,7 +277,7 @@ export function sniper(w: WB, optic = true) {
   guard(w, 'sn', 0.014, 0.068, yb - 0.026, 0.024, chassis, 0.012);
   trigger(w, 'sn', 0.048, yb - 0.026, 0.016, steel);
   pistolGrip(w, 'sn', 0.016, -0.022, yb - 0.024, rakeOf(f.grip.a), 0.098, 0.03, M.stipple(0x1d1e20, 0.3), { swell: 0.005 });
-  boxMag(w, 'sn', 0.074, 0.15, f.well[1] + 0.005, 0.012, 0, 0.026, black, { plate: black });
+  w.piece('mag', () => boxMag(w, 'sn', 0.074, 0.15, f.well[1] + 0.005, 0.012, 0, 0.026, black, { plate: black, top: 0.03, round: [0.006, 0.051, 0.018] }));
   w.rbox(0, f.well[1] - 0.004, 0.064, 0.016, 0.006, 0.01, 0.002, steel);
   // Fore-end tube, the heavy fluted barrel and its brake.
   mlok(w, 'sn', 0.225, 0.55, B, 0.025, chassis, false);
@@ -302,11 +321,18 @@ export function rifle(w: WB, optic = true) {
   const wood = M.wood(0x5e3a20, 0.4);
   const chq = M.checker(0x523018, 0.4);
   w.turn('hr.action', [[0, -0.005], [0.016, -0.005], [0.0173, -0.001], [0.0173, 0.21], [0.0165, 0.215], [0, 0.215]], 0, B, blued);
-  w.turn('hr.shroud', [[0, -0.042], [0.005, -0.042], [0.0095, -0.032], [0.0112, -0.015], [0.0112, -0.004], [0, -0.004]], 0, B, blued);
   w.box(-0.0168, B + 0.006, f.port[2], 0.0012, 0.012, 0.058, M.hole());
   const k = f.spots!.knob;
-  w.turnAlong('hr.handle', [[0, 0], [0.0042, 0], [0.0034, 0.6], [0.003, 1], [0, 1]], [-0.012, B + 0.002, k[2] + 0.014], [k[0] + 0.006, k[1] + 0.004, k[2] + 0.002], blued);
-  w.sphere(k[0], k[1], k[2], 0.0085, blued);
+  w.piece('bolt', () => {
+    w.turn('hr.shroud', [[0, -0.042], [0.005, -0.042], [0.0095, -0.032], [0.0112, -0.015], [0.0112, -0.004], [0, -0.004]], 0, B, blued);
+    w.turnAlong('hr.handle', [[0, 0], [0.0042, 0], [0.0034, 0.6], [0.003, 1], [0, 1]], [-0.012, B + 0.002, k[2] + 0.014], [k[0] + 0.006, k[1] + 0.004, k[2] + 0.002], blued);
+    w.sphere(k[0], k[1], k[2], 0.0085, blued);
+    w.inner(() => boltBody(w, B, -0.004, 0.1, 0.0098));
+  });
+  // The open action's dark well under the bolt, and a cartridge for the right hand to press down into it.
+  w.inner(() => w.box(0, B - 0.006, f.port[2], 0.012, 0.012, 0.07, M.hole()));
+  const rs = ROUND_SEAT.rifle;
+  w.prop('round', () => cartridge(w, 'hr.round', rs.back, 0.006, 0.051, 0.021));
   // The safety on the right of the tang, the bolt release in front of the guard.
   w.rbox(-0.0125, B - 0.01, -0.002, 0.004, 0.006, 0.012, 0.0012, blued);
   // Barrel.
@@ -391,16 +417,18 @@ export function carbine(w: WB, looks: Looks = {}) {
   // The charging handle: a bar welded straight out of the bolt to the right, a nut for a knob.
   const h = f.spots!.handle;
   w.box(-0.0172, B, (h[2] + f.spots!.handleBack[2]) / 2, 0.0012, 0.004, h[2] - f.spots!.handleBack[2] + 0.01, M.hole());
-  w.rod([-0.012, B, h[2]], [h[0] + 0.006, h[1], h[2]], 0.0032, raw);
-  w.turnAlong('cb.nut', [[0, 0], [0.0062, 0], [0.0062, 1], [0, 1]], [h[0] + 0.006, h[1], h[2]], [h[0] - 0.006, h[1], h[2]], raw, 6);
-  weld(-0.0145, B, h[2], 0.008, 'y');
+  w.piece('handle', () => {
+    w.rod([-0.012, B, h[2]], [h[0] + 0.006, h[1], h[2]], 0.0032, raw);
+    w.turnAlong('cb.nut', [[0, 0], [0.0062, 0], [0.0062, 1], [0, 1]], [h[0] + 0.006, h[1], h[2]], [h[0] - 0.006, h[1], h[2]], raw, 6);
+    weld(-0.0145, B, h[2], 0.008, 'y');
+  });
   // The magazine well: a box of plate welded under the action, and the steel 30-round magazine in it.
   const wz0 = f.well[2] - 0.024;
   const wz1 = f.well[2] + 0.024;
   w.side('cb.well', () => shape([[wz0 - 0.004, B - 0.012], [wz1 + 0.004, B - 0.012], [wz1 + 0.004, f.well[1]], [wz0 - 0.004, f.well[1]]]), 0, 0.03, 0, raw);
   weld(0.0152, B - 0.013, f.well[2], 0.05, 'z');
   weld(-0.0152, B - 0.013, f.well[2], 0.05, 'z');
-  boxMag(w, 'cb', wz0 + 0.001, wz1 - 0.001, f.well[1] + 0.004, f.well[1] - f.mag.y - 0.008, 0.07, 0.027, M.park(0x2c2a26, 0.8), { ribs: 1, flare: 0.006 });
+  w.piece('mag', () => boxMag(w, 'cb', wz0 + 0.001, wz1 - 0.001, f.well[1] + 0.004, f.well[1] - f.mag.y - 0.008, 0.07, 0.027, M.park(0x2c2a26, 0.8), { ribs: 1, flare: 0.006, top: 0.022, round: [0.0056, 0.039, 0.016] }));
   // The cut-down stock: the wrist and butt of a sporter, its fore-end sawn off under the action; tape round the wrist.
   const wrist: P2[] = [
     [0.08, B - 0.002],
@@ -471,7 +499,7 @@ export function lever(w: WB) {
   if (w.hi) w.side('lv.spur', () => shape([[-0.022, B + 0.0285], [-0.032, B + 0.0305], [-0.033, B + 0.027], [-0.024, B + 0.025]]), 0, 0.0074, 0, M.knurl(0x16181c));
   // The lever: along the receiver's bottom, the trigger's opening, then the loop the fingers go through.
   const L = f.spots!.loop;
-  w.side(
+  w.piece('lever', () => w.side(
     'lv.lever',
     () =>
       shape(
@@ -485,8 +513,11 @@ export function lever(w: WB) {
     0.0078,
     0.0014,
     blued,
-  );
+  ));
   trigger(w, 'lv', 0.03, yb, 0.016, blued, 0.006);
+  // A round for the gate: a .44 with its flat lead nose.
+  const rs = ROUND_SEAT.lever;
+  w.prop('round', () => cartridge(w, 'lv.round', rs.back, 0.0058, 0.029, 0.011, true));
   // The barrel's octagon, the crown cut in its face, the magazine tube under it with its cap, the brass nose cap.
   const oc = (): ReturnType<typeof shape> => {
     const r = 0.0118;
@@ -534,28 +565,42 @@ export function lmg(w: WB, looks: Looks = {}) {
   w.side('lm.recv', () => shape([[-0.105, -0.004], [0.225, -0.004], [0.225, top, 0.004], [-0.105, top, 0.004]]), 0, 0.05, 0.0015, steel);
   if (w.hi) for (const z of [-0.08, -0.04, 0.0, 0.18, 0.205]) for (const y of [0.006, 0.046]) for (const s of [1, -1]) w.sphere(s * 0.0252, y, z, 0.0018, steel, 0.5, 1, 1);
   // The feed cover, its latch at the back, the rail on it.
-  w.side('lm.cover', () => shape([[-0.035, top - 0.001], [0.17, top - 0.001], [0.175, top + 0.006, 0.004], [0.16, f.top.y - 0.0095], [-0.03, f.top.y - 0.0095], [-0.035, top + 0.008, 0.003]]), 0, 0.052, 0.0012, steel);
-  w.rbox(0, top + 0.004, -0.038, 0.03, 0.01, 0.008, 0.002, steel);
-  w.rail('lm', 0, f.top.y - 0.0095, -0.025, 0.155, steel);
+  w.piece('cover', () => {
+    w.side('lm.cover', () => shape([[-0.035, top - 0.001], [0.17, top - 0.001], [0.175, top + 0.006, 0.004], [0.16, f.top.y - 0.0095], [-0.03, f.top.y - 0.0095], [-0.035, top + 0.008, 0.003]]), 0, 0.052, 0.0012, steel);
+    w.rbox(0, top + 0.004, -0.038, 0.03, 0.01, 0.008, 0.002, steel);
+    w.rail('lm', 0, f.top.y - 0.0095, -0.025, 0.155, steel);
+    // Rear sight: a peep with wings on the cover's back.
+    for (const s of [1, -1]) w.side('lm.rw', () => shape([[f.rear[2] - 0.012, f.top.y], [f.rear[2] + 0.012, f.top.y], [f.rear[2] + 0.008, f.rear[1] + 0.003, 0.004], [f.rear[2] - 0.008, f.rear[1] + 0.003, 0.004]]), s * 0.011, 0.003, 0.0008, steel);
+    peep(w, f.rear[2], f.rear[1], f.top.y, steel, 0.006, 0.0022);
+  });
+  // Under the cover: the feed tray and its dark slot, the top of the bolt.
+  w.inner(() => {
+    w.rbox(0, top - 0.003, 0.07, 0.046, 0.004, 0.2, 0.001, M.steel(0x5a5e60, 0.4));
+    w.box(0, top - 0.0008, 0.07, 0.012, 0.0008, 0.12, M.hole());
+  });
   // Feed tray opening on the left, the belt running up into it out of the box.
   w.box(0.0253, 0.04, 0.115, 0.0008, 0.014, 0.05, M.hole());
   const box = { x0: 0.004, x1: 0.064, y0: -0.13, y1: -0.008, z0: 0.065, z1: 0.165 };
-  w.rbox((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2, (box.z0 + box.z1) / 2, box.x1 - box.x0, box.y1 - box.y0, box.z1 - box.z0, 0.006, od);
-  if (w.hi) {
-    for (let i = 0; i < 3; i++) w.box(box.x1 + 0.0004, (box.y0 + box.y1) / 2, box.z0 + 0.025 + i * 0.025, 0.0016, box.y1 - box.y0 - 0.02, 0.006, od);
-    w.rbox(box.x1 + 0.002, box.y1 - 0.012, (box.z0 + box.z1) / 2, 0.004, 0.012, 0.03, 0.0015, M.poly(0x2a2c26));
-  }
   const brass = M.brass(0xb08a46, 0.3);
-  const belt: [number, number][] = [[0.05, -0.006], [0.046, 0.006], [0.04, 0.017], [0.034, 0.027], [0.029, 0.036]];
-  for (const [x, y] of w.hi ? belt : belt.slice(0, 3)) {
-    w.turn('lm.round', [[0, -0.03], [0.0048, -0.03], [0.0048, 0.006], [0.0038, 0.012], [0.0029, 0.014], [0.0029, 0.026], [0, 0.034]], x, y, brass, w.hi ? 10 : 6, 0.7, f.well[2]);
-    if (w.hi) w.box(x, y + 0.0045, f.well[2] - 0.012, 0.007, 0.0012, 0.022, M.steel(0x3a3c3e, 0.5));
-  }
+  // The box and the belt out of it come off together (`mag`); split, the belt's end runs on over the tray.
+  w.piece('mag', () => {
+    w.rbox((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2, (box.z0 + box.z1) / 2, box.x1 - box.x0, box.y1 - box.y0, box.z1 - box.z0, 0.006, od);
+    if (w.hi) {
+      for (let i = 0; i < 3; i++) w.box(box.x1 + 0.0004, (box.y0 + box.y1) / 2, box.z0 + 0.025 + i * 0.025, 0.0016, box.y1 - box.y0 - 0.02, 0.006, od);
+      w.rbox(box.x1 + 0.002, box.y1 - 0.012, (box.z0 + box.z1) / 2, 0.004, 0.012, 0.03, 0.0015, M.poly(0x2a2c26));
+    }
+    const belt: [number, number][] = [[0.05, -0.006], [0.046, 0.006], [0.04, 0.017], [0.034, 0.027], [0.029, 0.036]];
+    if (w.split) belt.push([0.02, 0.046], [0.008, 0.052], [-0.004, 0.054]);
+    for (const [x, y] of w.hi ? belt : belt.slice(0, 3)) {
+      w.turn('lm.round', [[0, -0.03], [0.0048, -0.03], [0.0048, 0.006], [0.0038, 0.012], [0.0029, 0.014], [0.0029, 0.026], [0, 0.034]], x, y, brass, w.hi ? 10 : 6, 0.7, f.well[2]);
+      if (w.hi) w.box(x, y + 0.0045, f.well[2] - 0.012, 0.007, 0.0012, 0.022, M.steel(0x3a3c3e, 0.5));
+    }
+  });
   // Ejection port underneath on the right; the charging handle folding out of the right side.
   w.box(-0.018, -0.0045, f.port[2], 0.012, 0.0008, 0.05, M.hole());
   const hz = f.spots!.handle[2];
   w.box(-0.0255, 0.022, (hz + f.spots!.handleBack[2]) / 2, 0.0008, 0.006, hz - f.spots!.handleBack[2] + 0.012, M.hole());
-  w.rbox(-0.036, 0.022, hz, 0.022, 0.009, 0.012, 0.002, steel);
+  w.piece('handle', () => w.rbox(-0.036, 0.022, hz, 0.022, 0.009, 0.012, 0.002, steel));
   // Trigger group: a polymer lower with guard and grip.
   w.side('lm.lower', () => shape([[-0.1, -0.004], [0.07, -0.004], [0.068, -0.014, 0.004], [-0.04, -0.016, 0.006], [-0.1, -0.012, 0.004]]), 0, 0.04, 0.002, poly);
   guard(w, 'lm', 0.012, 0.066, -0.014, 0.03, poly, 0.012);
@@ -588,9 +633,6 @@ export function lmg(w: WB, looks: Looks = {}) {
     const a = Math.PI / 2 + (i - 2) * 1.0;
     w.box(Math.cos(a) * 0.012, B + Math.sin(a) * 0.012, f.muzzle - 0.022, 0.0026, 0.0026, 0.026, M.hole(), 0, 0, a);
   }
-  // Rear sight: a peep with wings on the cover's back.
-  for (const s of [1, -1]) w.side('lm.rw', () => shape([[f.rear[2] - 0.012, f.top.y], [f.rear[2] + 0.012, f.top.y], [f.rear[2] + 0.008, f.rear[1] + 0.003, 0.004], [f.rear[2] - 0.008, f.rear[1] + 0.003, 0.004]]), s * 0.011, 0.003, 0.0008, steel);
-  peep(w, f.rear[2], f.rear[1], f.top.y, steel, 0.006, 0.0022);
   if (own) swivel(w, 0, -0.06, sz + 0.06, steel, false);
 }
 
@@ -630,24 +672,28 @@ export function crossbow(w: WB) {
     }
     tips.push([s * L[L.length - 2][0], B - 0.012, L[L.length - 2][1]]);
   }
-  // The string, cocked into the latch; the serving at its middle.
-  for (const t of tips) w.rod(t, [0, latch[1] - 0.004, latch[2] - 0.13], 0.0012, M.cord(0x2a2622, 0.4));
-  // The bolt: carbon shaft, three vanes, a three-bladed broadhead.
+  // The string, cocked into the latch (the close-up model draws its own, which can be drawn back by hand: `string`).
+  w.piece('string', () => {
+    for (const t of tips) w.rod(t, [0, latch[1] - 0.004, latch[2] - 0.13], 0.0012, M.cord(0x2a2622, 0.4));
+  });
+  // The bolt: carbon shaft, three vanes, a three-bladed broadhead (a thing the hand lays on the rail: `quarrel`).
   const nz = latch[2] - 0.13;
-  w.tube(0, B, nz, f.muzzle - 0.03, 0.0044, M.poly(0x161718, 0.3), 0.0004, w.hi ? 12 : 6);
-  for (let i = 0; i < 3; i++) {
-    const a = Math.PI / 2 + (i / 3) * Math.PI * 2;
-    w.box(Math.cos(a) * 0.009, B + Math.sin(a) * 0.009, nz + 0.04, 0.0008, 0.01, 0.06, i === 0 ? M.poly(0xc8402a, 0.3) : M.poly(0xd8d4c8, 0.3), 0, 0, a - Math.PI / 2);
-  }
-  w.turn('xb.ferrule', [[0, f.muzzle - 0.034], [0.0048, f.muzzle - 0.034], [0.0048, f.muzzle - 0.022], [0, f.muzzle - 0.018]], 0, B, M.bright(0x9aa0a4));
-  for (let i = 0; i < 3; i++) {
-    const a = Math.PI / 2 + (i / 3) * Math.PI * 2;
-    w.raw(M.bright(0xb4b8bc, 0.2), (b) => {
-      const bx = Math.cos(a) * 0.006;
-      const by = Math.sin(a) * 0.006;
-      b.box(bx, B + by, f.muzzle - 0.013, Math.abs(Math.cos(a)) * 0.011 + 0.0006, Math.abs(Math.sin(a)) * 0.011 + 0.0006, 0.026, M.bright(0xb4b8bc, 0.2));
-    });
-  }
+  w.piece('quarrel', () => {
+    w.tube(0, B, nz, f.muzzle - 0.03, 0.0044, M.poly(0x161718, 0.3), 0.0004, w.hi ? 12 : 6);
+    for (let i = 0; i < 3; i++) {
+      const a = Math.PI / 2 + (i / 3) * Math.PI * 2;
+      w.box(Math.cos(a) * 0.009, B + Math.sin(a) * 0.009, nz + 0.04, 0.0008, 0.01, 0.06, i === 0 ? M.poly(0xc8402a, 0.3) : M.poly(0xd8d4c8, 0.3), 0, 0, a - Math.PI / 2);
+    }
+    w.turn('xb.ferrule', [[0, f.muzzle - 0.034], [0.0048, f.muzzle - 0.034], [0.0048, f.muzzle - 0.022], [0, f.muzzle - 0.018]], 0, B, M.bright(0x9aa0a4));
+    for (let i = 0; i < 3; i++) {
+      const a = Math.PI / 2 + (i / 3) * Math.PI * 2;
+      w.raw(M.bright(0xb4b8bc, 0.2), (b) => {
+        const bx = Math.cos(a) * 0.006;
+        const by = Math.sin(a) * 0.006;
+        b.box(bx, B + by, f.muzzle - 0.013, Math.abs(Math.cos(a)) * 0.011 + 0.0006, Math.abs(Math.sin(a)) * 0.011 + 0.0006, 0.026, M.bright(0xb4b8bc, 0.2));
+      });
+    }
+  });
   // Fore-grip with finger guards, the pistol grip and guard, a skeleton stock with a cheek piece.
   w.side('xb.fore', () => shape([[0.19, B - 0.024], [0.4, B - 0.024], [0.395, B - 0.044, 0.008], [0.2, B - 0.05, 0.012]]), 0, 0.036, 0.004, poly);
   for (const z of [0.185, 0.405]) w.rbox(0, B - 0.03, z, 0.06, 0.014, 0.006, 0.002, poly);

@@ -22,6 +22,19 @@ import type { CampScene } from '../game/campScene';
 import type { QualityPreset } from '../render/renderer';
 import { BENCHMARK_CASES, BENCHMARK_SCENARIOS } from '../game/benchmark';
 import { initPhysics } from '../physics/physics';
+import { DAY_MINUTES, TUNING, ZOMBIE_HITS } from '../sim/tuning';
+import { RETICLE_COLORS, RETICLE_DOTS, RETICLE_LOOKS, RETICLE_MARKS, stepIn } from './reticle';
+
+/** Settings steps for the fire's spread and the wind, as shares of the game as tuned. */
+const FIRE_PACES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3];
+const WIND_STRENGTHS = [0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3];
+
+/** The next step up or down a list from the value nearest `cur`, stopping at the ends. */
+function stepClamped(list: readonly number[], cur: number, dir: number): number {
+  let i = 0;
+  for (let k = 1; k < list.length; k++) if (Math.abs(list[k] - cur) < Math.abs(list[i] - cur)) i = k;
+  return list[Math.min(list.length - 1, Math.max(0, i + dir))];
+}
 
 let guideClass: typeof Guide | null = null;
 let guideLoading: Promise<typeof Guide> | null = null;
@@ -107,6 +120,7 @@ export class Overlays {
 
   private renderTitle() {
     const g = this.game;
+    const pads = g.input.connectedPads();
     const solo = g.solo;
     const slotHtml = (i: number) => {
       const s = g.input.slots[i];
@@ -141,6 +155,7 @@ export class Overlays {
           <button data-fid="bench">Benchmark</button>
         </div>
         <p style="font-size:.78em;margin-top:18px">${solo ? 'One player, full screen. Plug in a gamepad and press A, or use the keyboard (WASD with F, or the arrow keys with Right Shift).' : 'Two players, one screen. Plug in two gamepads and press A, or share the keyboard.'} Chrome or Edge recommended; gamepads need localhost or HTTPS.</p>
+        <p style="font-size:.78em">${pads.length ? `Controllers found: ${pads.map((p) => escapeHtml(padName(p))).join(' · ')}` : 'No controller found yet. Connect one and press any button on it: the browser only shows a controller after a press.'}</p>
         ${g.input.nonStandard.size ? '<p style="color:var(--amber)">A controller without the standard mapping was detected. Controls may be wrong.</p>' : ''}
       </div></div>`;
     const el = (k: string) => this.root.querySelector<HTMLElement>(`[data-fid="${k}"]`)!;
@@ -197,7 +212,7 @@ export class Overlays {
   tickTitle(dt: number) {
     if (!this.titleReady || this.game.phase !== 'title' || !this.root.querySelector('.title-screen')) return;
     this.titleLock = Math.max(0, this.titleLock - dt);
-    const j = this.game.input.joined + (this.game.input.slots[0]?.kind === 'pad' ? 10 : 0) + (this.game.input.slots[1]?.kind === 'pad' ? 20 : 0);
+    const j = this.game.input.joined + (this.game.input.slots[0]?.kind === 'pad' ? 10 : 0) + (this.game.input.slots[1]?.kind === 'pad' ? 20 : 0) + this.game.input.connectedPads().length * 100;
     if (j !== this.lastJoined) {
       this.lastJoined = j;
       this.titleLock = 0.4;
@@ -287,6 +302,9 @@ export class Overlays {
       const row = (id: string, label: string, val: string) =>
         `<div class="item"><span>${label}</span><span style="display:flex;gap:6px;align-items:center"><button data-fid="${id}-" style="padding:0 8px">-</button><span style="min-width:96px;text-align:center;font-family:var(--mono)">${val}</span><button data-fid="${id}+" style="padding:0 8px">+</button></span></div>`;
       const d = g.campaign.difficulty;
+      const ret = g.hud.reticle;
+      const retLook = RETICLE_LOOKS.find((l) => l.id === ret.look)!;
+      const retColor = RETICLE_COLORS.find((c) => c.id === ret.color)!;
       host.innerHTML = `<div class="menu" style="min-width:min(640px,92vw);max-height:90vh;overflow-y:auto;pointer-events:auto"><h2>Settings</h2><div class="list">
         ${row('q', 'Graphics preset', g.R.quality.toUpperCase())}
         ${row('ui', 'UI scale', `${Math.round(g.hud.uiScale * 100)}%`)}
@@ -296,7 +314,7 @@ export class Overlays {
         ${row('user-vol', 'User music volume', `${Math.round(g.audio.userMusicVolume * 100)}%`)}
         ${row('tts', 'Optional synthesized radio voice', g.audio.ttsEnabled ? 'ON' : 'OFF')}
         ${row('voice', 'Read story lines aloud (browser voice)', g.storyVoice.enabled ? 'ON' : 'OFF')}
-        <div style="font-size:.7em;text-transform:none;letter-spacing:0">Recorded effects: <span data-audio-status>${recordingStatus()}</span> · <a href="audio/CREDITS.txt" target="_blank" rel="noopener">Sound credits and licenses</a></div>
+        <div style="font-size:.7em;text-transform:none;letter-spacing:0">Recorded effects: <span data-audio-status>${recordingStatus()}</span> · <a href="audio/CREDITS.txt" target="_blank" rel="noopener">Sound credits and licenses</a> · <a href="models/CREDITS.txt" target="_blank" rel="noopener">Model credits</a> · <a href="textures/CREDITS.txt" target="_blank" rel="noopener">Texture credits</a></div>
         <div class="item"><span>User music folder</span><span style="display:flex;gap:6px"><button data-fid="music-folder" ${musicBusy ? 'disabled' : ''}>Choose music folder</button><button data-fid="music-game" ${musicBusy ? 'disabled' : ''}>Default music folder</button></span></div>
         <div style="font-size:.7em;text-transform:none;letter-spacing:0;max-width:620px;overflow-wrap:anywhere">${escapeHtml(g.audio.userMusic.label)} · ${escapeHtml(g.audio.userMusic.status)}<br>Drop tracks into public/music, or choose a folder on your device. Imports stay in this browser; reselect to refresh. Music pauses for radio speech and resumes where it left off.</div>
         ${row('rm1', solo ? 'Rumble' : 'P1 rumble', s.rumble[0] ? 'ON' : 'OFF')}
@@ -307,13 +325,28 @@ export class Overlays {
         ${row('dr', 'Drain (fuel, food)', `${d.drain.toFixed(2)}×`)}
         ${row('ag', 'Aggro (enemy senses)', `${d.aggro.toFixed(2)}×`)}
         ${row('dm', 'Damage taken', `${d.damage.toFixed(2)}×`)}
-        ${row('god', 'God mode (every weapon from the start)', g.godMode ? 'ON' : 'OFF')}
+        ${row('god', 'God mode (every weapon from the start, +50% health)', g.godMode ? 'ON' : 'OFF')}
+        ${row('zt', 'Zombie toughness (pistol hits to drop one)', `${TUNING.zombieHits} ${TUNING.zombieHits === 1 ? 'HIT' : 'HITS'}`)}
+        <div style="font-size:.7em;text-transform:none;letter-spacing:0;max-width:620px">Counted for a walker shot in the body; big ones take more, heavy guns fewer. The wounds add up, so a tough one loses limbs, bones and guts before it drops. New zombies take the change.</div>
+        ${row('fs', 'Fire spread speed', `${TUNING.fire.toFixed(2)}×`)}
+        ${row('ws', 'Wind strength', TUNING.wind === 0 ? 'CALM' : `${TUNING.wind.toFixed(2)}×`)}
+        ${row('dl', 'Day length (first light to dark)', `<input type="range" data-fid="dl-slider" min="${DAY_MINUTES.min}" max="${DAY_MINUTES.max}" step="${DAY_MINUTES.step}" value="${TUNING.dayLength / 60}" style="width:110px;vertical-align:middle;pointer-events:auto"> <span data-fid="dl-val">${TUNING.dayLength / 60} MIN</span>`)}
+        ${row('xs', 'Crosshair', `<span style="display:inline-flex;gap:8px;align-items:center"><span class="retprev"><span class="reticle" data-look="${ret.look}" style="--rd:${ret.dot}px;--rc:${retColor.css}">${RETICLE_MARKS}</span></span>${retLook.name.toUpperCase()}</span>`)}
+        ${row('xd', 'Crosshair dot size', `${ret.dot}px`)}
+        ${row('xc', 'Crosshair colour', retColor.name.toUpperCase())}
         ${row('nc', 'Night camp (every night: a camp and a raid)', g.nightCamp ? 'ON' : 'OFF')}
         <div style="font-size:.7em;text-transform:none;letter-spacing:0;max-width:620px">${g.nightCamp ? 'The Dusk Bell calls a camp: build defences and hold off a three-wave night raid.' : 'After the Dusk Bell, rest until dawn, push on through the dark, or make camp and hold it through a raid for the night\'s haul: ammunition, a rare part and medicine.'}</div>
         <div class="item"><button data-fid="back">Back</button><span class="mutedtxt" style="color:#c9bd9f">${solo ? '' : 'Per-player options apply to that seat.'}</span></div>
       </div></div>`;
       (host.querySelectorAll('.menu button') as NodeListOf<HTMLElement>).forEach((b) => (b.style.pointerEvents = 'auto'));
       const el = (k: string) => host.querySelector<HTMLElement>(`[data-fid="${k}"]`)!;
+      // The day-length slider: dragging retimes the day as it goes, letting go saves it.
+      const daySlider = host.querySelector<HTMLInputElement>('[data-fid="dl-slider"]')!;
+      daySlider.addEventListener('input', () => {
+        g.setDayLength(Number(daySlider.value) * 60);
+        el('dl-val').textContent = `${TUNING.dayLength / 60} MIN`;
+      });
+      daySlider.addEventListener('change', () => g.saveSettings());
       const q: QualityPreset[] = ['low', 'medium', 'high'];
       const step = (id: string, dir: number) => {
         const st = g.input.settings;
@@ -356,6 +389,33 @@ export class Overlays {
           case 'god':
             g.setGodMode(!g.godMode);
             break;
+          case 'zt':
+            TUNING.zombieHits = stepClamped(ZOMBIE_HITS, TUNING.zombieHits, dir);
+            break;
+          case 'fs':
+            TUNING.fire = stepClamped(FIRE_PACES, TUNING.fire, dir);
+            break;
+          case 'ws':
+            TUNING.wind = stepClamped(WIND_STRENGTHS, TUNING.wind, dir);
+            break;
+          case 'dl':
+            g.setDayLength(TUNING.dayLength + dir * DAY_MINUTES.step * 60);
+            break;
+          case 'xs': {
+            const r = g.hud.reticle;
+            g.hud.setReticle({ ...r, look: stepIn(RETICLE_LOOKS.map((l) => l.id), r.look, dir) });
+            break;
+          }
+          case 'xd': {
+            const r = g.hud.reticle;
+            g.hud.setReticle({ ...r, dot: stepClamped(RETICLE_DOTS, r.dot, dir) });
+            break;
+          }
+          case 'xc': {
+            const r = g.hud.reticle;
+            g.hud.setReticle({ ...r, color: stepIn(RETICLE_COLORS.map((c) => c.id), r.color, dir) });
+            break;
+          }
           case 'nc':
             g.nightCamp = !g.nightCamp;
             break;
@@ -392,7 +452,7 @@ export class Overlays {
         render();
         fc.setItems(makeItems(), keys);
       };
-      const ids = ['q', 'ui', ...(solo ? [] : ['lay']), 'vol', 'user-mus', 'user-vol', 'tts', 'voice', 'rm1', ...(solo ? [] : ['rm2']), 'aa1', ...(solo ? [] : ['aa2']), 'ms', 'dr', 'ag', 'dm', 'god', 'nc'];
+      const ids = ['q', 'ui', ...(solo ? [] : ['lay']), 'vol', 'user-mus', 'user-vol', 'tts', 'voice', 'rm1', ...(solo ? [] : ['rm2']), 'aa1', ...(solo ? [] : ['aa2']), 'ms', 'dr', 'ag', 'dm', 'god', 'zt', 'fs', 'ws', 'dl', 'xs', 'xd', 'xc', 'nc'];
       const makeItems = (): FocusItem[] => [
         ...ids.flatMap((id) => [
           { el: el(`${id}-`), press: () => step(id, -1) },
@@ -497,13 +557,13 @@ export class Overlays {
       ['Right stick', 'Aim / look', 'Free look', 'Aim gun', 'Aim reticle'],
       [pair('RT', 'LT'), 'Fire / aim', 'Throttle / brake', 'Fire / zoom', 'Place / remove'],
       [pad('RB'), 'Tap melee · hold takedown', 'Fire front gun', 'Fire', 'Next element'],
-      [pad('LB'), 'Swap what is in hand along your belt: weapons, wrench (repair), crowbar (strip parts), jerrycan (fuel)', '—', 'Swap weapon', 'Previous element'],
+      [pad('LB'), 'Tap: swap what is in hand along your belt: weapons, wrench (repair), crowbar (strip parts), jerrycan (fuel) · hold: crew orders', 'Hold: crew orders', 'Swap weapon', 'Previous element'],
       [pad('A'), 'Tap jump (when nothing is in reach) · hold to loot, repair, strip, siphon, refuel, revive', 'Handbrake', 'Reload', 'Rotate'],
       [pad('B'), 'Crouch', 'Tap lights · hold engine off', 'Cancel', 'Cancel'],
       [pad('X'), 'Reload · hold swap utility · wrench: workbench', 'Tap horn · hold siren', 'Reload', 'Watch post'],
       [pad('Y'), 'Get in any vehicle (abandoned cars become yours)', 'Get out · hold to bail at speed', 'Get out', 'Build wheel'],
       [pad('view'), 'Always first person on foot', 'Vehicle camera: chase / the eyes in the cab', 'Same: chase / along the gun', '—'],
-      ['D-pad', 'Tap ping · hold command wheel', 'Same', 'Same', 'Same'],
+      ['D-pad', 'Tap ↑ ping · hold any way for the quick select wheel: ↑ weapons, → tools, ↓ health, ← drugs', 'Same', 'Same', 'Same'],
       [pad('map'), 'Tap map: closer look, whole leg, close', 'Same', 'Same', 'Same'],
       [pad('inventory'), 'Inventory: change what you wear and hold (the game pauses)', 'Same', 'Same', 'Same'],
       [pair('L3', 'R3'), 'Click to sprint (stays on until you stop) / reset cam', 'Camera distance / look back', 'Zoom', 'Snap grid'],
@@ -1013,3 +1073,9 @@ function selectEndingTitle(e: EndingId) {
 }
 
 const mouseWord = (b: number | undefined) => (b === undefined ? 'unbound' : ['left click', 'middle click', 'right click', 'side button 1', 'side button 2'][b] ?? `button ${b + 1}`);
+
+/** A controller's name without the vendor/product codes browsers add ("Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e ...)"). */
+function padName(p: Gamepad): string {
+  const name = p.id.replace(/\s*\(.*\)\s*$/, '').replace(/^[0-9a-f]{4}-[0-9a-f]{4}-/i, '').trim();
+  return name || `Controller ${p.index + 1}`;
+}

@@ -40,6 +40,22 @@ const DRINKERS = new Set(['prey', 'pack', 'scavenger', 'brute', 'charger']);
  */
 export type AState = 'idle' | 'wander' | 'alert' | 'flee' | 'chase' | 'stalk' | 'windup' | 'charge' | 'rest' | 'fly' | 'land' | 'feed' | 'drink' | 'bed';
 
+/**
+ * Where a swept blade lands on a beast (`game/bladeSwing.ts`): the world point, the way the edge was going, the part, how
+ * far through that part the cut has got over every stroke (0..1), and whether this stroke finished it.
+ */
+export interface AnimalStrike {
+  x: number;
+  y: number;
+  z: number;
+  dx: number;
+  dy: number;
+  dz: number;
+  zone: AnimalZone;
+  depth: number;
+  through: boolean;
+}
+
 /** Seconds between a ground animal's thoughts (see `update`): what its awareness steps by. */
 const THINK = 0.08;
 
@@ -125,6 +141,15 @@ export class Animal {
   flap: number;
   gait = 0;
   attackCd = 0;
+  /** The cooldown the last attack set (`attackCd` counts down from it), so a model can play the strike through. */
+  attackFor = 0;
+  /** Render-only: the last flap phase seen and when, and the smoothed wing-beat rate (rad/s) for gliding. */
+  rFlap = NaN;
+  rT = 0;
+  flapRate = 8;
+  /** Render-only: seconds left of flinching from a hit, and the side it came from (+1 its left, -1 its right). */
+  hitT = 0;
+  hitSide = 1;
   stun = 0;
   burn = 0;
   aiT: number;
@@ -522,6 +547,9 @@ export class WildlifeSystem {
   damage(a: Animal, amount: number, info: { fromX: number; fromZ: number; killer?: number; fire?: boolean; explosive?: boolean; vehicle?: boolean; blade?: boolean }): boolean {
     if (a.dead) return false;
     a.hp -= amount;
+    a.hitT = 0.6;
+    // Its left is +x of its own frame (it faces +z at yaw 0).
+    a.hitSide = Math.cos(a.yaw) * (info.fromX - a.x) - Math.sin(a.yaw) * (info.fromZ - a.z) >= 0 ? 1 : -1;
     if (info.killer !== undefined && info.killer >= 0) a.lastKiller = info.killer;
     if (a.hp <= 0) {
       a.cause = info.explosive ? 'blast' : info.fire ? 'fire' : info.vehicle ? 'vehicle' : info.blade ? 'blade' : 'shot';
@@ -831,22 +859,40 @@ export class WildlifeSystem {
     }
   }
 
-  /** `cut` is how well the weapon takes limbs off (see `cutOf`): a blade takes a leg or the head, a bat only breaks. */
-  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number, feel: MeleeFeel = MELEE.fist, cut = 0): number {
+  /**
+   * `cut` is how well the weapon takes limbs off (see `cutOf`): a blade takes a leg or the head, a bat only breaks. A swing
+   * swept through the world (`strikeOf`, see `game/bladeSwing.ts`) says which beasts the edge crossed, the part it landed
+   * on and how far through that part the cut has got; one that finishes the cut takes the part off.
+   */
+  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number, feel: MeleeFeel = MELEE.fist, cut = 0, strikeOf?: (a: Animal) => AnimalStrike | null): number {
     let hit = 0;
     for (const a of this.list) {
       if (a.dead || a.flying) continue;
       const dx = a.x - p.pos.x;
       const dz = a.z - p.pos.z;
       const d = Math.hypot(dx, dz);
-      if (d > reach + a.def.radius * a.def.size) continue;
-      if (Math.abs(wrapAngle(Math.atan2(dx, dz) - yaw)) > 1.0) continue;
+      const strike = strikeOf ? strikeOf(a) : null;
+      if (strikeOf && !strike) continue;
+      if (!strike) {
+        if (d > reach + a.def.radius * a.def.size) continue;
+        if (Math.abs(wrapAngle(Math.atan2(dx, dz) - yaw)) > 1.0) continue;
+      }
       const dealt = dmg * (1 - a.def.armor);
       a.hits++;
       const killed = this.damage(a, dealt, { fromX: p.pos.x, fromZ: p.pos.z, killer: p.index, blade: true });
       // A blade opens it up; finishing a bedded animal with the knife is quiet and spoils nothing.
-      if (!killed && cut > 0) a.wounds.bleed += a.def.hp * 0.02 * cut;
-      if (cut > 0) {
+      if (!killed && cut > 0) a.wounds.bleed += a.def.hp * 0.02 * cut * (strike ? 0.4 + strike.depth : 1);
+      if (strike) {
+        // The edge went right through a leg, a wing or the neck: it comes off where the cut is.
+        if (strike.through && strike.zone !== 'torso' && !(a.wounds.mask & PART_BIT[strike.zone])) {
+          const res = woundAnimal(a.wounds, a.kind, strike.zone, a.def.hp * 4, a.def.hp, killed, this.ctx.rng.next());
+          if (res.off.length) {
+            this.refreshWounds(a);
+            for (const part of res.off) this.ctx.gore?.severAnimal(a, part, strike.dx, 0.3 + Math.max(0, strike.dy), strike.dz, Math.max(1, (dealt * cut) / a.def.hp));
+            if (res.fatal && !a.dead) this.kill(a, p.index);
+          }
+        }
+      } else if (cut > 0) {
         // A swing lands low or high at random: mostly a leg, now and then the head.
         const r = this.ctx.rng.next();
         const zone: AnimalZone = r < 0.15 ? 'head' : r < 0.75 ? LEGS[Math.floor(this.ctx.rng.next() * 4)] : 'torso';
@@ -966,6 +1012,7 @@ export class WildlifeSystem {
       a.attackCd -= dt;
       if (a.stun > 0) a.stun -= dt;
       a.stateT += dt;
+      if (a.hitT > 0) a.hitT -= dt;
       a.drinkT -= dt;
       if (a.calmT > 0) a.calmT -= dt;
       if (a.burn > 0) {
@@ -2325,7 +2372,7 @@ export class WildlifeSystem {
   private walk(a: Animal, dt: number) {
     const ctx = this.ctx;
     const def = a.def;
-    a.y = ctx.groundAt(a.x, a.z);
+    a.y = ctx.groundAt(a.x, a.z) + (ctx.ground?.heightAt(a.x, a.z) ?? 0);
     if (a.kind === 'fox') this.mousing(a, dt);
     let speed = 0;
     let wx = 0;
@@ -2566,7 +2613,7 @@ export class WildlifeSystem {
           a.gait = 1;
           a.phase += dt * 16;
         } else a.gait = 0;
-        a.y = ctx.groundAt(a.x, a.z);
+        a.y = ctx.groundAt(a.x, a.z) + (ctx.ground?.heightAt(a.x, a.z) ?? 0);
         a.vx = a.vz = 0;
         return;
       }
@@ -2748,6 +2795,7 @@ export class WildlifeSystem {
         if (Math.hypot(p.pos.x - a.x, p.pos.z - a.z) > reach) continue;
         const [cd, k] = t === 'brute' ? [1.3, 1] : t === 'charger' ? [1.2, 1] : [1.0, 1];
         a.attackCd = cd;
+        a.attackFor = cd;
         p.hurt(dmg * k, a.x, a.z, t === 'charger' ? 'ram' : 'bite');
         ctx.fx.blood(p.pos.x, p.pos.y + 1, p.pos.z, 3);
         ctx.audio.play(t === 'pack' ? 'yelp' : 'thud', a.x, a.z, 0.7);
@@ -2777,6 +2825,7 @@ export class WildlifeSystem {
         const d = Math.hypot(v.position.x - a.x, v.position.z - a.z);
         if (d > v.def.length * 0.5 + def.radius * def.size + 0.5) continue;
         a.attackCd = t === 'brute' ? 1.6 : 1.5;
+        a.attackFor = a.attackCd;
         v.takeHit(def.vehicleDamage ?? 15, a.x, a.z, { ram: true, smash: true });
         const dx = v.position.x - a.x;
         const dz = v.position.z - a.z;
@@ -2846,6 +2895,19 @@ export class WildlifeSystem {
       _pose.legs = !a.dead && (a.air || (a.flying && a.state !== 'feed')) ? 1.3 : undefined;
       _pose.pitch = a.dead ? 0 : a.tip;
       _pose.lie = !a.dead && a.state === 'bed' ? Math.min(1, a.stateT * 1.5) : 0;
+      // For the rigged models: the strike played through over its first 0.7 s, gliding when the wings barely beat, a duck
+      // paddling on its water, and how far through falling dead it is.
+      _pose.attack = !a.dead && a.attackFor > 0 && a.attackCd > a.attackFor - 0.7 ? Math.min(1, Math.max(0.01, (a.attackFor - a.attackCd) / 0.7)) : 0;
+      const now = performance.now() / 1000;
+      if (Number.isFinite(a.rFlap) && now > a.rT) a.flapRate += ((a.flap - a.rFlap) / Math.max(1e-3, now - a.rT) - a.flapRate) * 0.15;
+      a.rFlap = a.flap;
+      a.rT = now;
+      _pose.glide = Math.min(1, Math.max(0, (4 - a.flapRate) / 2.5));
+      _pose.swim = a.kind === 'duck' && !a.air ? 1 : 0;
+      _pose.dying = a.dead ? Math.max(0.02, a.fall) : 0;
+      // Which of its takes it plays (its own, kept), and a flinch from a hit, toward the side it came from.
+      _pose.seed = a.id;
+      _pose.hit = !a.dead && a.hitT > 0 ? (1 - a.hitT / 0.6) * a.hitSide : 0;
       ar.push(a.kind, a.def.size, a.x, a.y - sink + lift, a.z, a.yaw, a.phase, a.dead ? 0 : a.gait, roll, a.dead ? 0.2 : a.flap, bank, a.tint, _pose);
     }
     ar.end();

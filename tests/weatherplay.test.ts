@@ -8,7 +8,7 @@ import { treeKey } from '../src/game/wildfire';
 import { riverFloodRise } from '../src/game/weatherSystem';
 import { dayPlan, hydrograph, HYDRO_DT } from '../src/sim/climate';
 import { clayAt, heightAt } from '../src/world/terrain';
-import { FLOOD_SPEED } from '../src/world/washes';
+import { FLOOD_RUN } from '../src/world/washes';
 import type { TreeSpot } from '../src/world/flora';
 import { fakeServices, run } from './helpers/sim';
 
@@ -91,7 +91,7 @@ describe('a flash flood in play', () => {
     expect(radio.some((r) => /FLASH FLOOD/.test(r))).toBe(true);
     expect(sc.weather.rain).toBe(0);
     // At the height of it, where we stand: deep, brown, running fast down the wash.
-    const tHere = tp + w.s[i] / (FLOOD_SPEED * leg.dayLength) + 0.004;
+    const tHere = tp + w.s[i] / FLOOD_RUN + 0.004;
     at(sc, tHere);
     run(sc, 1);
     const water = sc.waterAt(w.x[i], w.z[i])!;

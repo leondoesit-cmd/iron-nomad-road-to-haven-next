@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { kitMaterial } from './materials';
+import { shared } from './dispose';
 import { drawEars, portraitGeometry, portraitMaterial, type PortraitSpec } from './portrait';
 import { melabesPose } from '../world/melabes';
 
@@ -33,6 +34,7 @@ export const MELABES_WORKER_LOOK: PortraitSpec = {
 };
 
 const UP = new THREE.Vector3(0, 1, 0);
+const workerGeos = new Map<string, THREE.BufferGeometry>();
 
 /** A shop worker walks around both spits, carves each stack, then offers portions at the counter. */
 export class MelabesWorker {
@@ -43,7 +45,6 @@ export class MelabesWorker {
   readonly rightHand = new THREE.Group();
   readonly leftHand = new THREE.Group();
   private arms: [THREE.Mesh, THREE.Mesh][] = [];
-  private geos: THREE.BufferGeometry[] = [];
   private shavings: THREE.Mesh[] = [];
   private meat: THREE.Mesh;
   private legs: THREE.Group[] = [];
@@ -58,78 +59,103 @@ export class MelabesWorker {
     const skin = S.skin(MELABES_WORKER_LOOK.paint.skin);
     const navy = S.cloth(0x172034, 0.18);
     const white = S.cloth(0xecebe3, 0.16);
-    const body = new MeshBuilder();
-    body.jitter = 0.02;
-    // Dark blazer and open white collar from the reference photograph.
-    body.rbox(0, 1.15, 0, 0.48, 0.58, 0.26, 0.09, navy);
-    body.rbox(0, 1.2, 0.14, 0.24, 0.48, 0.04, 0.025, white);
     for (const side of [-1, 1]) {
-      body.box(side * 0.077, 1.43, 0.16, 0.10, 0.12, 0.025, white, 0, 0, side * 0.4);
-      body.box(side * 0.14, 1.27, 0.167, 0.075, 0.32, 0.025, navy, 0, 0, -side * 0.22);
       const leg = new THREE.Group();
       leg.position.set(side * 0.12, 0.91, 0);
-      const trousers = new MeshBuilder();
-      trousers.capsule(0, -0.73, 0, 0, 0, 0, 0.085, S.cloth(0x242832, 0.2));
-      trousers.rbox(0, -0.825, 0.04, 0.16, 0.13, 0.29, 0.035, S.leather(0x22211f));
-      leg.add(this.mesh(trousers));
+      leg.add(this.mesh('trousers', () => {
+        const trousers = new MeshBuilder();
+        trousers.capsule(0, -0.73, 0, 0, 0, 0, 0.085, S.cloth(0x242832, 0.2));
+        trousers.rbox(0, -0.825, 0.04, 0.16, 0.13, 0.29, 0.035, S.leather(0x22211f));
+        return trousers;
+      }));
       this.legs.push(leg);
       this.root.add(leg);
     }
-    this.root.add(this.mesh(body));
+    this.root.add(this.mesh('body', () => {
+      const body = new MeshBuilder();
+      body.jitter = 0.02;
+      // Dark blazer and open white collar from the reference photograph.
+      body.rbox(0, 1.15, 0, 0.48, 0.58, 0.26, 0.09, navy);
+      body.rbox(0, 1.2, 0.14, 0.24, 0.48, 0.04, 0.025, white);
+      for (const side of [-1, 1]) {
+        body.box(side * 0.077, 1.43, 0.16, 0.10, 0.12, 0.025, white, 0, 0, side * 0.4);
+        body.box(side * 0.14, 1.27, 0.167, 0.075, 0.32, 0.025, navy, 0, 0, -side * 0.22);
+      }
+      return body;
+    }));
     this.head.position.set(0, 1.51, 0);
     this.head.scale.setScalar(1.13);
     const face = new THREE.Mesh(portraitGeometry(MELABES_WORKER_LOOK, 'full'), portraitMaterial(MELABES_WORKER_LOOK));
     face.castShadow = true;
     this.head.add(face);
-    const ears = new MeshBuilder();
-    drawEars(ears, MELABES_WORKER_LOOK);
-    this.head.add(this.mesh(ears));
+    this.head.add(this.mesh('ears', () => {
+      const ears = new MeshBuilder();
+      drawEars(ears, MELABES_WORKER_LOOK);
+      return ears;
+    }));
     this.root.add(this.head);
     for (const hand of [this.rightHand, this.leftHand]) {
-      const palm = new MeshBuilder();
-      palm.rbox(0, 0, 0, 0.07, 0.085, 0.045, 0.018, skin);
-      palm.capsule(0.032, -0.005, 0, 0.045, -0.033, 0.02, 0.011, skin);
-      hand.add(this.mesh(palm));
+      hand.add(this.mesh('palm', () => {
+        const palm = new MeshBuilder();
+        palm.rbox(0, 0, 0, 0.07, 0.085, 0.045, 0.018, skin);
+        palm.capsule(0.032, -0.005, 0, 0.045, -0.033, 0.02, 0.011, skin);
+        return palm;
+      }));
       this.root.add(hand);
-      const upper = new MeshBuilder();
-      upper.cyl(0, 0, 0, 0.115, 1, 0.115, navy, 0, 0, 0, 10);
-      const fore = new MeshBuilder();
-      fore.cyl(0, 0, 0, 0.085, 1, 0.085, navy, 0, 0, 0, 10);
-      fore.cyl(0, 0.45, 0, 0.088, 0.1, 0.088, white, 0, 0, 0, 10);
-      const parts: [THREE.Mesh, THREE.Mesh] = [this.mesh(upper), this.mesh(fore)];
+      const upper = this.mesh('upper', () => {
+        const b = new MeshBuilder();
+        b.cyl(0, 0, 0, 0.115, 1, 0.115, navy, 0, 0, 0, 10);
+        return b;
+      });
+      const fore = this.mesh('fore', () => {
+        const b = new MeshBuilder();
+        b.cyl(0, 0, 0, 0.085, 1, 0.085, navy, 0, 0, 0, 10);
+        b.cyl(0, 0.45, 0, 0.088, 0.1, 0.088, white, 0, 0, 0, 10);
+        return b;
+      });
+      const parts: [THREE.Mesh, THREE.Mesh] = [upper, fore];
       parts[0].name = 'worker-upper-arm';
       parts[1].name = 'worker-forearm';
       this.arms.push(parts);
       this.root.add(...parts);
     }
-    const blade = new MeshBuilder();
-    blade.rbox(0, 0, 0, 0.035, 0.11, 0.035, 0.01, S.plastic(0x26231f));
-    blade.box(0, -0.19, 0, 0.045, 0.28, 0.006, S.chrome());
-    this.knife.add(this.mesh(blade));
+    this.knife.add(this.mesh('blade', () => {
+      const blade = new MeshBuilder();
+      blade.rbox(0, 0, 0, 0.035, 0.11, 0.035, 0.01, S.plastic(0x26231f));
+      blade.box(0, -0.19, 0, 0.045, 0.28, 0.006, S.chrome());
+      return blade;
+    }));
     this.rightHand.add(this.knife);
-    const dish = new MeshBuilder();
-    dish.cyl(0, 0.035, 0, 0.28, 0.018, 0.28, S.plastic(0xeee9dd), 0, 0, 0, 20);
-    dish.torus(0, 0.049, 0, 0.132, 0.009, S.plastic(0xf7f3e8), Math.PI / 2, 0, 0, 6, 20);
-    this.plate.add(this.mesh(dish));
+    this.plate.add(this.mesh('dish', () => {
+      const dish = new MeshBuilder();
+      dish.cyl(0, 0.035, 0, 0.28, 0.018, 0.28, S.plastic(0xeee9dd), 0, 0, 0, 20);
+      dish.torus(0, 0.049, 0, 0.132, 0.009, S.plastic(0xf7f3e8), Math.PI / 2, 0, 0, 6, 20);
+      return dish;
+    }));
     this.plate.position.x = -0.18;
-    const portion = new MeshBuilder();
-    for (let i = 0; i < 16; i++) portion.box(Math.sin(i * 2.4) * 0.07, 0.065 + (i % 4) * 0.012, Math.cos(i * 2.4) * 0.07, 0.075, 0.016, 0.025, S.plastic(i % 2 ? 0xa97042 : 0xc38d55), 0, i * 0.5, 0);
-    this.meat = this.mesh(portion);
+    this.meat = this.mesh('portion', () => {
+      const portion = new MeshBuilder();
+      for (let i = 0; i < 16; i++) portion.box(Math.sin(i * 2.4) * 0.07, 0.065 + (i % 4) * 0.012, Math.cos(i * 2.4) * 0.07, 0.075, 0.016, 0.025, S.plastic(i % 2 ? 0xa97042 : 0xc38d55), 0, i * 0.5, 0);
+      return portion;
+    });
     this.plate.add(this.meat);
     this.leftHand.add(this.plate);
     for (let i = 0; i < 4; i++) {
-      const shaving = new MeshBuilder();
-      shaving.box(0, 0, 0, 0.055, 0.012, 0.024, S.plastic(0xb7804c));
-      const flake = this.mesh(shaving);
+      const flake = this.mesh('shaving', () => {
+        const shaving = new MeshBuilder();
+        shaving.box(0, 0, 0, 0.055, 0.012, 0.024, S.plastic(0xb7804c));
+        return shaving;
+      });
       this.shavings.push(flake);
       this.root.add(flake);
     }
     this.update(0);
   }
 
-  private mesh(b: MeshBuilder) {
-    const geometry = b.build();
-    this.geos.push(geometry);
+  /** One of the worker's parts: built the first time, then the same geometry for every worker (they are all alike). */
+  private mesh(key: string, make: () => MeshBuilder) {
+    let geometry = workerGeos.get(key);
+    if (!geometry) workerGeos.set(key, (geometry = shared(make().build())));
     const mesh = new THREE.Mesh(geometry, kitMaterial());
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -190,9 +216,7 @@ export class MelabesWorker {
   }
 
   dispose() {
-    for (const geometry of this.geos) geometry.dispose();
-    this.geos.length = 0;
     this.root.removeFromParent();
-    // Portrait geometry/material and the kit material belong to their shared caches.
+    // Its part geometries, the portrait geometry/material and the kit material belong to their shared caches.
   }
 }

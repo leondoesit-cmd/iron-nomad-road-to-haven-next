@@ -1,0 +1,24 @@
+IRON NOMAD — TEXTURE CREDITS
+
+Photo-scanned surfaces from Poly Haven (https://polyhaven.com), released under CC0 1.0 Universal
+(https://creativecommons.org/publicdomain/zero/1.0/): free for commercial use, no attribution required. Credit is given
+here with thanks. The file-by-file source, edits and SHA-256 inventory is in sources.json.
+
+sand: "Aerial Beach 01" by Rob Tuytel, https://polyhaven.com/a/aerial_beach_01 (Terrain sand: wind ripples)
+earth: "Dry Ground 01" by Rob Tuytel, https://polyhaven.com/a/dry_ground_01 (Terrain earth: baked, cracked desert ground)
+rock: "Cliff Side" by James Ray Cock, Jenelle van Heerden, Dario Barresi, https://polyhaven.com/a/cliff_side (Terrain rock: layered cliff (triplanar))
+gravel: "Gravel Floor" by Jenelle van Heerden, Matterfield, https://polyhaven.com/a/gravel_floor (Terrain gravel)
+sand2: "Gravelly Sand" by Dario Barresi, https://polyhaven.com/a/gravelly_sand (Terrain sand, second look: coarse, gravelly desert sand)
+earth2: "Rocky Trail 02" by Amal Kumar, https://polyhaven.com/a/rocky_trail_02 (Terrain earth, second look: dusty, stony ground)
+rock2: "Tiger Rock" by Dario Barresi, https://polyhaven.com/a/tiger_rock (Terrain rock, second look: weathered granular rock face (triplanar))
+gravel2: "Dry River Pebbles" by Amal Kumar, https://polyhaven.com/a/dry_river_pebbles (Terrain gravel, second look: rounded wadi and river pebbles)
+grass: "Leafy Grass" by Charlotte Baglioni, https://polyhaven.com/a/leafy_grass (Living ground: short grass with fallen leaves)
+drygrass: "Withered Grass" by Charlotte Baglioni, https://polyhaven.com/a/withered_grass (Living ground: dry, withered grass at the edge of the green)
+litter: "Forest Leaves 03" by Rob Tuytel, Dimitrios Savva, https://polyhaven.com/a/forest_leaves_03 (Wood floor: leaf litter)
+mud: "Brown Mud 02" by Rob Tuytel, https://polyhaven.com/a/brown_mud_02 (Wet ground: mud by the water)
+asphalt: "Asphalt 01" by Dario Barresi, Charlotte Baglioni, https://polyhaven.com/a/asphalt_01 (Road surface close-up detail)
+concrete: "Concrete Floor Worn 001" by Dimitrios Savva, Rico Cilliers, https://polyhaven.com/a/concrete_floor_worn_001 (Sidewalk slab close-up detail)
+wallconcrete: "Rough Concrete" by Dimitrios Savva, https://polyhaven.com/a/rough_concrete (Facades: concrete panels, brick faces, concrete floors)
+wallplaster: "White Stucco 02" by Dimitrios Savva, https://polyhaven.com/a/white_stucco_02 (Facades: stucco and interior plaster)
+wood: "Rough Wood" by Rob Tuytel, https://polyhaven.com/a/rough_wood (Facades: weatherboard and floorboards)
+metal: "Rusty Metal 02" by Rob Tuytel, https://polyhaven.com/a/rusty_metal_02 (Facades: corrugated sheet)

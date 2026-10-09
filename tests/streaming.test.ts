@@ -76,16 +76,24 @@ describe('staged chunk views', () => {
     const staged = build(sc, data, true);
     expect(whole.pending).toBe(0);
     expect(staged.pending).toBeGreaterThan(0);
-    // Ground, buildings and props are solid at once; the stones laid by the scatter stage get their colliders with it.
+    // Ground and buildings are solid at once and the props' colliders come first, a slice at a time; the stones laid by
+    // the scatter stage get their colliders with it.
     const atOnce = staged.colliders.length;
     expect(atOnce).toBeGreaterThan(0);
     expect(atOnce).toBeLessThanOrEqual(whole.colliders.length);
+    expect(whole.collidersIn).toBe(true);
+    expect(staged.collidersIn).toBe(false);
     expect(drawn(staged).verts).toBe(0);
     let steps = 0;
+    while (!staged.collidersIn && staged.buildNext()) steps++;
+    expect(drawn(staged).verts).toBe(0);
     while (staged.buildNext()) steps++;
     expect(steps).toBeGreaterThan(5);
     expect(staged.pending).toBe(0);
     expect(staged.colliders.length).toBe(whole.colliders.length);
+    // In the same order: nothing else is made solid between the ground and the props.
+    const at = (v: ChunkView) => v.colliders.map((c) => { const t = c.translation(); return [c.shape.type, t.x, t.y, t.z]; });
+    expect(at(staged)).toEqual(at(whole));
     expect(drawn(staged)).toEqual(drawn(whole));
     whole.dispose();
     staged.dispose();
@@ -120,6 +128,44 @@ describe('staged chunk views', () => {
     const bad = [...kinds].filter(([, e]) => e.n >= 5 && e.hit / e.n < 0.8).map(([k, e]) => `${k} ${e.hit}/${e.n}`);
     expect(bad).toEqual([]);
     expect(Object.keys(PROP_COLLISION).length).toBeGreaterThan(40);
+  });
+
+  it('lets a car be dropped on a staged chunk only once its props are solid', () => {
+    const sc = open();
+    const data = [...sc.chunks.values()].find((v) => v.data.props.some((p) => propCollisionMesh(p)))!.data;
+    const key = [...sc.chunks].find(([, v]) => v.data === data)![0];
+    const old = sc.chunks.get(key)!;
+    const v = build(sc, data, true);
+    sc.chunks.set(key, v);
+    const x = (data.cx + 0.5) * CHUNK;
+    const z = (data.cz + 0.5) * CHUNK;
+    try {
+      expect(sc.colliderReady(x, z)).toBe(false);
+      while (!v.collidersIn) v.buildNext();
+      expect(sc.colliderReady(x, z)).toBe(true);
+    } finally {
+      sc.chunks.set(key, old);
+      v.dispose();
+    }
+  });
+
+  it('draws every dead tree of a variant over one set of buffers, and lets go of them without freeing them', () => {
+    const sc = open();
+    const views = [...sc.chunks.values()];
+    const treesOf = (v: ChunkView) => v.vegetation.plants.filter((p) => p.kind === 'deadTree').map((p) => p.refs[0].mesh);
+    const trees = views.flatMap(treesOf);
+    expect(trees.length).toBeGreaterThan(1);
+    const buffers = new Set(trees.map((t) => t.geometry.attributes.position.array));
+    expect(buffers.size).toBeLessThanOrEqual(4);
+    expect(buffers.size).toBeLessThan(trees.length);
+    expect(new Set(trees.map((t) => t.geometry)).size).toBe(trees.length);
+    // Throw one chunk away: its trees let go of the shared buffers, everyone else's still draw them.
+    const owner = views.find((v) => treesOf(v).length)!;
+    const mine = treesOf(owner);
+    const others = trees.filter((t) => !mine.includes(t));
+    owner.dispose();
+    for (const t of mine) expect(t.geometry.attributes.position).toBeUndefined();
+    for (const t of others) expect(t.geometry.attributes.position.array.length).toBeGreaterThan(0);
   });
 
   it('can be thrown away half built', () => {

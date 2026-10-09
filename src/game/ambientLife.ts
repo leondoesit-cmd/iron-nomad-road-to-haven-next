@@ -1932,7 +1932,10 @@ export class AmbientLife {
       switch (c.kind) {
         case 'butterfly': {
           const sitting = c.state === 0;
-          const open = sitting ? 0.25 + Math.abs(Math.sin(c.phase)) * 1.15 : 0.15 + (0.5 + 0.5 * Math.sin(c.phase)) * 1.25;
+          // On the wing each has its own rhythm: bursts of beats, then a glide on wings held open, a little wobble in it.
+          const burst = Math.sin(t * (0.7 + c.seed * 0.9) + c.seed * 20) > -0.35;
+          const open = sitting ? 0.25 + Math.abs(Math.sin(c.phase)) * 1.15
+            : burst ? 0.15 + (0.5 + 0.5 * Math.sin(c.phase)) * 1.25 : 1.3 + Math.sin(t * 9 + c.seed * 7) * 0.08;
           const flap = Math.PI * 0.5 - open;
           for (const side of [1, -1]) lr.putChild('wing', c.x, c.y, c.z, c.yaw, sitting ? 0 : -0.2, 0, 0, 0, 0, side * flap, 0, side * c.size, 1, c.size * 1.1, c.r, c.g, c.b);
           break;
@@ -1944,13 +1947,19 @@ export class AmbientLife {
           }
           break;
         case 'dragonfly': {
-          const fl = Math.sin(c.phase) * 0.35;
-          lr.put('dragon', c.x, c.y, c.z, c.yaw, 0, 0, c.size, c.size, c.size, c.r, c.g, c.b);
+          // Fore and hind pairs beat out of step, each from its own hinge at its own sweep. Darting it beats hardest, nose
+          // down; holding station it bobs and tilts, and now and then glides a moment on still wings.
+          const glideK = c.state === 0 ? Math.min(1, Math.max(0, Math.sin(t * 0.9 + c.seed * 13) - 0.75) * 4) : 0;
+          const fl = Math.sin(c.phase) * (c.state === 1 ? 0.42 : 0.33) * (1 - glideK);
+          const s = c.size;
+          const pitch = c.state === 1 ? 0.18 : Math.sin(t * 1.7 + c.seed * 5) * 0.06;
+          const y = c.y + (c.state === 0 ? Math.sin(t * 2.3 + c.seed * 9) * 0.012 : 0);
+          lr.put('dragon', c.x, y, c.z, c.yaw, pitch, 0, s, s, s, c.r, c.g, c.b);
+          const wings = lr.dragonflyWings();
           for (const side of [1, -1]) {
-            for (const [oz, k] of [
-              [0.012, 1],
-              [0.0, 0.92],
-            ]) lr.putChild('dragonWing', c.x, c.y, c.z, c.yaw, 0, 0, side * 0.003, 0.004, oz * (c.size / 0.07), side * (fl + 0.05) * (oz ? 1 : -1), 0, side * c.size * 0.7 * k, 1, c.size * 0.7, 1, 1, 1);
+            for (const [m, beat] of [[wings.fore, fl], [wings.hind, -fl]] as const) {
+              lr.putChild('dragonWing', c.x, y, c.z, c.yaw, pitch, 0, side * m[0] * s, m[1] * s, m[2] * s, side * (beat + m[5] * 0.4 + glideK * 0.08), side * m[4], side * m[3] * s, 1, m[3] * s, 1, 1, 1);
+            }
           }
           break;
         }
@@ -1992,6 +2001,14 @@ export class AmbientLife {
           // A wagtail's tail bobs; a kingfisher hangs head-up on the hover and folds nose-down to dive.
           const bob = c.kind === 'wagtail' && !flying ? Math.sin(t * 9 + c.seed * 20) * 0.15 : 0;
           const pitch = king ? (c.state === 1 ? 1.3 : c.state === 4 ? -0.08 : -0.55) : flying ? -0.08 : peck + bob;
+          // From the models where loaded: wings beating on the bird's phase, gliding between a finch's bursts and on a
+          // swallow's long swoops, folded on a kingfisher's dive; standing, it glances about and pecks.
+          const own = t + c.seed * 20;
+          const burst = Math.sin(t * 5 + c.seed * 6);
+          const glide = !flying ? 0 : king ? (c.state === 1 ? 1 : 0) : c.kind === 'swallow' ? 0.35 + 0.35 * Math.sin(t * 1.3 + c.seed * 4)
+            : c.kind === 'songbird' || c.kind === 'perched' || c.kind === 'wagtail' ? 1 - Math.min(1, Math.max(0, (burst + 0.35) * 4)) : 0;
+          const peckK = !flying && c.vy === 0 ? Math.min(1, Math.max(0, (Math.sin(t * 2.3 + c.seed * 20) - 0.45) * 4)) : 0;
+          if (lr.putBird(c.kind, c.x, c.y + hop + (flying ? s * 0.05 : 0), c.z, c.yaw, flying ? pitch : bob, 0, s, c.r, c.g, c.b, { fly: flying, beat: c.phase, glide, peck: peckK, time: own, seed: Math.floor(c.seed * 997) })) break;
           const y = c.y + s * 0.2 + hop;
           lr.put('bird', c.x, y, c.z, c.yaw, pitch, 0, s, s, s, c.r, c.g, c.b);
           // A finch beats in bursts and closes its wings between them; swallows and bats beat and sweep back.
@@ -2031,7 +2048,7 @@ export class AmbientLife {
           // A scuttle rocks the body; at rest the claws (the whole front) lift now and then.
           const rock = c.state ? Math.sin(c.phase) * 0.08 : 0;
           const lift = c.state === 0 ? Math.max(0, Math.sin(t * 1.3 + c.seed * 20) - 0.7) * 0.5 : 0;
-          lr.put('crab', c.x, c.y, c.z, c.yaw, -lift, rock, c.size, c.size, c.size, c.r, c.g, c.b);
+          lr.putLimbed('crab', c.x, c.y, c.z, c.yaw, -lift, rock, c.size, c.size, c.size, c.r, c.g, c.b, c.phase * 2, 0, c.state ? 1 : 0, c.seed * 10);
           break;
         }
         case 'skater':
@@ -2043,8 +2060,11 @@ export class AmbientLife {
           lr.put('dragon', c.x, c.y, c.z, c.yaw, 0, 0, s * 0.45, s * 0.45, s, c.r, c.g, c.b);
           const fly = c.state === 1;
           const fl = fly ? Math.sin(c.phase) * 0.6 : 0;
+          const wings = lr.dragonflyWings();
           for (const side of [1, -1]) {
-            for (const oz of [0.012, 0]) lr.putChild('dragonWing', c.x, c.y, c.z, c.yaw, 0, 0, side * 0.002, 0.003, oz * (s / 0.07), side * (fly ? fl * (oz ? 1 : -1) : 0.25), side * (fly ? 0 : 1.45), side * s * 0.6, 1, s * 0.5, 0.9, 0.95, 1);
+            for (const [m, beat] of [[wings.fore, fl], [wings.hind, -fl]] as const) {
+              lr.putChild('dragonWing', c.x, c.y, c.z, c.yaw, 0, 0, side * m[0] * s * 0.45, m[1] * s * 0.45, m[2] * s, side * (fly ? beat : 0.25), side * (fly ? m[4] : 1.45), side * m[3] * s * 0.85, 1, m[3] * s * 0.6, 0.9, 0.95, 1);
+            }
           }
           break;
         }
@@ -2064,18 +2084,18 @@ export class AmbientLife {
         }
         case 'frog': {
           const breathe = c.state === 0 ? Math.sin(t * 3 + c.seed * 9) * 0.04 : 0;
-          lr.put('frog', c.x, c.y, c.z, c.yaw, c.state === 1 ? -0.5 : 0, 0, c.size, c.size * (1 + breathe), c.size, c.r, c.g, c.b);
+          lr.putLimbed('frog', c.x, c.y, c.z, c.yaw, c.state === 1 ? -0.5 : 0, 0, c.size, c.size * (1 + breathe), c.size, c.r, c.g, c.b, 0, 0, c.state === 1 ? 1 : 0, c.seed * 10);
           break;
         }
         case 'turtle':
-          lr.put('turtle', c.x, c.y, c.z, c.yaw, c.state === 2 ? 0.15 : 0, 0, c.size, c.size, c.size, c.r, c.g, c.b);
+          lr.putLimbed('turtle', c.x, c.y, c.z, c.yaw, c.state === 2 ? 0.15 : 0, 0, c.size, c.size, c.size, c.r, c.g, c.b, t * 2.2, 0, c.state !== 0 ? 1 : 0, c.seed * 10);
           break;
         case 'lizard': {
           const monitor = c.ref === 3;
           const push = c.state === 0 && !monitor ? Math.max(0, Math.sin(c.phase)) * 0.012 * (c.size / 0.25) : 0;
           // A monitor's walk swings its whole body; a running lizard wriggles.
           const swing = monitor || c.state === 1 ? Math.sin(c.phase) * (monitor ? 0.12 : 0.18) : 0;
-          lr.put('lizard', c.x, c.y + push, c.z, c.yaw + swing, -push * 8, 0, c.size, c.size, c.size, c.r, c.g, c.b);
+          lr.putLimbed('lizard', c.x, c.y + push, c.z, c.yaw + swing, -push * 8, 0, c.size, c.size, c.size, c.r, c.g, c.b, c.phase, 0, monitor ? 0.7 : c.state === 1 ? 1 : 0, c.seed * 10);
           break;
         }
       }

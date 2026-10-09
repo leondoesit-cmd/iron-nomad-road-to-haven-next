@@ -30,6 +30,7 @@ import { openPanel, standAt } from './helpers/access';
 import { fakeServices } from './helpers/sim';
 import type { Vehicle } from '../src/game/vehicle';
 import { storageOf } from '../src/game/storage';
+import { roadX } from '../src/world/terrain';
 
 // Cargo that is really on a car: held by a holder, loose on an open surface, or stowed inside.
 vi.setConfig({ testTimeout: 90000 });
@@ -342,11 +343,18 @@ describe('in the scene', () => {
     const { sc } = leg();
     const v = ownCar(sc, 'pickup');
     v.cargoRig.add({ kind: 'part', item: newPart('whl_mt') }, 'bed');
+    // Down the middle of the road (pushed dead straight, nothing steers it: the road bends away after about 60 m).
+    const z0 = v.position.z;
+    const x0 = roadX(sc.terrain!, z0);
+    v.body.setPose(x0, sc.groundAt(x0, z0) + 1.2, z0, 0);
     run(sc, 1);
-    drive(sc, v, 12, 12);
+    drive(sc, v, 12, 5);
     expect(v.cargoRig.entries.length).toBe(1);
-    // Tailgate gone: it slides out the back.
+    // Tailgate gone: it slides out the back. Turned round, back over the ground it has just crossed.
     v.open.trunk = true;
+    const t = v.position;
+    v.body.setPose(t.x, t.y + 0.05, t.z, v.yaw + Math.PI);
+    run(sc, 0.5);
     drive(sc, v, 12, 30, () => v.cargoRig.entries.length === 0);
     expect(v.cargoRig.entries.length).toBe(0);
   });

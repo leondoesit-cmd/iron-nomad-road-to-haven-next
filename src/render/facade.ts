@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { KIT } from './materials';
 import { grungeTexture, macroTexture, terrainTextures } from './proctex';
+import { flatDetail, grainTexture } from './photoTex';
+import type { TerrainUniforms } from './terrainMaterial';
+import { FAR_CUT_FRAG, FAR_CUT_FRAG_PARS } from './dissolve';
 
 /**
  * Procedural building facades. Each wall quad carries metre UVs (u along the wall, v up) and a style
@@ -33,6 +36,11 @@ varying vec3 vFWN;
 uniform sampler2D tGrungeF;
 uniform sampler2D tMacroF;
 uniform sampler2D tCrack;
+// The cracked-earth albedo's brightness relative to the procedural one it was tuned on (photo scans are darker on average).
+uniform float uCrackK;
+// Photo grain (photoTex.grainTexture), 2 m square: R rough concrete, G stucco, B wood grain along u, A rusty sheet metal.
+uniform sampler2D tWallD;
+uniform float uWallK;
 uniform float uGlowF;
 float fHash( vec2 p ) {
   vec3 p3 = fract( vec3( p.xyx ) * 0.1031 );
@@ -77,12 +85,14 @@ vec4 fM = texture2D( tMacroF, vec2( vFWPos.x + vFWPos.z, vFWPos.y ) * 0.02 + fSe
 // Wall material.
 vec3 fWall = diffuseColor.rgb;
 float fRough = 0.9;
+vec4 fD = mix( vec4( 1.0 ), texture2D( tWallD, fUv * 0.5 ) * 2.0, uWallK );
 if ( fStyle < 0.5 ) {
   // Precast concrete panels with joints at every floor and cell.
   vec2 pj = abs( fract( vec2( fUv.x / ( fCellW * 2.0 ), fUv.y / fFloor ) + 0.5 ) - 0.5 ) * vec2( fCellW * 2.0, fFloor );
   float joint = 1.0 - smoothstep( 0.015, 0.035, min( pj.x, pj.y ) );
   fWall *= 1.0 - joint * 0.35;
   fWall *= 0.92 + fHash( floor( vec2( fUv.x / ( fCellW * 2.0 ), fUv.y / fFloor ) ) + fSeed ) * 0.14;
+  fWall *= fD.r;
 } else if ( fStyle < 1.5 ) {
   // Running-bond brick.
   vec2 bs = vec2( 0.25, 0.075 );
@@ -93,10 +103,12 @@ if ( fStyle < 0.5 ) {
   float mortar = 1.0 - smoothstep( 0.0, 0.08, min( min( bf.x, 1.0 - bf.x ) * bs.x / bs.y, min( bf.y, 1.0 - bf.y ) ) );
   float tone = fHash( bi + fSeed );
   fWall *= mix( 0.78 + tone * 0.3, 1.25, mortar );
+  fWall *= mix( 1.0, fD.r, 0.6 );
 } else if ( fStyle < 2.5 ) {
   // Stucco: blotchy render with cracks.
   fWall *= 0.9 + fM.r * 0.2;
-  float crack = 1.0 - texture2D( tCrack, fUv * 0.12 ).b;
+  fWall *= fD.g;
+  float crack = 1.0 - texture2D( tCrack, fUv * 0.12 ).b * uCrackK;
   fWall *= 1.0 - smoothstep( 0.55, 0.85, crack ) * 0.35;
 } else if ( fStyle < 3.5 ) {
   // Curtain wall: spandrel panels between floors, mullions on the grid.
@@ -109,12 +121,14 @@ if ( fStyle < 0.5 ) {
   float bt = fHash( vec2( floor( bd ), floor( fUv.x / 2.4 ) + fSeed ) );
   fWall *= 0.88 + bt * 0.2;
   fWall *= mix( 0.7, 1.0, smoothstep( 0.0, 0.2, bf ) );
+  fWall *= fD.b;
   float bare = smoothstep( 0.78, 0.95, fM.g + fG.r * 0.3 + bt * 0.12 );
   fWall = mix( fWall, vec3( 0.46, 0.37, 0.28 ) * ( 0.8 + bt * 0.3 ), bare * 0.4 );
 } else if ( fStyle < 5.5 ) {
   // Interior wall: plaster over a wainscot, chair rail and skirting, damp creeping up from the floor.
   float v = fUv.y;
   fWall *= 1.18 * ( 0.92 + fM.r * 0.16 );
+  fWall *= mix( 1.0, fD.g, 0.7 );
   float wain = 1.0 - smoothstep( 1.0, 1.04, v );
   fWall = mix( fWall, fWall * vec3( 0.82, 0.86, 0.84 ), wain );
   float rail = smoothstep( 0.035, 0.0, abs( v - 1.04 ) );
@@ -131,6 +145,7 @@ if ( fStyle < 0.5 ) {
   // Corrugated sheet metal, rusted along the seams.
   float rib = abs( fract( fUv.x / 0.1 ) - 0.5 );
   fWall *= 0.78 + rib * 0.55;
+  fWall *= fD.a;
   fRough = 0.52;
   float rust = smoothstep( 0.52, 0.75, fM.g + fG.r * 0.45 + ( 1.0 - smoothstep( 0.0, 1.2, fUv.y ) ) * 0.25 );
   fWall = mix( fWall, vec3( 0.42, 0.22, 0.12 ) * ( 0.7 + fM.r * 0.5 ), rust * 0.4 );
@@ -143,6 +158,7 @@ if ( fStyle < 0.5 ) {
   float pu = fUv.x / 1.5 + fHash( vec2( prow, fSeed ) ) * 7.0;
   float pt = fHash( vec2( prow, floor( pu ) + fSeed * 3.0 ) );
   fWall *= 0.74 + pt * 0.4;
+  fWall *= fD.b;
   float seam = min( min( fract( pr ), 1.0 - fract( pr ) ) * 0.14, min( fract( pu ), 1.0 - fract( pu ) ) * 1.5 );
   fWall *= mix( 0.45, 1.0, smoothstep( 0.0, 0.006, min( min( fract( pr ), 1.0 - fract( pr ) ) * 0.14, 0.2 ) ) );
   fWall *= mix( 0.6, 1.0, smoothstep( 0.0, 0.012, min( fract( pu ), 1.0 - fract( pu ) ) * 1.5 ) );
@@ -156,13 +172,15 @@ if ( fStyle < 0.5 ) {
   float grout = step( 0.465, max( tf.x, tf.y ) );
   float tt = fHash( floor( tc ) + fSeed );
   fWall *= 0.82 + tt * 0.26;
+  fWall *= mix( 1.0, fD.g, 0.4 );
   fWall = mix( fWall, vec3( 0.32, 0.3, 0.27 ), grout );
   fWall *= 1.0 - smoothstep( 0.7, 0.9, fG.r + fM.b * 0.4 ) * 0.35;
   fRough = 0.35 + grout * 0.5;
 } else {
   // Poured concrete floor: mottled, with cracks and saw joints.
   fWall *= 0.82 + fM.r * 0.3;
-  float crack = 1.0 - texture2D( tCrack, fUv * 0.25 ).b;
+  fWall *= fD.r;
+  float crack = 1.0 - texture2D( tCrack, fUv * 0.25 ).b * uCrackK;
   fWall *= 1.0 - smoothstep( 0.55, 0.85, crack ) * 0.4;
   vec2 jf = abs( fract( fUv / 2.4 ) - 0.5 );
   fWall *= 1.0 - step( 0.492, max( jf.x, jf.y ) ) * 0.25;
@@ -278,18 +296,63 @@ totalEmissiveRadiance += fRoom * vec3( 2.6, 1.9, 1.2 ) * fEmit * max( uGlowF - 1
 
 let facadeMat: THREE.MeshStandardMaterial | null = null;
 
-/** Shared facade material (window glow follows KIT.uGlow, which rises at night). */
-export function facadeMaterial(): THREE.MeshStandardMaterial {
-  if (facadeMat) return facadeMat;
-  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
-  m.onBeforeCompile = (shader) => {
+/** The far district's step aside: `lodAt` is the centre of the chunk a building stands in (see `farFacadeMaterial`). */
+const LOD_VERT_PARS = /* glsl */ `
+attribute vec2 lodAt;
+uniform sampler2D tLoaded;
+uniform vec4 uLoadedRect;
+varying float vFarCut;
+`;
+
+const LOD_VERT = /* glsl */ `
+#include <begin_vertex>
+{
+  // How far the chunk is in, drawing the real building: this one dissolves out as it does, then folds to a point.
+  vec2 lc = ( lodAt - uLoadedRect.xy ) / uLoadedRect.zw;
+  vFarCut = lc.x >= 0.0 && lc.y >= 0.0 && lc.x < 1.0 && lc.y < 1.0 ? texture2D( tLoaded, lc ).g : 0.0;
+  if ( vFarCut >= 1.0 ) transformed = vec3( 0.0 );
+}
+`;
+
+let grainHit: THREE.DataTexture | null | undefined;
+/** Concrete, stucco, wood and sheet-metal scans in one texture, made once (null without the scans). */
+export function wallGrain(): THREE.DataTexture | null {
+  if (grainHit === undefined) {
+    grainHit = grainTexture([
+      { set: 'wallconcrete', real: 1.23 },
+      { set: 'wallplaster', real: 1.8 },
+      { set: 'wood', real: 0.5, turn: true },
+      { set: 'metal', real: 1 },
+    ], 2);
+    // Not ready yet: try again for the next material rather than settling on flat walls.
+    if (!grainHit) grainHit = undefined;
+  }
+  return grainHit ?? null;
+}
+
+function facadeShader(lod?: TerrainUniforms): THREE.Material['onBeforeCompile'] {
+  return (shader) => {
     shader.uniforms.tGrungeF = { value: grungeTexture() };
     shader.uniforms.tMacroF = { value: macroTexture() };
-    shader.uniforms.tCrack = { value: terrainTextures().a };
+    const terr = terrainTextures();
+    shader.uniforms.tCrack = { value: terr.a };
+    shader.uniforms.uCrackK = { value: terr.crackK };
+    const grain = wallGrain();
+    shader.uniforms.tWallD = { value: grain ?? flatDetail() };
+    shader.uniforms.uWallK = { value: grain ? 0.85 : 0 };
     shader.uniforms.uGlowF = KIT.uGlow;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${VERT_PARS}`)
       .replace('#include <project_vertex>', `${VERT_MAIN}\n#include <project_vertex>`);
+    if (lod) {
+      Object.assign(shader.uniforms, lod);
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', `#include <common>\n${LOD_VERT_PARS}`)
+        .replace('#include <begin_vertex>', LOD_VERT);
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>\n${FAR_CUT_FRAG_PARS}`)
+        .replace('#include <clipping_planes_fragment>', FAR_CUT_FRAG);
+    }
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${FRAG_PARS}`)
       .replace('#include <color_fragment>', FRAG_COLOR)
@@ -301,9 +364,28 @@ export function facadeMaterial(): THREE.MeshStandardMaterial {
         '#include <opaque_fragment>\ndiffuseColor.a = 1.0;\ngl_FragColor.a = 1.0;',
       );
   };
+}
+
+/** Shared facade material (window glow follows KIT.uGlow, which rises at night). */
+export function facadeMaterial(): THREE.MeshStandardMaterial {
+  if (facadeMat) return facadeMat;
+  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
+  m.onBeforeCompile = facadeShader();
   m.customProgramCacheKey = () => 'facade';
   m.userData.shared = true;
   facadeMat = m;
+  return m;
+}
+
+/**
+ * The facade drawn far away, for a whole district in one mesh: each building dissolves out as the chunk it stands in
+ * comes in fully built (the far landscape's loaded-chunk mask, green), then folds to a point in the vertex shader. The
+ * geometry needs a `lodAt` attribute, the centre of that chunk.
+ */
+export function farFacadeMaterial(lod: TerrainUniforms): THREE.MeshStandardMaterial {
+  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
+  m.onBeforeCompile = facadeShader(lod);
+  m.customProgramCacheKey = () => 'facade:lod';
   return m;
 }
 

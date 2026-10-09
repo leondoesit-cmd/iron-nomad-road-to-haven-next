@@ -39,7 +39,6 @@
       "length": 4100,
       "seed": 7777,
       "baseThreat": 14,
-      "dayLength": 720,
       "tutorial": true,
       "campSites": ["flats", "gasStation", "canyonMouth", "carPark", "plaza"],
       "open": {
@@ -206,7 +205,6 @@
       "length": 3600,
       "seed": 7101,
       "baseThreat": 8,
-      "dayLength": 720,
       "tutorial": true,
       "endHub": "dustwell",
       "campSites": ["gasStation", "flats"],
@@ -236,7 +234,6 @@
       "length": 3800,
       "seed": 7202,
       "baseThreat": 12,
-      "dayLength": 720,
       "campSites": ["canyonMouth", "flats"],
       "sets": [
         { "at": 240, "type": "fuelCache", "count": 3 },
@@ -262,7 +259,6 @@
       "length": 3000,
       "seed": 7203,
       "baseThreat": 16,
-      "dayLength": 720,
       "campSites": ["carPark", "plaza"],
       "sets": [
         { "at": 200, "type": "tip", "id": "city" },
@@ -291,7 +287,6 @@
       "length": 4000,
       "seed": 7304,
       "baseThreat": 18,
-      "dayLength": 720,
       "endHub": "rustgate",
       "campSites": ["canyonMouth", "gasStation"],
       "sets": [
@@ -317,7 +312,6 @@
       "length": 3400,
       "seed": 7305,
       "baseThreat": 22,
-      "dayLength": 720,
       "endHub": "rustgate",
       "campSites": ["carPark", "plaza"],
       "sets": [
@@ -347,7 +341,6 @@
       "length": 1300,
       "seed": 7306,
       "baseThreat": 20,
-      "dayLength": 720,
       "endHub": "rustgate",
       "campSites": ["plaza", "carPark"],
       "sets": [

@@ -26,10 +26,11 @@ export const SPECS: Record<Spec['id'], Spec> = {
 
 /**
  * Distance from the chassis centre down to the ground when the suspension has settled.
- * The spring term is `g / (wheels * stiffness)`; Rapier's controller settles 2.2 cm higher than that, measured.
+ * The spring term is `g / (wheels * stiffness)`; Rapier's controller settles 2.2 cm higher than that, measured: its dampers
+ * hold it up a little. A truck's or a rig's dampers are shared out among more wheels (`physics/vehicle.ts`), so less.
  */
 export function restHeight(def: VehicleDef): number {
   const p = def.physics;
-  return -p.hardY + (p.suspension.rest - 9.81 / (p.wheelCount * p.suspension.stiffness)) + p.wheelRadius + 0.022;
+  return -p.hardY + (p.suspension.rest - 9.81 / (p.wheelCount * p.suspension.stiffness)) + p.wheelRadius + 0.022 * Math.sqrt(4 / Math.max(4, p.wheelCount));
 }
 

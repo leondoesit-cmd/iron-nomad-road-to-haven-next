@@ -1,11 +1,12 @@
+import * as THREE from 'three';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { initPhysics } from '../src/physics/physics';
 import { legById } from '../src/data';
 import { LegScene } from '../src/game/legScene';
 import { WorldMemory } from '../src/game/worldMemory';
 import { GROUND_CELL } from '../src/game/fires';
-import { FIRE, FIRE_MAX } from '../src/render/fireLight';
-import { FUELS, fireLight, flameHeight, flameLean, rainCooling, spreadRate, stepHeat, waterFate } from '../src/sim/combustion';
+import { FIRE, FIRE_MAX, aimFireShadow, fireShadowLight, installFireShadowFilter, keepFireShadow } from '../src/render/fireLight';
+import { FUELS, fireLight, flameHeight, flameLean, heatRelease, plumeInflow, plumeRise, rainCooling, SPREAD_PACE, spreadRate, spreadSpeed, stepHeat, waterFate } from '../src/sim/combustion';
 import { groundFuel } from '../src/world/fuel';
 import { fakeServices, run } from './helpers/sim';
 
@@ -66,15 +67,52 @@ describe('how things burn', () => {
     expect(waterFate('flare', 2)).toBe('floats');
   });
 
-  it('runs a grass fire downwind and lets it creep back against the wind', () => {
-    const still = spreadRate(1, 0.8, 0.8, 0);
-    expect(spreadRate(1, 0.8, 0.8, 6)).toBeGreaterThan(still * 2.5);
-    expect(spreadRate(1, 0.8, 0.8, -6)).toBeLessThan(still * 0.3);
-    expect(spreadRate(1, 0.8, 0.8, -6)).toBeGreaterThan(0);
-    expect(spreadRate(1, 0, 0.8, 0)).toBe(0);
-    expect(spreadRate(1, 0.8, 0, 0)).toBe(0);
-    // Wet land hardly carries it.
-    expect(spreadRate(1, 0.8, 0.2, 0)).toBeLessThan(still * 0.1);
+  it('spreads a grass fire as fast as real grassland burns: a creep in still air, a walk at the head in a breeze', () => {
+    // Bone dry, thick grass.
+    // The game runs at 40% of the measured pace (CSIRO: about 0.015 m/s calm, 0.57 m/s at the head in a 1.6 m/s breeze).
+    expect(SPREAD_PACE).toBe(0.4);
+    const calm = spreadSpeed(1, 1, 0, 0);
+    expect(calm).toBeGreaterThan(0.003);
+    expect(calm).toBeLessThan(0.015);
+    // The game's everyday breeze (1.6 m/s): the head walks at about a fifth of a metre a second.
+    const head = spreadSpeed(1, 1, 1.6, 1);
+    expect(head).toBeGreaterThan(0.15);
+    expect(head).toBeLessThan(0.4);
+    // The flanks widen at a tenth of that, the back creeps into the wind slower still.
+    const flank = spreadSpeed(1, 1, 1.6, 0);
+    const back = spreadSpeed(1, 1, 1.6, -1);
+    expect(flank).toBeLessThan(head * 0.15);
+    expect(back).toBeLessThan(flank);
+    expect(back).toBeGreaterThan(0);
+    // A gale runs it at metres a second.
+    expect(spreadSpeed(1, 1, 8, 1)).toBeGreaterThan(1);
+    // Damp or thin, it slows; nothing to burn, or too wet, it stops.
+    expect(spreadSpeed(1, 0.6, 1.6, 1)).toBeLessThan(head * 0.4);
+    expect(spreadSpeed(0.3, 1, 1.6, 1)).toBeLessThan(head * 0.6);
+    expect(spreadSpeed(0, 1, 1.6, 1)).toBe(0);
+    expect(spreadSpeed(1, 0, 1.6, 1)).toBe(0);
+    // As odds a second to light the next patch: speed over distance, once the burning patch is hot enough.
+    expect(spreadRate(1, 1, 1, 1.6, 1, 2.5)).toBeCloseTo(head / 2.5, 6);
+    expect(spreadRate(0.15, 1, 1, 1.6, 1, 2.5)).toBe(0);
+  });
+
+  it('draws air in toward a fire: a breath by a campfire, a wind by a big grass fire', () => {
+    const camp = heatRelease('wood', 0.45, 1);
+    const front = heatRelease('grass', 1.55, 1) * 8;
+    expect(camp).toBeGreaterThan(150);
+    expect(camp).toBeLessThan(400);
+    expect(plumeInflow(camp, 0.5, 0.45)).toBeGreaterThan(0.3);
+    expect(plumeInflow(camp, 2, 0.45)).toBeLessThan(0.2);
+    const near = plumeInflow(front, 4, 5);
+    expect(near).toBeGreaterThan(0.5);
+    expect(near).toBeLessThan(4);
+    // It falls off with distance, and cancels toward the middle of the fire.
+    expect(plumeInflow(front, 20, 5)).toBeLessThan(near * 0.4);
+    expect(plumeInflow(front, 0.5, 5)).toBeLessThan(near * 0.2);
+    // The smoke leaves the top at the plume's own updraft: a campfire's a couple of metres a second, a big fire's more.
+    expect(plumeRise(camp)).toBeGreaterThan(1.5);
+    expect(plumeRise(camp)).toBeLessThan(4);
+    expect(plumeRise(front)).toBeGreaterThan(plumeRise(camp) * 1.5);
   });
 
   it('lights more the bigger it is, and only so far', () => {
@@ -279,6 +317,33 @@ describe('the fire engine in play', () => {
     next.dispose();
   });
 
+  it('in the everyday breeze a grass fire walks downwind at the pace of a real one, and makes its own wind', () => {
+    const { sc } = open();
+    const { x, z } = here(sc);
+    sc.fires.fuelAt = () => 0.85;
+    const sx = x + 40;
+    expect(sc.fires.igniteGround(sx, z)).toBe(true);
+    burn(sc, 30, [1.6, 0], { heat: 1 });
+    let east = 0;
+    let west = 0;
+    for (const f of sc.fires.sources) {
+      if (!f.cell) continue;
+      east = Math.max(east, f.x - sx);
+      west = Math.max(west, sx - f.x);
+    }
+    // About a fifth of a metre a second at the head (the first rate ran it 35 m in this time); the back has barely moved.
+    expect(east).toBeLessThan(11);
+    expect(east).toBeGreaterThan(GROUND_CELL);
+    expect(west).toBeLessThan(GROUND_CELL * 1.5);
+    // The burning ground draws the air in: just upwind of the fire the wind is the breeze plus an inflow toward it, just
+    // downwind it is held back.
+    const up = sc.fires.windAt(sx - 6, z);
+    const down = sc.fires.windAt(sx + east + 6, z);
+    expect(up[0]).toBeGreaterThan(1.6);
+    expect(down[0]).toBeLessThan(1.6);
+    sc.dispose();
+  });
+
   it('will not start on wet ground, bare ground, or a road', () => {
     const { sc } = open();
     const { x, z } = here(sc);
@@ -340,5 +405,149 @@ describe('the fire engine in play', () => {
     expect(crown!.shape).toBe('crown');
     expect(crown!.heat).toBeGreaterThan(0.3);
     sc.dispose();
+  });
+
+  it('the nearest fire on open ground casts shadows at night; a burning wreck does not, nor any fire by day or on Low', () => {
+    const { sc } = open();
+    const { x, z } = here(sc);
+    const R = sc.R as unknown as { quality: string };
+    R.quality = 'medium';
+    const fx = x + 6;
+    sc.fires.start({ x: fx, y: sc.groundAt(fx, z), z, r: 0.45, fuel: 'wood', burn: Infinity, heat: 1 });
+    // A wreck burning nearer the camera, and brighter: its light sits inside its hull, which would shadow all round it.
+    const key = {};
+    const wreck = () => sc.fires.hold(key, { x: x - 5, y: sc.groundAt(x - 5, z) + 0.6, z, r: 1.2, fuel: 'rubber', heat: 1, bed: false });
+    for (let k = 0; k < 60; k++) {
+      wreck();
+      burn(sc, 0.05);
+    }
+    const cam = sc.R.views[0].camera;
+    cam.position.set(x, sc.groundAt(x, z) + 2, z);
+    sc.night = 1;
+    const light = fireShadowLight();
+    wreck();
+    sc.fires.frame(1 / 60);
+    sc.fires.beforeView(0, cam);
+    // Both light the view; the campfire casts, first in the list, and the shadow's light stands where its light does.
+    expect(FIRE.info.x).toBe(2);
+    expect(FIRE.info.w).toBe(1);
+    expect(Math.hypot(FIRE.pos[0] - fx, FIRE.pos[2] - z)).toBeLessThan(1);
+    expect(light.position.x).toBeCloseTo(FIRE.pos[0], 5);
+    expect(light.position.y).toBeCloseTo(FIRE.pos[1], 5);
+    expect(light.position.z).toBeCloseTo(FIRE.pos[2], 5);
+    expect(light.distance).toBeGreaterThan(5);
+    expect(light.shadow.needsUpdate).toBe(true);
+    // None on Low, and none by day, when the sun swamps firelight.
+    R.quality = 'low';
+    sc.fires.beforeView(0, cam);
+    expect(FIRE.info.w).toBe(0);
+    R.quality = 'medium';
+    sc.night = 0;
+    wreck();
+    sc.fires.frame(1 / 60);
+    sc.fires.beforeView(0, cam);
+    expect(FIRE.info.w).toBe(0);
+    sc.dispose();
+    expect(FIRE.info.w).toBe(0);
+  });
+
+  it('keeps the shadows on the fire casting them until another outshines it twice over', () => {
+    const { sc } = open();
+    const { x, z } = here(sc);
+    (sc.R as unknown as { quality: string }).quality = 'medium';
+    for (const fx of [x - 8, x + 8]) sc.fires.start({ x: fx, y: sc.groundAt(fx, z), z, r: 0.45, fuel: 'wood', burn: Infinity, heat: 1 });
+    burn(sc, 2);
+    sc.night = 1;
+    const cam = sc.R.views[0].camera;
+    const caster = (cx: number) => {
+      cam.position.set(cx, sc.groundAt(cx, z) + 2, z);
+      sc.time += 1 / 30;
+      sc.fires.frame(1 / 30);
+      sc.fires.beforeView(0, cam);
+      expect(FIRE.info.w).toBe(1);
+      return FIRE.pos[0] < x ? 'west' : 'east';
+    };
+    expect(caster(x - 3)).toBe('west');
+    // Halfway between, the two flicker past each other: the shadows stay put.
+    for (let i = 0; i < 60; i++) expect(caster(x)).toBe('west');
+    // Beside the other fire, it takes them.
+    expect(caster(x + 6)).toBe('east');
+    sc.dispose();
+  });
+
+  it('redraws the shadow cube every other frame, once for both halves of a split screen', () => {
+    const { sc } = open();
+    const { x, z } = here(sc);
+    (sc.R as unknown as { quality: string }).quality = 'high';
+    sc.fires.start({ x: x + 6, y: sc.groundAt(x + 6, z), z, r: 0.45, fuel: 'wood', burn: Infinity, heat: 1 });
+    burn(sc, 2);
+    sc.night = 1;
+    const cam = sc.R.views[0].camera;
+    cam.position.set(x, sc.groundAt(x, z) + 2, z);
+    const s = fireShadowLight().shadow;
+    const drawn = () => {
+      // As the renderer would: a cube asked for is drawn, and the ask cleared.
+      const asked = s.needsUpdate;
+      s.needsUpdate = false;
+      return asked;
+    };
+    const frames: boolean[] = [];
+    for (let i = 0; i < 4; i++) {
+      sc.time += 1 / 60;
+      sc.fires.frame(1 / 60);
+      sc.fires.beforeView(0, cam);
+      frames.push(drawn());
+      // The other half looks at the same fire: it shares this frame's cube.
+      sc.fires.beforeView(1, cam);
+      expect(drawn()).toBe(false);
+      expect(FIRE.info.w).toBe(1);
+    }
+    expect(frames).toEqual([true, false, true, false]);
+    expect(s.mapSize.x).toBe(512);
+    sc.dispose();
+  });
+});
+
+describe('the fire shadow cube', () => {
+  it('leaves out a batch with no member near the fire, and never touches what the views draw', () => {
+    const drawn: THREE.Object3D[] = [];
+    const gl = { renderBufferDirect: (_c: unknown, _s: unknown, _g: unknown, _m: unknown, o: THREE.Object3D) => drawn.push(o) };
+    installFireShadowFilter(gl as unknown as THREE.WebGLRenderer);
+    const draw = (cam: THREE.Camera, o: THREE.Mesh) => gl.renderBufferDirect(cam, null, o.geometry, o.material, o);
+    const cube = fireShadowLight().shadow.camera;
+    aimFireShadow(0, 1, 0, 20);
+    // A herd drawn wherever it is, all of it far off: not in the cube, whose faces would each draw it whole.
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const herd = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial(), 4);
+    herd.frustumCulled = false;
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < 4; i++) herd.setMatrixAt(i, m.makeTranslation(200 + i * 3, 0, 0));
+    herd.updateMatrixWorld();
+    draw(cube, herd);
+    draw(cube, herd);
+    expect(drawn.length).toBe(0);
+    // The views still draw it.
+    draw(new THREE.PerspectiveCamera(), herd);
+    expect(drawn.length).toBe(1);
+    // One of them wanders up to the fire: the batch is in the next drawing of the cube.
+    herd.setMatrixAt(2, m.makeTranslation(5, 0, 2));
+    draw(cube, herd);
+    expect(drawn.length).toBe(1);
+    aimFireShadow(0, 1, 0, 20);
+    draw(cube, herd);
+    expect(drawn.length).toBe(2);
+    // A lone mesh drawn without bounds goes in only within reach.
+    const far = new THREE.Mesh(geo, herd.material);
+    far.frustumCulled = false;
+    far.position.set(0, 0, 60);
+    far.updateMatrixWorld();
+    draw(cube, far);
+    expect(drawn.length).toBe(2);
+    far.position.set(0, 0, 10);
+    far.updateMatrixWorld();
+    aimFireShadow(0, 1, 0, 20);
+    draw(cube, far);
+    expect(drawn.length).toBe(3);
+    keepFireShadow(0);
   });
 });

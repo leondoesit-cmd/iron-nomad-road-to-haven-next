@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
-import { kitMaterial } from './materials';
+import { applyKit, kitMaterial } from './materials';
+import { shared } from './dispose';
+import { PLANT_SWAY_GLSL, plantUniforms, type PlantWind } from './wind';
 import { FORAGE, FORAGE_KINDS, type ForageKind, type Shroom } from '../sim/forage';
 import type { ForageSpot } from '../world/forage';
 import type { PhysicsWorld } from '../physics/physics';
-import type { VegetationMemory } from '../sim/vegetation';
+import { PLANT_MECHANICS, type VegetationMemory } from '../sim/vegetation';
 import { Vegetation, type VegetationPlant } from './vegetation';
 
 /**
@@ -438,6 +440,49 @@ export interface ForageView {
 
 const CAP = 512;
 
+/**
+ * How each wild plant takes the wind (`plantSway`), with its height (m) to bend over: the fig and the bramble are woody and
+ * stiff, the old sabra's pads hardly stir, za'atar and yarrow are herbs that lean and shiver in any breeze. The crop rides
+ * its plant (same material, same instance), so the fruit stays on the branch. Mushrooms and turf keep still.
+ */
+const FORAGE_WIND: Partial<Record<PlantKey, PlantWind & { h: number }>> = {
+  fig: { h: 2.0, lean: 0.14, rate: PLANT_MECHANICS.fig.frequency, leaf: 0.05, leafHz: 2.2 },
+  bramble: { h: 0.85, lean: 0.18, rate: PLANT_MECHANICS.bramble.frequency, leaf: 0.035, leafHz: 2.6 },
+  sabra: { h: 1.6, lean: 0.035, rate: PLANT_MECHANICS.sabra.frequency, leaf: 0.006, leafHz: 1.4 },
+  zaatar: { h: 0.5, lean: 0.5, rate: PLANT_MECHANICS.zaatar.frequency, leaf: 0.025, leafHz: 3.0 },
+  yarrow: { h: 0.6, lean: 0.6, rate: PLANT_MECHANICS.yarrow.frequency, leaf: 0.03, leafHz: 2.6 },
+};
+
+/** A wild plant's vertex work in the wind, in its colour (after the kit's, which keeps its rest pose) and its shadow. */
+function forageSway(shader: THREE.WebGLProgramParametersWithUniforms, w: PlantWind & { h: number }, at: string) {
+  plantUniforms(shader, w);
+  shader.uniforms.uPlantTop = { value: w.h };
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>\n${PLANT_SWAY_GLSL}\nuniform float uPlantTop;`)
+    .replace(at, `transformed = plantSway( transformed, transformed.y / uPlantTop );\n${at}`);
+}
+
+const swayMats = new Map<PlantKey, { colour: THREE.MeshStandardMaterial; depth: THREE.MeshDepthMaterial }>();
+/** The kit material, swaying as plant `k` does, and its shadow; null for a plant that keeps still. */
+function swayMaterials(k: PlantKey) {
+  const w = FORAGE_WIND[k];
+  if (!w) return null;
+  let hit = swayMats.get(k);
+  if (!hit) {
+    const colour = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+    colour.onBeforeCompile = (shader) => {
+      applyKit(shader, true);
+      forageSway(shader, w, '#include <project_vertex>');
+    };
+    colour.customProgramCacheKey = () => 'kit:true|plant';
+    const depth = new THREE.MeshDepthMaterial();
+    depth.onBeforeCompile = (shader) => forageSway(shader, w, '#include <project_vertex>');
+    depth.customProgramCacheKey = () => 'plant-depth';
+    swayMats.set(k, (hit = { colour: shared(colour), depth: shared(depth) }));
+  }
+  return hit;
+}
+
 export class ForageRender {
   readonly group = new THREE.Group();
   private plants = new Map<PlantKey, THREE.InstancedMesh>();
@@ -449,7 +494,9 @@ export class ForageRender {
     this.group.name = 'forage';
     const mat = kitMaterial();
     for (const k of PLANT_KEYS) {
-      const m = new THREE.InstancedMesh(plantGeometry(k), mat, CAP);
+      const sway = swayMaterials(k);
+      const m = new THREE.InstancedMesh(plantGeometry(k), sway?.colour ?? mat, CAP);
+      if (sway) m.customDepthMaterial = sway.depth;
       m.count = 0;
       m.frustumCulled = false;
       m.castShadow = k === 'fig' || k === 'bramble' || k === 'sabra';
@@ -461,7 +508,7 @@ export class ForageRender {
       const n = handfulsOf(k);
       const list: THREE.InstancedMesh[] = [];
       for (let part = 0; part < n; part++) {
-        const m = new THREE.InstancedMesh(cropGeometry(k, part, n), mat, CAP);
+        const m = new THREE.InstancedMesh(cropGeometry(k, part, n), (k.startsWith('mushroom') ? null : swayMaterials(k as ForageKind)?.colour) ?? mat, CAP);
         m.count = 0;
         m.frustumCulled = false;
         m.receiveShadow = true;

@@ -21,6 +21,11 @@ export type Slot = { kind: 'pad'; index: number } | { kind: 'kb'; set: 1 | 2 };
 
 /** The camera in a vehicle: behind it (the default) or through the eyes in the seat. On foot it is always the eyes. */
 export type VehicleView = 'third' | 'first';
+/**
+ * Driving help: 'arcade' (the default) catches slides with the hands, eases the throttle and brakes at the limit and keeps
+ * a spin from getting away; 'pro' leaves the driving to the driver and the car's own electronics.
+ */
+export type DriveAssist = 'arcade' | 'pro';
 
 export interface Settings {
   /** Per-player options, per the pause menu. */
@@ -45,12 +50,18 @@ export interface Settings {
   firstPerson: [boolean, boolean];
   /** Per seat, the camera while driving, at a gun or riding along: the chase view (the default) or the eyes. */
   vehicleView: [VehicleView, VehicleView];
+  /** Per seat, how much the driving assists help (see `DriveAssist`). */
+  driveAssist: [DriveAssist, DriveAssist];
   /** Horizontal field of view in first person, degrees. */
   fpFov: number;
   /** Horizontal field of view of the chase camera, degrees. */
   chaseFov: number;
+  /** How much the driving chase view rides with the car (lag under power, swing and bank in corners, landing bounce, rumble), 0 to 2. */
+  chaseMotion: number;
   /** How strongly the first-person view is drawn as a body camera sees it (barrel lens, colour fringes, dark rim), 0 to 1. */
   fpLens: number;
+  /** How strongly what the eye is not focused on blurs behind the sights in first person (depth of field), 0 (off) to 1. */
+  fpDof: number;
   /** Which physical input drives which action, per device. */
   bindings: Bindings;
 }
@@ -67,9 +78,12 @@ export const defaultSettings = (): Settings => ({
   keyTurn: 1,
   firstPerson: [false, false],
   vehicleView: ['third', 'third'],
+  driveAssist: ['arcade', 'arcade'],
   fpFov: 100,
   chaseFov: 110,
+  chaseMotion: 1,
   fpLens: 0.7,
+  fpDof: 1,
   bindings: defaultBindings(),
 });
 
@@ -121,6 +135,12 @@ export class InputManager {
   /** Test hook: when set, returned instead of navigator.getGamepads(). */
   mockPads: (Gamepad | null)[] | null = null;
   private joinPrev = new Map<number, boolean>();
+  /** Per pad index, whether it was being touched last tick: a pad takes a seat on the touch, not while it stays held. */
+  private swapPrev = new Map<number, boolean>();
+  /** Per seat, seconds since its keyboard last had a bound key down (which keyboard seat a new pad may take). */
+  private kbIdle: [number, number] = [0, 0];
+  /** Fired when a seat changes device mid-run (a pad picked up, or the keyboard took it back). */
+  onSeatDevice: (player: number, slot: Slot) => void = () => {};
 
   /** Pointer-lock mouse state. Deltas are in CSS pixels, accumulated between fixed ticks. */
   mouseLocked = false;
@@ -198,6 +218,10 @@ export class InputManager {
         return;
       }
       if (!this.mouseLocked) {
+        // Solo on a pad: clicking into the game hands the seat back to the keyboard and mouse.
+        if (e.button === 0 && this.seats === 1 && this.slots[0]?.kind === 'pad' && this.canCapture() && !this.pending) {
+          this.takeSeat(0, { kind: 'kb', set: 1 });
+        }
         if (e.button === 0 && this.mouseSeat() >= 0 && this.canCapture()) this.capture(canvas);
         return;
       }
@@ -426,9 +450,12 @@ export class InputManager {
       lookSens: s.lookSens,
       keyTurn: s.keyTurn,
       vehicleView: s.vehicleView,
+      driveAssist: s.driveAssist,
       fpFov: s.fpFov,
       chaseFov: s.chaseFov,
+      chaseMotion: s.chaseMotion,
       fpLens: s.fpLens,
+      fpDof: s.fpDof,
       bindings: exportBindings(s.bindings),
     };
   }
@@ -450,6 +477,8 @@ export class InputManager {
     // whatever it said, and the vehicle camera starts on the chase view until it is chosen again.
     const isView = (x: unknown): x is VehicleView => x === 'third' || x === 'first';
     s.vehicleView = pair(r.vehicleView, isView, s.vehicleView);
+    const isAssist = (x: unknown): x is DriveAssist => x === 'arcade' || x === 'pro';
+    s.driveAssist = pair(r.driveAssist, isAssist, s.driveAssist);
     const aa = pair(r.aimAssist, isNum, s.aimAssist);
     s.aimAssist = [clamp(aa[0], 0, 2), clamp(aa[1], 0, 2)];
     const ls = pair(r.lookSens, isNum, s.lookSens);
@@ -459,12 +488,92 @@ export class InputManager {
     s.keyTurn = num(r.keyTurn, 0.4, 2.5, s.keyTurn);
     s.fpFov = num(r.fpFov, 70, 120, s.fpFov);
     s.chaseFov = num(r.chaseFov, 70, 130, s.chaseFov);
+    s.chaseMotion = num(r.chaseMotion, 0, 2, s.chaseMotion);
     s.fpLens = num(r.fpLens, 0, 1, s.fpLens);
+    s.fpDof = num(r.fpDof, 0, 1, s.fpDof);
     if (r.bindings) s.bindings = importBindings(r.bindings);
     this.bindingsChanged();
   }
 
   // ------------------------------------------------------------------ sampling
+
+  /** Connected gamepads (for menus that list what the browser can see). */
+  connectedPads(): Gamepad[] {
+    return this.pads().filter((p): p is Gamepad => !!p && p.connected);
+  }
+
+  /**
+   * Any device can pick up a seat at any time, not only at the title's join screen: a run started with the mouse or the
+   * keyboard otherwise fills every seat with keyboards and a pad plugged in or woken later is never read.
+   * - A pad no seat uses takes one the moment it is touched: an empty seat first, then a seat whose pad was unplugged,
+   *   then (solo) the keyboard seat, or (split screen) the keyboard seat idle the longest, if it has been idle a moment.
+   * - Solo on a pad: a key of either keyboard layout takes the seat back (a click does too, see `attachMouse`).
+   * - Split screen: a keyboard layout nobody uses can take a seat whose pad was unplugged.
+   */
+  private hotSwap(pads: (Gamepad | null)[], dt: number) {
+    for (let p = 0; p < 2; p++) {
+      const s = this.slots[p];
+      const kbDown = s?.kind === 'kb' && Object.values(this.settings.bindings.kb[s.set - 1]).some((c) => !!c && this.keys.has(c));
+      this.kbIdle[p] = kbDown ? 0 : this.kbIdle[p] + dt;
+    }
+    for (const pad of pads) {
+      if (!pad || !pad.connected) continue;
+      if (pad.mapping !== 'standard') this.nonStandard.add(pad.index);
+      // Sticks only, and only on the standard layout: other layouts may park triggers at -1 on an axis.
+      const sticks = pad.mapping === 'standard' ? pad.axes.slice(0, 4) : [];
+      const touched = pad.buttons.some((b) => b.pressed) || sticks.some((a) => Math.abs(a) > 0.6);
+      // A browser only shows a pad after a button press, so the press that woke it counts on first sight.
+      const was = this.swapPrev.get(pad.index) ?? false;
+      this.swapPrev.set(pad.index, touched);
+      if (!touched || was) continue;
+      if (this.slots.some((s) => s?.kind === 'pad' && s.index === pad.index)) continue;
+      const seat = this.seatForPad(pads);
+      if (seat >= 0) this.takeSeat(seat, { kind: 'pad', index: pad.index });
+    }
+    for (const set of [1, 2] as const) {
+      const pressed = Object.values(this.settings.bindings.kb[set - 1]).some((c) => !!c && this.keyEdges.has(c));
+      if (!pressed || this.slots.some((s) => s?.kind === 'kb' && s.set === set)) continue;
+      const seat = this.seats === 1
+        ? (this.slots[0]?.kind === 'pad' ? 0 : -1)
+        : this.slots.findIndex((s, i) => i < this.seats && s?.kind === 'pad' && !this.padAlive(pads, s.index));
+      if (seat >= 0) this.takeSeat(seat, { kind: 'kb', set });
+    }
+  }
+
+  private padAlive(pads: (Gamepad | null)[], index: number) {
+    return !!pads[index]?.connected;
+  }
+
+  private seatForPad(pads: (Gamepad | null)[]): number {
+    const n = this.seats;
+    for (let p = 0; p < n; p++) if (!this.slots[p]) return p;
+    for (let p = 0; p < n; p++) {
+      const s = this.slots[p];
+      if (s?.kind === 'pad' && !this.padAlive(pads, s.index)) return p;
+    }
+    if (n === 1) return this.slots[0]?.kind === 'kb' ? 0 : -1;
+    let best = -1;
+    for (let p = 0; p < n; p++) {
+      if (this.slots[p]?.kind !== 'kb' || this.kbIdle[p] < 1) continue;
+      if (best < 0 || this.kbIdle[p] > this.kbIdle[best]) best = p;
+    }
+    return best;
+  }
+
+  /** Put a device in a seat. Whatever it is holding right now does not count as a fresh press (no stray jump or pause). */
+  private takeSeat(p: number, slot: Slot) {
+    this.slots[p] = slot;
+    this.prevHeld[p] = (1 << BTN_COUNT) - 1;
+    this.shareT[p] = 0;
+    this.kbIdle[p] = 0;
+    if (this.disconnected[p]) {
+      this.disconnected[p] = false;
+      this.onReconnect(p);
+    }
+    // The mouse belongs to a keyboard seat; with none left the pointer is let go.
+    if (this.mouseLocked && this.mouseSeat() < 0) this.release();
+    this.onSeatDevice(p, slot);
+  }
 
   /** Sample devices into intents. Call once per fixed tick. */
   sample(dt: number): void {
@@ -478,6 +587,7 @@ export class InputManager {
     const mute = this.pending !== null || this.muteT > 0;
     if (this.muteT > 0) this.muteT = Math.max(0, this.muteT - dt);
     const pads = this.pads();
+    if (!mute) this.hotSwap(pads, dt);
     const bind = this.settings.bindings;
     live.mouseLocked = this.mouseLocked;
     live.mouseSeat = this.mouseSeat();

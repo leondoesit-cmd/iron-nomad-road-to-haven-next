@@ -16,6 +16,14 @@ export interface ZombieMotion {
   move: number;
   action: number;
   weight: number;
+  /** The dead: seconds since it died, which of its deaths (0..1), and whether it goes down on its back (shot from the
+   * front), its face (from behind) or either (undefined). */
+  deadT?: number;
+  death?: number;
+  back?: boolean;
+  /** The dead: the slope of the ground it lies on, turned into its own frame (radians, nose down and left side down). */
+  pitch?: number;
+  roll?: number;
 }
 
 interface PoseState {

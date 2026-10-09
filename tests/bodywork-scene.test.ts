@@ -465,17 +465,23 @@ describe('tyre marks laid by real wheels', () => {
     expect(laid).toBeGreaterThan(30);
   });
 
-  it('asphalt takes nothing from a rolling car and a black skid from a locked wheel', () => {
+  it('asphalt takes nothing from a rolling car or an anti-lock stop, and a black skid from a locked wheel', () => {
     const { sc } = leg();
     const v = car(sc, newBuild('sedan', { seed: 42 }));
     sc.surfaceAt = () => ({ grip: 1, drag: 0, name: 'asphalt' });
     v.driver = holding({ throttle: 0.6 });
     v.setEngine(true);
     run(sc, 5);
-    const rolling = sc.marks.count;
-    expect(rolling).toBe(0);
-    v.driver = holding({ throttle: 0, brake: 1 });
-    run(sc, 2);
+    expect(sc.marks.count).toBe(0);
+    // The sedan's anti-lock keeps its tyres at the edge of their grip: a hard stop, but no rubber laid.
+    v.driver = holding({ throttle: 0, brake: 1, assist: 0 });
+    run(sc, 0.8);
+    expect(sc.marks.count).toBe(0);
+    // The handbrake locks the back wheels past it.
+    v.driver = holding({ throttle: 0.6 });
+    run(sc, 3);
+    v.driver = holding({ handbrake: true });
+    run(sc, 1);
     expect(sc.marks.count).toBeGreaterThan(0);
   });
 

@@ -158,7 +158,7 @@ describe('settings', () => {
         difficulty: { drain: 1, aggro: 1, damage: 1 },
         campaign: new Campaign(),
         R: { quality: 'medium', layout: 'vertical', setQuality: noop, setLayout: noop },
-        hud: { uiScale: 1, setScale: noop },
+        hud: { uiScale: 1, setScale: noop, setReticle: noop },
         audio: { volume: 1, musicVolume: 1, gameMusicEnabled: true, userMusicEnabled: true, userMusicVolume: 1, ttsEnabled: false, setVolume: noop, setMusicVolume: noop, setGameMusicEnabled: noop, setUserMusicEnabled: noop, setUserMusicVolume: noop, setTtsEnabled: noop },
         storyVoice: { enabled: true },
         input: { settings: { mouseSens: 1 }, exportSettings: () => ({}), importSettings: noop },

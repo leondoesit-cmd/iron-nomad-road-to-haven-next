@@ -5,6 +5,7 @@ import { MeshBuilder, S } from './builder';
 import { applyKit } from './materials';
 import { propProto } from './props';
 import { makeRoadMaterial, ROAD_REPEAT, type TerrainUniforms } from './terrainMaterial';
+import { FAR_CUT_FRAG, FAR_CUT_FRAG_PARS } from './dissolve';
 
 /**
  * What the far landscape adds beyond the streamed chunks so the view keeps its landmarks for navigation: the paved
@@ -12,9 +13,9 @@ import { makeRoadMaterial, ROAD_REPEAT, type TerrainUniforms } from './terrainMa
  * containers, poles, pylons, buses) as instances of cheap stand-ins. Each kind shares geometry across spatial batches,
  * so views submit only nearby regions instead of running the vertex shader on every instance in the world.
  *
- * Both step aside per chunk once that chunk is fully built in detail: the green channel of the far landscape's
- * loaded-chunk mask, read in the vertex shader for props (the instance collapses to a point) and in the fragment
- * shader for roads.
+ * Both step aside per chunk as that chunk comes in fully built in detail: the green channel of the far landscape's
+ * loaded-chunk mask is how far it is in. Both dissolve out pixel for pixel as it dissolves in (`dissolve.ts`), and once
+ * it is all in a prop's instance collapses to a point in the vertex shader.
  */
 
 /** Rocks smaller than this read as a pixel or two past the streamed ring; not worth drawing. */
@@ -23,7 +24,12 @@ const MIN_ROCK = 1.5;
 const ROAD_STEP = 8;
 /** Height of the far road over the ground: above the far terrain (laid 0.6 under), close to the detailed road. */
 const ROAD_LIFT = 0.1;
-const PROP_REGION = 256;
+/**
+ * Side of the square a batch of one kind covers, metres. Each batch is a draw call of its own, and a far prop is a few
+ * hundred vertices: at 256 m a view of the open world submitted about 190 draws of one or two instances each, and the
+ * per-draw cost (CPU and GPU) was far more than the vertices culled. At 2048 m the same view takes about 50 draws.
+ */
+const PROP_REGION = 2048;
 
 /** Kinds drawn from the real prototype: few enough in the world that its full detail is cheap. */
 const REAL: ReadonlySet<PropKind> = new Set<PropKind>(['pylon', 'bus', 'tram', 'tent', 'cairn']);
@@ -39,15 +45,19 @@ function rng(seed: number) {
 const LOD_VERT_PARS = /* glsl */ `
 uniform sampler2D tLoaded;
 uniform vec4 uLoadedRect;
+varying float vFarCut;
 `;
 
 const LOD_VERT = /* glsl */ `
 #include <begin_vertex>
+vFarCut = 0.0;
 #ifdef USE_INSTANCING
 {
-  // The detailed chunk under this instance is built: fold the stand-in to a point so nothing rasterizes.
+  // How far the detailed chunk under this instance is in: the stand-in dissolves out as it does, and once it is all in
+  // the stand-in folds to a point so nothing rasterizes.
   vec2 lc = ( instanceMatrix[ 3 ].xz - uLoadedRect.xy ) / uLoadedRect.zw;
-  if ( lc.x >= 0.0 && lc.y >= 0.0 && lc.x < 1.0 && lc.y < 1.0 && texture2D( tLoaded, lc ).g > 0.5 ) transformed = vec3( 0.0 );
+  if ( lc.x >= 0.0 && lc.y >= 0.0 && lc.x < 1.0 && lc.y < 1.0 ) vFarCut = texture2D( tLoaded, lc ).g;
+  if ( vFarCut >= 1.0 ) transformed = vec3( 0.0 );
 }
 #endif
 `;
@@ -60,6 +70,9 @@ function farPropMaterial(lod: TerrainUniforms): THREE.MeshStandardMaterial {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${LOD_VERT_PARS}`)
       .replace('#include <begin_vertex>', LOD_VERT);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\n${FAR_CUT_FRAG_PARS}`)
+      .replace('#include <clipping_planes_fragment>', FAR_CUT_FRAG);
   };
   m.customProgramCacheKey = () => 'kit:far';
   return m;

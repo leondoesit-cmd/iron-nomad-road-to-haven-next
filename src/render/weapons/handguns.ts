@@ -1,5 +1,7 @@
 import { M, shape, rrect, type P2, type WB, type WS } from './kit';
+import { cartridge } from './parts';
 import { FRAMES } from '../../sim/gunFrames';
+import { CYLINDER, chamberAt } from '../../sim/gunActions';
 
 /**
  * Handguns: the polymer striker pistols (a full-size duty pistol, the subcompact, and the select-fire machine pistol with
@@ -49,20 +51,38 @@ export function pistolPoints(d: PistolDims) {
 export function polymerPistol(w: WB, d: PistolDims) {
   const B = d.bore;
   const yb = B - 0.0155;
+  const { z0, z1 } = d;
+  const steel = M.steel(0x5e6266, 0.3);
+  const zp0 = z0 + 0.06;
+  const zp1 = zp0 + 0.047;
+
+  // ---- slide: three sweeps (behind the port, the port, ahead of it), the ends overlapping so no seam shows. It runs back
+  // on its own in the close-up model (`slide`): everything on it, sights and all, is drawn in that piece.
+  w.piece('slide', () => pistolSlide(w, d));
+  // The barrel: its hood in the port, its crown in the slide's nose, the guide rod under it; between them, under the slide,
+  // the barrel runs on (only drawn where the slide can uncover it).
+  w.rbox(-0.001, B + 0.006, (zp0 + zp1) / 2 - 0.001, 0.0146, 0.0105, zp1 - zp0 + 0.002, 0.0012, steel);
+  w.inner(() => w.tube(0, B, zp1 - 0.002, z1 - 0.028, 0.0066, steel));
+  w.bored(0, B, z1 - 0.03, z1 - 0.0008, 0.0066, 0.0045, steel, 0.025);
+  w.tube(0, yb + 0.0048, z1 - 0.02, z1 - 0.0012, 0.003, M.poly(0x2a2a2c));
+  w.inner(() => w.tube(0, yb + 0.0048, zp0, z1 - 0.02, 0.0028, M.steel(0x6a6e72, 0.3)));
+  pistolFrame(w, d);
+}
+
+/** The duty pistol's slide: the sweeps, serrations, back plate, extractor, the port's dark, the sights. */
+function pistolSlide(w: WB, d: PistolDims) {
+  const B = d.bore;
+  const yb = B - 0.0155;
   const yt = B + 0.0165;
   const hw = 0.0127;
   const ys = yt + SIGHT_H;
   const { z0, z1 } = d;
   const slide = M.nitride(0x2a2b2d, 0.3);
-  const frame = M.poly(d.frame ?? 0x1d1e20, 0.3);
-  const grip = M.stipple(d.frame ?? 0x1c1d1f, 0.3);
   const steel = M.steel(0x5e6266, 0.3);
   const dark = M.blued(0x17181b, 0.2);
   const K = d.key;
   const zp0 = z0 + 0.06;
   const zp1 = zp0 + 0.047;
-
-  // ---- slide: three sweeps (behind the port, the port, ahead of it), the ends overlapping so no seam shows.
   const full = (inset = 0) => (): ReturnType<typeof shape> =>
     shape([[-hw + inset, yb, 0.0012], [hw - inset, yb, 0.0012], [hw - inset, yt - 0.003, 0.0006], [hw - 0.0035, yt, 0.0012], [-hw + 0.0035, yt, 0.0012], [-hw + inset, yt - 0.003, 0.0006]]);
   w.sec(`${K}.slideR`, full(), z0, z0 + 0.004, 0.0012, slide);
@@ -91,14 +111,12 @@ export function polymerPistol(w: WB, d: PistolDims) {
   if (w.hi) {
     for (let i = 0; i < 8; i++) w.rbox(0, yb + 0.0125, z0 + 0.007 + i * 0.0036, 0.0254, 0.019, 0.0016, 0.0005, slide);
   }
-  // The slide's back plate and the extractor at the back of the port.
+  // The slide's back plate and the extractor at the back of the port; the dark of the port beside the barrel's hood.
   w.rbox(0, B + 0.0005, z0 - 0.0003, 0.0145, 0.019, 0.0012, 0.0005, dark);
   w.rbox(-hw - 0.0002, B + 0.006, zp0 - 0.008, 0.0012, 0.0045, 0.016, 0.0004, slide);
-  // The barrel: its hood in the port, its crown in the slide's nose, the guide rod under it.
-  w.rbox(-0.001, B + 0.006, (zp0 + zp1) / 2 - 0.001, 0.0146, 0.0105, zp1 - zp0 + 0.002, 0.0012, steel);
   w.box(-hw / 2 - 0.004, B + 0.0021, (zp0 + zp1) / 2, hw - 0.006, 0.0006, zp1 - zp0 - 0.002, M.hole());
-  w.bored(0, B, z1 - 0.03, z1 - 0.0008, 0.0066, 0.0045, steel, 0.025);
-  w.tube(0, yb + 0.0048, z1 - 0.02, z1 - 0.0012, 0.003, M.poly(0x2a2a2c));
+  // Inside the slide, seen once it runs back: the dark of its insides behind the barrel's hood.
+  w.inner(() => w.box(0, B + 0.004, z0 + 0.03, 0.02, 0.016, 0.05, M.hole()));
 
   // ---- sights: a U-notch rear with a white outline, a post with a white dot.
   w.sec(
@@ -116,6 +134,24 @@ export function polymerPistol(w: WB, d: PistolDims) {
   }
   w.rbox(0, (yt + ys) / 2, z1 - 0.011, 0.0034, ys - yt + 0.0006, 0.0072, 0.0006, dark);
   w.turn(`${K}.fdot`, [[0, 0], [0.00115, 0], [0.00115, 0.0003], [0, 0.0003]], 0, ys - 0.0019, M.dot(), 10, 0.7, z1 - 0.0151);
+  if (d.select) {
+    // The fire selector on the left of the slide's back plate.
+    w.rbox(0.0072, B + 0.002, z0 - 0.0012, 0.0048, 0.0028, 0.0022, 0.0006, steel);
+  }
+}
+
+/** The pistol's polymer frame, its grip and controls, and the magazine in the grip (its own piece, `mag`). */
+function pistolFrame(w: WB, d: PistolDims) {
+  const B = d.bore;
+  const yb = B - 0.0155;
+  const { z0, z1 } = d;
+  const frame = M.poly(d.frame ?? 0x1d1e20, 0.3);
+  const grip = M.stipple(d.frame ?? 0x1c1d1f, 0.3);
+  const steel = M.steel(0x5e6266, 0.3);
+  const dark = M.blued(0x17181b, 0.2);
+  const K = d.key;
+  const zp0 = z0 + 0.06;
+  const zp1 = zp0 + 0.047;
 
   // ---- frame: the dust cover with its rail slot, the rails under the slide, the trigger guard, the grip.
   const zd = zp1 - 0.008;
@@ -159,16 +195,28 @@ export function polymerPistol(w: WB, d: PistolDims) {
     [bz(yTop - 0.004) - 0.0008 + gb, yTop - 0.004, 0.006],
   ];
   w.side(`${K}.grip`, () => shape(gripPts), 0, gw, gb, grip);
-  // The base plate under the magazine well, or the long magazine hanging out of it.
+  // The base plate under the magazine well, or the long magazine hanging out of it; in the close-up model the whole
+  // magazine, its body up the grip and the top round at its lips, comes out with it.
   const mo = d.magOut ?? 0;
-  if (mo > 0) {
-    const mt = yB + 0.004;
-    const mb = yB - mo;
-    w.side(`${K}.mag`, () => shape([[bz(mt) + 0.004, mt], [fz(mt) - 0.004, mt], [fz(mb) - 0.002, mb], [bz(mb) + 0.004, mb]]), 0, 0.0225, 0.0018, M.blued(0x1c1d20, 0.35));
-    w.side(`${K}.magb`, () => shape([[bz(mb) + 0.0025, mb + 0.002, 0.001], [fz(mb) - 0.001, mb + 0.002, 0.001], [fz(mb) + 0.001, mb - 0.006, 0.002], [bz(mb) + 0.002, mb - 0.006, 0.002]]), 0, 0.026, 0.0015, frame);
-  } else {
-    w.side(`${K}.base`, () => shape([[bz(yB) - 0.001, yB + 0.001, 0.001], [fz(yB) + 0.0015, yB + 0.001, 0.001], [fz(yB) + 0.002, yB - 0.006, 0.002], [bz(yB) - 0.0015, yB - 0.006, 0.002]]), 0, 0.0275, 0.0016, frame);
-  }
+  w.piece('mag', () => {
+    if (mo > 0) {
+      const mt = yB + 0.004;
+      const mb = yB - mo;
+      w.side(`${K}.mag`, () => shape([[bz(mt) + 0.004, mt], [fz(mt) - 0.004, mt], [fz(mb) - 0.002, mb], [bz(mb) + 0.004, mb]]), 0, 0.0225, 0.0018, M.blued(0x1c1d20, 0.35));
+      w.side(`${K}.magb`, () => shape([[bz(mb) + 0.0025, mb + 0.002, 0.001], [fz(mb) - 0.001, mb + 0.002, 0.001], [fz(mb) + 0.001, mb - 0.006, 0.002], [bz(mb) + 0.002, mb - 0.006, 0.002]]), 0, 0.026, 0.0015, frame);
+    } else {
+      w.side(`${K}.base`, () => shape([[bz(yB) - 0.001, yB + 0.001, 0.001], [fz(yB) + 0.0015, yB + 0.001, 0.001], [fz(yB) + 0.002, yB - 0.006, 0.002], [bz(yB) - 0.0015, yB - 0.006, 0.002]]), 0, 0.0275, 0.0016, frame);
+    }
+    w.inner(() => {
+      const top = yTop - 0.01;
+      const bot = yB + 0.002;
+      w.side(`${K}.magBody`, () => shape([[bz(top) + 0.007, top, 0.002], [fz(top) - 0.006, top, 0.002], [fz(bot) - 0.004, bot], [bz(bot) + 0.006, bot]]), 0, 0.021, 0.0012, M.blued(0x1c1d20, 0.35));
+      // The lips, and the top round held in them, its nose forward.
+      const zc = (fz(top) + bz(top)) / 2 + 0.002;
+      w.side(`${K}.lips`, () => shape([[bz(top) + 0.008, top + 0.004, 0.001], [zc + 0.006, top + 0.004, 0.001], [zc + 0.006, top - 0.002], [bz(top) + 0.008, top - 0.002]]), 0, 0.0215, 0.0006, M.blued(0x1c1d20, 0.35));
+      cartridge(w, `${K}.top`, [0, top + 0.006, zc - 0.014], 0.0049, 0.019, 0.0105);
+    });
+  });
   // Trigger: a curved blade with the safety lever down its face; its pin above in the frame.
   const zt = zg - 0.03;
   w.side(`${K}.trig`, () => shape([[zt - 0.003, yg + 0.001], [zt + 0.003, yg + 0.001], [zt + 0.0065, yg - 0.008, 0.004], [zt + 0.005, yg - 0.0145, 0.003], [zt + 0.0025, yg - 0.0145, 0.001], [zt + 0.0032, yg - 0.008, 0.004], [zt - 0.001, yg - 0.002]]), 0, 0.0062, 0.0011, frame);
@@ -181,10 +229,8 @@ export function polymerPistol(w: WB, d: PistolDims) {
   w.pin(0.0116, yb - 0.0085, zt - 0.003, 0.0013, steel);
   w.pin(0.0116, yb - 0.0055, zt + 0.019, 0.0013, steel);
   w.pin(0.0116, yb - 0.008, z0 + 0.012, 0.0012, steel);
-  if (d.select) {
-    // The fire selector on the left of the slide's back plate.
-    w.rbox(0.0072, B + 0.002, z0 - 0.0012, 0.0048, 0.0028, 0.0022, 0.0006, steel);
-  }
+  void zp1;
+  void z1;
   // A lanyard loop cut in the back strap's foot, and the frame's finger rest.
   if (w.hi) w.box(0, yB + 0.004, bz(yB + 0.004) + 0.001, 0.008, 0.003, 0.0006, M.hole());
 }
@@ -285,13 +331,34 @@ export function revolver(w: WB, d: RevolverDims) {
     const a = (i / 6) * Math.PI * 2 + Math.PI / 2;
     return { c: [Math.cos(a) * d.pitch, Math.sin(a) * d.pitch] as [number, number], r: d.ch };
   });
-  w.sec(`${K}.cylR`, ring(), c0, c0 + 0.008, 0.001, cyl, 0, cy);
-  w.sec(`${K}.cylF`, flute, c0 + 0.0075, c1 - 0.0075, 0, cyl, 0, cy);
-  w.sec(`${K}.cylN`, ring(holes), c1 - 0.008, c1, 0.001, cyl, 0, cy);
-  // The bullets' noses a little way into the chambers.
-  if (w.hi) for (const h of holes) w.turn(`${K}.nose`, [[0, -0.007], [d.ch * 0.96, -0.007], [d.ch * 0.88, -0.0042], [d.ch * 0.45, -0.0022], [0, -0.0018]], h.c[0], cy + h.c[1], M.brass(0x9a7a48, 0.3), 10, 0.7, c1);
-  // The crane's hub, and the ejector rod under the barrel to its latch (or inside the full underlug).
-  w.tube(0, cy, c1 - 0.001, c1 + 0.005, 0.0045 * k, metal);
+  // The cylinder swings out on its crane in the close-up model (`cyl`), the ejector rod and the star riding on it (`star`).
+  w.piece('cyl', () => {
+    w.sec(`${K}.cylR`, ring(), c0, c0 + 0.008, 0.001, cyl, 0, cy);
+    w.sec(`${K}.cylF`, flute, c0 + 0.0075, c1 - 0.0075, 0, cyl, 0, cy);
+    w.sec(`${K}.cylN`, ring(holes), c1 - 0.008, c1, 0.001, cyl, 0, cy);
+    // The bullets' noses a little way into the chambers (in the close-up model they are the rounds' own, see below).
+    if (w.hi && !w.split) for (const h of holes) w.turn(`${K}.nose`, [[0, -0.007], [d.ch * 0.96, -0.007], [d.ch * 0.88, -0.0042], [d.ch * 0.45, -0.0022], [0, -0.0018]], h.c[0], cy + h.c[1], M.brass(0x9a7a48, 0.3), 10, 0.7, c1);
+    // The crane's hub, and under the frame where only a swung-out cylinder shows it, the crane's arm down to its hinge.
+    w.tube(0, cy, c1 - 0.001, c1 + 0.005, 0.0045 * k, metal);
+    w.inner(() => {
+      const hy = cy - cr - 0.002;
+      w.rod([0, cy - 0.003, c1 + 0.003], [0.0105 * k, hy, c1 + 0.003], 0.0032 * k, metal);
+      w.tube(0.0105 * k, hy, c0 + 0.006, c1 + 0.006, 0.0028 * k, metal);
+      // The chambers' mouths at the back, dark, for when they are empty.
+      for (const h of holes) w.turn(`${K}.chamb`, [[0, 0], [d.ch * 1.04, 0], [d.ch * 1.04, 0.0006], [0, 0.0006]], h.c[0], cy + h.c[1], M.hole(), 10, 0.7, c0 - 0.0004);
+    });
+  });
+  w.piece('star', () => {
+    w.inner(() => {
+      // The extractor star, flush in the cylinder's back face; pushed back it lifts the cases out.
+      const star = () => shape(Array.from({ length: 12 }, (_, i) => {
+        const a = (i / 12) * Math.PI * 2 + Math.PI / 2 + Math.PI / 6;
+        const r = i % 2 === 0 ? d.pitch * 0.62 : d.pitch + d.ch * 0.2;
+        return [Math.cos(a) * r, Math.sin(a) * r, 0.0008] as P2;
+      }));
+      w.sec(`${K}.star`, star, c0 - 0.0016, c0 + 0.0004, 0.0003, cyl, 0, cy);
+    });
+  });
   // ---- barrel: a heavy shank in the frame, tapering to the crown.
   const br = d.br;
   const bz0 = c1 + 0.002;
@@ -299,12 +366,15 @@ export function revolver(w: WB, d: RevolverDims) {
   if (w.hi) w.turn(`${K}.bore`, [[0.0046 * k, 0], [0.0046 * k, 0.0148], [0, 0.0148]], 0, B, M.hole(), 12, 0.7, MZ - 0.0155);
   if (d.lug) {
     w.side(`${K}.lug`, () => shape([[c1 + 0.016, B - br + 0.001], [MZ - 0.0008, B - br + 0.001], [MZ - 0.0008, cy - 0.0045, 0.005], [c1 + 0.02, cy - 0.0045, 0.004]]), 0, br * 1.55, 0.0016, metal);
-    w.tube(0, cy - 0.0005, c1 + 0.003, c1 + 0.018, 0.0028 * k, metal);
+    w.piece('star', () => w.tube(0, cy - 0.0005, c1 + 0.003, c1 + 0.018, 0.0028 * k, metal));
   } else {
-    w.tube(0, cy, c1 + 0.004, bz0 + 0.07, 0.0026, metal);
-    w.tube(0, cy, bz0 + 0.068, bz0 + 0.077, 0.0034, M.knurl(0x1d2026));
+    w.piece('star', () => {
+      w.tube(0, cy, c1 + 0.004, bz0 + 0.07, 0.0026, metal);
+      w.tube(0, cy, bz0 + 0.068, bz0 + 0.077, 0.0034, M.knurl(0x1d2026));
+    });
     w.side(`${K}.lug`, () => shape([[bz0 + 0.075, B - br + 0.001], [bz0 + 0.09, B - br + 0.001], [bz0 + 0.088, cy - 0.003, 0.002], [bz0 + 0.077, cy - 0.003, 0.002]]), 0, 0.0075, 0.001, metal);
   }
+  revolverProps(w, d);
   // ---- sights: a groove down the top strap and a ramped blade (the .44: an adjustable rear and a ventilated rib).
   const fy = fr.front[1];
   if (d.rib) {
@@ -368,6 +438,39 @@ export function revolver(w: WB, d: RevolverDims) {
       w.rbox(0, y, fz(y) - 0.0005, 0.032, 0.0045, 0.006, 0.002, M.rubber(0x121214));
     }
   }
+}
+
+/**
+ * What the hands carry to a revolver, drawn where it sits in the closed cylinder: the six cases on the star (fired, to be
+ * thrown out), six fresh rounds, the speedloader's ring and knob behind them, and the rounds by twos.
+ */
+function revolverProps(w: WB, d: RevolverDims) {
+  const K = d.key;
+  const cy = d.cy;
+  const { c0, c1 } = CYLINDER[K];
+  const r = d.ch * 0.94;
+  const len = (c1 - c0) * 0.72;
+  const round = (key: string, i: number, live: boolean) => {
+    const [x, y] = chamberAt(K, i);
+    if (live) cartridge(w, `${K}.${key}`, [x, cy + y, c0 - 0.0012], r, len, c1 - c0 - len - 0.0035, true);
+    else w.turnAlong(`${K}.${key}`, [[0, 0], [r * 1.12, 0], [r * 1.12, 0.05], [r * 0.95, 0.08], [r, 0.12], [r, 1], [r * 0.8, 1], [r * 0.8, 0.96], [0, 0.96]], [x, cy + y, c0 - 0.0012], [x, cy + y, c0 - 0.0012 + len], M.brass(0xa07e3e, 0.45));
+  };
+  w.prop('cases', () => {
+    for (let i = 0; i < 6; i++) round('spent', i, false);
+  });
+  w.prop('rounds', () => {
+    for (let i = 0; i < 6; i++) round('live', i, true);
+  });
+  for (let p = 0; p < 3; p++)
+    w.prop(`pair${p}`, () => {
+      round('live', p * 2, true);
+      round('live', p * 2 + 1, true);
+    });
+  // The speedloader: a black ring holding the rounds by their rims, and the knurled knob behind it that lets them go.
+  w.prop('loader', () => {
+    w.turn(`${K}.ldr`, [[0, c0 - 0.0115], [d.pitch + d.ch * 1.35, c0 - 0.0115], [d.pitch + d.ch * 1.45, c0 - 0.008], [d.pitch + d.ch * 1.35, c0 - 0.0018], [0, c0 - 0.0018]], 0, cy, M.poly(0x161718, 0.3));
+    w.turn(`${K}.ldk`, [[0, c0 - 0.031], [0.0062, c0 - 0.031], [0.0068, c0 - 0.027], [0.0068, c0 - 0.016], [0.0048, c0 - 0.0112], [0, c0 - 0.0112]], 0, cy, M.knurl(0x2a2b2d, 0.3));
+  });
 }
 
 /** The machine pistol's long magazine is part of its silhouette; its other parts are the duty pistol's. */

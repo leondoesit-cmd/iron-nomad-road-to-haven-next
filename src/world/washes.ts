@@ -2,6 +2,7 @@ import type { LegDef, WashSpec, XZ } from '../data';
 import { Rng, noise2 } from '../core/rng';
 import { clamp, lerp, smoothstep } from '../core/math';
 import { sampleHydro, type Hydrograph } from '../sim/climate';
+import { TUNED_DAY } from '../sim/tuning';
 import { heightAt, type TerrainDef } from './terrain';
 import { nearestRoad } from './openWorld';
 import type { WaterHit } from './lakes';
@@ -27,6 +28,11 @@ const GRID = 32;
 const cellKey = (ix: number, iz: number) => (ix + 4096) * 8192 + (iz + 4096);
 /** How fast a flood front runs down a wash, metres a second: faster than anyone runs. */
 export const FLOOD_SPEED = 6;
+/**
+ * How far a flood front runs in one whole day of the clock, metres. Kept to the tuned day, so floods, pans and rivers keep
+ * their timing against the clock whatever the day-length setting (on a longer day they run slower in real time).
+ */
+export const FLOOD_RUN = FLOOD_SPEED * TUNED_DAY;
 /** How far a flood's surface stays under the top of the lower bank of its wash. */
 const FLOOD_FREEBOARD = 0.25;
 /** The deepest a full pan's sheet of water stands over its floor. */
@@ -97,8 +103,6 @@ export interface WashNet {
   pans: Pan[];
   /** Wash segments by 32 m cell: flat (wash, sample) pairs. */
   grid: Map<number, number[]>;
-  /** Seconds in the leg's day, to turn the flood's speed into the clock. */
-  dayLength: number;
   ready: boolean;
 }
 
@@ -277,7 +281,7 @@ export function nearWash(def: TerrainDef, x: number, z: number, pad: number): bo
 
 /** How deep the flood runs over the bed at distance `s` down a wash, at clock `t`, from the day's hydrograph. */
 export function floodStage(net: WashNet, w: Wash, s: number, t: number, hy: Hydrograph): number {
-  const travel = s / (FLOOD_SPEED * net.dayLength);
+  const travel = s / FLOOD_RUN;
   const q = sampleHydro(hy.wash, t - travel);
   if (q <= 0.002) return 0;
   // It spreads and soaks into the gravel as it goes: the far end of a wash runs lower than the gorge. It never tops the banks,
@@ -342,7 +346,7 @@ export function planWashes(def: TerrainDef, leg: LegDef): WashNet | null {
   const spec = leg.open?.water;
   if (!spec?.washes?.length || !def.open) return null;
   const rng = new Rng(leg.seed * 71 + 29);
-  const net: WashNet = { washes: [], pans: [], grid: new Map(), dayLength: leg.dayLength, ready: false };
+  const net: WashNet = { washes: [], pans: [], grid: new Map(), ready: false };
   const panIds = new Map<string, number>();
   for (const ps of spec.pans ?? []) {
     const ax = ps.ax ?? 1;
@@ -398,7 +402,7 @@ export function planWashes(def: TerrainDef, leg: LegDef): WashNet | null {
   for (const w of net.washes) {
     if (w.into.kind !== 'pan') continue;
     const p = net.pans[w.into.ref];
-    p.travel = Math.max(p.travel, w.s[w.end] / (FLOOD_SPEED * net.dayLength));
+    p.travel = Math.max(p.travel, w.s[w.end] / FLOOD_RUN);
   }
   for (const w of net.washes) indexWash(net, w);
   net.ready = true;

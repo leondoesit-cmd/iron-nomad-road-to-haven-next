@@ -7,6 +7,7 @@ import { coolantLitres, oilRate, sumpLitres } from './fluids';
 import { cabinEffects, cabinGaps, cabinStatCounts } from './cabin';
 import { OCCUPANT_KG, curbKg, referenceKg } from './massModel';
 import { engineCurve, powerToWeight, powertrainFor, straightRun, topSpeed, type Powertrain } from './powertrain';
+import { feelNotes } from './driveFeel';
 
 export { INTERIOR_SLOTS, isInteriorSlot } from '../data';
 export { cabinGaps, cabinPart, canRidePassenger, type CabinGaps } from './cabin';
@@ -388,6 +389,10 @@ const pct = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
 
 /** What a part is, in plain words: an engine's size, output and fuel, a radiator's rating, otherwise its stat changes. */
 export function describePart(d: PartDef): string[] {
+  return [...partLines(d), ...feelNotes(d.id)];
+}
+
+function partLines(d: PartDef): string[] {
   if (d.engine) {
     if (d.empty) return ['no engine: the vehicle will not run'];
     const c = engineCurve(d.engine);

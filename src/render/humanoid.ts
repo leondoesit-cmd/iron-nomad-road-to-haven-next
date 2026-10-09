@@ -5,6 +5,7 @@ import { clamp, clamp01, damp, lerp, wrapAngle } from '../core/math';
 import { swingPose } from '../sim/weaponfx';
 import { GUN_POINTS } from '../sim/weaponanim';
 import { drillPose, newDrillPose, offGrip, type Drill } from '../sim/gunDrills';
+import type { Reload } from '../sim/reloads';
 import { shared } from './dispose';
 import { applyKit, kitMaterial } from './materials';
 import { drawMods, muzzleAt } from './gunMods';
@@ -415,6 +416,30 @@ export function weaponGeometry(kind: Exclude<Held, 'none'>, mods = '', lod: Lod 
   return g;
 }
 
+/**
+ * The close-up model of a gun in its working parts, for the owner's first-person view: the body, and each part that moves
+ * on it (a slide, a bolt, a magazine, a cylinder) or that the hands carry to it (rounds, shells), in the gun's own frame
+ * (see `WB.piece`).
+ */
+export interface WeaponRig {
+  body: THREE.BufferGeometry;
+  parts: Record<string, THREE.BufferGeometry>;
+}
+const rigCache = new Map<string, WeaponRig>();
+export function weaponRig(kind: Exclude<Held, 'none'>, mods = ''): WeaponRig {
+  const ck = `${kind}|${mods}`;
+  const hit = rigCache.get(ck);
+  if (hit) return hit;
+  const looks = parseLooks(mods);
+  const wb = buildModel(kind, 'hi', looks, true)!;
+  if (mods && GUN_MODELS.includes(kind as GunModel)) drawMods(wb, kind as GunModel, looks);
+  const parts = wb.buildParts();
+  for (const k of Object.keys(parts)) shared(parts[k]);
+  const rig = { body: shared(wb.build()), parts };
+  rigCache.set(ck, rig);
+  return rig;
+}
+
 /** A survivor or raider. Origin at the feet, facing +Z. */
 export class Humanoid {
   root = new THREE.Group();
@@ -455,6 +480,8 @@ export class Humanoid {
   flashK = 1;
   /** 1 at the start of a melee swing, counting down to 0: raises the weapon arm overhead and brings it down. */
   swing = 0;
+  /** Which way a blade's swing comes across: down from the right, back from the left, or straight over the top. */
+  swingStyle: 'fore' | 'back' | 'over' = 'fore';
   private walkT = 0;
   /** Smoothed gait: how much of a stride the legs take (0 standing, 1 moving) and how hard it is a sprint. */
   private moveK = 0;
@@ -998,6 +1025,14 @@ export class Humanoid {
    * what a partner sees, turns the weapon with it and lets the support arm come off the gun.
    */
   drill: { r: Drill | null; t: number; w: number } = { r: null, t: 0, w: 0 };
+  /**
+   * The routine the hands are working the gun through (see `sim/reloads`): a reload or a stage of one, or a pump, bolt or
+   * lever worked after a shot. `t` is how far through it, `w` how much of it shows. The owner's first-person arms play it
+   * with the gun's parts and what the hands carry; this rig gets the gist of it through `gunPose`.
+   */
+  reload: { r: Reload | null; t: number; w: number } = { r: null, t: 0, w: 0 };
+  /** The gun in hand has nothing in it: a pistol's slide is locked back, a crossbow's string is down and its bolt gone. */
+  gunEmpty = false;
   /** How far the body leans into a sidestep or a turn (radians, positive to its left), set by the owner each frame. */
   lean = 0;
 
@@ -1107,7 +1142,9 @@ export class Humanoid {
         const sp = swingPose(e);
         this.armR.rotation.x = sp.arm;
         this.elbowR.rotation.x = sp.elbow;
-        this.torso.rotation.y = sp.yaw;
+        // A backhand turns the body the other way and brings the arm out across from the left; an overhead chop is square.
+        this.torso.rotation.y = this.swingStyle === 'back' ? -sp.yaw : this.swingStyle === 'over' ? sp.yaw * 0.15 : sp.yaw;
+        if (this.swingStyle === 'back') this.armR.rotation.z = 0.6 * Math.sin(Math.PI * e);
         // The wrist leads: the weapon comes over the top and chops down in front, not held up behind the head.
         this.hand.rotation.x = sp.blade - (sp.arm + sp.elbow);
       }

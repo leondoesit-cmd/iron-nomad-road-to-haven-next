@@ -1,6 +1,19 @@
 import { M, shape, type P2, type WB, type WS } from './kit';
 import { guard, post, swivel, trigger } from './parts';
 import { FRAMES } from '../../sim/gunFrames';
+import { SHELL_LEN } from '../../sim/gunActions';
+
+/**
+ * A 12-gauge shell lying along +z from its head at `at`: the brass head with its rim and primer, the plastic hull, its crimp
+ * folded in at the front.
+ */
+function shell(w: WB, key: string, at: [number, number, number], hull: number) {
+  const [x, y, z] = at;
+  const L = SHELL_LEN;
+  w.turnAlong(`${key}.head`, [[0, 0], [0.0108, 0], [0.0108, 0.012], [0.0101, 0.016], [0.0101, 0.2], [0, 0.2]], [x, y, z], [x, y, z + L], M.brass(0xb08a46, 0.3));
+  w.turnAlong(`${key}.hull`, [[0, 0.19], [0.0099, 0.19], [0.0099, 0.95], [0.0088, 0.99], [0.004, 1], [0, 1]], [x, y, z], [x, y, z + L], M.paint(hull, 0.35));
+  if (w.hi) w.turnAlong(`${key}.primer`, [[0, 0], [0.0028, 0], [0.0028, 1], [0, 1]], [x, y, z - 0.0003], [x, y, z + 0.0004], M.steel(0x9a9ea2, 0.3));
+}
 
 /**
  * The shotguns: the side-by-side doubles (a sawn-off with its stock cut to a stub grip, and the long-barrelled coach gun
@@ -28,15 +41,28 @@ function double(w: WB, c: DoubleCfg) {
   const wood = M.wood(c.key === 'sawn' ? 0x5e3820 : 0x5a3018, 0.45);
   const MZ = f.muzzle;
   const dx = f.dbl! / 2;
-  // The barrels: tapering tubes with a dark bore, the sawn ends left rough; the ribs between them.
-  for (const s of [1, -1]) {
-    const rough = c.key === 'sawn';
-    w.turn(`${K}.bbl`, [[0, 0.034], [0.0119, 0.034], [0.0119, 0.06], [0.0105, 0.2], [0.0104, MZ - (rough ? 0 : 0.001)], [rough ? 0.0104 : 0.0098, MZ], [0.0093, MZ], [0.0093, MZ - 0.04], [0, MZ - 0.04]], s * dx, B, blued);
-    if (w.hi) w.turn(`${K}.bore`, [[0.0091, 0], [0.0091, 0.039], [0, 0.039]], s * dx, B, M.hole(), 12, 0.7, MZ - 0.04);
-  }
-  w.side(`${K}.rib`, () => shape([[0.036, B + 0.007], [MZ - 0.002, B + 0.006], [MZ - 0.002, f.front[1] - 0.003, 0.001], [0.036, f.rear[1] - 0.003, 0.002]]), 0, 0.009, 0.0008, blued);
-  w.side(`${K}.ribL`, () => shape([[0.036, B - 0.012], [MZ - 0.004, B - 0.011], [MZ - 0.004, B - 0.004], [0.036, B - 0.004]]), 0, 0.01, 0, blued);
-  w.sphere(0, f.front[1] - 0.0016, f.front[2], 0.0017, M.brass(0xd8c070, 0.2));
+  // The barrels drop open on their hinge in the close-up model (`barrels`), the fore-end with them.
+  w.piece('barrels', () => {
+    // The barrels: tapering tubes with a dark bore, the sawn ends left rough; the ribs between them.
+    for (const s of [1, -1]) {
+      const rough = c.key === 'sawn';
+      w.turn(`${K}.bbl`, [[0, 0.034], [0.0119, 0.034], [0.0119, 0.06], [0.0105, 0.2], [0.0104, MZ - (rough ? 0 : 0.001)], [rough ? 0.0104 : 0.0098, MZ], [0.0093, MZ], [0.0093, MZ - 0.04], [0, MZ - 0.04]], s * dx, B, blued);
+      if (w.hi) w.turn(`${K}.bore`, [[0.0091, 0], [0.0091, 0.039], [0, 0.039]], s * dx, B, M.hole(), 12, 0.7, MZ - 0.04);
+      // The chambers' mouths in the breech face, dark, for when they are empty; the lumps under the breech on the hinge.
+      w.inner(() => w.turn(`${K}.chamber`, [[0, 0], [0.0102, 0], [0.0102, 0.0006], [0, 0.0006]], s * dx, B, M.hole(), 16, 0.7, 0.0336));
+    }
+    w.inner(() => w.side(`${K}.lump`, () => shape([[0.034, B - 0.012], [0.06, B - 0.012], [0.058, B - 0.024, 0.003], [0.036, B - 0.022, 0.003]]), 0, 0.016, 0.001, blued));
+    w.side(`${K}.rib`, () => shape([[0.036, B + 0.007], [MZ - 0.002, B + 0.006], [MZ - 0.002, f.front[1] - 0.003, 0.001], [0.036, f.rear[1] - 0.003, 0.002]]), 0, 0.009, 0.0008, blued);
+    w.side(`${K}.ribL`, () => shape([[0.036, B - 0.012], [MZ - 0.004, B - 0.011], [MZ - 0.004, B - 0.004], [0.036, B - 0.004]]), 0, 0.01, 0, blued);
+    w.sphere(0, f.front[1] - 0.0016, f.front[2], 0.0017, M.brass(0xd8c070, 0.2));
+    // Fore-end: a splinter of wood under the barrels with its iron at the back.
+    w.side(`${K}.fore`, () => shape([[0.04, B - 0.006], [c.fore, B - 0.006], [c.fore + 0.004, B - 0.016, 0.006], [c.fore - 0.01, B - 0.03, 0.008], [0.05, B - 0.032, 0.01]]), 0, 0.04, w.hi ? 0.005 : 0.004, wood);
+    w.side(`${K}.iron`, () => shape([[0.036, B - 0.012], [0.06, B - 0.012], [0.058, B - 0.031, 0.004], [0.038, B - 0.033, 0.004]]), 0, 0.034, 0.0015, action);
+  });
+  // The two shells in the chambers, their heads flush with the breech face.
+  w.prop('shells', () => {
+    for (const s of [1, -1]) shell(w, `${K}.sh`, [s * dx, B, 0.0336 - 0.0012], 0xa8281c);
+  });
   // The action: the body with its rounded fences at the breech, the top tang, the top lever and safety.
   w.side(`${K}.action`, () => shape([[-0.048, B + 0.004, 0.006], [-0.03, B + 0.016, 0.006], [0.034, B + 0.016, 0.004], [0.036, B - 0.022, 0.006], [0.0, B - 0.036, 0.006], [-0.035, B - 0.036], [-0.05, B - 0.026, 0.008]]), 0, 0.043, 0.003, action);
   for (const s of [1, -1]) w.sphere(s * dx, B, 0.034, 0.0128, action, 1, 1, 0.45);
@@ -52,9 +78,6 @@ function double(w: WB, c: DoubleCfg) {
       if (w.hi) w.side(`${K}.spur`, () => shape([[-0.043, B + 0.031], [-0.051, B + 0.027], [-0.048, B + 0.023], [-0.041, B + 0.027]]), s * 0.0255, 0.006, 0, M.knurl(0x15181c));
     }
   }
-  // Fore-end: a splinter of wood under the barrels with its iron at the back.
-  w.side(`${K}.fore`, () => shape([[0.04, B - 0.006], [c.fore, B - 0.006], [c.fore + 0.004, B - 0.016, 0.006], [c.fore - 0.01, B - 0.03, 0.008], [0.05, B - 0.032, 0.01]]), 0, 0.04, w.hi ? 0.005 : 0.004, wood);
-  w.side(`${K}.iron`, () => shape([[0.036, B - 0.012], [0.06, B - 0.012], [0.058, B - 0.031, 0.004], [0.038, B - 0.033, 0.004]]), 0, 0.034, 0.0015, action);
   // Two triggers in the guard.
   const gy = B - 0.036;
   guard(w, K, -0.052, 0.006, gy, 0.032, blued, 0.008);
@@ -120,13 +143,17 @@ export function pump(w: WB) {
   // The slide: ribbed walnut round the tube, on its two bars.
   const s0 = 0.215;
   const s1 = 0.405;
-  w.side('pu.slide', () => shape([[s0, B - 0.012], [s1, B - 0.012], [s1 + 0.004, f.mag.y - 0.008, 0.008], [s1 - 0.004, f.under.y + 0.004, 0.006], [s0 + 0.004, f.under.y + 0.004, 0.006], [s0 - 0.004, f.mag.y - 0.008, 0.008]]), 0, 0.046, w.hi ? 0.008 : 0.004, wood);
-  if (w.hi) for (let i = 0; i < 9; i++) {
-    const z = s0 + 0.02 + i * 0.019;
-    for (const s of [1, -1]) w.box(s * 0.0232, f.mag.y - 0.004, z, 0.0012, 0.026, 0.004, M.wood(0x3e2412, 0.4));
-    w.box(0, f.under.y + 0.0, z, 0.03, 0.0012, 0.004, M.wood(0x3e2412, 0.4));
-  }
-  for (const s of [1, -1]) w.box(s * 0.0128, f.mag.y + 0.004, 0.185, 0.002, 0.005, 0.07, M.steel(0x7a7e82, 0.35));
+  // The slide and its bars run back on their own in the close-up model (`pump`).
+  w.piece('pump', () => {
+    w.side('pu.slide', () => shape([[s0, B - 0.012], [s1, B - 0.012], [s1 + 0.004, f.mag.y - 0.008, 0.008], [s1 - 0.004, f.under.y + 0.004, 0.006], [s0 + 0.004, f.under.y + 0.004, 0.006], [s0 - 0.004, f.mag.y - 0.008, 0.008]]), 0, 0.046, w.hi ? 0.008 : 0.004, wood);
+    if (w.hi) for (let i = 0; i < 9; i++) {
+      const z = s0 + 0.02 + i * 0.019;
+      for (const s of [1, -1]) w.box(s * 0.0232, f.mag.y - 0.004, z, 0.0012, 0.026, 0.004, M.wood(0x3e2412, 0.4));
+      w.box(0, f.under.y + 0.0, z, 0.03, 0.0012, 0.004, M.wood(0x3e2412, 0.4));
+    }
+    for (const s of [1, -1]) w.box(s * 0.0128, f.mag.y + 0.004, 0.185, 0.002, 0.005, 0.07, M.steel(0x7a7e82, 0.35));
+  });
+  w.prop('shell', () => shell(w, 'pu.shell', [0, f.mag.y, 0.13], 0xa8281c));
   // Stock: the wrist and pistol grip with its cap, the comb, the butt and its pad.
   const sz = f.stock.z;
   const pts: P2[] = [
@@ -170,7 +197,8 @@ export function combat(w: WB) {
   w.rail('cs', 0, railBase, -0.048, 0.165, anod);
   w.box(-0.0172, B + 0.004, f.port[2], 0.0008, 0.022, 0.058, M.hole());
   const h = f.spots!.handle;
-  w.turnAlong('cs.handle', [[0, 0], [0.0045, 0], [0.0045, 0.7], [0.0062, 0.75], [0.0062, 1], [0, 1]], [-0.016, h[1], h[2]], [h[0] - 0.004, h[1], h[2]], steel);
+  w.piece('handle', () => w.turnAlong('cs.handle', [[0, 0], [0.0045, 0], [0.0045, 0.7], [0.0062, 0.75], [0.0062, 1], [0, 1]], [-0.016, h[1], h[2]], [h[0] - 0.004, h[1], h[2]], steel));
+  w.prop('shell', () => shell(w, 'cs.shell', [0, f.mag.y, 0.13], 0x2a3a6a));
   w.rbox(-0.0172, B - 0.024, 0.13, 0.002, 0.008, 0.012, 0.0015, steel);
   w.rbox(0.0172, B - 0.03, 0.035, 0.002, 0.006, 0.02, 0.0015, steel);
   // Trigger group in polymer, guard, trigger; the pistol grip.

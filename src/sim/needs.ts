@@ -1,4 +1,5 @@
 import { clamp } from '../core/math';
+import { dayPace } from './tuning';
 
 /**
  * The body's four chores: eat, drink, piss and shit. Food and water drain with time and effort and are topped up from the
@@ -14,7 +15,10 @@ export const NEED_ACTS: NeedAct[] = ['eat', 'drink', 'piss', 'shit'];
 export const isNeedAct = (id: string): id is NeedAct => (NEED_ACTS as string[]).includes(id);
 
 export const NEEDS = {
-  /** Fullness lost per second at rest. A day is 720 s: with no food you are hungry at nightfall, starving the day after. */
+  /**
+   * Fullness lost per second at rest, on a tuned day of 720 s (`TUNED_DAY`; a longer day slows it in proportion): with no food
+   * you are hungry at nightfall, starving the day after.
+   */
   foodPerSec: 0.0009,
   waterPerSec: 0.0011,
   /** A sprint burns water as well as wind: water drain is this much faster at full effort. */
@@ -126,15 +130,17 @@ function announce(n: Needs, need: NeedId, level: Level | WasteLevel, out: NeedEv
 export function tickNeeds(n: Needs, dt: number, o: NeedsTick = {}): NeedEvent[] {
   const out: NeedEvent[] = [];
   const effort = clamp(o.effort ?? 0, 0, 1);
-  const foodLoss = NEEDS.foodPerSec * Math.max(0.3, o.appetite ?? 1) * (1 + effort * 0.35) * dt;
-  const waterLoss = NEEDS.waterPerSec * (1 + effort * NEEDS.exertion) * dt;
+  // The drains are per day of the clock, so a longer day spreads them out.
+  const ddt = dt * dayPace();
+  const foodLoss = NEEDS.foodPerSec * Math.max(0.3, o.appetite ?? 1) * (1 + effort * 0.35) * ddt;
+  const waterLoss = NEEDS.waterPerSec * (1 + effort * NEEDS.exertion) * ddt;
   // What leaves the stomach turns into waste, so an empty one stops filling the bowels.
   const f = Math.min(n.food, foodLoss);
   const w = Math.min(n.water, waterLoss);
   n.food -= f;
   n.water -= w;
-  n.bowel = Math.min(1, n.bowel + NEEDS.bowelPerSec * dt * (n.food > 0.02 ? 1 : 0.2) + f * NEEDS.bowelPerFood * 0.5);
-  n.bladder = Math.min(1, n.bladder + NEEDS.bladderPerSec * dt * (n.water > 0.02 ? 1 : 0.2) + w * NEEDS.bladderPerWater * 0.5);
+  n.bowel = Math.min(1, n.bowel + NEEDS.bowelPerSec * ddt * (n.food > 0.02 ? 1 : 0.2) + f * NEEDS.bowelPerFood * 0.5);
+  n.bladder = Math.min(1, n.bladder + NEEDS.bladderPerSec * ddt * (n.water > 0.02 ? 1 : 0.2) + w * NEEDS.bladderPerWater * 0.5);
 
   announce(n, 'food', intakeLevel(n.food), out);
   announce(n, 'water', intakeLevel(n.water), out);

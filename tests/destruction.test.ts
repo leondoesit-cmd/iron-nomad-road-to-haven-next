@@ -8,6 +8,7 @@ import { wallAabbs, type BuildingPlan, type Wall } from '../src/world/interiors'
 import { BREACH_MAX, BREACH_MIN, WALL_HP, breachWall, breachWidth, structuralMul, wallDamage, wallHp } from '../src/sim/breach';
 import { AMMO, throughSlab } from '../src/sim/ballistics';
 import { fakeServices } from './helpers/sim';
+import { CELL, SPALLS } from '../src/render/decals';
 
 vi.setConfig({ testTimeout: 90000 });
 
@@ -180,12 +181,17 @@ describe('breaking a building', () => {
     const t = target(sc, rb);
     const scorch0 = sc.gore.placed;
     const gibs0 = sc.gore.gibs.counts().chunk;
+    const craters0 = sc.ground?.stats.craters ?? 0;
+    const thrown0 = sc.ground?.ejecta.launched ?? 0;
     const x = t.from.x + t.dir.x * 5.2;
     const z = t.from.z + t.dir.z * 5.2;
     sc.combat.explode(x, t.y - 0.5, z, 6, 260, { side: 'neutral' });
     expect(sc.world!.breaches).toBeGreaterThanOrEqual(1);
-    expect(sc.gore.placed).toBeGreaterThan(scorch0);
-    expect(sc.gore.gibs.counts().chunk).toBeGreaterThan(gibs0);
+    // Soft ground takes the blast itself (a charred crater, its soil thrown: groundWork.ts); hard ground gets a scorch
+    // mark and clods.
+    const dug = (sc.ground?.stats.craters ?? 0) > craters0;
+    expect(dug || sc.gore.placed > scorch0).toBe(true);
+    expect(dug ? (sc.ground?.ejecta.launched ?? 0) > thrown0 : sc.gore.gibs.counts().chunk > gibs0).toBe(true);
     // A small bang far from any wall breaks nothing.
     const n = sc.world!.breaches;
     sc.combat.explode(t.from.x + t.dir.x * -80, t.y, t.from.z, 6, 260, { side: 'neutral' });
@@ -259,9 +265,10 @@ describe('marks left by weapons', () => {
     for (let i = 0; i < 12; i++) sc.tick(DT);
     const holes = add.mock.calls.filter(([, , , o]) => o.hole && o.cell !== 11);
     expect(holes.length).toBeGreaterThanOrEqual(2);
-    // The exit is the ragged kind, and its face looks away from the shooter.
+    // The exit is the ragged kind (splintered wood, or a wide spall out of plaster or masonry), and its face looks away from
+    // the shooter.
     const exit = holes[1][3];
-    expect(exit.cell).toBe(9);
+    expect([CELL.splinter, ...SPALLS] as number[]).toContain(exit.cell);
     const away = t.w.axis === 'x' ? exit.nz : exit.nx;
     expect(Math.sign(away)).toBe(Math.sign(t.w.axis === 'x' ? t.dir.z : t.dir.x));
     expect(exit.w).toBeGreaterThanOrEqual(holes[0][3].w - 0.05);

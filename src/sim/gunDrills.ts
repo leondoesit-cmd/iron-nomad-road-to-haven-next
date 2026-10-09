@@ -2,6 +2,7 @@ import { clamp01, lerp, TAU } from '../core/math';
 import type { GunModel, MeleeModel } from '../data/gear';
 import { curve, type V3 } from './weaponanim';
 import { FRAMES } from './gunFrames';
+import { onPart, type Act } from './gunActions';
 
 /**
  * What the hands do with a weapon besides firing and reloading it, as pure routines ("drills"). Now and then at rest a hand
@@ -18,15 +19,16 @@ import { FRAMES } from './gunFrames';
  * any frame and stop on any frame.
  */
 
-type Key = [number, number];
+export type Key = [number, number];
 export type Chan = 'x' | 'y' | 'z' | 'rx' | 'ry' | 'rz' | 'spin';
 export const CHANS: Chan[] = ['x', 'y', 'z', 'rx', 'ry', 'rz', 'spin'];
 
 /**
  * A place for a hand on the weapon: at `p` (closed round the line `a`, the palm facing `n`; the grip's own when left out),
- * or `off` its own grip by so much.
+ * or `off` its own grip by so much; or off the weapon on the body, `cam` in the view's own frame (x right, y up, z back
+ * toward the eye: a pouch on the belt, below the picture).
  */
-export type Spot = { p: V3; a?: V3; n?: V3 } | { off: V3; a?: V3; n?: V3 };
+export type Spot = { p: V3; a?: V3; n?: V3 } | { off: V3; a?: V3; n?: V3 } | { cam: V3; a: V3; n: V3 };
 /** A hand's keyframe: when, the spot it is at, and how far its fingers are open (0 closed round what it holds, 1 open). */
 export type HandKey = [number, string, number?];
 /** A sound the hands make: the action worked, the trigger clicking, a light touch, a palm on the magazine, a case out, a shell. */
@@ -44,6 +46,8 @@ export interface Drill {
   cues?: [number, Cue, number][];
   /** When a live round or a dud leaves the gun, as shares of the drill. */
   eject?: number[];
+  /** The gun's working parts as the hands work them (see `gunActions.ts`): a slide racked, a bolt thrown, a lever swung. */
+  act?: Partial<Record<Act, Key[]>>;
 }
 
 /** Where a hand is in a drill: partway (`k`) from one spot to the next, its fingers `open` so far. */
@@ -419,6 +423,8 @@ interface RackSpots {
    * shooter's cheek, so it is pushed out a hand's width to be reached.
    */
   push?: number;
+  /** The working part the rack runs back: a pistol's slide, a rifle's or an SMG's charging handle. */
+  part: Act;
 }
 
 /** `assess`, with the gun pushed forward by `s.push` from `from` to `to` while the action is worked. */
@@ -455,6 +461,7 @@ function tapRack(s: RackSpots, secs = 1.0, id = 'tap-rack'): Drill {
     spots: { side: { p: s.side, a: [0, 0, 1], n: [-1, 0.3, 0] }, low: palmUp(s.floor, 0.05), hit: palmUp(s.floor), grab: s.grab, back: s.back, release: over(add(spotP(s.back), [0.055, -0.01, -0.01])) },
     cues: [[0.24, 'slap', 0.24], [0.57, 'rack', 0.3]],
     eject: [0.6],
+    act: { [s.part]: k(0, 0, 0.48, 0, 0.58, 1, 0.62, 1, 0.65, 0, 1, 0) },
   };
 }
 
@@ -487,6 +494,7 @@ function stovepipe(s: RackSpots, port: V3, secs = 1.25): Drill {
     },
     cues: [[0.33, 'handle', 0.12], [0.65, 'rack', 0.3]],
     eject: [0.34],
+    act: { [s.part]: k(0, 0, 0.56, 0, 0.66, 1, 0.7, 1, 0.73, 0, 1, 0) },
   };
 }
 
@@ -522,10 +530,11 @@ function doubleFeed(s: RackSpots, secs = 2.4): Drill {
     spots: { side: { p: s.side, a: [0, 0, 1], n: [-1, 0.3, 0] }, low: palmUp(s.floor, 0.05), hit: palmUp(s.floor), grab: s.grab, back: s.back },
     cues: [[0.31, 'slap', 0.22], [0.47, 'rack', 0.3], [0.58, 'rack', 0.3], [0.69, 'rack', 0.3], [0.84, 'slap', 0.24]],
     eject: [0.48, 0.59],
+    act: { [s.part]: k(0, 0, 0.42, 0, 0.47, 1, 0.51, 0, 0.53, 0, 0.58, 1, 0.62, 0, 0.64, 0, 0.69, 1, 0.73, 0, 1, 0) },
   };
 }
 
-const spotP = (s: Spot): V3 => ('p' in s ? s.p : s.off);
+const spotP = (s: Spot): V3 => ('p' in s ? s.p : 'off' in s ? s.off : s.cam);
 
 /** The firing hand comes off the grip to rack a handle on the gun's right side, the support hand keeping the gun up. */
 function rightRack(grab: V3, back: V3, secs = 1.0, id = 'right-rack', floor?: V3): Drill {
@@ -539,6 +548,7 @@ function rightRack(grab: V3, back: V3, secs = 1.0, id = 'right-rack', floor?: V3
     spots: { grab: rightSide(grab), back: rightSide(back), release: rightSide(add(back, [-0.04, 0.03, -0.02])), ...(floor ? { low: palmUp(floor, 0.05), hit: palmUp(floor) } : {}) },
     cues: [...(floor ? ([[0.2, 'slap', 0.22]] as [number, Cue, number][]) : []), [0.61, 'rack', 0.3]],
     eject: [0.63],
+    act: { handle: k(0, 0, 0.5, 0, 0.62, 1, 0.66, 1, 0.69, 0, 1, 0) },
   };
 }
 
@@ -576,6 +586,7 @@ function hkSlap(floor: V3, tube: V3, secs = 1.35): Drill {
     },
     cues: [[0.2, 'slap', 0.22], [0.48, 'handle', 0.2], [0.7, 'rack', 0.32]],
     eject: [0.72],
+    act: { handle: k(0, 0, 0.38, 0, 0.48, 1, 0.68, 1, 0.72, 0, 1, 0), notch: k(0, 0, 0.48, 0, 0.56, 1, 0.68, 1, 0.7, 0, 1, 0) },
   };
 }
 
@@ -611,6 +622,7 @@ function cylinderBind(side: V3, secs = 1.7): Drill {
     spots: { near: onLeft(side, 0.03), cyl: onLeft(side), out: onLeft(add(side, [0.025, 0, 0])), roll: onLeft(add(side, [0.025, -0.02, 0])) },
     cues: [[0.3, 'click', 0.2], [0.5, 'shell', 0.14], [0.72, 'click', 0.24]],
     eject: [0.42],
+    act: { swing: k(0, 0, 0.28, 0, 0.38, 0.3, 0.6, 0.3, 0.72, 0, 1, 0) },
   };
 }
 
@@ -624,6 +636,7 @@ function shortStroke(travel = 0.09, secs = 0.75): Drill {
     spots: { back: { off: [0, 0, -travel] } },
     cues: [[0.35, 'rack', 0.32]],
     eject: [0.38],
+    act: { pump: k(0, 0, 0.15, 0, 0.35, 1, 0.55, 0, 1, 0) },
   };
 }
 
@@ -648,6 +661,7 @@ function stuckShell(port: V3, travel = 0.09, secs = 1.6): Drill {
     spots: { near: leftSide(add(port, [0.04, 0.02, 0])), port: leftSide(add(port, [0, 0.01, 0])), wiggle: leftSide(add(port, [0.005, 0.02, -0.01])), flick: leftSide(add(port, [0.06, 0.07, -0.03])), back: { off: [0, 0, -travel] } },
     cues: [[0.42, 'handle', 0.14], [0.74, 'rack', 0.32]],
     eject: [0.5],
+    act: { pump: k(0, 0, 0.64, 0, 0.74, 1, 0.86, 0, 1, 0) },
   };
 }
 
@@ -662,33 +676,47 @@ function breakDud(breech: V3, secs = 1.5): Drill {
     spots: { breech: over(add(breech, [0, 0.0, 0])), pull: over(add(breech, [0, 0.025, -0.03])), flick: { p: add(breech, [0.08, 0.08, -0.06]), a: [0, 0, -1], n: [-0.5, -1, 0] }, lever: { off: [0, 0.012, -0.012] } },
     cues: [[0.1, 'click', 0.22], [0.5, 'shell', 0.12], [0.8, 'click', 0.28]],
     eject: [0.54],
+    act: { open: k(0, 0, 0.08, 0, 0.16, 1, 0.72, 1, 0.8, 0, 1, 0) },
   };
 }
 
+/** The firing hand on a bolt's knob: down (shut), turned up, and up and drawn back, where the bolt really puts it. */
+const knobSpots = (m: 'rifle' | 'sniper') => {
+  const knob = SP(m, 'knob');
+  return {
+    down: boltHand(knob),
+    up: boltHand(onPart(m, 'bolt', knob, { boltUp: 1 }), true),
+    back: boltHand(onPart(m, 'bolt', knob, { boltUp: 1, boltBack: 1 }), true),
+  };
+};
+
 /** Misfire in a bolt gun: the bolt thrown up, back and home again on a fresh round. */
-function boltCycle(knob: V3, secs = 0.95): Drill {
+function boltCycle(m: 'rifle' | 'sniper', secs = 0.95): Drill {
   return {
     id: 'bolt-cycle',
     secs,
     // Off the shoulder and forward a hand's width, so the bolt comes back in front of the eye and not into it.
     gun: { rz: k(0, 0, 0.2, 0.15, 0.8, 0.15, 1, 0), rx: k(0, 0, 0.2, -0.04, 0.8, -0.03, 1, 0), z: k(0, 0, 0.18, -0.07, 0.72, -0.07, 0.9, 0, 1, 0), y: k(0, 0, 0.18, -0.025, 0.72, -0.025, 1, 0) },
     r: [[0, 'grip'], [0.2, 'down'], [0.3, 'up'], [0.45, 'back'], [0.6, 'up'], [0.7, 'down'], [0.9, 'grip'], [1, 'grip']],
-    spots: { down: boltHand(knob), up: boltHand(add(knob, [0.02, 0.05, 0]), true), back: boltHand(add(knob, [0.02, 0.05, -0.075]), true) },
+    spots: knobSpots(m),
     cues: [[0.3, 'click', 0.12], [0.45, 'rack', 0.3]],
     eject: [0.47],
+    act: { boltUp: k(0, 0, 0.2, 0, 0.3, 1, 0.6, 1, 0.7, 0, 1, 0), boltBack: k(0, 0, 0.3, 0, 0.45, 1, 0.6, 0, 1, 0) },
   };
 }
 
 /** A case stuck in a bolt gun's chamber: the handle slapped up with the heel of the hand, then the bolt hauled back. */
-function boltStuck(knob: V3, secs = 1.5): Drill {
+function boltStuck(m: 'rifle' | 'sniper', secs = 1.5): Drill {
+  const knob = SP(m, 'knob');
   return {
     id: 'stuck-case',
     secs,
     gun: { ...assess(0.15, 0.85, -0.2, 0.7, 0.15), rx: k(0, 0, 0.15, -0.05, 0.3, -0.02, 0.33, -0.08, 0.5, -0.03, 0.85, -0.03, 1, 0), z: k(0, 0, 0.15, -0.05, 0.4, -0.08, 0.82, -0.08, 0.94, 0, 1, 0), y: k(0, 0, 0.15, -0.02, 0.82, -0.02, 1, 0) },
     r: [[0, 'grip'], [0.15, 'down'], [0.22, 'under', 1], [0.3, 'strike', 1], [0.38, 'under', 0.8], [0.46, 'up'], [0.6, 'back'], [0.72, 'up'], [0.8, 'down'], [0.94, 'grip'], [1, 'grip']],
-    spots: { down: boltHand(knob), under: { p: add(knob, [0.0, -0.05, 0]), a: [0, 0, 1], n: [0, 1, 0] }, strike: { p: add(knob, [0.0, -0.02, 0]), a: [0, 0, 1], n: [0, 1, 0] }, up: boltHand(add(knob, [0.02, 0.05, 0]), true), back: boltHand(add(knob, [0.02, 0.05, -0.075]), true) },
+    spots: { ...knobSpots(m), under: { p: add(knob, [0.0, -0.05, 0]), a: [0, 0, 1], n: [0, 1, 0] }, strike: { p: add(knob, [0.0, -0.02, 0]), a: [0, 0, 1], n: [0, 1, 0] } },
     cues: [[0.3, 'slap', 0.22], [0.6, 'rack', 0.32]],
     eject: [0.62],
+    act: { boltUp: k(0, 0, 0.22, 0, 0.3, 0.4, 0.46, 1, 0.72, 1, 0.8, 0, 1, 0), boltBack: k(0, 0, 0.46, 0, 0.6, 1, 0.72, 0, 1, 0) },
   };
 }
 
@@ -699,9 +727,10 @@ function leverCycle(loop: V3, secs = 0.8): Drill {
     secs,
     gun: { rx: k(0, 0, 0.2, -0.03, 0.45, 0.04, 0.7, 0, 1, 0), z: k(0, 0, 0.45, 0.012, 1, 0) },
     r: [[0, 'grip'], [0.2, 'loop'], [0.45, 'down'], [0.68, 'loop'], [0.88, 'grip'], [1, 'grip']],
-    spots: { loop: { p: loop }, down: { p: add(loop, [0, -0.07, 0.07]) } },
+    spots: { loop: { p: loop }, down: { p: onPart('lever', 'lever', loop, { lever: 1 }) } },
     cues: [[0.45, 'rack', 0.3]],
     eject: [0.47],
+    act: { lever: k(0, 0, 0.2, 0, 0.45, 1, 0.68, 0, 1, 0) },
   };
 }
 
@@ -712,9 +741,10 @@ function leverJam(loop: V3, secs = 1.4): Drill {
     secs,
     gun: { ...assess(0.15, 0.85, 0.3, 0.6, 0.15), rx: k(0, 0, 0.15, -0.03, 0.3, 0.02, 0.4, -0.02, 0.55, 0.05, 0.85, 0, 1, 0) },
     r: [[0, 'grip'], [0.15, 'loop'], [0.3, 'half'], [0.38, 'loop'], [0.55, 'down'], [0.62, 'down'], [0.78, 'loop'], [0.92, 'grip'], [1, 'grip']],
-    spots: { loop: { p: loop }, half: { p: add(loop, [0, -0.03, 0.03]) }, down: { p: add(loop, [0, -0.075, 0.075]) } },
+    spots: { loop: { p: loop }, half: { p: onPart('lever', 'lever', loop, { lever: 0.45 }) }, down: { p: onPart('lever', 'lever', loop, { lever: 1 }) } },
     cues: [[0.3, 'click', 0.14], [0.55, 'rack', 0.32]],
     eject: [0.57],
+    act: { lever: k(0, 0, 0.15, 0, 0.3, 0.45, 0.38, 0.2, 0.55, 1, 0.62, 1, 0.78, 0, 1, 0) },
   };
 }
 
@@ -742,6 +772,7 @@ function feedJam(cover: V3, handle: V3, secs = 2.8): Drill {
     },
     cues: [[0.22, 'handle', 0.22], [0.48, 'shell', 0.16], [0.64, 'slap', 0.28], [0.82, 'rack', 0.34]],
     eject: [0.3],
+    act: { cover: k(0, 0, 0.12, 0, 0.22, 1, 0.56, 1, 0.64, 0, 1, 0), handle: k(0, 0, 0.74, 0, 0.82, 1, 0.86, 1, 0.88, 0, 1, 0) },
   };
 }
 
@@ -773,16 +804,16 @@ const portL = (m: GunModel, dx = 0): V3 => {
 // A slide is gripped round its middle, toward the back.
 const slide = (m: GunModel, side: V3): RackSpots => {
   const s = SP(m, 'slide');
-  return { floor: SP(m, 'floor'), grab: over([s[0], s[1], s[2] + 0.005]), back: over([s[0], s[1] + 0.002, s[2] - 0.033]), side, pull: 0.3 };
+  return { floor: SP(m, 'floor'), grab: over([s[0], s[1], s[2] + 0.005]), back: over([s[0], s[1] + 0.002, s[2] - 0.033]), side, pull: 0.3, part: 'slide' };
 };
 const PISTOL = slide('pistol', [0.08, -0.02, 0.02]);
 const COMPACT = slide('compact', [0.075, -0.02, 0.02]);
 const MP = slide('mp', [0.08, -0.03, 0.02]);
-const SMG: RackSpots = { floor: SP('smg', 'floor'), grab: leftSide(SP('smg', 'handle')), back: leftSide(SP('smg', 'handleBack')), side: [0.09, -0.04, 0.12], pull: 0.2 };
+const SMG: RackSpots = { floor: SP('smg', 'floor'), grab: leftSide(SP('smg', 'handle')), back: leftSide(SP('smg', 'handleBack')), side: [0.09, -0.04, 0.12], pull: 0.2, part: 'handle' };
 // A rifle's charging handle: hooked at the back of the receiver and pulled straight back (shortened in view, see `push`).
-const AR: RackSpots = { floor: SP('ar', 'floor'), grab: { p: SP('ar', 'handle'), a: [1, 0, 0], n: [0, -0.6, -0.8] }, back: { p: SP('ar', 'handleBack'), a: [1, 0, 0], n: [0, -0.6, -0.8] }, side: [0.09, -0.03, 0.2], pull: 0.2, push: 0.15 };
+const AR: RackSpots = { floor: SP('ar', 'floor'), grab: { p: SP('ar', 'handle'), a: [1, 0, 0], n: [0, -0.6, -0.8] }, back: { p: SP('ar', 'handleBack'), a: [1, 0, 0], n: [0, -0.6, -0.8] }, side: [0.09, -0.03, 0.2], pull: 0.2, push: 0.15, part: 'handle' };
 const DMR: RackSpots = { ...AR, floor: SP('dmr', 'floor'), grab: { ...AR.grab, p: SP('dmr', 'handle') }, back: { ...AR.back, p: SP('dmr', 'handleBack') } };
-const BR: RackSpots = { floor: SP('br', 'floor'), grab: leftSide(SP('br', 'handle')), back: leftSide(SP('br', 'handleBack')), side: [0.1, -0.03, 0.3], pull: 0.2 };
+const BR: RackSpots = { floor: SP('br', 'floor'), grab: leftSide(SP('br', 'handle')), back: leftSide(SP('br', 'handleBack')), side: [0.1, -0.03, 0.3], pull: 0.2, part: 'handle' };
 const RIFLE_KNOB: V3 = SP('rifle', 'knob');
 const SNIPER_KNOB: V3 = SP('sniper', 'knob');
 const LEVER_LOOP: V3 = SP('lever', 'loop');
@@ -846,8 +877,8 @@ export const FAULTS: Record<GunModel, Fault[]> = {
   combat: [misfire(shortStroke(0.09, 0.7), 'Short-stroked: pump it'), jam(stuckShell(portL('combat'), 0.09, 1.5), 'Jammed: stuck shell')],
   sawn: [misfire(breakDud(SP('sawn', 'breech')), 'Dud shell: break it open')],
   coach: [misfire(breakDud(SP('coach', 'breech'), 1.6), 'Dud shell: break it open')],
-  rifle: [misfire(boltCycle(RIFLE_KNOB), 'Misfire: work the bolt'), jam(boltStuck(RIFLE_KNOB), 'Jammed: stuck case')],
-  sniper: [misfire(boltCycle(SNIPER_KNOB, 1.0), 'Misfire: work the bolt'), jam(boltStuck(SNIPER_KNOB, 1.6), 'Jammed: stuck case')],
+  rifle: [misfire(boltCycle('rifle'), 'Misfire: work the bolt'), jam(boltStuck('rifle'), 'Jammed: stuck case')],
+  sniper: [misfire(boltCycle('sniper', 1.0), 'Misfire: work the bolt'), jam(boltStuck('sniper', 1.6), 'Jammed: stuck case')],
   lever: [misfire(leverCycle(LEVER_LOOP), 'Misfire: work the lever'), jam(leverJam(LEVER_LOOP), 'Jammed: lever stuck')],
   crossbow: [misfire(boltReseat(...CROSSBOW_RAIL), 'Bolt slipped: reseat it', 0)],
   bow: [],

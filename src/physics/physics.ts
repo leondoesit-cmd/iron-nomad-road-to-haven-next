@@ -114,6 +114,25 @@ export interface TreeFall {
   by: number;
 }
 
+/**
+ * A stone lying on the ground that a round can break: the instanced mesh that draws it (an `InstancedMesh`, kept opaque
+ * here so the physics needs no three.js) and its instance; what kind of stone (`render/scatter.ts` tags its meshes); and how
+ * to take it out of the world (its instance hidden, its collider gone).
+ */
+export interface StoneTarget {
+  im: unknown;
+  i: number;
+  kind: 'pebble' | 'boulder';
+  v: number;
+  /** Take it out of the world (once). */
+  remove(): void;
+}
+
+/** A key for a stone's place (to the decimetre), to keep it gone. */
+export function stoneKey(x: number, z: number): number {
+  return Math.round(x * 10) * 1e6 + Math.round(z * 10);
+}
+
 /** What the scene does when trees break and land, and when leaves are torn off (`game/timber.ts`). */
 export interface TreeEvents {
   snapped(f: TreeFall): void;
@@ -166,6 +185,10 @@ export class PhysicsWorld {
   contactForces: { a: number; b: number; x: number; y: number; z: number }[] = [];
   /** Wood that rounds can work, by collider handle (see `TreeTarget`). */
   trees = new Map<number, TreeTarget>();
+  /** Stones and boulders lying about, by collider handle (see `StoneTarget`, `game/stones.ts`). */
+  stones = new Map<number, StoneTarget>();
+  /** Where stones were shattered or knocked away (`stoneKey`), so a chunk built again leaves them out. */
+  brokenStones = new Set<number>();
   /** The scene's effects for trees breaking and leaves torn off; absent in bare physics. */
   treeEvents: TreeEvents | null = null;
 
@@ -292,6 +315,7 @@ export class PhysicsWorld {
     this.surfaces.delete(c.handle);
     this.impactHandlers.delete(c.handle);
     this.trees.delete(c.handle);
+    this.stones.delete(c.handle);
     this.world.removeCollider(c, false);
   }
 

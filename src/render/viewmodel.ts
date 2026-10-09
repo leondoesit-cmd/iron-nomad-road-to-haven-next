@@ -5,14 +5,16 @@ import { clamp, clamp01, damp, lerp } from '../core/math';
 import { GUN_BASE, GUN_POINTS, curve } from '../sim/weaponanim';
 import { FRAMES } from '../sim/gunFrames';
 import { drillPose, newDrillPose, type Drill, type HandAt } from '../sim/gunDrills';
+import { CROSSBOW_STRING, PARTS, PROPS, newActPose, type ActPose, type PartDef, type PropDef } from '../sim/gunActions';
+import { actAt, propAt, restAct, restProp, type PropAt, type Reload } from '../sim/reloads';
 import { flashes } from '../sim/weaponfx';
 import { GUN_MODELS, type GunModel } from '../data/gear';
 import { shared } from './dispose';
 import { applyKit } from './materials';
 import { DEFAULT_LOOK, drawUpperArm, sleeveColor } from './outfit';
-import { weaponGeometry, type Held, type Humanoid, type Palette } from './humanoid';
+import { weaponGeometry, weaponRig, type Held, type Humanoid, type Palette } from './humanoid';
 import { MuzzleFlash } from './muzzleFlash';
-import { weaponMaterial } from './weapons';
+import { weaponShader } from './weapons';
 import { muzzleAt, sightLine } from './gunMods';
 import { parseLooks } from '../sim/gunmods';
 import { ARROW_LEN, BRACE, BowRig } from './bow';
@@ -42,8 +44,8 @@ import { ARROW_LEN, BRACE, BowRig } from './bow';
  * - Points behind the eye (the shoulders) cannot be slid; for the triangles that reach back to them the plane's cut is
  *   switched off (EXT_depth_clamp) so they are not sliced either. The side, far and behind-the-eye limits still clip.
  * Clamping alone left every fragment nearer than the plane at one depth, so the sleeve's own surfaces tied and the wrong
- * one showed through as a flat patch. Not the weapon: a long gun's stock runs back into the cheek, and the near plane is
- * what keeps it out of the picture.
+ * one showed through as a flat patch. The weapon is drawn the same way: shouldered, its rear sight is a hand's breadth from
+ * the eye and its stock runs back past it to the shoulder.
  */
 const SQUASH = { value: new THREE.Vector2(0.205, 0.36) };
 function clampNear(m: THREE.Object3D) {
@@ -67,12 +69,19 @@ const depthClamp = (gl: WebGLRenderingContext | WebGL2RenderingContext) => {
   return e;
 };
 
-const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: THREE.DoubleSide });
-mat.onBeforeCompile = (shader) => {
-  applyKit(shader, true);
+/**
+ * A scope up to the eye: inside its eyepiece the composite draws the magnified world (`sights.ts`), so the arms and the gun
+ * are cut away there, or the scope's own tube seen end on would cover it. Its middle (NDC), radius (NDC height, 0 for none)
+ * and the view's aspect; set for each view as it is placed (`place`).
+ */
+const CUT = { value: new THREE.Vector4(0, 0, 0, 1) };
+
+/** Slide what is nearer than the near plane's slab out into it (see `SQUASH`), and cut the eyepiece out (see `CUT`). */
+function viewHooks(shader: THREE.WebGLProgramParametersWithUniforms) {
   shader.uniforms.uSquash = SQUASH;
+  shader.uniforms.uCut = CUT;
   shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', '#include <common>\nuniform vec2 uSquash;')
+    .replace('#include <common>', '#include <common>\nuniform vec2 uSquash;\nvarying vec4 vCut;')
     .replace(
       '#include <project_vertex>',
       `#include <project_vertex>
@@ -82,15 +91,45 @@ mat.onBeforeCompile = (shader) => {
     mvPosition.xyz *= ( uSquash.x + ( uSquash.y - uSquash.x ) * d / uSquash.y ) / d;
     gl_Position = projectionMatrix * mvPosition;
   }
+}
+vCut = gl_Position;`,
+    );
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform vec4 uCut;\nvarying vec4 vCut;')
+    .replace(
+      '#include <clipping_planes_fragment>',
+      `#include <clipping_planes_fragment>
+if ( uCut.z > 0.0 && vCut.w > 0.0 ) {
+  vec2 cq = ( vCut.xy / vCut.w - uCut.xy ) * vec2( uCut.w, 1.0 );
+  if ( dot( cq, cq ) < uCut.z * uCut.z ) discard;
 }`,
     );
+}
+
+const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: THREE.DoubleSide });
+mat.onBeforeCompile = (shader) => {
+  applyKit(shader, true);
+  viewHooks(shader);
   shader.fragmentShader = shader.fragmentShader.replace(
     '#include <emissivemap_fragment>',
     '#include <emissivemap_fragment>\nif ( !gl_FrontFacing ) normal = vec3( 0.0, 0.0, 1.0 );',
   );
 };
-mat.customProgramCacheKey = () => 'kit:true:cap:squash';
+mat.customProgramCacheKey = () => 'kit:true:cap:squash:cut';
 shared(mat);
+
+/**
+ * The weapon in first person: the weapons' own material (`weaponMaterial`) with the arms' squash and eyepiece cut. A
+ * shouldered gun's stock runs back past the eye to the shoulder, its rear sight a hand's breadth from it: in front of the eye
+ * all of it is slid into the near plane's slab like the arms, and only what is behind the eye is left out.
+ */
+const gunMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+gunMat.onBeforeCompile = (shader) => {
+  weaponShader(shader);
+  viewHooks(shader);
+};
+gunMat.customProgramCacheKey = () => 'kit:weapon:view';
+shared(gunMat);
 
 type V3 = [number, number, number];
 
@@ -106,6 +145,17 @@ const WRIST = new THREE.Vector3(0, 0.06, -0.036);
 const SHOULDER_R = new THREE.Vector3(0.2, -0.27, 0.07);
 const SHOULDER_L = new THREE.Vector3(-0.2, -0.27, 0.07);
 const SHOULDER_L_LONG = new THREE.Vector3(-0.24, -0.36, 0.0);
+/**
+ * A handgun pushed out at arm's length: the shoulders roll forward and in behind it and drop, so both arms rise from the
+ * bottom corners to the grip instead of reaching in level from the sides.
+ */
+const SHOULDER_R_PUSH = new THREE.Vector3(0.16, -0.31, -0.03);
+const SHOULDER_L_PUSH = new THREE.Vector3(-0.16, -0.31, -0.03);
+const _sR = new THREE.Vector3();
+const _sL = new THREE.Vector3();
+/** How far a wrist may bend off its forearm with a handgun pushed out (radians; see `handOn`). */
+const PUSH_BEND = 0.85;
+const _holdPush: Hold = { roll: 0, bend: 0, skew: 0 };
 /** How far the wrist bends off the line of the forearm, at most (radians). */
 const WRIST_BEND = 0.5;
 /** How far a hand rolls round its grip toward the forearm, and how far the forearm swings toward the hand, at most. */
@@ -140,6 +190,11 @@ const _pl = new THREE.Vector3();
 const POLE_DRAW = new THREE.Vector3(1, 0.12, -0.2).normalize();
 /** The hip-fire gun points at what the crosshair is on, this far out. */
 const CONVERGE = 20;
+/**
+ * How far a scope's exit pupil shadow is pushed (NDC height) per metre the eye is off the scope's line: the pupil is a few
+ * millimetres across, so a few millimetres of kick or sway darken one side of the picture.
+ */
+const PUPIL_GAIN = 60;
 
 /** A hand in a drill this frame: the drill, where the hand is in it, and how much of it shows. */
 interface DrillHand {
@@ -147,6 +202,53 @@ interface DrillHand {
   at: HandAt;
   w: number;
 }
+
+/** A working part of the gun in hand (a slide, a bolt, a cylinder): its mesh and how it moves. */
+interface PartMesh {
+  mesh: THREE.Mesh;
+  def: PartDef;
+}
+
+/**
+ * A thing the hands carry to the gun (a magazine, a shell, a speedloader), drawn in the view's own space: in the gun, in a
+ * hand, or falling free. `unhold` takes the hand's frame on it back to the thing's own (gun-frame) geometry.
+ */
+interface PropMesh {
+  name: string;
+  mesh: THREE.Mesh;
+  def: PropDef;
+  unhold: THREE.Matrix4;
+  state: PropAt['where'];
+  /** Falling: when it was let go (the rig's clock), and where, how fast and how it tumbles, in the world. */
+  fall: { t0: number; p: THREE.Vector3; v: THREE.Vector3; q: THREE.Quaternion; spin: THREE.Vector3 } | null;
+}
+
+/** Something let go of that has fallen out of the picture and is now the world's to keep (an empty magazine, cases). */
+export interface Fallen {
+  kind: NonNullable<PropDef['falls']>;
+  count: number;
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+}
+
+/** How long a thing let go of falls in the view before it is handed to the world (seconds), well out of the frame by then. */
+const FALL_HIDE = 0.32;
+const GRAVITY = new THREE.Vector3(0, -9.81, 0);
+const stringMat = shared(new THREE.MeshStandardMaterial({ color: 0x2a2622, roughness: 0.9, metalness: 0 }));
+const stringGeo = shared(new THREE.CylinderGeometry(0.0012, 0.0012, 1, 6).translate(0, 0.5, 0));
+
+/** A hand's frame from where it is, the line it closes round and the way its palm faces (the hand frame of `solveArm`). */
+function frameOf(p: THREE.Vector3, a: THREE.Vector3, n: THREE.Vector3, out: THREE.Matrix4): THREE.Matrix4 {
+  const x = _fx.copy(a).normalize();
+  const z = _fz.copy(n).addScaledVector(x, -n.dot(x));
+  if (z.lengthSq() < 1e-8) z.set(0, 0, 1).addScaledVector(x, -x.z);
+  z.normalize();
+  const y = _fy.copy(z).cross(x);
+  return out.makeBasis(x, y, z).setPosition(p);
+}
+const _fx = new THREE.Vector3();
+const _fy = new THREE.Vector3();
+const _fz = new THREE.Vector3();
 
 /**
  * A hand on the weapon, in the weapon's own frame (+z down the barrel, +y up, +x to the weapon's left): the middle of what
@@ -210,33 +312,60 @@ const HANDLE = (z: number, n: V3 = [1, 0, 0]): Grip => ({ p: [0, 0, z], a: [0, 0
 const MELEE_REST: V3 = [1.05, 0.3, 0.12];
 const HANDGUNS: GunModel[] = ['pistol', 'compact', 'mp', 'revolver', 'cannon'];
 
-/** How each kind of gun is carried and aimed (hip, sight distance, shouldered); the hands come from the gun's frame. */
+/**
+ * How each kind of gun is carried and aimed (hip, sight distance, shouldered); the hands come from the gun's frame. The sight
+ * distance here is only a default: the gun in hand is measured for it (`adsDistance`).
+ */
 const CARRY: Record<'handgun' | 'smg' | 'sawn' | 'pump' | 'rifle' | 'crossbow', Pick<Spec, 'hip' | 'ads' | 'long'>> = {
-  // Shouldered, but the grip held a little further out: the bolt is seated with the hand over the rail.
-  crossbow: { hip: [0.11, -0.26, -0.26], ads: 0.38, long: true },
-  handgun: { hip: [0.075, -0.18, -0.33], ads: 0.42 },
-  smg: { hip: [0.1, -0.24, -0.28], ads: 0.35, long: true },
-  sawn: { hip: [0.1, -0.24, -0.27], ads: 0.36, long: true },
-  pump: { hip: [0.11, -0.26, -0.23], ads: 0.35, long: true },
-  rifle: { hip: [0.11, -0.26, -0.22], ads: 0.35, long: true },
+  crossbow: { hip: [0.11, -0.26, -0.26], ads: 0.27, long: true },
+  handgun: { hip: [0.075, -0.18, -0.33], ads: 0.55 },
+  smg: { hip: [0.1, -0.24, -0.28], ads: 0.1, long: true },
+  sawn: { hip: [0.1, -0.24, -0.27], ads: 0.5, long: true },
+  pump: { hip: [0.11, -0.26, -0.23], ads: 0.17, long: true },
+  rifle: { hip: [0.11, -0.26, -0.22], ads: 0.13, long: true },
 };
 /** Which way each gun is carried: by its base gun, except the shouldered crossbow and the two-handed machine pistol. */
 const carryOf = (m: GunModel) => (HANDGUNS.includes(m) ? CARRY.handgun : m === 'crossbow' ? CARRY.crossbow : CARRY[GUN_BASE[m] === 'pistol' || GUN_BASE[m] === 'revolver' ? 'handgun' : (GUN_BASE[m] as 'smg' | 'sawn' | 'pump' | 'rifle')]);
 
 /**
- * With the sights up the firing hand stays at least this far out from the eye (metres), clear of the near plane (0.2 m) with
- * its wrist: a gun whose rear sight sits far up the barrel from the grip (a lever gun's buckhorn, a double's rib) is held
- * further out, up to `ADS_FAR`.
+ * With the sights up a gun with a stock is shouldered, the way it is in the hands: the butt in the pocket of the shoulder and
+ * the cheek down on the comb, the eye this far ahead of the butt plate along the line of sight (metres). Where the sights
+ * then sit is the gun's own build: an AR's rear aperture a hand's breadth from the eye, a lever gun's buckhorn far up the
+ * barrel, a scope at its eye relief.
  */
-const GRIP_CLEAR = 0.34;
-const ADS_FAR = 0.58;
-/** A handgun's arms run straight back from the grip at both bottom corners, so its grip is held a little further out still. */
-const GRIP_CLEAR_HANDGUN = 0.37;
-const adsOf = (m: GunModel) => {
+const POCKET = 0.17;
+/** The nearest a shouldered gun's rear sight (or a scope's eyepiece) comes to the eye, and the furthest any sight goes. */
+const SIGHT_NEAR = 0.08;
+const ADS_FAR = 0.65;
+/**
+ * A red dot or holographic sight is looked through from further back than iron sights: right up at the eye its housing
+ * would close the view down to its little window, so the gun rides a little further out on the cheek.
+ */
+const DOT_NEAR = 0.16;
+const DOT_LOOKS = new Set(['dot', 'reflex', 'holo']);
+/** A handgun is pushed out to the target on near-straight arms: its grip this far out from the eye. */
+const HANDGUN_OUT = 0.58;
+/** A gun with no stock to shoulder (a sawn-off on its pistol grip) is held out in both hands: its grip this far out. */
+const HELD_OUT = 0.4;
+/** A gun counts as stocked when its butt reaches this far back behind the grip. */
+const STOCKED = 0.15;
+
+/**
+ * Eye to rear sight with the sights up (metres), for a gun whose sight line runs back to `rear` and whose butt (the back of
+ * its model, add-ons and all) is at `butt`, both along the gun's own z.
+ */
+export function adsDistance(m: GunModel, rear: V3, butt: number, near = SIGHT_NEAR): number {
   const f = FRAMES[m];
-  const clear = HANDGUNS.includes(m) ? GRIP_CLEAR_HANDGUN : GRIP_CLEAR;
-  return clamp(f.rear[2] - f.grip.p[2] + clear, carryOf(m).ads, ADS_FAR);
-};
+  if (HANDGUNS.includes(m)) return clamp(rear[2] - f.grip.p[2] + HANDGUN_OUT, near, ADS_FAR);
+  if (f.grip.p[2] - butt < STOCKED) return clamp(rear[2] - f.grip.p[2] + HELD_OUT, near, ADS_FAR);
+  return clamp(rear[2] - butt - POCKET, near, ADS_FAR);
+}
+
+/** The back of a weapon model (its butt plate on a long gun), along its own z. */
+function buttOf(g: THREE.BufferGeometry): number {
+  if (!g.boundingBox) g.computeBoundingBox();
+  return g.boundingBox!.min.z;
+}
 
 const SPECS = {} as Record<Exclude<Held, 'none'>, Spec>;
 for (const m of GUN_MODELS) {
@@ -244,7 +373,6 @@ for (const m of GUN_MODELS) {
   const hand = HANDGUNS.includes(m);
   SPECS[m] = {
     ...carryOf(m),
-    ads: adsOf(m),
     scale: 1,
     r: GRIP_R(f.grip.p, f.grip.a),
     l: f.support ? (hand ? SUPPORT_HANDGUN(f.support, f.grip.a) : FORE_END(f.support)) : undefined,
@@ -569,6 +697,21 @@ export class ViewModel {
   private dp = newDrillPose();
   private dhL: DrillHand = { d: null!, at: this.dp.l, w: 0 };
   private dhR: DrillHand = { d: null!, at: this.dp.r, w: 0 };
+  /** The gun's working parts and the things the hands carry to it, for the gun in hand. */
+  private parts: PartMesh[] = [];
+  private props: PropMesh[] = [];
+  /** The parts' channels this frame, and what the gun has at rest. */
+  readonly act: ActPose = newActPose();
+  private actRest: ActPose = newActPose();
+  /** A crossbow's string, drawn here so a hand can draw it back. */
+  private strings: THREE.Mesh[] = [];
+  /** Where each hand's spot is this frame, unturned (camera space), for what it carries. */
+  private hands = { l: { p: new THREE.Vector3(), a: new THREE.Vector3(), n: new THREE.Vector3(), on: false }, r: { p: new THREE.Vector3(), a: new THREE.Vector3(), n: new THREE.Vector3(), on: false } };
+  /** Things let go of that have fallen out of the picture, waiting for the game to put them in the world. */
+  private fallen: Fallen[] = [];
+  private camPrev = new THREE.Vector3();
+  private camVel = new THREE.Vector3();
+  private placedAt = -1;
 
   constructor(pal: Palette) {
     const g = (this.geo = viewArms(pal));
@@ -610,6 +753,10 @@ export class ViewModel {
       this.weapon.removeFromParent();
       this.weapon = null;
     }
+    for (const p of this.props) p.mesh.removeFromParent();
+    this.parts = [];
+    this.props = [];
+    this.strings = [];
     if (this.bow) {
       this.bow.group.removeFromParent();
       this.bow = null;
@@ -623,14 +770,20 @@ export class ViewModel {
       this.weapon = this.bow.riser;
       return;
     }
-    // The close-up model, with the add-ons fitted: a dot or a scope on the rail is what the sights come up behind.
-    const m = new THREE.Mesh(weaponGeometry(kind, mods, 'hi'), weaponMaterial());
+    // The close-up model, with the add-ons fitted: a dot or a scope on the rail is what the sights come up behind. A gun is
+    // built in its working parts, each its own mesh on the body, and the things the hands carry to it.
+    const gunHeld = isGun(kind);
+    const rig = gunHeld ? weaponRig(kind, mods) : null;
+    const m = new THREE.Mesh(rig ? rig.body : weaponGeometry(kind, mods, 'hi'), gunMat);
     m.frustumCulled = false;
+    clampNear(m);
     this.gun.add(m);
     this.weapon = m;
-    if (!isGun(kind)) return;
+    if (!gunHeld || !rig) return;
+    this.buildParts(kind, rig.parts, m);
     const looks = parseLooks(mods);
     this.sight = sightLine(kind, looks);
+    this.adsD = adsDistance(kind, this.sight.rear, buttOf(m.geometry), DOT_LOOKS.has(looks.optic ?? '') ? DOT_NEAR : SIGHT_NEAR);
     const tip = muzzleAt(kind, looks);
     this.tip.set(GUN_POINTS[kind].muzzle[0], tip.y, tip.z);
     if (flashes(kind)) {
@@ -640,10 +793,89 @@ export class ViewModel {
     }
   }
 
+  /** The gun's working parts on its body, the carried things in the view, and a crossbow's string. */
+  private buildParts(kind: GunModel, geos: Record<string, THREE.BufferGeometry>, body: THREE.Mesh) {
+    const defs = PARTS[kind] ?? {};
+    const props = PROPS[kind] ?? {};
+    const used = new Set<string>(Object.values(props).map((p) => p.geo));
+    const mk = (g: THREE.BufferGeometry) => {
+      const mesh = new THREE.Mesh(g, gunMat);
+      mesh.frustumCulled = false;
+      mesh.matrixAutoUpdate = false;
+      clampNear(mesh);
+      return mesh;
+    };
+    // Parts in order, each on the part it rides on (parts riding on others come after them in the table).
+    const byName = new Map<string, THREE.Mesh>();
+    for (const [name, def] of Object.entries(defs)) {
+      const g = geos[name];
+      if (!g) continue;
+      const mesh = mk(g);
+      (def.on ? byName.get(def.on) ?? body : body).add(mesh);
+      byName.set(name, mesh);
+      this.parts.push({ mesh, def });
+    }
+    for (const [name, def] of Object.entries(props)) {
+      const g = geos[def.geo];
+      if (!g) continue;
+      const mesh = mk(g);
+      mesh.visible = false;
+      this.root.add(mesh);
+      const unhold = frameOf(_v.set(...def.hold.p), _a.set(...def.hold.a), _n.set(...def.hold.n), new THREE.Matrix4()).invert();
+      this.props.push({ name, mesh, def, unhold, state: 'off', fall: null });
+    }
+    // Pieces with no part or prop of their own (a box magazine fitted to a bolt rifle) stay on the body as they are.
+    for (const [name, g] of Object.entries(geos)) {
+      if (defs[name] || used.has(name) || name === 'string' || name.startsWith('prop:')) continue;
+      const mesh = new THREE.Mesh(g, gunMat);
+      mesh.frustumCulled = false;
+      clampNear(mesh);
+      body.add(mesh);
+    }
+    if (kind === 'crossbow') {
+      for (let i = 0; i < 2; i++) {
+        const s = new THREE.Mesh(stringGeo, stringMat);
+        s.frustumCulled = false;
+        body.add(s);
+        this.strings.push(s);
+      }
+    }
+  }
+
+  /**
+   * Whether this view is being drawn (placed on its camera lately): only then can its arms let things fall and hand them
+   * to the world (`takeFallen`); otherwise the game drops them itself.
+   */
+  get live(): boolean {
+    return this.placedAt >= 0 && this.t - this.placedAt < 0.25;
+  }
+
+  /** Things let go of that have fallen out of the picture since the last call, for the game to put in the world. */
+  takeFallen(): Fallen[] {
+    if (this.fallen.length === 0) return this.fallen;
+    const out = this.fallen;
+    this.fallen = [];
+    return out;
+  }
+
   /** The add-ons on the weapon in hand (their look key), the line its sights or optic look along, and its muzzle's tip. */
   private mods = '';
   private sight: { rear: V3; front: V3 } | null = null;
   private tip = new THREE.Vector3();
+  /** Eye to the rear sight (or the optic's back end) with the sights up, for the gun in hand (`adsDistance`). */
+  private adsD = 0.3;
+  /**
+   * Where the line of the sights passes the eye this frame, NDC height: (0, 0) with the eye on it; off it with a shot's kick,
+   * a step, the sights coming up. Through a scope it is the way the exit pupil's shadow is pushed (`sights.ts`).
+   */
+  readonly sightOff = new THREE.Vector2();
+  /** The radius (NDC height) of a scope's eyepiece in this view this frame, cut out of the arms and the gun (0 for none). */
+  cut = 0;
+
+  /** The weapon in hand is a handgun, held out at arm's length. */
+  get handgun(): boolean {
+    return HANDGUNS.includes(this.held as GunModel);
+  }
 
   /**
    * Pose the arms and the weapon for this frame, in camera space. Reads what the third-person rig was handed (the weapon,
@@ -661,6 +893,14 @@ export class ViewModel {
     const gun = isGun(kind);
     const bow = this.bow;
     const gp = h.gunPose;
+    // The routine the hands are working the gun through (a reload, the action worked after a shot): played like a drill,
+    // with the gun's parts and what the hands carry. The rig's own reload pose (`gunPose`) is the third person's; it fades
+    // out while a routine plays.
+    const rs = h.reload;
+    const routine = gun && !bow && rs.r && rs.w > 0 ? rs.r : null;
+    const rw = routine ? clamp01(rs.w) : 0;
+    const gpOn = 1 - rw;
+    this.hands.l.on = this.hands.r.on = false;
     this.sf = damp(this.sf, m.strafe, 7, dt);
     this.ff = damp(this.ff, m.fwd, 5, dt);
     const ads = gun ? smooth01(m.ads) : 0;
@@ -682,7 +922,7 @@ export class ViewModel {
         const rear = _v.set(g.rear[0], g.rear[1], g.rear[2]).multiplyScalar(s).applyQuaternion(_q2);
         const grip = _a.set(spec.r.p[0], spec.r.p[1], spec.r.p[2]).multiplyScalar(s).applyQuaternion(_q2);
         // Where the grip is with the rear sight at the right distance down the line of sight.
-        grip.sub(rear).add(_n.set(0, 0, -spec.ads));
+        grip.sub(rear).add(_n.set(0, 0, -this.adsD));
         P.lerp(grip, ads);
         Q.slerp(_q2, ads);
       }
@@ -748,11 +988,11 @@ export class ViewModel {
       dy += 0.02 * gp.high;
       rx += 1.0 * gp.high;
       // A reload brings the gun in to the middle of the chest, canted to the support hand, the muzzle moved.
-      const rl = clamp(Math.max(Math.abs(gp.tilt) * 2, Math.abs(gp.pitch) * 1.5, gp.down), 0, 1);
+      const rl = clamp(Math.max(Math.abs(gp.tilt) * 2, Math.abs(gp.pitch) * 1.5, gp.down), 0, 1) * gpOn;
       dx -= 0.05 * rl;
       dy += 0.035 * rl;
       dz += 0.07 * rl;
-      rx -= gp.pitch;
+      rx -= gp.pitch * gpOn;
     }
     if (swing > 0) {
       const e = 1 - swing;
@@ -769,6 +1009,22 @@ export class ViewModel {
         dx -= 0.12 * k;
         dy += 0.14 * k;
         dz -= 0.22 * k;
+      } else if (h.swingStyle === 'back') {
+        // Back across the other way: wound up over the left shoulder, cut down and out to the right, recovered.
+        dx += curve([[0, 0], [0.3, -0.24], [0.55, 0.2], [1, 0]], e);
+        dy += curve([[0, 0], [0.3, 0.1], [0.55, -0.06], [1, 0]], e);
+        dz += curve([[0, 0], [0.3, 0.08], [0.55, -0.12], [1, 0]], e);
+        rx += curve([[0, 0], [0.3, 0.35], [0.55, -1.3], [1, 0]], e);
+        ry += curve([[0, 0], [0.3, 0.6], [0.55, -0.7], [1, 0]], e);
+        rz += curve([[0, 0], [0.3, 0.65], [0.55, -0.55], [1, 0]], e);
+      } else if (h.swingStyle === 'over') {
+        // Straight over the top: raised high, chopped down in front, recovered.
+        dx += curve([[0, 0], [0.3, -0.04], [0.55, -0.08], [1, 0]], e);
+        dy += curve([[0, 0], [0.3, 0.24], [0.55, -0.16], [1, 0]], e);
+        dz += curve([[0, 0], [0.3, 0.12], [0.55, -0.16], [1, 0]], e);
+        rx += curve([[0, 0], [0.3, 0.8], [0.55, -2.2], [1, 0]], e);
+        ry += curve([[0, 0], [0.3, -0.1], [0.55, 0.15], [1, 0]], e);
+        rz += curve([[0, 0], [0.3, -0.1], [0.55, 0.1], [1, 0]], e);
       } else {
         // Over the top and down across: wound up and back, chopped down to the left, recovered.
         dx += curve([[0, 0], [0.3, 0.08], [0.55, -0.3], [1, 0]], e);
@@ -779,8 +1035,8 @@ export class ViewModel {
         rz += curve([[0, 0], [0.3, -0.5], [0.55, 0.6], [1, 0]], e);
       }
     }
-    // A drill of the hands (a re-grip, a jam being cleared) moves the weapon too.
-    const dr = h.drill;
+    // A drill of the hands (a re-grip, a jam being cleared, a reload) moves the weapon too.
+    const dr = routine ? rs : h.drill;
     const dw = dr.r && kind !== 'none' ? clamp01(dr.w) : 0;
     const dp = dw > 0 ? drillPose(dr.r!, dr.t, this.dp) : null;
     // A gun is canted about its barrel, the way a wrist turns it (about the view it would swing the forearm into the lens);
@@ -800,7 +1056,7 @@ export class ViewModel {
     P.z += dz;
     Q.premultiply(_q2.setFromEuler(_e.set(rx, ry, rz, 'YXZ')));
     // Canted about the barrel for a reload, or a drill.
-    if (gun && (gp.tilt || cant)) Q.multiply(_q2.setFromAxisAngle(_x.set(0, 0, 1), gp.tilt + cant));
+    if (gun && (gp.tilt || cant)) Q.multiply(_q2.setFromAxisAngle(_x.set(0, 0, 1), gp.tilt * gpOn + cant));
 
     // The weapon: placed so its grip lands on P.
     const g = this.gun;
@@ -808,8 +1064,18 @@ export class ViewModel {
     g.scale.setScalar(s);
     g.position.copy(P).sub(_v.set(spec.r.p[0], spec.r.p[1], spec.r.p[2]).multiplyScalar(s).applyQuaternion(Q));
     g.updateMatrix();
+    this.sightOff.set(0, 0);
+    if (gun && !bow && this.sight) {
+      // The eye off the line of the sights, square to it: where the line (its nearest point) is, seen from the eye.
+      const a = _v.set(...this.sight.rear).applyMatrix4(g.matrix);
+      const dir = _w.set(...this.sight.front).applyMatrix4(g.matrix).sub(a).normalize();
+      a.addScaledVector(dir, -a.dot(dir));
+      this.sightOff.set(clamp(a.x * PUPIL_GAIN, -1, 1), clamp(a.y * PUPIL_GAIN, -1, 1));
+    }
     // Turned in the fingers about its grip (a knife rolled, a handle twisted), the hand staying where it is.
     if (this.weapon && !bow) this.spin(spec.r, dp ? dp.spin * dw : 0);
+    // The working parts as the routine or the drill works them (a jam cleared racks the real slide).
+    if (gun && !bow) this.workParts(kind, dw > 0 && (routine || dr.r?.act) ? dr.r : null, dr.t, dw, h.gunEmpty, h.flash.amount);
     const dhL = dp && dr.r!.l ? this.drillHand(this.dhL, dr.r!, dw) : null;
     const dhR = dp && dr.r!.r ? this.drillHand(this.dhR, dr.r!, dw) : null;
 
@@ -820,7 +1086,7 @@ export class ViewModel {
     }
     // Right hand: on the grip, or off to the bolt.
     let rp = spec.r.p;
-    if (gun && gp.bolt && gp.rack > 0.001) {
+    if (gun && gp.bolt && gp.rack > 0.001 && !routine) {
       const k = clamp01(gp.rack * 3);
       rp = [lerp(rp[0], -0.045, k), lerp(rp[1], 0.05, k), lerp(rp[2], 0.12 - gp.rack * 0.09, k)];
     }
@@ -828,11 +1094,14 @@ export class ViewModel {
     const poleR = dp ? _pr.copy(poleR0).lerp(POLE_TUCK_R, dw).normalize() : poleR0;
     const pole0 = spec.long && spec.l ? POLE_FORE : ads > 0 ? _pb.copy(POLE_L).lerp(POLE_L_ADS, ads).normalize() : POLE_L;
     const poleL = dp ? _pl.copy(pole0).lerp(POLE_TUCK_L, dw).normalize() : pole0;
-    this.handOn(rp, spec.r, 'r', this.handR, SHOULDER_R, poleR, this.upperR, this.foreR, 0, dhR);
+    const push = gun && this.handgun ? ads : 0;
+    const shR = push > 0 ? _sR.lerpVectors(SHOULDER_R, SHOULDER_R_PUSH, push) : SHOULDER_R;
+    const shL = push > 0 ? _sL.lerpVectors(SHOULDER_L, SHOULDER_L_PUSH, push) : SHOULDER_L;
+    this.handOn(rp, spec.r, 'r', this.handR, shR, poleR, this.upperR, this.foreR, 0, dhR, push);
     // Left hand: on the support grip unless a reload has it at the belt or it is racking the slide; or a loose guard.
     if (spec.l) {
       let lp = spec.l.p;
-      if (gun && !gp.bolt && gp.rack > 0.001) {
+      if (gun && !gp.bolt && gp.rack > 0.001 && !routine) {
         if (kind === 'pump') lp = [lp[0], lp[1], lp[2] - gp.rack * 0.09];
         else {
           // Over the top of the slide and back.
@@ -840,10 +1109,130 @@ export class ViewModel {
           lp = [lerp(lp[0], 0.0, k), lerp(lp[1], 0.075, k), lerp(lp[2], 0.08 - gp.rack * 0.06, k)];
         }
       }
-      const down = gun ? gp.down : 0;
-      this.handOn(lp, spec.l, 'l', this.handL, spec.long ? SHOULDER_L_LONG : SHOULDER_L, poleL, this.upperL, this.foreL, down, dhL);
+      const down = gun ? gp.down * gpOn : 0;
+      this.handOn(lp, spec.l, 'l', this.handL, spec.long ? SHOULDER_L_LONG : shL, poleL, this.upperL, this.foreL, down, dhL, push);
     } else this.guard(swing, dhL);
-    if (m.flip > 0.001) this.flipOff(smooth01(m.flip), spec.long ? SHOULDER_L_LONG : SHOULDER_L);
+    if (m.flip > 0.001) this.flipOff(smooth01(m.flip), spec.long ? SHOULDER_L_LONG : shL);
+    if (gun) this.placeProps(kind, routine, rs.t, rw, h.gunEmpty);
+  }
+
+  /** The working parts where the routine (or the gun at rest) has them: a slide back, a bolt up, a cylinder out. */
+  private workParts(kind: GunModel, routine: Drill | null, t: number, w: number, empty: boolean, shot = 0) {
+    const act = this.act;
+    restAct(kind, empty, this.actRest);
+    if (routine) {
+      actAt(routine, t, this.actRest, act);
+      if (w < 1) for (const a of Object.keys(act) as (keyof ActPose)[]) act[a] = lerp(this.actRest[a], act[a], w);
+    } else Object.assign(act, this.actRest);
+    // The moment of a shot: a slide, or a handle riding on the bolt, blows back and slams home with it.
+    const blow = BLOWBACK[kind];
+    if (blow && shot > 0) act[blow] = Math.max(act[blow], Math.min(1, shot * 1.4));
+    for (const p of this.parts) {
+      partMatrix(p.def, act, p.mesh.matrix);
+      p.mesh.matrixWorldNeedsUpdate = true;
+    }
+    if (this.strings.length) {
+      // The string from each limb's tip to its middle, wherever the middle is between down and drawn.
+      const S = CROSSBOW_STRING;
+      const nock = _s.set(...S.rest).lerp(_v.set(...S.cocked), clamp01(act.cock));
+      for (let i = 0; i < 2; i++) {
+        const s = this.strings[i];
+        s.position.set(...S.tips[i]);
+        const d = _a.copy(nock).sub(s.position);
+        const len = d.length();
+        s.quaternion.setFromUnitVectors(UP, d.divideScalar(Math.max(len, 1e-6)));
+        s.scale.set(1, len, 1);
+      }
+    }
+  }
+
+  /** A part's matrix on the gun (or on the part it rides on), through the parts' channels. */
+  private partChain(name: string | undefined, out: THREE.Matrix4): THREE.Matrix4 {
+    if (!name) return out.identity();
+    const p = this.parts.find((q) => q.def === PARTS[this.held as GunModel]?.[name]);
+    if (!p) return out.identity();
+    this.partChain(p.def.on, out);
+    return out.multiply(p.mesh.matrix);
+  }
+
+  /**
+   * Put each carried thing where the routine has it: in the gun at its seat (shifted, riding on its part), in a hand as the
+   * hand holds it, falling free, or away. With no routine, the gun is as it is at rest (loaded, unless it was shot dry).
+   */
+  private placeProps(kind: GunModel, routine: Reload | null, t: number, w: number, empty: boolean) {
+    const w0 = this.weapon!;
+    w0.updateMatrix();
+    const gunCam = _pm.multiplyMatrices(this.gun.matrix, w0.matrix);
+    for (const pr of this.props) {
+      const keys = routine?.props?.[pr.name];
+      let where: PropAt['where'];
+      let off: [number, number, number] = [0, 0, 0];
+      if (keys) {
+        const at = propAt(keys, t, _propAt);
+        where = at.where;
+        off = at.off;
+      } else where = restProp(kind, pr.name, empty) ? 'gun' : 'off';
+      // A hand on its way back from a routine cut short has let go of what it carried; and a hand not at a spot has nothing.
+      if ((where === 'l' || where === 'r') && (w < 0.999 || !this.hands[where].on)) where = 'off';
+      const mesh = pr.mesh;
+      if (where !== 'drop') pr.fall = null;
+      switch (where) {
+        case 'gun':
+          this.partChain(pr.def.on, _pm2);
+          mesh.matrix.multiplyMatrices(gunCam, _pm2).multiply(_pm3.makeTranslation(off[0], off[1], off[2]));
+          mesh.visible = true;
+          break;
+        case 'l':
+        case 'r': {
+          const hf = this.hands[where];
+          mesh.matrix.multiplyMatrices(frameOf(hf.p, hf.a, hf.n, _pm2), pr.unhold);
+          mesh.visible = true;
+          break;
+        }
+        case 'drop':
+          if (pr.state !== 'drop' && mesh.visible && this.placedAt >= 0) this.letGo(pr);
+          else if (!pr.fall) mesh.visible = false;
+          break;
+        default:
+          mesh.visible = false;
+      }
+      pr.state = where;
+      mesh.matrixWorldNeedsUpdate = true;
+    }
+  }
+
+  /** A carried thing let go of: from where it is in the world now, it falls with the body's way of going and a tumble. */
+  private letGo(pr: PropMesh) {
+    const world = _pm2.multiplyMatrices(this.root.matrixWorld, pr.mesh.matrix);
+    const p = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    world.decompose(p, q, _v);
+    const v = this.camVel.clone().multiplyScalar(0.9);
+    v.y -= 0.35;
+    // Thrown off a little to the left and away, the way a hand lets a magazine go.
+    v.addScaledVector(_a.set(-0.6, 0, -0.4).applyQuaternion(this.root.quaternion), 0.45);
+    const spin = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(5 + Math.random() * 4);
+    pr.fall = { t0: this.t, p, v, q, spin };
+  }
+
+  /** Falling things, placed in the world under the camera as it is now; handed to the world once out of the picture. */
+  private fallProps() {
+    const inv = _pm.copy(this.root.matrixWorld).invert();
+    for (const pr of this.props) {
+      const f = pr.fall;
+      if (!f || !pr.mesh.visible) continue;
+      const tau = this.t - f.t0;
+      const p = _v.copy(f.p).addScaledVector(f.v, tau).addScaledVector(GRAVITY, 0.5 * tau * tau);
+      if (tau > FALL_HIDE) {
+        pr.mesh.visible = false;
+        if (pr.def.falls) this.fallen.push({ kind: pr.def.falls, count: pr.def.count ?? 1, pos: p.clone(), vel: f.v.clone().addScaledVector(GRAVITY, tau) });
+        continue;
+      }
+      const ang = f.spin.length() * tau;
+      const q = _q.copy(f.q).premultiply(_q2.setFromAxisAngle(_a.copy(f.spin).normalize(), ang));
+      pr.mesh.matrix.multiplyMatrices(inv, _pm2.compose(p, q, _s.set(1, 1, 1)));
+      pr.mesh.matrixWorldNeedsUpdate = true;
+    }
   }
 
   /** The bow's grip at `P`, turned by `Q`, for a draw `k`: the arrow along its line from the shelf, the top canted right. */
@@ -897,7 +1286,7 @@ export class ViewModel {
    * Put a hand on the weapon at `p` (weapon space), or partway to the belt by `down`, and bend the arm to it. In a drill the
    * hand goes where the drill has it instead.
    */
-  private handOn(p: V3, grip: Grip, side: 'r' | 'l', hand: THREE.Mesh, shoulder: THREE.Vector3, pole: THREE.Vector3, upper: THREE.Mesh, fore: THREE.Mesh, down = 0, dh: DrillHand | null = null) {
+  private handOn(p: V3, grip: Grip, side: 'r' | 'l', hand: THREE.Mesh, shoulder: THREE.Vector3, pole: THREE.Vector3, upper: THREE.Mesh, fore: THREE.Mesh, down = 0, dh: DrillHand | null = null, push = 0) {
     const g = this.gun;
     const t = _s.set(p[0], p[1], p[2]).applyMatrix4(g.matrix);
     const a = _a.set(grip.a[0], grip.a[1], grip.a[2]).applyQuaternion(g.quaternion);
@@ -911,7 +1300,14 @@ export class ViewModel {
     hand.geometry = dh ? this.drillReach(dh, side, t, a, n, p, grip) : this.geo.hand[side][grip.thumb];
     // Off its grip (down at the belt, or away at work in a drill) the hand holds on the plain way.
     const on = (1 - clamp01(down)) * (dh ? 1 - dh.w * (1 - this.gripOn) : 1);
-    solveArm(shoulder, t, a, n, pole, hand, upper, fore, holdOf(grip, on));
+    let hold = holdOf(grip, on);
+    if (push > 0) {
+      // Pushed out on a handgun the wrists lock with the gun, the forearms on the line from the elbows below: the wrist
+      // takes the angle between the grip's rake and that line, so the elbow is not swung up level with the hand.
+      hold = Object.assign(_holdPush, hold);
+      hold.bend = lerp(hold.bend, PUSH_BEND, push);
+    }
+    solveArm(shoulder, t, a, n, pole, hand, upper, fore, hold);
   }
 
   /** The free hand of a one-handed weapon: low on the left, a loose fist, barely in frame; it comes up for balance in a swing. */
@@ -944,6 +1340,12 @@ export class ViewModel {
     const at = dh.at;
     const fromOn = this.spotAt(dh.d, at.from, p, grip, rp, ra, rn, _h0);
     const toOn = this.spotAt(dh.d, at.to, p, grip, rp, ra, rn, _h1);
+    // What the hand carries goes with the spots as they are laid out (a magazine's line one way up, not the nearer).
+    const hf = this.hands[side];
+    hf.p.lerpVectors(_h0.p, _h1.p, at.k).lerp(t, 1 - dh.w);
+    hf.a.lerpVectors(_h0.a, _h1.a, at.k).normalize();
+    hf.n.lerpVectors(_h0.n, _h1.n, at.k).normalize();
+    hf.on = dh.w > 0.999 && at.from !== 'grip' && at.to !== 'grip';
     // A hand's frame does not care which way along its line `a` points, so take the nearer way round.
     if (_h1.a.dot(_h0.a) < 0) _h1.a.negate();
     _h0.p.lerp(_h1.p, at.k);
@@ -966,6 +1368,13 @@ export class ViewModel {
   private spotAt(d: Drill, name: string, p: V3 | null, grip: Grip | null, rp: THREE.Vector3, ra: THREE.Vector3, rn: THREE.Vector3, out: typeof _h0): boolean {
     const s = name === 'grip' ? undefined : d.spots?.[name];
     const g = this.gun;
+    if (s && 'cam' in s) {
+      // On the body, in the view's own frame: a pouch on the belt.
+      out.p.set(s.cam[0], s.cam[1], s.cam[2]);
+      out.a.set(s.a[0], s.a[1], s.a[2]);
+      out.n.set(s.n[0], s.n[1], s.n[2]);
+      return false;
+    }
     if (!s || ('off' in s && (!p || !grip))) {
       out.p.copy(rp);
       out.a.copy(ra);
@@ -1000,16 +1409,30 @@ export class ViewModel {
   /** Move onto the camera for its view. */
   place(cam: THREE.Camera) {
     cam.matrixWorld.decompose(this.root.position, this.root.quaternion, _v);
+    // How fast the eye is going, for what is let go of to keep going with it.
+    const dtp = this.t - this.placedAt;
+    if (this.placedAt >= 0 && dtp > 1e-4) this.camVel.copy(this.root.position).sub(this.camPrev).divideScalar(dtp).clampLength(0, 12);
+    this.camPrev.copy(this.root.position);
+    this.placedAt = this.t;
     // An optic's zoom narrows the view, which would blow the gun and the arms up with the world until they filled it: drawn
     // that much smaller across the view (not in depth), they keep the size they have without it, and only the world through
-    // the sights is magnified.
+    // the sights is magnified. Behind iron sights or a dot (`gunZoom`) the sight picture comes in closer with the world, by
+    // part of the zoom.
     const z = Math.max(1, this.zoom);
-    this.root.scale.set(1 / z, 1 / z, 1);
+    const k = clamp(this.gunZoom, 1, z) / z;
+    this.root.scale.set(k, k, 1);
     this.root.updateMatrixWorld(true);
+    CUT.value.set(0, 0, this.cut, (cam as THREE.PerspectiveCamera).aspect ?? 1);
+    if (this.props.length) {
+      this.fallProps();
+      this.root.updateMatrixWorld(true);
+    }
   }
 
   /** The zoom the owner's view is drawn with this frame (an optic's magnification with the sights up; 1 without). */
   zoom = 1;
+  /** How much of that the gun and the arms are magnified by themselves (1: not at all, they keep their unzoomed size). */
+  gunZoom = 1;
 
   /** The muzzle flash: how much of it is left this frame (the rig's own flash decides when). */
   muzzle(k: number) {
@@ -1133,6 +1556,35 @@ function reachArm(sh: THREE.Vector3, wrist: THREE.Vector3, pole: THREE.Vector3, 
   const h = Math.sqrt(Math.max(0, UPPER * UPPER - along * along));
   const side = _w.copy(pole).addScaledVector(d, -pole.dot(d)).normalize();
   elbow.copy(sh).addScaledVector(d, along).addScaledVector(side, h);
+}
+
+/** The part that runs back with each shot, on the guns whose slide or bolt handle reciprocates. */
+const BLOWBACK: Partial<Record<GunModel, keyof ActPose>> = { pistol: 'slide', compact: 'slide', mp: 'slide', smg: 'handle', carbine: 'handle', combat: 'handle' };
+
+const _pm = new THREE.Matrix4();
+const _pm2 = new THREE.Matrix4();
+const _pm3 = new THREE.Matrix4();
+const _pm4 = new THREE.Matrix4();
+const _pax = new THREE.Vector3();
+const _propAt: PropAt = { where: 'off', off: [0, 0, 0], since: 0 };
+
+/** A working part's matrix in the frame of what it rides on: each of its moves in order, the first innermost. */
+function partMatrix(def: PartDef, act: ActPose, out: THREE.Matrix4): THREE.Matrix4 {
+  out.identity();
+  for (const mv of def.moves) {
+    const k = act[mv.act];
+    if (!k) continue;
+    if (mv.d) out.premultiply(_pm4.makeTranslation(mv.d[0] * k, mv.d[1] * k, mv.d[2] * k));
+    else if (mv.turn) {
+      const { axis, at, angle } = mv.turn;
+      _pm4.makeRotationAxis(_pax.set(axis[0], axis[1], axis[2]).normalize(), angle * k);
+      // About a hinge through `at`: there, turned, and back.
+      _pm4.multiply(_pm3.makeTranslation(-at[0], -at[1], -at[2]));
+      _pm4.premultiply(_pm3.makeTranslation(at[0], at[1], at[2]));
+      out.premultiply(_pm4);
+    }
+  }
+  return out;
 }
 
 function smooth01(x: number) {

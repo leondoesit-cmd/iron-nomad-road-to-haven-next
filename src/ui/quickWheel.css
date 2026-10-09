@@ -1,0 +1,196 @@
+/* The quick select wheel: a cross of four arms in the middle of the owner's half, the arm in use as a row under it. */
+.hud .qwheel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) scale(var(--qs, 1));
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  pointer-events: none;
+  font-size: calc(15px * var(--u));
+}
+.qwheel .qwcross {
+  display: grid;
+  grid-template-columns: repeat(3, calc(92px * var(--u)));
+  grid-template-rows: repeat(3, calc(70px * var(--u)));
+  gap: 4px;
+}
+.qwheel .qwarm {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 3px;
+  background: rgba(8, 6, 4, 0.74);
+  border: 1px solid var(--panel-line);
+  color: var(--paper-dim);
+  overflow: hidden;
+}
+.qwheel .qwarm.up { grid-area: 1 / 2; border-radius: 40% 40% 6px 6px; }
+.qwheel .qwarm.right { grid-area: 2 / 3; border-radius: 6px 40% 40% 6px; }
+.qwheel .qwarm.down { grid-area: 3 / 2; border-radius: 6px 6px 40% 40%; }
+.qwheel .qwarm.left { grid-area: 2 / 1; border-radius: 40% 6px 6px 40%; }
+.qwheel .qwarm b {
+  font-size: 0.62em;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ac);
+}
+.qwheel .qwarm em {
+  font-style: normal;
+  font-size: 0.5em;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+}
+.qwheel .qwarm .qwic {
+  width: calc(34px * var(--u));
+  height: calc(26px * var(--u));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.qwheel .qwarm.on {
+  border: 2px solid var(--ac);
+  background: rgba(30, 24, 16, 0.86);
+  color: var(--paper);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--ac) 45%, transparent);
+}
+.qwheel .qwarm.empty { opacity: 0.5; }
+.qwheel .qwhub {
+  grid-area: 2 / 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(8, 6, 4, 0.82);
+  border: 2px solid var(--ac);
+}
+.qwheel .qwhub svg,
+.qwheel .qwhub .qwglyph {
+  width: 76%;
+  height: 76%;
+}
+.qwheel svg {
+  width: 100%;
+  height: 100%;
+}
+.qwheel .qwglyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3em;
+}
+.qwheel .qwrow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  background: rgba(8, 6, 4, 0.72);
+  border: 1px solid var(--panel-line);
+}
+.qwheel .qwtile {
+  width: calc(36px * var(--u));
+  height: calc(36px * var(--u));
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.5);
+  transition: transform 0.08s;
+}
+.qwheel .qwtile.sel {
+  transform: scale(1.2);
+  border: 2px solid var(--ac);
+  background: rgba(255, 255, 255, 0.12);
+}
+.qwheel .qwtile.none { opacity: 0.35; }
+.qwheel .qwmore,
+.qwheel .qwnone {
+  font-size: 0.55em;
+  color: var(--paper-dim);
+  font-family: var(--mono);
+}
+.qwheel .qwtext {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 10px;
+  max-width: 100%;
+  background: rgba(8, 6, 4, 0.78);
+  border: 1px solid var(--panel-line);
+}
+.qwheel .qwname {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.qwheel .qwname b {
+  font-size: 0.8em;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ac);
+}
+.qwheel .qwname em {
+  font-style: normal;
+  font-size: 0.58em;
+  color: var(--paper);
+}
+.qwheel .qwblurb {
+  font-size: 0.55em;
+  max-width: 32em;
+  text-align: center;
+  color: var(--paper);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+.qwheel .qwhint {
+  font-size: 0.5em;
+  opacity: 0.75;
+  text-align: center;
+  text-transform: none;
+}
+.qwheel .qwside {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.qwheel.tight .qwblurb {
+  display: none;
+}
+/* On its side, for a short half (the stacked split): the cross on the left, a shorter row and the words on the right. */
+.qwheel.wide {
+  flex-direction: row;
+  gap: 8px;
+}
+.qwheel.wide .qwtile.far,
+.qwheel.wide .qwmore.n9,
+.qwheel:not(.wide) .qwmore.n5 {
+  display: none;
+}
+.qwheel.wide .qwtext {
+  max-width: 17em;
+}
+/* While the wheel is open, what sits under the sights makes way for it: the prompts and readouts, the crosshair, the label of
+   what you look at, the hand hints and the car part card. */
+.hud[data-qw] .bc,
+.hud[data-qw] .reticle,
+.hud[data-qw] .handdot,
+.hud[data-qw] .lookinfo,
+.hud[data-qw] .handhints,
+.hud[data-qw] .carcard,
+.hud[data-qwnews] .msgs,
+.hud[data-qwnews] .banner,
+.hud[data-qwnews] .tether {
+  visibility: hidden;
+}

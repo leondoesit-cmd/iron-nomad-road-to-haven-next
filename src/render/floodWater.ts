@@ -3,7 +3,7 @@ import { GLOBALS } from './materials';
 import { mirrorWaterMaterial, waterNoiseTexture, waterNormalTexture } from './water';
 import { lakeColors } from '../world/lakes';
 import { heightAt, type TerrainDef } from '../world/terrain';
-import { FLOOD_SPEED, floodTaper, PAN_POOL, panQ, roadRamp, type Pan, type WashNet } from '../world/washes';
+import { FLOOD_RUN, floodTaper, PAN_POOL, panQ, roadRamp, type Pan, type WashNet } from '../world/washes';
 import { DrawnGround } from './drawnGround';
 import { HYDRO_DT, type Hydrograph } from '../sim/climate';
 
@@ -41,13 +41,13 @@ export const HYDRO = {
   /** Texels in the hydrograph texture, and the clock span one texel covers. */
   uHydro: { value: new THREE.Vector2(1, HYDRO_DT) },
   /** How far a flood front runs in one whole day of the clock, metres. */
-  uFloodRun: { value: FLOOD_SPEED * 720 },
+  uFloodRun: { value: FLOOD_RUN },
 };
 
 let hydroData: Uint8Array | null = null;
 
 /** Load a day's hydrograph into `HYDRO.tHydro` (the floods, the rivers and the pans all read it). */
-export function setHydroTexture(h: Hydrograph, dayLength: number) {
+export function setHydroTexture(h: Hydrograph) {
   const n = h.wash.length;
   if (!hydroData || hydroData.length !== n * 4) {
     hydroData = new Uint8Array(n * 4);
@@ -69,7 +69,6 @@ export function setHydroTexture(h: Hydrograph, dayLength: number) {
   }
   HYDRO.tHydro.value!.needsUpdate = true;
   HYDRO.uHydro.value.set(n, HYDRO_DT);
-  HYDRO.uFloodRun.value = FLOOD_SPEED * dayLength;
 }
 
 // ------------------------------------------------------------------------------------------------ the wash ribbons

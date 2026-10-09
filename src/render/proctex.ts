@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { shared } from './dispose';
+import { colourFields, normalFields, photoSet, red, REL, resampleField, stretch } from './photoTex';
 
 /**
  * Procedural textures generated on the CPU into typed arrays: tileable gradient noise, Voronoi cells,
@@ -8,7 +9,7 @@ import { shared } from './dispose';
 
 export type Field = Float32Array;
 
-function perm(seed: number): Uint8Array {
+export function perm(seed: number): Uint8Array {
   const p = new Uint8Array(512);
   for (let i = 0; i < 256; i++) p[i] = i;
   let s = (seed >>> 0) || 1;
@@ -255,22 +256,88 @@ export function detailNormalTexture(): THREE.DataTexture {
   });
 }
 
+/** The ground materials, one texture-array layer each, in the order `terrainMaterial.ts` reads them. */
+export const GROUND_LAYERS = ['sand', 'sand2', 'earth', 'earth2', 'rock', 'rock2', 'gravel', 'gravel2', 'grass', 'drygrass', 'litter', 'mud'] as const;
+export type GroundLayer = (typeof GROUND_LAYERS)[number];
+
+/**
+ * Per layer: how much of its scan's own hue it keeps (the palettes set the mean colour), how hard its normal map tilts, and
+ * the first look it is a second look of (its tint is measured against that one).
+ */
+const LAYER_LOOK: Record<GroundLayer, { chroma: number; tilt: number; base: GroundLayer }> = {
+  sand: { chroma: 0.35, tilt: 1.6, base: 'sand' },
+  sand2: { chroma: 0.6, tilt: 1.3, base: 'sand' },
+  earth: { chroma: 0.35, tilt: 1.4, base: 'earth' },
+  earth2: { chroma: 0.6, tilt: 1.2, base: 'earth' },
+  rock: { chroma: 0.6, tilt: 1, base: 'rock' },
+  rock2: { chroma: 0.7, tilt: 1, base: 'rock' },
+  gravel: { chroma: 1, tilt: 1, base: 'gravel' },
+  gravel2: { chroma: 1, tilt: 1, base: 'gravel' },
+  grass: { chroma: 1, tilt: 0.8, base: 'grass' },
+  drygrass: { chroma: 0.8, tilt: 0.8, base: 'drygrass' },
+  litter: { chroma: 1, tilt: 0.9, base: 'litter' },
+  mud: { chroma: 0.7, tilt: 1, base: 'earth' },
+};
+
 export interface TerrainTextures {
-  /** (sand albedo, sand height, earth albedo, earth height) */
+  /** A layer per ground material (`GROUND_LAYERS`): RGB albedo as a multiplier (`REL` at the scan's mean colour), A height. */
+  col: THREE.DataArrayTexture;
+  /** A layer per material: RG normal tilt (0..1, x along +u, y along +v). */
+  nrm: THREE.DataArrayTexture;
+  /**
+   * Per layer, its scan's mean colour against its material's first look (1 for a first look), softened: a second look keeps
+   * its own cast under every palette.
+   */
+  tint: THREE.Vector3[];
+  /** Per layer: made from a photo scan, so it is drawn at the scan's real size. */
+  photoLayer: boolean[];
+  /** (sand albedo, sand height, earth albedo, earth height), albedo as in `col`: the facades' crack and stain source. */
   a: THREE.DataTexture;
-  /** (rock albedo, rock height, gravel albedo, gravel height) */
-  b: THREE.DataTexture;
-  /** normals: (sand nx, sand ny, earth nx, earth ny) */
-  an: THREE.DataTexture;
-  /** normals: (rock nx, rock ny, gravel nx, gravel ny) */
-  bn: THREE.DataTexture;
+  /** What the facades multiply `a`'s earth albedo by to get the brightness they were tuned with. */
+  crackK: number;
+  /** All four first looks are photo scans. */
+  photo: boolean;
 }
 
-/** Four ground materials packed two per texture: wind-rippled sand, cracked hardpan, layered rock and gravel. */
-export function terrainTextures(): TerrainTextures {
-  const a = cache.get('terrA') as THREE.DataTexture | undefined;
-  if (a) return { a, b: cache.get('terrB') as THREE.DataTexture, an: cache.get('terrAN') as THREE.DataTexture, bn: cache.get('terrBN') as THREE.DataTexture };
-  const S = 512;
+/** Mean albedo of each procedural field (sand, earth, rock, gravel). */
+const PROC_MEAN = [0.83, 0.8, 0.6, 0.7];
+
+/** Bilinear resize of a wrapping square field. */
+function resize(f: Field, from: number, to: number): Field {
+  if (from === to) return f;
+  const out = new Float32Array(to * to);
+  const k = from / to;
+  for (let y = 0; y < to; y++) {
+    const fy = (y + 0.5) * k - 0.5;
+    const y0 = Math.floor(fy);
+    const ay = fy - y0;
+    const r0 = ((y0 % from) + from) % from;
+    const r1 = (r0 + 1) % from;
+    for (let x = 0; x < to; x++) {
+      const fx = (x + 0.5) * k - 0.5;
+      const x0 = Math.floor(fx);
+      const ax = fx - x0;
+      const c0 = ((x0 % from) + from) % from;
+      const c1 = (c0 + 1) % from;
+      out[y * to + x] = (f[r0 * from + c0] * (1 - ax) + f[r0 * from + c1] * ax) * (1 - ay) + (f[r1 * from + c0] * (1 - ax) + f[r1 * from + c1] * ax) * ay;
+    }
+  }
+  return out;
+}
+
+/** A square field turned a quarter: a second look from the same noise that does not line up with the first. */
+function turn(f: Field, S: number): Field {
+  const out = new Float32Array(S * S);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) out[y * S + x] = f[x * S + (S - 1 - y)];
+  return out;
+}
+
+/** Procedural albedo and height for every layer, at `PROC_SIZE` (the stand-in when a scan is missing). */
+const PROC_SIZE = 512;
+let procGround: Record<GroundLayer, { alb: Field; h: Field; tilt: number }> | null = null;
+function proceduralGround() {
+  if (procGround) return procGround;
+  const S = PROC_SIZE;
   const N = S * S;
   // --- sand: wind ripples, warped, over soft grain
   const warp = fbm(S, 4, { octaves: 4, seed: 31 });
@@ -360,38 +427,179 @@ export function terrainTextures(): TerrainTextures {
     gravH[i] = stone * (0.55 + (1 - d) * 0.35) + sfine[i] * 0.1;
     gravA[i] = 0.35 + stone * (0.45 + (stones.id[i] - 0.5) * 0.5) + (sfine[i] - 0.5) * 0.1;
   }
-  const pack = (p: Field, q: Field, r: Field, s: Field) => {
-    const out = new Uint8Array(N * 4);
-    for (let i = 0; i < N; i++) {
-      out[i * 4] = b8(p[i]);
-      out[i * 4 + 1] = b8(q[i]);
-      out[i * 4 + 2] = b8(r[i]);
-      out[i * 4 + 3] = b8(s[i]);
-    }
-    return out;
+  // --- living ground: grass blades over soil, dry grass, leaf litter; and dark mud
+  const blades = fbm(S, 96, { octaves: 2, seed: 81 });
+  const tufts = fbm(S, 12, { octaves: 4, seed: 82 });
+  const leaves = voronoi(S, 40, 83, 0.9);
+  const mudF = fbm(S, 8, { octaves: 5, seed: 84 });
+  const grassH = new Float32Array(N);
+  const grassA = new Float32Array(N);
+  const litterH = new Float32Array(N);
+  const litterA = new Float32Array(N);
+  const mudH = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    grassH[i] = blades[i] * 0.6 + tufts[i] * 0.4;
+    grassA[i] = 0.5 + grassH[i] * 0.45;
+    const leaf = sstep(0.0, 0.1, leaves.f2[i] - leaves.f1[i]);
+    litterH[i] = leaf * (0.5 + leaves.id[i] * 0.5);
+    litterA[i] = 0.35 + leaf * (0.4 + (leaves.id[i] - 0.5) * 0.4);
+    mudH[i] = mudF[i];
+  }
+  procGround = {
+    sand: { alb: sandA, h: sandH, tilt: 5 },
+    sand2: { alb: turn(sandA, S), h: turn(sandH, S), tilt: 4 },
+    earth: { alb: earthA, h: earthH, tilt: 9 },
+    earth2: { alb: turn(earthA, S), h: turn(earthH, S), tilt: 7 },
+    rock: { alb: rockA, h: rockH, tilt: 10 },
+    rock2: { alb: turn(rockA, S), h: turn(rockH, S), tilt: 10 },
+    gravel: { alb: gravA, h: gravH, tilt: 8 },
+    gravel2: { alb: turn(gravA, S), h: turn(gravH, S), tilt: 8 },
+    grass: { alb: grassA, h: grassH, tilt: 4 },
+    drygrass: { alb: turn(grassA, S), h: turn(grassH, S), tilt: 4 },
+    litter: { alb: litterA, h: litterH, tilt: 6 },
+    mud: { alb: mudF.map((v) => 0.7 + v * 0.3), h: mudH, tilt: 3 },
   };
-  const packN = (h1: Field, s1: number, h2: Field, s2: number) => {
-    const out = new Uint8Array(N * 4);
-    for (let i = 0; i < N; i++) {
-      const [ax, ay] = normalXY(h1, S, s1, i);
-      const [bx, by] = normalXY(h2, S, s2, i);
-      out[i * 4] = b8(ax);
-      out[i * 4 + 1] = b8(ay);
-      out[i * 4 + 2] = b8(bx);
-      out[i * 4 + 3] = b8(by);
-    }
-    return out;
-  };
-  const tA = toTexture(pack(sandA, sandH, earthA, earthH), S);
-  const tB = toTexture(pack(rockA, rockH, gravA, gravH), S);
-  const tAN = toTexture(packN(sandH, 5, earthH, 9), S);
-  const tBN = toTexture(packN(rockH, 10, gravH, 8), S);
-  cache.set('terrA', tA);
-  cache.set('terrB', tB);
-  cache.set('terrAN', tAN);
-  cache.set('terrBN', tBN);
-  return { a: tA, b: tB, an: tAN, bn: tBN };
+  return procGround;
 }
+
+/**
+ * Packs the ground layers a few at a time (`step`), so the title's warm-up spreads the work over idle moments: each scan
+ * is resampled into its layer as a colour multiplier, a stretched height and a normal; a missing scan falls back to its
+ * procedural field.
+ */
+class GroundBuilder {
+  readonly S: number;
+  /** The normals' size: half the colour's (relief that fine is lost in the shading anyway, and it saves a quarter of the memory). */
+  readonly NS: number;
+  private readonly col: Uint8Array;
+  private readonly nrm: Uint8Array;
+  private readonly means = new Map<GroundLayer, [number, number, number]>();
+  private readonly tint: THREE.Vector3[] = [];
+  private readonly photoLayer: boolean[] = [];
+  private next = 0;
+
+  constructor() {
+    // Scans are packed at full size; with none (tests, a failed download) the procedural fields keep their own.
+    this.S = GROUND_LAYERS.some((l) => photoSet(l)) ? 1024 : PROC_SIZE;
+    this.NS = this.S / 2;
+    const L = GROUND_LAYERS.length;
+    this.col = new Uint8Array(this.S * this.S * 4 * L);
+    this.nrm = new Uint8Array(this.NS * this.NS * 2 * L);
+  }
+
+  /** Pack the next layer; true while any are left. */
+  step(): boolean {
+    if (this.next >= GROUND_LAYERS.length) return false;
+    const li = this.next++;
+    const name = GROUND_LAYERS[li];
+    const look = LAYER_LOOK[name];
+    const S = this.S;
+    const N = S * S;
+    const NS = this.NS;
+    const NN = NS * NS;
+    const scans = photoSet(name);
+    let r: Field, g: Field, b: Field, h: Field, nx: Field, ny: Field;
+    if (scans) {
+      const c = colourFields(scans.albedo, S, look.chroma);
+      ({ r, g, b } = c);
+      h = stretch(resampleField(scans.height, S, red));
+      ({ x: nx, y: ny } = normalFields(scans.normal, NS, look.tilt));
+      this.means.set(name, c.mean);
+      const base = this.means.get(look.base);
+      // Softened and bounded: a second look leans its own way without leaving its palette.
+      const lean = (m: number, k: number) => Math.min(1.3, Math.max(0.72, (m / (base![k] || 1e-3)) ** 0.3));
+      this.tint.push(base && look.base !== name ? new THREE.Vector3(...c.mean.map(lean)) : new THREE.Vector3(1, 1, 1));
+    } else {
+      const p = proceduralGround()[name];
+      const alb = resize(p.alb, PROC_SIZE, S);
+      h = resize(p.h, PROC_SIZE, S);
+      let m = 0;
+      for (let i = 0; i < N; i++) m += alb[i];
+      const k = REL / (m / N || 1);
+      r = g = b = alb.map((v) => v * k);
+      const hn = resize(p.h, PROC_SIZE, NS);
+      nx = new Float32Array(NN);
+      ny = new Float32Array(NN);
+      for (let i = 0; i < NN; i++) [nx[i], ny[i]] = normalXY(hn, NS, (p.tilt * NS) / PROC_SIZE, i);
+      this.tint.push(new THREE.Vector3(1, 1, 1));
+    }
+    this.photoLayer.push(!!scans);
+    const co = li * N * 4;
+    for (let i = 0; i < N; i++) {
+      this.col[co + i * 4] = b8(r[i]);
+      this.col[co + i * 4 + 1] = b8(g[i]);
+      this.col[co + i * 4 + 2] = b8(b[i]);
+      this.col[co + i * 4 + 3] = b8(h[i]);
+    }
+    const no = li * NN * 2;
+    for (let i = 0; i < NN; i++) {
+      this.nrm[no + i * 2] = b8(nx[i]);
+      this.nrm[no + i * 2 + 1] = b8(ny[i]);
+    }
+    return this.next < GROUND_LAYERS.length;
+  }
+
+  finish(): TerrainTextures {
+    while (this.step());
+    const S = this.S;
+    const N = S * S;
+    const L = GROUND_LAYERS.length;
+    const array = (data: Uint8Array, format: THREE.PixelFormat, size: number) => {
+      const t = new THREE.DataArrayTexture(data, size, size, L);
+      t.format = format;
+      t.type = THREE.UnsignedByteType;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.magFilter = THREE.LinearFilter;
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.generateMipmaps = true;
+      t.anisotropy = 8;
+      t.colorSpace = THREE.NoColorSpace;
+      t.unpackAlignment = 1;
+      t.needsUpdate = true;
+      return shared(t);
+    };
+    // The facades' crack source: sand and earth brightness and height, as the old two-material texture had them.
+    const a = new Uint8Array(N * 4);
+    const lum = (o: number) => this.col[o] * 0.2126 + this.col[o + 1] * 0.7152 + this.col[o + 2] * 0.0722;
+    const sand = GROUND_LAYERS.indexOf('sand') * N * 4;
+    const earth = GROUND_LAYERS.indexOf('earth') * N * 4;
+    for (let i = 0; i < N; i++) {
+      a[i * 4] = lum(sand + i * 4);
+      a[i * 4 + 1] = this.col[sand + i * 4 + 3];
+      a[i * 4 + 2] = lum(earth + i * 4);
+      a[i * 4 + 3] = this.col[earth + i * 4 + 3];
+    }
+    return {
+      a: toTexture(a, S),
+      col: array(this.col, THREE.RGBAFormat, S),
+      nrm: array(this.nrm, THREE.RGFormat, this.NS),
+      tint: this.tint,
+      photoLayer: this.photoLayer,
+      crackK: PROC_MEAN[1] / REL,
+      photo: (['sand', 'earth', 'rock', 'gravel'] as const).every((l) => this.photoLayer[GROUND_LAYERS.indexOf(l)]),
+    };
+  }
+}
+
+let terrain: TerrainTextures | null = null;
+let groundBuild: GroundBuilder | null = null;
+
+/** One warm-up slice of the ground textures: true while there is more to pack. */
+export function terrainTexturesStep(): boolean {
+  if (terrain) return false;
+  groundBuild ??= new GroundBuilder();
+  if (groundBuild.step()) return true;
+  terrain = groundBuild.finish();
+  groundBuild = null;
+  return false;
+}
+
+/** The ground materials (`GROUND_LAYERS`), from photo scans where loaded. */
+export function terrainTextures(): TerrainTextures {
+  while (terrainTexturesStep());
+  return terrain!;
+}
+
 
 /** Large-scale variation, sampled at a few hundred metres to break up tiling everywhere. */
 export function macroTexture(): THREE.DataTexture {
@@ -1012,7 +1220,7 @@ export function spriteAtlasTexture(data: Uint8Array, w: number, h: number, cols:
 }
 
 /** Cells of the leaf atlas (4 x 3 cells of 256 px). Each foliage card of a tree maps one whole cell. */
-export const LEAF_CELL = { broad: 0, needle: 1, acacia: 2, feather: 3, strands: 4, poplar: 5, frond: 6, bark: 7, gum: 8, gumBark: 9 } as const;
+export const LEAF_CELL = { broad: 0, needle: 1, acacia: 2, feather: 3, strands: 4, poplar: 5, frond: 6, bark: 7, gum: 8, gumBark: 9, palmBark: 10 } as const;
 export const LEAF_ATLAS = { w: 1024, h: 768, cols: 4, rows: 3, cell: 256 };
 
 export interface LeafAtlas {
@@ -1028,7 +1236,8 @@ let leafAtlasHit: LeafAtlas | null = null;
  * a pine's needle spray, acacia's fine leaflets, the feathery sprays of a swamp cypress, a willow's hanging strands, poplar
  * leaves, a date palm's frond (laid along the cell, base at the left), a strip of bark, a eucalyptus's hanging sprays of
  * long sickle leaves and its smooth pale bark. RGB is near white, so each species' vertex colour sets its green; the leaves
- * vary a little in tone and hue among themselves.
+ * vary a little in tone and hue among themselves. The near trees' wood draws its bark from `barkTex.ts` instead; the bark
+ * cells here are what the impostors are baked from.
  */
 export function leafAtlas(): LeafAtlas {
   if (leafAtlasHit) return leafAtlasHit;
@@ -1219,6 +1428,7 @@ export function leafAtlas(): LeafAtlas {
       bytes[i * 4 + 3] = 255;
     }
     blit(LEAF_CELL.bark, bytes);
+    blit(LEAF_CELL.palmBark, bytes);
   }
   // Eucalyptus (river red gum) spray: thin twigs hanging from the top edge, long narrow sickle leaves dangling off them on
   // both sides, sparse enough that the sky shows through. Grey-green, some older leaves yellower.

@@ -4,6 +4,7 @@ import { cylindersOf } from './engineSize';
 import { bayEmpty, engineEffects, engineSpec } from './engines';
 import { exhaustSpec, gearboxSpec, gearTop } from './drivetrain';
 import { cabinStatCounts } from './cabin';
+import { driveFeel, tractionShare } from './driveFeel';
 import type { Fit, Tyres } from './parts';
 
 /**
@@ -311,7 +312,7 @@ export interface Powertrain {
   roll: number;
   /**
    * Tyre grip for drive and braking (a friction coefficient), the share of the weight on the driven wheels, and how much
-   * weight a pull squats back onto them (centre-of-mass height over wheelbase).
+   * weight a pull moves onto them (+, the back wheels) or off them (-, the front ones): centre-of-mass height over wheelbase.
    */
   mu: number;
   driven: number;
@@ -344,7 +345,12 @@ function goneTyres(tyres: Tyres | undefined, n: number): number {
   return k;
 }
 
-function assemble(def: VehicleDef, fit: Fit, tyres: Tyres | undefined, cal: ChassisCal, withTop = true): Powertrain {
+/**
+ * `calibrating`: the traction the chassis was first tuned with (every wheel of a car driven), so fitting each chassis' gain
+ * stays as it was; a real build pulls through its own wheels (`sim/driveFeel.ts`): a front-driver lifts its driven wheels
+ * as it pulls away, a rear-driver squats onto them.
+ */
+function assemble(def: VehicleDef, fit: Fit, tyres: Tyres | undefined, cal: ChassisCal, withTop = true, calibrating = false): Powertrain {
   const spec = engineSpec(def, fit);
   const empty = bayEmpty(def, fit);
   const gb = gearboxSpec(def, fit);
@@ -367,6 +373,11 @@ function assemble(def: VehicleDef, fit: Fit, tyres: Tyres | undefined, cal: Chas
     transfer: comHeight(def) / wheelbaseOf(def),
     vTop: 0,
   };
+  if (!calibrating) {
+    const t = tractionShare(def, driveFeel(def, fit, tyres), comHeight(def), wheelbaseOf(def));
+    pt.driven = t.driven;
+    pt.transfer = t.transfer;
+  }
   if (withTop) pt.vTop = topSpeed(pt, def.physics.mass);
   return pt;
 }
@@ -645,8 +656,8 @@ export function straightRun(pt: Powertrain, m: number, targets: number[], second
   const th = Math.atan(grade);
   let left = targets.length;
   for (let t = 0; t < seconds; t += dt) {
-    // The driven wheels' share of the weight, plus what the pull squats onto them when only the back ones drive.
-    const grip = pt.mu * m * (G * Math.cos(th) * pt.driven + (pt.driven < 1 ? Math.max(0, a) * pt.transfer : 0));
+    // The driven wheels' share of the weight, plus what the pull squats onto them (rear drive) or lifts off them (front).
+    const grip = pt.mu * m * Math.max(0.05 * G, G * Math.cos(th) * pt.driven + (pt.driven < 1 ? Math.max(0, a) * pt.transfer : 0));
     const want = u.step(dt, v, 1, 1, true, 1);
     const got = clamp(want, -grip, grip);
     u.tyres(want, got, dt);
@@ -730,7 +741,7 @@ export function calibrate(def: VehicleDef): ChassisCal {
     for (let i = 0; i < 16; i++) {
       const mid = Math.sqrt(lo * hi);
       cal.gain = mid;
-      const t = straightRun(assemble(def, {}, undefined, cal, false), m, [vm * 0.6], t60 + 0.1).times[0];
+      const t = straightRun(assemble(def, {}, undefined, cal, false, true), m, [vm * 0.6], t60 + 0.1).times[0];
       if (t > t60) lo = mid;
       else hi = mid;
     }
@@ -743,7 +754,7 @@ export function calibrate(def: VehicleDef): ChassisCal {
     for (let i = 0; i < 10; i++) {
       cal.spread = (lo + hi) / 2;
       fitGain();
-      const t = straightRun(assemble(def, {}, undefined, cal, false), m, [vm * 0.25], t25 + 0.1).times[0];
+      const t = straightRun(assemble(def, {}, undefined, cal, false, true), m, [vm * 0.25], t25 + 0.1).times[0];
       if (t > t25) lo = cal.spread;
       else hi = cal.spread;
     }
@@ -751,13 +762,13 @@ export function calibrate(def: VehicleDef): ChassisCal {
     fitGain();
     // The air: enough that near the limiter in top gear under a third of the pull is left over, so a hill or a load costs
     // top speed rather than vanishing into a rev limiter it never leaves.
-    const ptNow = assemble(def, {}, undefined, cal, false);
+    const ptNow = assemble(def, {}, undefined, cal, false, true);
     const vr = ptNow.gearing.vRev * 0.97;
     const airTop = Math.max(airMin, (0.7 * maxPull(ptNow, vr) - BODY_DAMPING * m * vr - ROLL * m * G) / (vr * vr));
     // Coasting from 60% of top speed in the gear a light foot would have it in: the air, the tyres and engine braking
     // together. Where the air already does most of it, the engine braking is eased off to match.
     const v = vm * 0.6;
-    const u = new DriveUnit(assemble(def, {}, undefined, { ...cal, brakeGain: 1 }, false));
+    const u = new DriveUnit(assemble(def, {}, undefined, { ...cal, brakeGain: 1 }, false, true));
     for (let i = 0; i < 120; i++) u.step(1 / 30, v, 0.3, 1, true, 1);
     for (let i = 0; i < 20; i++) u.step(1 / 30, v, 0, 1, true, 1);
     const eb = Math.max(0, -u.step(1 / 30, v, 0, 1, true, 1));

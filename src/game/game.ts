@@ -6,6 +6,8 @@ import { Hud } from '../ui/hud';
 import { FocusUI } from '../ui/focus';
 import { Campaign, GOD_BAG_SLOTS, grantAllWeapons } from './campaign';
 import { setExtraBagSlots } from '../sim/gear';
+import { clampDayLength, GOD_HP, TUNING, ZOMBIE_HITS } from '../sim/tuning';
+import { readReticle } from '../ui/reticle';
 import { StoryVoice } from '../audio/storyVoice';
 import { LegScene } from './legScene';
 import { WorldMemory, type WorldPose } from './worldMemory';
@@ -24,6 +26,7 @@ import { saveCampaign, loadCampaign } from '../save/save';
 import { PLAYER_PAINT, newBuild } from '../sim/garage';
 import { Workbench } from '../ui/garage';
 import { closeStorage, storageOf } from './storage';
+import { WHEEL_HOLD } from './quickWheel';
 import { InventoryScreen } from '../ui/inventory';
 import { TutorialDirector, TRAINING_STEPS } from './tutorial';
 import { setupStoryCampaign } from './story';
@@ -39,6 +42,7 @@ import { perf } from '../core/perfMarks';
 import { delay, nextPaint, quietSlot } from '../core/idle';
 import { planMade, planMaster, preparePlan } from '../world/planCache';
 import { WARMUPS, worldWarmups } from '../render/warmup';
+import { loadAssets } from '../render/assets';
 import { LoadingVeil } from '../ui/loading';
 
 export type Phase =
@@ -91,6 +95,8 @@ export class Game {
   private fpsEma = 60;
   private frameMs = 16;
   private wheelHold: [number, number] = [0, 0];
+  /** Seconds a pad's D-pad up has been held: a short one pings. */
+  private pingHold: [number, number] = [0, 0];
   /** Test and tooling hook. */
   hooks: { onTick?: (g: Game) => void } = {};
   slowMo = 1;
@@ -142,6 +148,11 @@ export class Game {
     this.input.onReconnect = (p) => {
       this.hud.disconnected[p] = false;
     };
+    this.input.onSeatDevice = (p, slot) => {
+      const who = this.solo ? '' : `Player ${p + 1}: `;
+      const what = slot.kind === 'pad' ? `controller ${slot.index + 1}` : `keyboard${slot.set === 1 ? ' and mouse' : ' (arrows)'}`;
+      if (this.phase === 'leg' || this.phase === 'camp') this.scene?.toast(`${who}now on ${what}`, 3);
+    };
     // Browsers need a gesture before audio can start.
     const wake = () => { this.audio.init(); this.audio.userMusic.unlock(); };
     void this.audio.userMusic.load();
@@ -190,6 +201,7 @@ export class Game {
     requestAnimationFrame((n) => this.frame(n));
     await initPhysics();
     perf.mark('boot:physics');
+    void loadAssets();
     if (this.debug) {
       const errs = validateData();
       if (errs.length) console.error('Data validation failed:', errs);
@@ -197,6 +209,7 @@ export class Game {
     // Shortcut for checking a map without playing up to it: ?leg=L3P starts a fresh run on that leg.
     const jump = new URLSearchParams(location.search).get('leg');
     if (jump && LEGS.legs.some((l) => l.id === jump)) {
+      await loadAssets();
       this.input.autoJoinKeyboard();
       this.newCampaign();
       this.beginLeg(jump);
@@ -204,6 +217,7 @@ export class Game {
     }
     // ?training goes straight into the lessons, the way ?leg skips to a map.
     if (new URLSearchParams(location.search).has('training')) {
+      await loadAssets();
       this.input.autoJoinKeyboard();
       this.startTraining();
       return;
@@ -241,6 +255,8 @@ export class Game {
     return (this.worldPrep ??= (async () => {
       const t0 = perf.mark('prep:start');
       await initPhysics();
+      await loadAssets();
+      perf.mark('prep:assets');
       const quiet = () => quietSlot(() => this.lastInputAt, 700, () => this.urgent);
       const leg = legById('W');
       if (!planMade(leg)) {
@@ -347,7 +363,7 @@ export class Game {
     try {
       const raw = localStorage.getItem('ironnomad.settings');
       if (!raw) return;
-      const s = JSON.parse(raw) as { quality?: QualityPreset; ui?: number; layout?: 'horizontal' | 'vertical'; vol?: number; music?: number; gameMusicEnabled?: boolean; userMusicEnabled?: boolean; userMusicVolume?: number; tts?: boolean; god?: boolean; voice?: boolean; mouse?: number; solo?: boolean; nightCamp?: boolean; difficulty?: { drain?: unknown; aggro?: unknown; damage?: unknown }; input?: unknown };
+      const s = JSON.parse(raw) as { quality?: QualityPreset; ui?: number; layout?: 'horizontal' | 'vertical'; vol?: number; music?: number; gameMusicEnabled?: boolean; userMusicEnabled?: boolean; userMusicVolume?: number; tts?: boolean; god?: boolean; zhits?: unknown; fire?: unknown; wind?: unknown; dayMin?: unknown; reticle?: unknown; voice?: boolean; mouse?: number; solo?: boolean; nightCamp?: boolean; difficulty?: { drain?: unknown; aggro?: unknown; damage?: unknown }; input?: unknown };
       if (s.solo) this.setSolo(true);
       if (s.quality && QUALITY[s.quality]) this.R.setQuality(s.quality);
       if (s.ui) this.hud.setScale(s.ui);
@@ -359,6 +375,12 @@ export class Game {
       if (s.userMusicVolume !== undefined) this.audio.setUserMusicVolume(s.userMusicVolume);
       if (s.tts !== undefined) this.audio.setTtsEnabled(s.tts);
       if (s.god !== undefined) this.setGodMode(s.god);
+      if (typeof s.zhits === 'number' && ZOMBIE_HITS.includes(s.zhits)) TUNING.zombieHits = s.zhits;
+      const pace = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(3, Math.max(0, v)) : 1);
+      if (s.fire !== undefined) TUNING.fire = Math.max(0.25, pace(s.fire));
+      if (s.wind !== undefined) TUNING.wind = pace(s.wind);
+      if (typeof s.dayMin === 'number' && Number.isFinite(s.dayMin)) this.setDayLength(s.dayMin * 60);
+      this.hud.setReticle(readReticle(s.reticle));
       if (s.voice !== undefined) this.storyVoice.enabled = s.voice;
       // Settings from before the option have none: they get the new default (off), like everybody else.
       if (typeof s.nightCamp === 'boolean') this.nightCamp = s.nightCamp;
@@ -380,7 +402,7 @@ export class Game {
     try {
       localStorage.setItem(
         'ironnomad.settings',
-        JSON.stringify({ quality: this.R.quality, ui: this.hud.uiScale, layout: this.R.layout, vol: this.audio.volume, music: this.audio.musicVolume, gameMusicEnabled: this.audio.gameMusicEnabled, userMusicEnabled: this.audio.userMusicEnabled, userMusicVolume: this.audio.userMusicVolume, tts: this.audio.ttsEnabled, god: this.godMode, voice: this.storyVoice.enabled, mouse: this.input.settings.mouseSens, solo: this.solo, nightCamp: this.nightCamp, difficulty: this.difficulty, input: this.input.exportSettings() }),
+        JSON.stringify({ quality: this.R.quality, ui: this.hud.uiScale, layout: this.R.layout, vol: this.audio.volume, music: this.audio.musicVolume, gameMusicEnabled: this.audio.gameMusicEnabled, userMusicEnabled: this.audio.userMusicEnabled, userMusicVolume: this.audio.userMusicVolume, tts: this.audio.ttsEnabled, god: this.godMode, zhits: TUNING.zombieHits, fire: TUNING.fire, wind: TUNING.wind, dayMin: TUNING.dayLength / 60, reticle: this.hud.reticle, voice: this.storyVoice.enabled, mouse: this.input.settings.mouseSens, solo: this.solo, nightCamp: this.nightCamp, difficulty: this.difficulty, input: this.input.exportSettings() }),
       );
     } catch {
       /* ignore */
@@ -445,7 +467,22 @@ export class Game {
   setGodMode(on: boolean) {
     this.godMode = on;
     setExtraBagSlots(on ? GOD_BAG_SLOTS : 0);
+    // Half again the health: the heroes on the field now keep their share of it.
+    const hp = on ? 100 * GOD_HP : 100;
+    if (TUNING.playerHp !== hp) {
+      TUNING.playerHp = hp;
+      for (const sc of [this.scene, this.delveParent]) for (const p of sc?.players ?? []) {
+        p.hp = (p.hp / p.maxHp) * hp;
+        p.maxHp = hp;
+      }
+    }
     if (on && this.phase !== 'boot' && this.phase !== 'title') grantAllWeapons(this.campaign);
+  }
+
+  /** Seconds from first light to dark. The day under way keeps its time of day and just runs at the new pace. */
+  setDayLength(sec: number) {
+    TUNING.dayLength = clampDayLength(sec);
+    for (const sc of [this.scene, this.delveParent]) sc?.clock.retime(TUNING.dayLength);
   }
 
   startNewGame() {
@@ -1191,7 +1228,10 @@ export class Game {
     this.hooks.onTick?.(this);
   }
 
-  /** D-pad: tap = ping, hold = command wheel (Ping, Hold, Follow, Spread, Regroup). */
+  /**
+   * Tap the ping button (D-pad up) to ping. Hold for the crew orders wheel (Ping, Follow, Regroup, Call ride, Spread, Hold):
+   * the ping key on a keyboard, LB on a pad, whose D-pad holds open the quick select wheel instead (quickWheel.ts).
+   */
   private handleCommandWheel(sc: Scene) {
     for (let p = 0; p < 2; p++) {
       const it = this.input.intents[p];
@@ -1203,7 +1243,21 @@ export class Game {
         this.wheelHold[p] = 0;
         continue;
       }
-      if (isHeld(it, Btn.Up)) {
+      const orders = it.device === 'pad' ? Btn.LB : Btn.Up;
+      if (orders !== Btn.Up) {
+        // On a pad a short tap of D-pad up pings; a longer hold is the quick select wheel's.
+        if (isHeld(it, Btn.Up)) this.pingHold[p] += FIXED_STEP;
+        else if (this.pingHold[p] > 0) {
+          if (this.pingHold[p] < WHEEL_HOLD && !pl.quickWheel.open) this.doPing(sc, p);
+          this.pingHold[p] = 0;
+        }
+      } else this.pingHold[p] = 0;
+      if (pl.quickWheel.open) {
+        this.wheelHold[p] = 0;
+        this.hud.wheelSel[p] = -1;
+        continue;
+      }
+      if (isHeld(it, orders)) {
         this.wheelHold[p] += FIXED_STEP;
         if (this.wheelHold[p] > 0.25) {
           // Select a slice with the right stick (or move keys for keyboard).
@@ -1221,7 +1275,10 @@ export class Game {
         this.wheelHold[p] = 0;
         const sel = this.hud.wheelSel[p];
         this.hud.wheelSel[p] = -1;
-        if (held <= 0.25 || sel === 0) this.doPing(sc, p);
+        if (held <= 0.25) {
+          // A tap of LB on a pad is the tool swap (player.ts), not a ping.
+          if (orders === Btn.Up) this.doPing(sc, p);
+        } else if (sel === 0) this.doPing(sc, p);
         else {
           const cmd = (['ping', 'follow', 'regroup', 'summon', 'spread', 'hold'] as const)[sel] ?? 'follow';
           if (cmd === 'summon') {

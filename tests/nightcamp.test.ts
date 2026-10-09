@@ -12,6 +12,7 @@ import { DAWN_AT, DayClock, PREDAWN_AT, lightAt } from '../src/sim/dayclock';
 import { KIT_SLOTS, haulPool, rollNightHaul, type HaulOpts } from '../src/sim/nightHaul';
 import { newPart } from '../src/sim/parts';
 import { loadCampaign } from '../src/save/save';
+import { TUNING } from '../src/sim/tuning';
 import type { SceneResult } from '../src/game/scene';
 import { fakeServices, run } from './helpers/sim';
 
@@ -472,7 +473,7 @@ describe('the night camp setting', () => {
         nightCamp: false,
         solo: false,
         R: { quality: 'medium', layout: 'vertical', setQuality: noop, setLayout: noop },
-        hud: { uiScale: 1, setScale: noop },
+        hud: { uiScale: 1, setScale: noop, setReticle: noop },
         audio: { volume: 1, musicVolume: 1, gameMusicEnabled: true, userMusicEnabled: true, userMusicVolume: 1, ttsEnabled: false, setVolume: noop, setMusicVolume: noop, setGameMusicEnabled: noop, setUserMusicEnabled: noop, setUserMusicVolume: noop, setTtsEnabled: noop },
         storyVoice: { enabled: true },
         input: { settings: { mouseSens: 1 }, exportSettings: () => ({}), importSettings: noop },
@@ -483,6 +484,30 @@ describe('the night camp setting', () => {
     };
     return { store, make };
   }
+
+  it('day length: half an hour by default, saved and loaded, clamped, and a change keeps the time of day', () => {
+    const { store, make } = settingsGame();
+    const was = TUNING.dayLength;
+    try {
+      expect(was).toBe(1800);
+      const a = make();
+      const clock = new DayClock(TUNING.dayLength, 0.5);
+      Object.assign(a, { scene: { clock } });
+      a.setDayLength(45 * 60);
+      expect(clock.dayLength).toBe(2700);
+      expect(clock.t).toBeCloseTo(0.5, 6);
+      a.saveSettings();
+      expect(JSON.parse(store.get('ironnomad.settings')!).dayMin).toBe(45);
+      TUNING.dayLength = 1800;
+      make().applySettings();
+      expect(TUNING.dayLength).toBe(2700);
+      store.set('ironnomad.settings', JSON.stringify({ dayMin: 9999 }));
+      make().applySettings();
+      expect(TUNING.dayLength).toBe(120 * 60);
+    } finally {
+      TUNING.dayLength = was;
+    }
+  });
 
   it('is off by default, saves and loads, and settings from before it load as off', () => {
     const { store, make } = settingsGame();

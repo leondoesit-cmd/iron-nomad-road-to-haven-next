@@ -9,11 +9,20 @@ import { COPLANAR, DEPTH_UNIFORMS, PULL, coplanarOffset, depthPullGlsl } from '.
  * the newest. Blood is wet and bright when it lands and dries to a dark brown over the next minute.
  */
 
-/** Cells of the atlas, 4 across and 3 down. */
-export const CELL = { splat0: 0, splat1: 1, splat2: 2, splat3: 3, spray: 4, drops: 5, scar: 6, pool: 7, hole: 8, splinter: 9, scuff: 10, crack: 11 } as const;
+/** Cells of the atlas, 4 across and 5 down. */
+export const CELL = { splat0: 0, splat1: 1, splat2: 2, splat3: 3, spray: 4, drops: 5, scar: 6, pool: 7, hole: 8, splinter: 9, scuff: 10, crack: 11, pit: 12, pit1: 13, pit2: 14, pit3: 15, spall: 16, spall1: 17, spall2: 18, spall3: 19, punch: 20, punch1: 21, punch2: 22, punch3: 23 } as const;
+
+/** The spalls (concrete, asphalt), the pits (rock) and the punched holes (metal), to pick one at random: no two alike. */
+export const SPALLS = [CELL.spall, CELL.spall1, CELL.spall2, CELL.spall3] as const;
+export const PITS = [CELL.pit, CELL.pit1, CELL.pit2, CELL.pit3] as const;
+export const PUNCHES = [CELL.punch, CELL.punch1, CELL.punch2, CELL.punch3] as const;
+/** One of a family of marks, at random. */
+export function anyOf(cells: readonly number[]): number {
+  return cells[Math.floor(Math.random() * cells.length)];
+}
 
 const ATLAS_W = 4;
-const ATLAS_H = 3;
+const ATLAS_H = 6;
 const PX = 64;
 
 const vert = /* glsl */ `
@@ -25,9 +34,17 @@ varying vec2 vUv;
 varying vec4 vParam;
 varying vec3 vTint;
 varying float vDepth;
+varying vec3 vBX;
+varying vec3 vBY;
+varying vec3 vBN;
 #include <fog_pars_vertex>
 void main() {
   vUv = uv;
+  // The mark's own frame in the world: along it, across it, out of the surface.
+  mat3 B = mat3( modelMatrix * instanceMatrix );
+  vBX = B[ 0 ];
+  vBY = B[ 1 ];
+  vBN = B[ 2 ];
   vParam = aParam;
   vTint = aTint;
   float spread = aParam.w < 0.0 ? mix( 0.22, 1.0, smoothstep( 0.0, -aParam.w, max( 0.0, uSceneTime - aParam.z ) ) ) : 1.0;
@@ -41,12 +58,17 @@ void main() {
 
 const frag = /* glsl */ `
 uniform sampler2D tAtlas;
+uniform sampler2D tRelief;
 uniform vec3 uLight;
+uniform vec3 uSunDir;
 uniform float uSceneTime;
 varying vec2 vUv;
 varying vec4 vParam;
 varying vec3 vTint;
 varying float vDepth;
+varying vec3 vBX;
+varying vec3 vBY;
+varying vec3 vBN;
 #include <fog_pars_fragment>
 void main() {
   float cell = floor( vParam.x + 0.5 );
@@ -62,8 +84,14 @@ void main() {
   float gloss = vParam.w > 0.5 ? 0.0 : ( 1.0 - dry ) * t.g * ( 0.025 + sheen * 0.14 );
   float a = t.a * vParam.y * ( 1.0 - smoothstep( 110.0, 170.0, vDepth ) );
   if ( a < 0.01 ) discard;
+  // A hole's relief, lit by the sun against the face it is in: the wall of a pit facing the sun bright, the far wall in its
+  // own shade, a torn petal of metal catching the light. A flat mark (blood) is lit as the face is.
+  vec2 nt = texture2D( tRelief, uv ).rg * 2.0 - 1.0;
+  vec3 N = normalize( vBN );
+  vec3 nr = normalize( N * sqrt( max( 0.0, 1.0 - dot( nt, nt ) ) ) + normalize( vBX ) * nt.x + normalize( vBY ) * nt.y );
+  float rel = clamp( ( 0.3 + 0.7 * max( dot( nr, uSunDir ), 0.0 ) ) / ( 0.3 + 0.7 * max( dot( N, uSunDir ), 0.0 ) ), 0.25, 2.0 );
   // The blue channel is the dark of a pit: a bullet hole's core, the black of a crack.
-  vec3 lit = col * ( 0.55 + t.r * 0.5 ) * uLight + gloss;
+  vec3 lit = col * ( 0.55 + t.r * 0.5 ) * uLight * rel + gloss;
   gl_FragColor = vec4( mix( lit, vec3( 0.012, 0.011, 0.01 ) * uLight, t.b ), a );
   #include <fog_fragment>
 }`;
@@ -176,17 +204,36 @@ function holeCell(buf: Uint8Array, seed: number, big: boolean) {
   for (let i = 0; i < n; i++) streak(buf, 32, 32, rnd() * 6.28, coreR + 1, haloR * (big ? 1.5 : 1.2) * (0.6 + rnd() * 0.7), big ? 1.5 : 1.1, 255, 0, rnd);
 }
 
-/** A pit in earth, stone or concrete: soft dark dust thrown round a small hole, chips radiating. */
+/** A round's mark in hard earth: a patch of broken soil darker than the face, a shallow hole at its heart, crumbs round it. */
 function scuffCell(buf: Uint8Array, seed: number) {
   const rnd = lcg(seed);
+  const edge = ragged(rnd, 11 + rnd() * 4, 6, 0.22);
   for (let y = 0; y < PX; y++) {
     for (let x = 0; x < PX; x++) {
-      const d = Math.hypot(x + 0.5 - 32, y + 0.5 - 32);
-      const k = 1 - d / 17;
-      if (k > 0) px(buf, x, y, Math.round(110 + 70 * rnd()), 0, d < 5 ? Math.round(255 * (1 - d / 5)) : 0, Math.min(1, k * 1.6) * 0.78);
+      const dx = x + 0.5 - 32;
+      const dy = y + 0.5 - 32;
+      const d = Math.hypot(dx, dy) / edge(Math.atan2(dy, dx));
+      if (d >= 1) continue;
+      const g = grainAt(x, y, seed);
+      // Broken, mottled soil, darker than the face; a shallow hole at its heart.
+      relief[y * PX + x] = -2.5 * (1 - d * d);
+      px(buf, x, y, Math.round(255 * (0.3 + 0.25 * g + 0.2 * d)), 0, d < 0.3 ? Math.round(255 * 0.75 * (1 - d / 0.3)) : 0, 0.75 * (1 - d * d));
     }
   }
-  for (let i = 0; i < 9; i++) streak(buf, 32, 32, rnd() * 6.28, 6, 10 + rnd() * 14, 1, 200, 0, rnd);
+  // Crumbs knocked out round it.
+  const n = 6 + Math.floor(rnd() * 8);
+  for (let i = 0; i < n; i++) {
+    const a = rnd() * 6.28;
+    const r = 11 + rnd() * 14;
+    const cx = 32 + Math.cos(a) * r;
+    const cy = 32 + Math.sin(a) * r;
+    const s = 0.8 + rnd() * 1.4;
+    for (let y = Math.floor(cy - s - 1); y <= Math.ceil(cy + s + 1); y++) {
+      for (let x = Math.floor(cx - s - 1); x <= Math.ceil(cx + s + 1); x++) {
+        if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= s) px(buf, x, y, 70, 0, 60, 0.75);
+      }
+    }
+  }
 }
 
 /**
@@ -235,11 +282,153 @@ function crackCell(buf: Uint8Array, seed: number) {
   for (let y = 0; y < PX; y++) for (let x = 0; x < PX; x++) if (Math.hypot(x + 0.5 - 32, y + 0.5 - 32) < 3.4) px(buf, x, y, 30, 0, 255, 1);
 }
 
-function atlas(): THREE.DataTexture {
+/** A ragged outline: the radius at an angle, `R` pushed in and out by `lobes` waves. */
+function ragged(rnd: () => number, R: number, lobes: number, depth: number): (th: number) => number {
+  const ph: number[] = [];
+  const am: number[] = [];
+  for (let i = 0; i < lobes; i++) {
+    ph.push(rnd() * 6.28);
+    am.push(depth * (0.4 + 0.6 * rnd()));
+  }
+  return (th) => {
+    let e = R;
+    for (let i = 0; i < lobes; i++) e *= 1 + (am[i] / (1 + i * 0.5)) * Math.sin(th * (i + 2) + ph[i]);
+    return e;
+  };
+}
+
+/** A repeatable random in [0, 1) for a pixel. */
+function grainAt(x: number, y: number, seed: number): number {
+  const h = Math.sin(x * 12.9898 + y * 78.233 + seed * 3.71) * 43758.5453;
+  return h - Math.floor(h);
+}
+
+/**
+ * A pit in stone: what a round leaves in sandstone or rock. A small, rounded cone with smooth walls, darkening to its
+ * bottom the way a hollow shades itself, and a soft rounded lip; no cracks, no splash. It darkens the face it is on rather
+ * than painting over it, so it sits right in sun and in shade alike.
+ */
+function pitCell(buf: Uint8Array, seed: number) {
+  const rnd = lcg(seed);
+  const edge = ragged(rnd, 15 + rnd() * 6, 5, 0.1);
+  const sq = 0.85 + rnd() * 0.3;
+  for (let y = 0; y < PX; y++) {
+    for (let x = 0; x < PX; x++) {
+      const dx = (x + 0.5 - 32) * sq;
+      const dy = (y + 0.5 - 32) / sq;
+      const d = Math.hypot(dx, dy) / edge(Math.atan2(dy, dx));
+      if (d >= 1) continue;
+      const g = grainAt(x, y, seed);
+      // Deep in the cone it is dark; up its smooth wall it comes back to the face's own colour; the lip is a touch lighter.
+      relief[y * PX + x] = -edge(Math.atan2(dy, dx)) * 0.45 * (1 - d * d) + (d > 0.8 ? 0.6 * Math.sin((d - 0.8) * 15.7) : 0);
+      const shade = 0.12 + 0.8 * d * d + (d > 0.78 && d < 0.95 ? 0.1 : 0) + (g - 0.5) * 0.1;
+      const a = d < 0.7 ? 0.95 : 0.95 * (1 - (d - 0.7) / 0.3);
+      px(buf, x, y, Math.round(255 * Math.min(1, Math.max(0, shade))), 0, Math.round(255 * Math.max(0, 0.7 * (1 - d / 0.45))), a);
+    }
+  }
+}
+
+/**
+ * A spall: what a round blows out of concrete or asphalt. A deep, ragged hole, dark inside, in a wide broken crater of
+ * fresh material paler than the weathered face, its facets each catching the light their own way, grains of aggregate in
+ * it, its lip jagged.
+ */
+function spallCell(buf: Uint8Array, seed: number) {
+  const rnd = lcg(seed);
+  const outer = ragged(rnd, 18 + rnd() * 6, 9, 0.22);
+  const hole = ragged(rnd, 9 + rnd() * 4, 7, 0.3);
+  const facets = 7 + Math.floor(rnd() * 5);
+  const fb: number[] = [];
+  const fa: number[] = [0];
+  for (let i = 0; i < facets; i++) fb.push(rnd());
+  for (let i = 1; i < facets; i++) fa.push(fa[i - 1] + (6.28 / facets) * (0.6 + 0.8 * rnd()));
+  for (let y = 0; y < PX; y++) {
+    for (let x = 0; x < PX; x++) {
+      const dx = x + 0.5 - 32;
+      const dy = y + 0.5 - 32;
+      const r = Math.hypot(dx, dy);
+      const th = Math.atan2(dy, dx);
+      const o = r / outer(th);
+      if (o >= 1.04) continue;
+      const hr = r / hole(th);
+      let f = 0;
+      const tt = (th + 6.28) % 6.28;
+      for (let i = 0; i < facets; i++) if (tt >= fa[i]) f = i;
+      const g = grainAt(x, y, seed);
+      // The crater wall: deep and shaded near the hole, lighter up to its broken lip, each facet its own tilt, specks of
+      // aggregate light and dark.
+      const up = Math.min(1, Math.max(0, (o - 0.35) / 0.6));
+      let shade = 0.3 + 0.55 * up + (fb[f] - 0.5) * 0.35;
+      if (g > 0.86) shade += 0.25;
+      else if (g < 0.1) shade -= 0.25;
+      // The hole: black at its heart, its own wall shading into it.
+      const dark = hr < 1 ? Math.min(1, 0.7 + 0.3 * (1 - hr)) : hr < 1.5 ? 0.55 * (1.5 - hr) / 0.5 : 0;
+      // A broad cone down to the hole, its facets each tilted, grit on it; the hole drops away inside.
+      relief[y * PX + x] = -7 * Math.max(0, 1 - o) ** 1.2 - (hr < 1 ? 10 * (1 - hr * hr) : 0) + (fb[f] - 0.5) * 2.5 * Math.max(0, 1 - o) + (g - 0.5) * 0.5;
+      const a = o < 0.92 ? 1 : Math.max(0, 1 - (o - 0.92) / 0.12);
+      px(buf, x, y, Math.round(255 * Math.min(1, Math.max(0, shade))), 0, Math.round(255 * dark), a);
+    }
+  }
+}
+
+/**
+ * A round punched through sheet metal: a dark, nearly round hole, its edge torn into bright jagged petals of bare metal, in
+ * a ring where the paint is scorched and scuffed off.
+ */
+function punchCell(buf: Uint8Array, seed: number) {
+  const rnd = lcg(seed);
+  const H = 7 + rnd() * 3;
+  const petals = 7 + Math.floor(rnd() * 5);
+  const pl: number[] = [];
+  for (let i = 0; i < petals; i++) pl.push(0.35 + rnd() * 0.65);
+  const ring = 18 + rnd() * 5;
+  for (let y = 0; y < PX; y++) {
+    for (let x = 0; x < PX; x++) {
+      const dx = x + 0.5 - 32;
+      const dy = y + 0.5 - 32;
+      const r = Math.hypot(dx, dy);
+      if (r >= ring * 1.1) continue;
+      const th = (Math.atan2(dy, dx) + 6.28) % 6.28;
+      const k = (th / 6.28) * petals;
+      const i = Math.floor(k);
+      const u = k - i;
+      // Each petal a tooth: longest at its middle, its own length.
+      const tooth = H + H * 0.75 * pl[i % petals] * (1 - Math.abs(u - 0.5) * 2);
+      const g = grainAt(x, y, seed);
+      if (r < H * (0.92 + 0.08 * Math.sin(th * 5 + seed))) {
+        relief[y * PX + x] = -8;
+        px(buf, x, y, 30, 0, 255, 1);
+      } else if (r < tooth) {
+        // Bent: each petal curls up out of the sheet, most at its tip.
+        relief[y * PX + x] = 3 * (1 - (tooth - r) / Math.max(1, tooth - H)) + 1.2 * Math.sin(u * Math.PI);
+        // Bare metal, bright where it bent toward the light, a thin dark seam between petals.
+        const seam = Math.abs(u - 0.5) > 0.42 ? 0.5 : 0;
+        px(buf, x, y, Math.round(255 * Math.min(1, 0.85 + 0.15 * g)), 200, Math.round(255 * seam), 1);
+      } else {
+        // The scorched ring: the paint darkened, fading out.
+        const f = (r - tooth) / (ring - tooth);
+        px(buf, x, y, Math.round(255 * 0.25), 0, Math.round(255 * 0.3 * (1 - f)), Math.max(0, 0.55 * (1 - f)));
+      }
+    }
+  }
+}
+
+/** Heights (in pixels) of the cell being painted, for its relief: the painters of holes write them. Zero is flat. */
+const relief = new Float32Array(PX * PX);
+
+function atlas(): { col: THREE.DataTexture; relief: THREE.DataTexture } {
   const W = PX * ATLAS_W;
   const H = PX * ATLAS_H;
   const out = new Uint8Array(W * H * 4);
   const cell = new Uint8Array(PX * PX * 4);
+  // The relief: each texel's slope as a tangent-space normal's x and y, 0.5 flat.
+  const nrm = new Uint8Array(W * H * 4);
+  for (let i = 0; i < W * H; i++) {
+    nrm[i * 4] = 128;
+    nrm[i * 4 + 1] = 128;
+    nrm[i * 4 + 2] = 255;
+    nrm[i * 4 + 3] = 255;
+  }
   const put = (index: number) => {
     const ox = (index % ATLAS_W) * PX;
     const oy = Math.floor(index / ATLAS_W) * PX;
@@ -247,8 +436,20 @@ function atlas(): THREE.DataTexture {
       const src = y * PX * 4;
       const dst = ((oy + y) * W + ox) * 4;
       out.set(cell.subarray(src, src + PX * 4), dst);
+      for (let x = 0; x < PX; x++) {
+        const hx = relief[y * PX + Math.min(PX - 1, x + 1)] - relief[y * PX + Math.max(0, x - 1)];
+        const hy = relief[Math.min(PX - 1, y + 1) * PX + x] - relief[Math.max(0, y - 1) * PX + x];
+        if (hx === 0 && hy === 0) continue;
+        const nx = -hx * 0.5;
+        const ny = -hy * 0.5;
+        const l = Math.hypot(nx, ny, 1);
+        const o = ((oy + y) * W + ox + x) * 4;
+        nrm[o] = Math.round((nx / l) * 127 + 128);
+        nrm[o + 1] = Math.round((ny / l) * 127 + 128);
+      }
     }
     cell.fill(0);
+    relief.fill(0);
   };
   // Four splats: a main mass with a ring of drops thrown off it.
   for (let s = 0; s < 4; s++) {
@@ -295,6 +496,14 @@ function atlas(): THREE.DataTexture {
   put(CELL.crack);
   scarCell(cell, 37);
   put(CELL.scar);
+  for (let k = 0; k < 4; k++) {
+    spallCell(cell, 73 + k * 19);
+    put(SPALLS[k]);
+    pitCell(cell, 151 + k * 23);
+    put(PITS[k]);
+    punchCell(cell, 211 + k * 29);
+    put(PUNCHES[k]);
+  }
   // A pool: one broad, smooth, slightly irregular puddle.
   {
     const rnd = lcg(21);
@@ -305,16 +514,19 @@ function atlas(): THREE.DataTexture {
     }
     put(7);
   }
-  const tex = new THREE.DataTexture(out, W, H, THREE.RGBAFormat);
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.generateMipmaps = true;
-  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.needsUpdate = true;
-  return tex;
+  const make = (data: Uint8Array) => {
+    const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    return tex;
+  };
+  return { col: make(out), relief: make(nrm) };
 }
 
-let atlasTex: THREE.DataTexture | null = null;
+let atlasTex: { col: THREE.DataTexture; relief: THREE.DataTexture } | null = null;
 
 const _x = new THREE.Vector3();
 const _y = new THREE.Vector3();
@@ -372,8 +584,10 @@ export class Decals {
     geo.setAttribute('aTint', this.tintAttr);
     this.uniforms = {
       ...atmoUniforms(),
-      tAtlas: { value: atlasTex },
+      tAtlas: { value: atlasTex.col },
+      tRelief: { value: atlasTex.relief },
       uLight: GLOBALS.uLight,
+      uSunDir: GLOBALS.uSunDir,
       uSceneTime: { value: 0 },
       uPullStep: DEPTH_UNIFORMS.uPullStep,
     };

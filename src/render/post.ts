@@ -5,6 +5,7 @@ import { ScreenFX, type FxView } from './screenfx';
 import { lookActive, type TripView } from './trip';
 import { FIRE_HAZE } from './fireLight';
 import { DEPTH, DEPTH_GLSL } from './depth';
+import { DepthOfField } from './dof';
 
 /**
  * HDR post chain for the split screen: both views render into one multisampled half-float target, then
@@ -127,6 +128,13 @@ uniform vec2 uHeat;
 uniform vec2 uHorizon;
 // Heat haze over the fires: per half, four fires, two vec4s each (see fireLight.FIRE_HAZE).
 uniform vec4 uHaze[ 16 ];
+// Depth of field (dof.ts): the blurred picture with how much of it to use, at half resolution.
+uniform sampler2D tDof;
+uniform vec2 uDofTexel;
+uniform float uDofOn;
+// A scope's eyepiece per half, two vec4s each (half A first): how far up, radius (NDC height), reticle, lit dot; the exit
+// pupil's shadow offset (NDC height). See sights.ts.
+uniform vec4 uSight[ 4 ];
 varying vec2 vUv;
 ${RECTS}
 vec4 gRect;
@@ -232,6 +240,68 @@ float hNoise( vec2 p ) {
   vec2 f = fract( p );
   f = f * f * ( 3.0 - 2.0 * f );
   return mix( mix( hash( i ), hash( i + vec2( 1.0, 0.0 ) ), f.x ), mix( hash( i + vec2( 0.0, 1.0 ) ), hash( i + vec2( 1.0, 1.0 ) ), f.x ), f.y );
+}
+// The depth of field's picture under uv, four taps round it to smooth its spiral's grain.
+vec4 dofAt( vec2 uv ) {
+  vec2 o = uDofTexel * 0.6;
+  vec2 lo = gRect.xy + uDofTexel * 0.5;
+  vec2 hi = gRect.zw - uDofTexel * 0.5;
+  return 0.25 * ( texture2D( tDof, clamp( uv + o, lo, hi ) ) + texture2D( tDof, clamp( uv - o, lo, hi ) )
+    + texture2D( tDof, clamp( uv + vec2( o.x, -o.y ), lo, hi ) ) + texture2D( tDof, clamp( uv + vec2( -o.x, o.y ), lo, hi ) ) );
+}
+// How much of a reticle covers a pixel p pixels from the middle of an eyepiece rp pixels across (its radius).
+float band( float x, float hw ) {
+  return 1.0 - smoothstep( hw - 0.5, hw + 0.5, x );
+}
+float reticle( vec2 p, float rp, float kind ) {
+  float ax = abs( p.x );
+  float ay = abs( p.y );
+  float thin = 0.5 + rp * 0.0012;
+  float thick = max( 1.5, rp * 0.014 );
+  float r = 0.0;
+  if ( kind < 1.5 ) {
+    // A post: a fine level line across, heavy bars in from the sides, and a post up from below tapering to the aim point.
+    r = max( band( ay, thin ), band( ay, thick ) * step( rp * 0.22, ax ) );
+    float tw = thick * clamp( -p.y / ( rp * 0.1 ), 0.0, 1.0 );
+    r = max( r, band( ax, tw ) * step( p.y, 0.0 ) );
+  } else if ( kind < 2.5 ) {
+    // A duplex: a fine cross in the middle, heavy bars from a third of the way out.
+    r = max( max( band( ay, thin ), band( ax, thin ) ), max( band( ay, thick ) * step( rp * 0.32, ax ), band( ax, thick ) * step( rp * 0.32, ay ) ) );
+  } else {
+    // Mil-dots: a fine cross with a dot every 8% of the way out, heavy bars from 62%.
+    r = max( max( band( ay, thin ), band( ax, thin ) ), max( band( ay, thick ) * step( rp * 0.62, ax ), band( ax, thick ) * step( rp * 0.62, ay ) ) );
+    float sp = rp * 0.08;
+    float dr = max( 1.3, rp * 0.0065 );
+    float nx = floor( ax / sp + 0.5 );
+    if ( nx >= 1.0 && nx <= 7.0 ) r = max( r, band( length( vec2( ax - nx * sp, ay ) ), dr ) );
+    float ny = floor( ay / sp + 0.5 );
+    if ( ny >= 1.0 && ny <= 7.0 ) r = max( r, band( length( vec2( ax, ay - ny * sp ) ), dr ) );
+  }
+  return r;
+}
+// A scope up to the eye (sights.ts): its magnified picture in a round window with the reticle on it, the exit pupil's shadow
+// creeping in from the side the eye is off to, the eyepiece's black rim round it, and past that the world dim and out of
+// focus. q is the place in the view (NDC height from its middle, the width scaled to match), hPx pixels per unit.
+vec3 eyepiece( vec3 c, vec2 q, float hPx, vec4 s0, vec4 s1 ) {
+  float R = s0.y;
+  float d = length( q );
+  float px = 1.0 / hPx;
+  float win = 1.0 - smoothstep( R - 1.2 * px, R + 1.2 * px, d );
+  float pupil = 1.0 - smoothstep( R * 0.74, R * 1.02, length( q - s1.xy ) );
+  float inside = pupil * ( 1.0 - 0.3 * smoothstep( R * 0.5, R, d ) );
+  vec3 lit = vec3( 0.0 );
+  if ( s0.z > 0.5 && win > 0.0 ) {
+    vec2 p = q * hPx;
+    float rp = R * hPx;
+    inside *= 1.0 - 0.97 * reticle( p, rp, s0.z );
+    if ( s0.w > 0.5 ) lit = vec3( 4.0, 0.1, 0.04 ) * band( length( p ), max( 1.8, rp * 0.008 ) ) * pupil;
+  }
+  // The rim: black, with a faint sheen on its inner edge; then the world beyond, darkest next to it.
+  float rim = 1.0 - smoothstep( R * 1.14, R * 1.24, d );
+  float sheen = smoothstep( R * 1.0, R * 1.03, d ) * ( 1.0 - smoothstep( R * 1.03, R * 1.09, d ) );
+  float outside = mix( mix( 0.24, 0.68, smoothstep( R * 1.24, R * 2.0, d ) ), 0.02 + 0.05 * sheen, rim );
+  float m = mix( outside, inside, win );
+  return mix( c, c * m + lit * win, s0.x );
 }
 void main() {
   vec4 r = rectFor( vUv );
@@ -384,7 +454,20 @@ void main() {
     float creviceShield = mix( ao * ao, 1.0, smoothstep( 6.0, 50.0, zc ) );
     col += fl.rgb * ( 1.0 - col * 0.35 ) * creviceShield;
   }
+  // Depth of field: the blurred picture where the eye is not focused (behind the sights, round a scope's eyepiece).
+  if ( uDofOn > 0.5 ) {
+    vec4 dof = dofAt( fxUv );
+    col = mix( col, dof.rgb, dof.a );
+  }
   vec3 c = col + bloom * uBloom;
+  // A scope's eyepiece, drawn where the scene was (through the lens), so it lines up with the gun cut away inside it.
+  {
+    vec4 s0 = uSight[ inA ? 0 : 2 ];
+    if ( s0.x > 0.001 && f4.w < 0.5 ) {
+      vec2 qs = ( sUv - ctr ) / span * 2.0 * ax;
+      c = eyepiece( c, qs, span.y * uRes.y * 0.5, s0, uSight[ inA ? 1 : 3 ] );
+    }
+  }
   c = aces( c * uExposure * ( f4.w > 0.5 ? 1.0 + f3.w : 1.0 ) / 0.6 );
   c = toSRGB( c );
   float l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
@@ -441,6 +524,13 @@ export class PostFX {
   readonly depth: THREE.DepthTexture;
   /** Ambient occlusion, volumetric light and reflections. */
   readonly fx: ScreenFX;
+  /** Depth of field behind the sights (`dof.ts`); fill its `views` before `finish`. */
+  readonly dof: DepthOfField;
+  /** A scope's eyepiece per half, in the order of `setRects`: two vec4s each (see `uSight` in the composite). */
+  readonly sight = Array.from({ length: 4 }, () => new THREE.Vector4());
+  /** The cameras' near and far planes, and each half's height in scene pixels, for the depth of field. */
+  readonly nearFar = new THREE.Vector2(0.2, 2600);
+  readonly viewH: [number, number] = [1, 1];
   /** Turn the screen-space lighting off (the composite then skips it). */
   fxEnabled = true;
   /** Set once a view has run the screen-space passes this frame. */
@@ -491,6 +581,7 @@ export class PostFX {
       this.up.push(new THREE.WebGLRenderTarget(4, 4, opts));
     }
     const rects = { uRectA: { value: this.rectA }, uRectB: { value: this.rectB } };
+    this.dof = new DepthOfField(rects, this.depth);
     this.downMat = new THREE.ShaderMaterial({
       uniforms: { tSrc: { value: null }, uTexel: { value: new THREE.Vector2() }, uPrefilter: { value: 0 }, uThreshold: { value: new THREE.Vector2(1, 0.5) }, ...rects },
       vertexShader: VERT,
@@ -537,6 +628,10 @@ export class PostFX {
         uHeat: { value: this.heat },
         uHorizon: { value: this.horizon },
         uHaze: { value: FIRE_HAZE },
+        tDof: { value: null },
+        uDofTexel: { value: new THREE.Vector2(1, 1) },
+        uDofOn: { value: 0 },
+        uSight: { value: this.sight },
         ...rects,
       },
       vertexShader: VERT,
@@ -594,6 +689,7 @@ export class PostFX {
     this.height = h;
     this.hdr.setSize(w, h);
     this.fx.setSize(w, h);
+    this.dof.setSize(w, h);
     let lw = w;
     let lh = h;
     for (let i = 0; i < LEVELS; i++) {
@@ -659,8 +755,13 @@ export class PostFX {
       this.quad.render(gl);
       low = this.up[i];
     }
+    // Depth of field, for the halves aiming down their sights.
+    this.dof.run(gl, this.hdr.texture, this.width, this.height, this.nearFar.x, this.nearFar.y, this.viewH);
     const cm = this.compMat;
     const u = cm.uniforms;
+    u.tDof.value = this.dof.texture;
+    u.uDofOn.value = this.dof.ran ? 1 : 0;
+    u.uDofTexel.value.set(1 / this.dof.width, 1 / this.dof.height);
     u.tScene.value = this.hdr.texture;
     u.tBloom.value = this.up[0].texture;
     u.tFxLight.value = this.fx.lightTexture;
@@ -714,6 +815,7 @@ export class PostFX {
     this.hdr.dispose();
     this.depth.dispose();
     this.fx.dispose();
+    this.dof.dispose();
     for (const t of [...this.down, ...this.up, ...this.hist]) t.dispose();
     this.copyMat.dispose();
     this.downMat.dispose();

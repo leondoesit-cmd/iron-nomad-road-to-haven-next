@@ -3,8 +3,10 @@ import { ENEMIES, t, type ZombieDef, type ZombieKind } from '../data';
 import { clamp, damp, dist2, lerp, wrapAngle } from '../core/math';
 import type { Aabb } from '../world/layout';
 import type { Animal } from './wildlife';
-import { armDamageMult, damageFraction, legSpeedMult, limbsGone, maskOf, massOf, newWounds, staggerSpeed, wound, zoneOf, type AmmoSpec, type Wounds, type Zone } from '../sim/ballistics';
-import { MELEE, knockFor, type MeleeFeel } from '../sim/weaponfx';
+import { AMMO, armDamageMult, damageFraction, legSpeedMult, limbsGone, maskOf, massOf, newWounds, staggerSpeed, throughFlesh, wound, zoneOf, type AmmoSpec, type Wounds, type Zone } from '../sim/ballistics';
+import { MELEE, knockFor, type MeleeFeel, type MeleeKind } from '../sim/weaponfx';
+import { armsUseless, brainGone, fleshMoveMult, legsUseless, type FleshEvents, type FleshState } from '../sim/flesh';
+import type { BodyPose } from '../render/fleshRender';
 import { ZOMBIE_VARIANTS, zombieMotion, zombieStepPhase } from '../sim/zombieAnimation';
 import type { ZombieRenderer } from '../render/zombieRender';
 import type { Ctx } from './ctx';
@@ -14,6 +16,36 @@ import { SIGHT } from '../sim/enemySight';
 import type { Vehicle } from './vehicle';
 import { footprints, pushOutOfVehicles, type Footprint } from './vehicleFootprint';
 import { Nearest } from '../core/nearest';
+import { DISSOLVE_TIME } from '../render/dissolve';
+import { zombieToughness } from '../sim/tuning';
+
+/** A body drawn again within this many seconds of its last draw has not just come into sight. */
+const ZOMBIE_SEEN_GAP = 1;
+/** The dead stay where they fell: this many at most, for this long, before they sink away. */
+const CORPSE_KEEP = 32;
+const CORPSE_LIFE = 150;
+
+/** Which round an `AmmoSpec` is, for the flesh engine's wound tables. */
+const AMMO_KEY = new Map<AmmoSpec, string>(Object.entries(AMMO).map(([k, v]) => [v, k]));
+
+/**
+ * Where a swing lands on a body: the world point, the way the blade was travelling, and the part. Swing code that sweeps the
+ * blade through the world passes one per body it crosses; `depth` (0..1, how far through that part the cut has got over
+ * every stroke) and `through` (this stroke finished it) let it decide the cutting itself.
+ */
+export interface MeleeStrike {
+  x: number;
+  y: number;
+  z: number;
+  dx: number;
+  dy: number;
+  dz: number;
+  zone: Zone;
+  depth?: number;
+  through?: boolean;
+}
+/** Closer than this (metres) a body comes into sight at once: it was round a corner, not arriving at the edge of things. */
+const ZOMBIE_FADE_NEAR = 40;
 
 export type ZState = 'dormant' | 'wander' | 'investigate' | 'chase' | 'swarm';
 
@@ -29,6 +61,11 @@ export class Zombie {
   vx = 0;
   vz = 0;
   hp: number;
+  /**
+   * Full health: the kind's hit points times the toughness setting (`sim/tuning.ts`). Wounds, broken bones and lost limbs
+   * still count against the kind's own hit points, so a tougher body comes apart further before it drops.
+   */
+  maxHp: number;
   state: ZState;
   stateT = 0;
   homeX: number;
@@ -41,6 +78,10 @@ export class Zombie {
   dead = false;
   fall = 0;
   deadT = 0;
+  /** How it goes down: which of its deaths (0..1), onto its back or its face (undefined: either), and the slope it lies on. */
+  deathSeed = 0;
+  fallsBack: boolean | undefined = undefined;
+  lieSlope: { x: number; z: number; pitch: number; roll: number } | null = null;
   phase: number;
   stride = 4;
   /** Continuous distance-driven gait phase; phase remains the stable personality seed. */
@@ -78,6 +119,14 @@ export class Zombie {
   routeCool = 0;
   /** What heavy rounds have taken off, and how much each limb has taken since. */
   wounds: Wounds = newWounds();
+  /** What has been done to it under the skin: wounds, breaks, cuts, the gut (`sim/flesh.ts`). Null until it is first hurt. */
+  flesh: FleshState | null = null;
+  /** Seconds dead at which the body starts to sink away (set once it is laid among the dead that stay). */
+  rotAt = Infinity;
+  /** Sunk away and gone from the world: anything hanging from it lets go. */
+  gone = false;
+  /** Where a settled body lies (head, middle, feet in the world), for rounds and blades to find it (`FleshFx.lie`). */
+  lie: Float32Array | null = null;
   /** 0 to 1: how far it is reeling from a hit (leans back, arms thrown up). Fades on its own. */
   stagger = 0;
   /** Share of its walking speed left once legs are gone. */
@@ -122,7 +171,7 @@ export class Zombie {
     this.homeZ = z;
     this.tx = x;
     this.tz = z;
-    this.hp = this.def.hp;
+    this.hp = this.maxHp = this.def.hp * zombieToughness();
     this.state = dormant ? 'dormant' : 'wander';
     this.yaw = Math.random() * Math.PI * 2;
     this.phase = Math.random() * 6.28;
@@ -165,6 +214,8 @@ const _spore: SporeCloud[] = [];
 
 export class ZombieSystem {
   list: Zombie[] = [];
+  /** The dead that stay lying where they fell, out of the living list (`layOut`). */
+  corpses: Zombie[] = [];
   spores = _spore;
   /** Hook so camp structures and barricades can take damage from attackers. */
   onObstacleHit: (a: Aabb, dmg: number, z: Zombie) => void = () => {};
@@ -230,6 +281,23 @@ export class ZombieSystem {
       if (yy < zb.y - 0.1 || yy > zb.y + h) continue;
       if (!best || tt < best.dist) best = { zombie: zb, dist: tt, head: yy > zb.y + h * 0.8 };
     }
+    // The dead lying where they fell: a round can still find them, and still tear them.
+    const fl = this.ctx.gore?.anatomy;
+    if (fl) {
+      const lying = (zb: Zombie) => {
+        if (!this.hackable(zb)) return;
+        if (Math.abs(zb.x - ox) > maxD + 2 || Math.abs(zb.z - oz) > maxD + 2) return;
+        const l = fl.lie(zb);
+        const sc = zb.def.scale;
+        for (let k = 0; k < 2; k++) {
+          const a = k * 3;
+          const t = raySegment(ox, oy, oz, dx, dy, dz, l[a], l[a + 1], l[a + 2], l[a + 3], l[a + 4], l[a + 5], (k === 0 ? 0.17 : 0.13) * sc);
+          if (t !== null && t <= maxD && (!best || t < best.dist)) best = { zombie: zb, dist: t, head: false };
+        }
+      };
+      for (const zb of this.list) lying(zb);
+      for (const zb of this.corpses) lying(zb);
+    }
     return best;
   }
 
@@ -268,6 +336,13 @@ export class ZombieSystem {
     zb.fall = 0;
     this.release(zb);
     const ctx = this.ctx;
+    // Knocked back by a blow from the front it goes down on its back, from behind on its face; a blast or a glancing blow
+    // either way.
+    zb.deathSeed = ctx.rng.next();
+    const push = explosive || !zb.lastHit ? 0 : zb.lastHit.dx * Math.sin(zb.yaw) + zb.lastHit.dz * Math.cos(zb.yaw);
+    zb.fallsBack = push < -0.35 ? true : push > 0.35 ? false : undefined;
+    zb.lieSlope = null;
+    zb.lie = null;
     ctx.campaign.stats.zombiesKilled++;
     if (killer >= 0) this.killedByPlayer[killer]++;
     ctx.fx.blood(zb.x, zb.y + 1, zb.z, 6);
@@ -323,6 +398,44 @@ export class ZombieSystem {
     const g = limbsGone(zb.wounds.mask);
     zb.moveMult = legSpeedMult(g.legs);
     zb.biteMult = armDamageMult(g.arms);
+    // A broken leg is a limp as much as a missing one; a broken arm grabs as badly.
+    if (zb.flesh) {
+      zb.moveMult = Math.min(zb.moveMult, fleshMoveMult(zb.flesh));
+      zb.biteMult = Math.min(zb.biteMult, armDamageMult(armsUseless(zb.flesh)));
+    }
+  }
+
+  /** What the flesh engine did to a body changes what it can do: its legs, its arms, its brain, a body cut in two. */
+  private afterFlesh(zb: Zombie, ev: FleshEvents, killed: boolean, killer: number) {
+    const f = zb.flesh;
+    if (!f) return;
+    if (ev.bisect) zb.wounds.mask |= maskOf('legL') | maskOf('legR');
+    if (f.head === 'burst' || f.head === 'split' || f.head === 'sliced' || f.head === 'off') zb.wounds.mask |= maskOf('head');
+    this.refreshWounds(zb);
+    // A leg snapping under it drops it.
+    if (!zb.dead && ev.broke.some((b) => b.startsWith('femur') || b.startsWith('shin'))) {
+      zb.stun = Math.max(zb.stun, 1.1);
+      zb.stagger = 1;
+    }
+    // Nothing walks on without its brain.
+    if (brainGone(f) && !zb.dead) this.kill(zb, killer);
+    // Cut in two, the top half does not always know it is dead.
+    if (ev.bisect && killed && zb.dead && !brainGone(f) && zb.kind !== 'bloater' && this.ctx.rng.next() < 0.65) this.reviveHalf(zb, killer);
+  }
+
+  /** The top half of a body cut in two keeps coming, slowly, on its hands. */
+  private reviveHalf(zb: Zombie, killer: number) {
+    const ctx = this.ctx;
+    zb.dead = false;
+    zb.deadT = 0;
+    zb.fall = 0;
+    zb.hp = Math.max(1, zb.maxHp * 0.3);
+    ctx.campaign.stats.zombiesKilled = Math.max(0, ctx.campaign.stats.zombiesKilled - 1);
+    if (killer >= 0 && this.killedByPlayer[killer] > 0) this.killedByPlayer[killer]--;
+    zb.stun = 1.2;
+    zb.state = 'chase';
+    zb.chase = Math.max(zb.chase, 0.5);
+    this.refreshWounds(zb);
   }
 
   /**
@@ -334,26 +447,36 @@ export class ZombieSystem {
     h: { dmg: number; dx: number; dy: number; dz: number; x: number; y: number; z: number; head: boolean; spec: AmmoSpec; speed: number; fromX: number; fromZ: number; killer: number },
   ): { killed: boolean; zone: Zone; off: ('head' | 'armL' | 'armR' | 'legL' | 'legR')[] } {
     const sc = zb.def.scale;
+    // A body already down is found by its parts where they lie, not by height.
+    const wasDead = zb.dead;
+    const at = wasDead ? this.ctx.gore?.anatomy?.locate(zb, h.x, h.y, h.z, h.dx, h.dy, h.dz) ?? null : null;
     // Where on the body: height as a share of it, and which side (the model's +x is the body's left).
     const rx = Math.cos(zb.yaw);
     const rz = -Math.sin(zb.yaw);
     const lateral = (h.x - zb.x) * rx + (h.z - zb.z) * rz;
-    const relY = (h.y - zb.y) / (1.8 * sc);
-    let zone = zoneOf(relY, lateral, sc);
-    if (h.head) zone = 'head';
+    // A body dragging itself along lies lower than it stands: its chest is near the ground.
+    const relY = (h.y - zb.y + (zb.y - this.poseOf(zb).y)) / (1.8 * sc);
+    let zone = at ? at.zone : zoneOf(relY, lateral, sc);
+    if (h.head && !at) zone = 'head';
     zb.lastHit = { dx: h.dx, dz: h.dz, power: (h.dmg * Math.max(0.2, h.spec.gore)) / zb.def.hp };
     const killed = this.damage(zb, h.dmg, { fromX: h.fromX, fromZ: h.fromZ, head: h.head, killer: h.killer });
     this.knock(zb, h.dx, h.dz, staggerSpeed(h.spec, h.speed, massOf(sc)) * damageFraction(h.speed / h.spec.speed));
-    const res = wound(zb.wounds, zone, h.dmg, h.spec.gore, zb.def.hp, killed, this.ctx.rng.next());
+    const res = wound(zb.wounds, zone, h.dmg, h.spec.gore, zb.def.hp, killed, this.ctx.rng.next(), zb.maxHp);
+    // Under the skin: the hole, the crater out the back, the bone, the gut, where a limb is cut (sim/flesh.ts).
+    const fl = this.ctx.gore?.anatomy;
+    if (fl) {
+      const ev = fl.hit(zb, { key: AMMO_KEY.get(h.spec) ?? 'pistol', power: h.dmg / zb.def.hp, zone, x: h.x, y: h.y, z: h.z, dx: h.dx, dy: h.dy, dz: h.dz, through: throughFlesh(h.spec, h.speed) > 0, killed, off: res.off, rest: at ?? undefined });
+      this.afterFlesh(zb, ev, killed, h.killer);
+    }
     if (res.off.length) {
       this.refreshWounds(zb);
       if (res.off.includes('head') && !zb.dead) this.kill(zb, h.killer);
     }
-    if (killed || zb.dead) {
+    if (!wasDead && (killed || zb.dead)) {
       // It drops where the round was heading: turn it so it topples along the shot.
       zb.yaw = Math.atan2(-h.dx, -h.dz);
     }
-    return { killed: killed || zb.dead, zone, off: res.off };
+    return { killed: zb.dead, zone, off: res.off };
   }
 
   /** Area damage with a quadratic falloff. */
@@ -369,6 +492,14 @@ export class ZombieSystem {
       const k = (1 - d / radius) * 6;
       zb.vx += ((zb.x - x) / l) * k;
       zb.vz += ((zb.z - z) / l) * k;
+      // Burnt and blown open on the side that faced it; close enough, torn in half.
+      const fl = this.ctx.gore?.anatomy;
+      if (fl) {
+        const ux = (zb.x - x) / l;
+        const uz = (zb.z - z) / l;
+        const ev = fl.hit(zb, { key: 'blast', power: (damage * f) / zb.def.hp, zone: 'torso', x: zb.x - ux * 0.3, y: zb.y + 1.05 * zb.def.scale, z: zb.z - uz * 0.3, dx: ux, dy: 0.2, dz: uz, killed, off: [] });
+        this.afterFlesh(zb, ev, killed, killer);
+      }
       // A blast that more than kills tears pieces off.
       if (killed && damage * f >= zb.def.hp * 1.2) this.tear(zb, (zb.x - x) / l, (zb.z - z) / l, (damage * f) / zb.def.hp);
     }
@@ -434,29 +565,65 @@ export class ZombieSystem {
    * A swing of a weapon: everything in front of the player and within reach takes the blow, up to what the weapon can cleave
    * through. Each body is shoved back (a heavy one moves less) and staggered. `cut` is how well the weapon takes limbs off (see `cutOf`). Returns how many it landed on.
    */
-  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number, feel: MeleeFeel = MELEE.fist, cut = 0): number {
+  meleeHit(p: Player, hx: number, hz: number, yaw: number, reach: number, dmg: number, feel: MeleeFeel = MELEE.fist, cut = 0, model?: MeleeKind, strikeOf?: (zb: Zombie) => MeleeStrike | null): number {
+    const ctx = this.ctx;
+    // The weapon, for its wounds: named, or known by its feel (each hand weapon has its own).
+    const weapon = model ?? (Object.keys(MELEE) as MeleeKind[]).find((k) => MELEE[k] === feel) ?? 'fist';
     let hit = 0;
     for (const zb of this.list) {
       if (zb.dead) continue;
       const dx = zb.x - p.pos.x;
       const dz = zb.z - p.pos.z;
       const d = Math.hypot(dx, dz);
-      if (d > reach + zb.def.radius) continue;
-      const ang = Math.abs(wrapAngle(Math.atan2(dx, dz) - yaw));
-      if (ang > 1.0) continue;
+      let strike: MeleeStrike | null;
+      if (strikeOf) {
+        // The swing was swept through the world: it says which bodies the blade crossed, and where.
+        strike = strikeOf(zb);
+        if (!strike) continue;
+      } else {
+        if (d > reach + zb.def.radius) continue;
+        const ang = Math.abs(wrapAngle(Math.atan2(dx, dz) - yaw));
+        if (ang > 1.0) continue;
+        strike = this.blowAt(p, zb, yaw, d);
+      }
       const k = zb.def.armor > 0 ? 1 - zb.def.armor : 1;
       const ux = dx / (d || 1);
       const uz = dz / (d || 1);
-      zb.lastHit = { dx: ux, dz: uz, power: (dmg * k * Math.max(0.3, cut)) / zb.def.hp };
-      const killed = this.damage(zb, dmg * k, { fromX: p.pos.x, fromZ: p.pos.z, killer: p.index });
-      if (cut > 0) this.cutOff(zb, ux, uz, dmg * k, cut, killed, p.index);
+      const dealt = dmg * k;
+      zb.lastHit = { dx: ux, dz: uz, power: (dealt * Math.max(0.3, cut)) / zb.def.hp };
+      const killed = this.damage(zb, dealt, { fromX: p.pos.x, fromZ: p.pos.z, killer: p.index });
+      // A blade takes off what it cuts through, where it lands: by the damage rules, or by the swing's own reckoning of
+      // how far through the part it has got.
+      let off: Exclude<Zone, 'torso'>[] = [];
+      if (strike.through !== undefined) {
+        if (strike.through && strike.zone !== 'torso') {
+          const m = maskOf(strike.zone);
+          if ((zb.wounds.mask & m) !== m) {
+            zb.wounds.mask |= m;
+            off = [strike.zone];
+          }
+        }
+      } else if (cut > 0) off = wound(zb.wounds, strike.zone, dealt, cut, zb.def.hp, killed, ctx.rng.next(), zb.maxHp).off;
+      const fl = ctx.gore?.anatomy;
+      if (fl) {
+        const ev = fl.hit(zb, { key: weapon, power: dealt / zb.def.hp, zone: strike.zone, x: strike.x, y: strike.y, z: strike.z, dx: strike.dx, dy: strike.dy, dz: strike.dz, killed, off, cutDepth: strike.depth, cutThrough: strike.through });
+        this.afterFlesh(zb, ev, killed, p.index);
+      }
+      if (off.length) {
+        this.refreshWounds(zb);
+        const power = (dealt * Math.max(0.5, cut)) / zb.def.hp;
+        for (const part of off) ctx.gore.sever(zb, part, ux, 0.3, uz, power);
+        if (off.includes('head') && !zb.dead) this.kill(zb, p.index);
+      }
       const push = knockFor(feel, massOf(zb.def.scale));
-      zb.vx += (dx / (d || 1)) * push;
-      zb.vz += (dz / (d || 1)) * push;
+      zb.vx += ux * push;
+      zb.vz += uz * push;
       zb.stun = Math.max(zb.stun, feel.stun);
       hit++;
       if (hit >= feel.cleave) break;
     }
+    // Looking down at one of the dead in reach: the blow lands on what lies there.
+    if (!strikeOf && hit < feel.cleave && p.aimPitch < -0.3) hit += this.hackCorpse(p, yaw, reach, dmg, cut, weapon);
     if (hit) {
       this.ctx.fx.blood(hx, p.pos.y + 1.1, hz, 4);
       this.ctx.audio.play('thud', hx, hz, 0.7);
@@ -464,17 +631,114 @@ export class ZombieSystem {
     return hit;
   }
 
-  /** A blade lands somewhere on the body, at random: an arm, a leg, now and then the head. Takes off what it cut through. */
-  private cutOff(zb: Zombie, dx: number, dz: number, dealt: number, cut: number, killed: boolean, killer: number) {
+  /** A blow brought down on a body lying on the ground: it opens, breaks and cuts it like any other. */
+  private hackCorpse(p: Player, yaw: number, reach: number, dmg: number, cut: number, weapon: MeleeKind): number {
     const ctx = this.ctx;
-    const r = ctx.rng.next();
-    const zone: Zone = r < 0.18 ? 'head' : r < 0.5 ? (ctx.rng.next() < 0.5 ? 'armL' : 'armR') : r < 0.8 ? (ctx.rng.next() < 0.5 ? 'legL' : 'legR') : 'torso';
-    const res = wound(zb.wounds, zone, dealt, cut, zb.def.hp, killed, ctx.rng.next());
-    if (!res.off.length) return;
-    this.refreshWounds(zb);
-    const power = (dealt * cut) / zb.def.hp;
-    for (const part of res.off) ctx.gore.sever(zb, part, dx, 0.3, dz, power);
-    if (res.off.includes('head') && !zb.dead) this.kill(zb, killer);
+    const fl = ctx.gore?.anatomy;
+    if (!fl) return 0;
+    // Where the look meets the ground, in reach.
+    const down = Math.tan(-clamp(p.aimPitch, -1.4, -0.05));
+    const r = clamp(1.45 / down, 0.5, reach);
+    const gx = p.pos.x + Math.sin(yaw) * r;
+    const gz = p.pos.z + Math.cos(yaw) * r;
+    let best: Zombie | null = null;
+    let bd = 0.45;
+    let bx = 0;
+    let by = 0;
+    let bz = 0;
+    const consider = (zb: Zombie) => {
+      if (!this.hackable(zb)) return;
+      if (Math.abs(zb.x - gx) > 2.5 || Math.abs(zb.z - gz) > 2.5) return;
+      const l = fl.lie(zb);
+      for (let k = 0; k < 2; k++) {
+        const a = k * 3;
+        const ux = l[a + 3] - l[a];
+        const uz = l[a + 5] - l[a + 2];
+        const t = clamp(((gx - l[a]) * ux + (gz - l[a + 2]) * uz) / Math.max(1e-6, ux * ux + uz * uz), 0, 1);
+        const px = l[a] + ux * t;
+        const pz = l[a + 2] + uz * t;
+        const d = Math.hypot(px - gx, pz - gz);
+        if (d < bd) {
+          bd = d;
+          best = zb;
+          bx = px;
+          by = l[a + 1] + (l[a + 4] - l[a + 1]) * t + 0.05;
+          bz = pz;
+        }
+      }
+    };
+    for (const zb of this.list) consider(zb);
+    for (const zb of this.corpses) consider(zb);
+    const zb = best as Zombie | null;
+    if (!zb) return 0;
+    const dx = Math.sin(yaw) * 0.5;
+    const dz = Math.cos(yaw) * 0.5;
+    this.hackAt(p, zb, { x: bx, y: by, z: bz, dx, dy: -0.85, dz, zone: 'torso' }, dmg, cut, weapon);
+    return 1;
+  }
+
+  /** One of the dead that a blade or a club can still get at: settled, and not yet sinking away. */
+  hackable(zb: Zombie): boolean {
+    // Its death plays out over up to 2.3 seconds (`zombieRender.ts` DEATH_PACE); where it lies is only known after.
+    return zb.dead && !zb.gone && zb.deadT >= 2.3 && zb.rotAt > zb.deadT;
+  }
+
+  /**
+   * Every body lying where it fell that can still be cut, with where it lies: `segs` is head, middle (hips) and feet as
+   * world points (9 numbers, `FleshFx.lie`), two segments for a swing to be swept against.
+   */
+  *lyingBodies(): Generator<{ zb: Zombie; segs: Float32Array }> {
+    const fl = this.ctx.gore?.anatomy;
+    if (!fl) return;
+    for (const zb of this.list) if (this.hackable(zb)) yield { zb, segs: fl.lie(zb) };
+    for (const zb of this.corpses) if (this.hackable(zb)) yield { zb, segs: fl.lie(zb) };
+  }
+
+  /**
+   * A blow on a body lying on the ground at a point of it (`s.x, y, z`), the blade going `s.dx, dy, dz`. The part is found
+   * where it really lies (`FleshFx.locate`; `s.zone` is not used). A swept swing's `through` takes the part off there
+   * (`false` only opens it, `depth` deep); without it the damage rules decide, as for the living.
+   */
+  hackAt(p: Player, zb: Zombie, s: MeleeStrike, dmg: number, cut: number, weapon: MeleeKind) {
+    const ctx = this.ctx;
+    const fl = ctx.gore?.anatomy;
+    if (!fl || !zb.dead || zb.gone) return;
+    void p;
+    const at = fl.locate(zb, s.x, s.y, s.z, s.dx, s.dy, s.dz);
+    let off: Exclude<Zone, 'torso'>[] = [];
+    if (s.through !== undefined) {
+      if (s.through && at.zone !== 'torso') {
+        const m = maskOf(at.zone);
+        if ((zb.wounds.mask & m) !== m) {
+          zb.wounds.mask |= m;
+          off = [at.zone];
+        }
+      }
+    } else if (cut > 0) off = wound(zb.wounds, at.zone, dmg, cut, zb.def.hp, false, ctx.rng.next(), zb.maxHp).off;
+    fl.hit(zb, { key: weapon, power: dmg / zb.def.hp, zone: at.zone, x: s.x, y: s.y, z: s.z, dx: s.dx, dy: s.dy, dz: s.dz, killed: false, off, rest: at, cutDepth: s.depth, cutThrough: s.through });
+    if (zb.flesh?.cut[5]) zb.wounds.mask |= maskOf('legL') | maskOf('legR');
+    const l = Math.hypot(s.dx, s.dz) || 1;
+    for (const part of off) ctx.gore.sever(zb, part, s.dx / l, 0.3, s.dz / l, (dmg * Math.max(0.5, cut)) / zb.def.hp);
+  }
+
+  /**
+   * Where a swing lands on a body that nothing swept for: as high on it as the swinger is looking, coming down and across
+   * from the swinging arm's side.
+   */
+  private blowAt(p: Player, zb: Zombie, yaw: number, d: number): MeleeStrike {
+    const sc = zb.def.scale;
+    const lift = zb.dead ? 0 : zb.y - this.poseOf(zb).y;
+    const reach = Math.max(0.3, d - zb.def.radius * 0.5);
+    const look = p.pos.y + 1.6 + Math.tan(clamp(p.aimPitch, -1.2, 1.2)) * reach;
+    const y = clamp(look + (this.ctx.rng.next() - 0.5) * 0.12, zb.y + 0.12 * sc - lift, zb.y + 1.78 * sc - lift);
+    const fx = Math.sin(yaw);
+    const fz = Math.cos(yaw);
+    const x = p.pos.x + fx * reach;
+    const z = p.pos.z + fz * reach;
+    const lateral = (x - zb.x) * Math.cos(zb.yaw) - (z - zb.z) * Math.sin(zb.yaw);
+    const zone = zoneOf((y - zb.y + lift) / (1.8 * sc), lateral, sc);
+    // From the right shoulder down and across to the left.
+    return { x, y, z, dx: fx * 0.5 + Math.cos(yaw) * 0.6, dy: -0.5, dz: fz * 0.5 - Math.sin(yaw) * 0.6, zone };
   }
 
   /** Free a pinned player: grabbers are knocked back and stunned. */
@@ -518,6 +782,14 @@ export class ZombieSystem {
       const dmg = (22 + sp * 6.5) * (v.def.tier >= 3 ? 1.5 : v.def.tier === 2 ? 1.0 : 0.65) * (1 + pl);
       const res = zb.def.armor > 0 ? 1 - zb.def.armor : 1;
       const killed = this.damage(zb, dmg * res, { fromX: p.x, fromZ: p.z, killer: v.driver?.isPlayer ? v.driver.index : -1, explosive: false });
+      // The bumper takes it at the knees, a fast one in the body: bones break, and hard enough it comes apart.
+      const fl = this.ctx.gore?.anatomy;
+      if (fl) {
+        const high = sp > 13 && this.ctx.rng.next() < 0.5;
+        const zone: Zone = high ? 'torso' : this.ctx.rng.next() < 0.5 ? 'legL' : 'legR';
+        const ev = fl.hit(zb, { key: 'vehicle', power: (dmg * res) / zb.def.hp, zone, x: zb.x - fx * 0.25, y: zb.y + (high ? 1.05 : 0.5) * zb.def.scale, z: zb.z - fz * 0.25, dx: fx, dy: 0, dz: fz, killed, off: [] });
+        this.afterFlesh(zb, ev, killed, v.driver?.isPlayer ? v.driver.index : -1);
+      }
       // Hit hard enough, a body comes apart on the bumper.
       if (killed && dmg * res >= zb.def.hp * 1.1) this.tear(zb, fx, fz, (dmg * res) / zb.def.hp);
       zb.vx += fx * sp * 0.6 - fz * lx * 0.3;
@@ -552,6 +824,15 @@ export class ZombieSystem {
   update(dt: number) {
     const ctx = this.ctx;
     this.time += dt;
+    // The kept dead lie still, and the oldest sink away.
+    for (let i = this.corpses.length - 1; i >= 0; i--) {
+      const c = this.corpses[i];
+      c.deadT += dt;
+      if (c.deadT > c.rotAt + 1.6) {
+        c.gone = true;
+        this.corpses.splice(i, 1);
+      }
+    }
     // Remove corpses and build the spatial grid for separation.
     for (const bucket of this.grid.values()) { bucket.length = 0; this.gridPool.push(bucket); }
     this.grid.clear();
@@ -576,12 +857,13 @@ export class ZombieSystem {
           const k = Math.exp(-5 * dt);
           zb.vx *= k;
           zb.vz *= k;
-          zb.y = ctx.groundAt(zb.x, zb.z);
+          zb.y = ctx.groundAt(zb.x, zb.z) + (ctx.ground?.heightAt(zb.x, zb.z) ?? 0);
         }
         zb.stagger = Math.max(0, zb.stagger - dt * 3);
         if (zb.deadT > 3.2) {
           this.list[i] = this.list[this.list.length - 1];
           this.list.pop();
+          this.layOut(zb);
         }
         continue;
       }
@@ -595,7 +877,7 @@ export class ZombieSystem {
       }
       zb.active = near;
       if (!near) continue;
-      zb.y = ctx.groundAt(zb.x, zb.z);
+      zb.y = ctx.groundAt(zb.x, zb.z) + (ctx.ground?.heightAt(zb.x, zb.z) ?? 0);
       const k = (Math.floor(zb.x / 3) + 1000) * 4096 + Math.floor(zb.z / 3);
       let c = this.grid.get(k);
       if (!c) this.grid.set(k, (c = this.gridPool.pop() ?? []));
@@ -1450,7 +1732,81 @@ export class ZombieSystem {
     void dt;
   }
 
+  /** A body done falling is laid among the dead that stay. Past `CORPSE_KEEP` of them, the oldest starts to sink. */
+  private layOut(zb: Zombie) {
+    zb.rotAt = zb.deadT + CORPSE_LIFE;
+    this.corpses.push(zb);
+    let lying = 0;
+    for (const c of this.corpses) if (c.rotAt > c.deadT) lying++;
+    for (let i = 0; i < this.corpses.length && lying > CORPSE_KEEP; i++) {
+      const c = this.corpses[i];
+      if (c.rotAt > c.deadT) {
+        c.rotAt = c.deadT;
+        lying--;
+      }
+    }
+  }
+
+  /** Let every body go: the living and the dead lying about. */
+  clearBodies() {
+    for (const c of this.corpses) c.gone = true;
+    for (const z of this.list) z.gone = true;
+    this.list.length = 0;
+    this.corpses.length = 0;
+  }
+
   // ------------------------------------------------------------------ rendering
+
+  /** Where and how a body is drawn this frame (and where the flesh engine finds its parts on it). */
+  poseOf(zb: Zombie): BodyPose {
+    const sc = zb.def.scale;
+    const sink = zb.dead ? Math.max(0, zb.deadT - zb.rotAt) * 0.8 : 0;
+    let mask = zb.wounds.mask;
+    let legs = limbsGone(mask).legs;
+    // Legs that are there but broken drag behind it like gone ones.
+    if (zb.flesh && !zb.dead) {
+      const u = legsUseless(zb.flesh);
+      if (u >= 2 && legs < 2) {
+        legs = 2;
+        mask |= maskOf('legL') | maskOf('legR');
+      } else if (u > legs) legs = u;
+    }
+    // Without legs a body drops to the ground and drags itself; with one it lists to the side.
+    const drop = zb.dead ? 0 : legs >= 2 ? 0.78 * sc : legs === 1 ? 0.06 * sc : 0;
+    let motion = zombieMotion(zb);
+    if (zb.dead) {
+      const slope = this.slopeUnder(zb);
+      // Tipped to the ground as it comes down onto it.
+      const k = Math.min(1, zb.deadT / 1.2);
+      motion = { ...motion, deadT: zb.deadT, death: zb.deathSeed, back: zb.fallsBack, pitch: slope.pitch * k, roll: slope.roll * k };
+    }
+    return {
+      kind: zb.kind, scale: sc, x: zb.x, y: zb.y - sink + (zb.dead ? 0.1 : 0) - drop, z: zb.z, yaw: zb.yaw, phase: zb.walkPhase, stride: 0,
+      chase: zb.dead ? 0 : zb.chase, fall: zb.dead ? zb.fall : 0, variant: zb.variant, mask, reel: zb.stagger,
+      lean: (legs >= 2 ? 0.75 : legs === 1 ? 0.12 : 0) + (zb.charge !== 'none' ? 0.35 : 0) + (zb.feedT > 0 || zb.eatT > 0 ? 0.55 : 0), motion,
+    };
+  }
+
+  /**
+   * The ground's slope under a body lying where it fell, along it and across it (a step or kerb under one end is not a
+   * slope: it lies level there). Kept until the body is moved.
+   */
+  private slopeUnder(zb: Zombie) {
+    const c = zb.lieSlope;
+    if (c && c.x === zb.x && c.z === zb.z) return c;
+    const ctx = this.ctx;
+    const at = (x: number, z: number) => ctx.groundAt(x, z) + (ctx.ground?.heightAt(x, z) ?? 0);
+    const fx = Math.sin(zb.yaw), fz = Math.cos(zb.yaw);
+    const L = 0.7 * zb.def.scale, W = 0.3 * zb.def.scale;
+    const along = at(zb.x - fx * L, zb.z - fz * L) - at(zb.x + fx * L, zb.z + fz * L);
+    const across = at(zb.x + fz * W, zb.z - fx * W) - at(zb.x - fz * W, zb.z + fx * W);
+    const pitch = Math.abs(along) > 0.45 ? 0 : clamp(Math.atan2(along, 2 * L), -0.4, 0.4);
+    const roll = Math.abs(across) > 0.25 ? 0 : clamp(Math.atan2(across, 2 * W), -0.4, 0.4);
+    return (zb.lieSlope = { x: zb.x, z: zb.z, pitch, roll });
+  }
+
+  /** When each body last came into sight and when it was last drawn (`render`). */
+  private seenSince = new WeakMap<Zombie, { since: number; last: number }>();
 
   render(zr: ZombieRenderer, time: number, frustums: THREE.Frustum[], maxPerView: number, camPos: THREE.Vector3[]) {
     zr.begin();
@@ -1458,8 +1814,11 @@ export class ZombieSystem {
     const budget = maxPerView * 2;
     const nearest = this.renderNearest;
     nearest.begin(Math.ceil(budget));
-    for (let order = 0; order < this.list.length; order++) {
-      const zb = this.list[order];
+    const fl = this.ctx.gore?.anatomy;
+    fl?.renderer.begin();
+    const living = this.list.length;
+    for (let order = 0; order < living + this.corpses.length; order++) {
+      const zb = order < living ? this.list[order] : this.corpses[order - living];
       if (!zb.active && !zb.dead) continue;
       const distance = minDist(zb, camPos);
       if (!nearest.accepts(distance, order)) continue;
@@ -1475,15 +1834,23 @@ export class ZombieSystem {
       nearest.offer(zb, distance, order);
     }
     for (const { value: zb } of nearest.finish()) {
-      const sc = zb.def.scale;
-      const tilt = zb.dead ? zb.fall : 0;
-      const sink = zb.dead ? Math.max(0, zb.deadT - 2.2) * 0.8 : 0;
-      const legs = limbsGone(zb.wounds.mask).legs;
-      // Without legs a body drops to the ground and drags itself; with one it lists to the side.
-      const drop = zb.dead ? 0 : legs >= 2 ? 0.78 * sc : legs === 1 ? 0.06 * sc : 0;
-      zr.push(zb.kind, sc, zb.x, zb.y - sink + (zb.dead ? 0.1 : 0) - drop, zb.z, zb.yaw, zb.walkPhase, 0, zb.dead ? 0 : zb.chase, tilt, zb.variant, 1, zb.wounds.mask, zb.stagger, (legs >= 2 ? 0.75 : legs === 1 ? 0.12 : 0) + (zb.charge !== 'none' ? 0.35 : 0) + (zb.feedT > 0 || zb.eatT > 0 ? 0.55 : 0), zombieMotion(zb));
+      // A body that comes into sight away from everyone dissolves in; one seen within the last moment stays in.
+      let seen = this.seenSince.get(zb);
+      if (!seen || time - seen.last > ZOMBIE_SEEN_GAP) {
+        seen = { since: minDist(zb, camPos) > ZOMBIE_FADE_NEAR ? time : -Infinity, last: time };
+        this.seenSince.set(zb, seen);
+      }
+      seen.last = time;
+      const shown = Math.min(1, (time - seen.since) / DISSOLVE_TIME);
+      const q = this.poseOf(zb);
+      // A hurt body is drawn with its wounds, cuts and breaks (and what is inside it); the rest stay in the horde mesh.
+      if (!fl?.pushBody(zb, q, shown)) zr.push(q.kind, q.scale, q.x, q.y, q.z, q.yaw, q.phase, q.stride, q.chase, q.fall, q.variant, shown, q.mask, q.reel, q.lean, q.motion);
     }
     zr.end(time);
+    if (fl) {
+      fl.render();
+      fl.renderer.end(time);
+    }
   }
 }
 
@@ -1502,4 +1869,32 @@ function frustumNear(f: THREE.Frustum, p: THREE.Vector3) {
   const b = f.containsPoint(p);
   p.y = y;
   return a || b;
+}
+
+/**
+ * Where a ray (unit direction) first comes within `r` of a segment, as a distance along the ray, or null if it never does.
+ * Good enough for a body lying on the ground: a capsule from its head to its middle and its middle to its feet.
+ */
+function raySegment(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, ax: number, ay: number, az: number, bx: number, by: number, bz: number, r: number): number | null {
+  const ux = bx - ax;
+  const uy = by - ay;
+  const uz = bz - az;
+  const wx = ox - ax;
+  const wy = oy - ay;
+  const wz = oz - az;
+  const b = dx * ux + dy * uy + dz * uz;
+  const c = ux * ux + uy * uy + uz * uz;
+  const d = dx * wx + dy * wy + dz * wz;
+  const e = ux * wx + uy * wy + uz * wz;
+  const den = c - b * b;
+  let t = den > 1e-8 ? (e - b * d) / den : 0;
+  t = Math.min(1, Math.max(0, t));
+  const s = b * t - d;
+  if (s < 0) return null;
+  const px = ox + dx * s - (ax + ux * t);
+  const py = oy + dy * s - (ay + uy * t);
+  const pz = oz + dz * s - (az + uz * t);
+  const dist = Math.hypot(px, py, pz);
+  if (dist > r) return null;
+  return Math.max(0, s - Math.sqrt(r * r - dist * dist));
 }

@@ -2,6 +2,7 @@ import { clamp, clamp01 } from '../core/math';
 import type { GunModel, MeleeModel } from '../data/gear';
 import type { AmmoKind, Surface } from './ballistics';
 import { forGuns, type BaseGun } from './weaponanim';
+import { STAGE, TACTICAL_GUNS, byRound } from './reloads';
 
 /**
  * How weapons look and feel to use, as pure rules: the flash each gun throws, how a tracer is drawn, how a sustained burst
@@ -127,29 +128,35 @@ export function bloomSettle(model: GunModel, bloom: number, dt: number): number 
 
 // ------------------------------------------------------------------ reloading
 
-/** Share of the reload a pistol or SMG still needs when it has a round in it: no slide to rack. */
+/**
+ * Share of the reload a magazine gun still needs when it has a round in it: the old magazine kept, and nothing to make
+ * ready (no slide to slingshot, no catch, no handle).
+ */
 export const TACTICAL = 0.78;
-/** Share of a pump's reload spent opening the action; the rest is the shells going in one by one. */
-export const PUMP_OPEN = 0.12;
+/** Share of a pump's reload spent opening the action (turning the gun to load); see `STAGE` for every gun loaded by the round. */
+export const PUMP_OPEN = STAGE.open;
 
 export interface ReloadPlan {
-  /** Seconds until the first thing happens: the magazine in, or the first shell. */
+  /** Seconds until the first thing happens: the magazine in, or (loaded by the round) the gun turned and opened. */
   first: number;
   /** Seconds per round after that, when the gun is loaded round by round (0 when it takes the lot at once). */
   each: number;
+  /** Seconds to close up after the last round (and chamber one if it was run dry); 0 for the lot at once. */
+  close: number;
 }
 
 /**
- * How a gun is reloaded. A pistol or SMG that still has a round in it comes up faster than an empty one. A pump is loaded
- * a shell at a time: the whole magazine takes the gun's reload time, a part-empty one less, and the trigger cuts it short.
+ * How a gun is reloaded. A magazine gun that still has a round in it comes up faster than an empty one. A pump, a lever
+ * gun or a bolt rifle is loaded a round at a time: a full load takes the gun's reload time (a little more from dry, to
+ * chamber the first), a part-empty one less, and the trigger cuts it short.
  */
 export function reloadPlan(model: GunModel, reload: number, mag: number, have: number): ReloadPlan {
-  if (model === 'pump') {
-    const each = (reload * (1 - PUMP_OPEN)) / Math.max(1, mag);
-    return { first: reload * PUMP_OPEN + each, each };
+  if (byRound(model)) {
+    const each = (reload * (1 - STAGE.open - STAGE.close)) / Math.max(1, mag);
+    return { first: reload * STAGE.open, each, close: reload * (have > 0 ? STAGE.close : STAGE.closeEmpty) };
   }
-  const tactical = (model === 'pistol' || model === 'smg') && have > 0;
-  return { first: reload * (tactical ? TACTICAL : 1), each: 0 };
+  const tactical = TACTICAL_GUNS.includes(model) && have > 0;
+  return { first: reload * (tactical ? TACTICAL : 1), each: 0, close: 0 };
 }
 
 // ------------------------------------------------------------------ skipped rounds

@@ -3,10 +3,16 @@ import { uploadPrefix } from './upload';
 import { MeshBuilder, S, type ColorIn } from './builder';
 import { applyKit } from './materials';
 import type { ZombieKind } from '../data';
-import { ZOMBIE_VARIANTS, type ZombieMotion } from '../sim/zombieAnimation';
+import { ZOMBIE_ACTION, ZOMBIE_VARIANTS, type ZombieMotion } from '../sim/zombieAnimation';
 import { zombieAppearance } from './zombieAppearance';
+import { bakedModel, type ClipInfo } from './bakedModel';
+import { DISSOLVE_NOISE } from './dissolve';
+import { FLESH_BEND_NRM, FLESH_BEND_POS, FLESH_PARS_V, FLESH_PRE, fleshChunk, patchFleshFragment } from './fleshShader';
 
 export const MAX_ZOMBIES = 600;
+/** A death plays a little faster than its take, and blends out of what the body was doing over its first moments. */
+const DEATH_PACE = 1.15;
+const DEATH_BLEND = 0.2;
 
 /**
  * The infected: one instanced mesh for every zombie on screen. The body is built from smooth limbs with
@@ -33,7 +39,7 @@ interface PartSpec {
 }
 
 /** Joint layout (rest pose, metres, origin at the feet, facing +Z). */
-const J = {
+export const J = {
   hipL: [0.1, 0.94, 0] as Pivot,
   hipR: [-0.1, 0.94, 0] as Pivot,
   kneeL: [0.11, 0.52, 0.02] as Pivot,
@@ -392,6 +398,28 @@ vec3 zRotZ( vec3 v, vec3 p, float a ) {
   float s = sin( a );
   return p + vec3( d.x * c - d.y * s, d.x * s + d.y * c, d.z );
 }
+#ifdef Z_BAKED
+// Motion-library clips retargeted onto this body (zombie-anims.bin): eleven bones, three texels (a 3x4 matrix) each per
+// frame line. Clip A is aAnim (first line, frames (negative: held at its end), phase, B's weight), clip B is aMotion.xyz.
+uniform highp sampler2D tZAnim;
+mat4 zBakedBone( int line, int bone ) {
+  int x = bone * 3;
+  vec4 r0 = texelFetch( tZAnim, ivec2( x, line ), 0 );
+  vec4 r1 = texelFetch( tZAnim, ivec2( x + 1, line ), 0 );
+  vec4 r2 = texelFetch( tZAnim, ivec2( x + 2, line ), 0 );
+  return mat4( r0.x, r1.x, r2.x, 0.0, r0.y, r1.y, r2.y, 0.0, r0.z, r1.z, r2.z, 0.0, r0.w, r1.w, r2.w, 1.0 );
+}
+void zBakedFrames( float start, float frames, float phase, out int l0, out int l1, out float f ) {
+  float n = max( abs( frames ), 1.0 );
+  bool loop = frames > 0.0;
+  float p = loop ? fract( phase ) * n : clamp( phase, 0.0, 1.0 ) * ( n - 1.0 );
+  float i0 = floor( p );
+  f = p - i0;
+  float i1 = loop ? mod( i0 + 1.0, n ) : min( i0 + 1.0, n - 1.0 );
+  l0 = int( start + i0 );
+  l1 = int( start + i1 );
+}
+#endif
 `;
 
 /** Shared by colour, skeleton and depth shaders, before any shader chunks consume it. */
@@ -412,9 +440,17 @@ float zClothBulk = zOutfit == 2 ? 0.012 : ( zOutfit == 3 ? 0.018 : 0.0 );
 
 /** Joint angles: own rotation (x), parent rotation (y), head tilt (z), body lean (w). */
 const ANGLES = /* glsl */ `
-float zt = uTime * aAnim.y + aAnim.x;
-float zLife = 1.0 - step( 0.001, aAnim.w );
-float zMove = aMotion.x * zLife;
+#ifdef Z_BAKED
+// aAnim and aMotion carry clips here: the procedural joint angles below rest (alive, standing still, no action).
+vec4 zAnimV = vec4( 0.0 );
+vec4 zMotionV = vec4( 0.0, 0.0, 0.0, aMotion.w );
+#else
+vec4 zAnimV = aAnim;
+vec4 zMotionV = aMotion;
+#endif
+float zt = uTime * zAnimV.y + zAnimV.x;
+float zLife = 1.0 - step( 0.001, zAnimV.w );
+float zMove = zMotionV.x * zLife;
 float zIdle = uTime * ( 0.85 + zHash( 1.0 ) * 0.4 ) + aKind.y * 29.0;
 float zKind = aKind.x;
 float zRunner = step( 0.5, zKind ) * ( 1.0 - step( 1.5, zKind ) );
@@ -422,8 +458,8 @@ float zBloater = step( 2.5, zKind ) * ( 1.0 - step( 3.5, zKind ) );
 float zScreamer = step( 1.5, zKind ) * ( 1.0 - step( 2.5, zKind ) );
 float zBrute = step( 3.5, zKind ) * ( 1.0 - step( 4.5, zKind ) );
 float zStalker = step( 4.5, zKind );
-float zAct = aMotion.y;
-float zWeight = aMotion.z * zLife;
+float zAct = zMotionV.y;
+float zWeight = zMotionV.z * zLife;
 float zGrab = ( 1.0 - step( 0.5, abs( zAct - 1.0 ) ) ) * zWeight;
 float zFeed = ( 1.0 - step( 0.5, abs( zAct - 2.0 ) ) ) * zWeight;
 float zScream = ( 1.0 - step( 0.5, abs( zAct - 3.0 ) ) ) * zWeight;
@@ -434,7 +470,7 @@ float zSmash = ( 1.0 - step( 0.5, abs( zAct - 6.0 ) ) ) * zLife;
 float zLimp = ( 0.08 + zHash( 2.0 ) * 0.25 ) * ( 1.0 - zRunner ) * ( 1.0 - zStalker );
 float zs = sin( zt );
 float zr = sin( zt + 3.14159 + zLimp );
-float zc2 = aAnim.z;
+float zc2 = zAnimV.z;
 float zCrouch = zStalker * 0.35 + zWind * 0.12 + zFeed * 0.15;
 float zAmp = ( 0.40 + zRunner * 0.45 + zStalker * 0.2 - zBloater * 0.16 + zBurst * 0.15 ) * zMove;
 float zOwn = 0.0;
@@ -483,6 +519,34 @@ if ( zp == 0 ) {
 }
 float zShoulderOffset = ( zBrute * 0.065 + zBloater * 0.035 ) * sign( position.x );
 
+#ifdef Z_BAKED
+// The bone this vertex rides: its part's, with the torso blending pelvis to chest up the spine and chest to head at the neck.
+mat4 zSkin;
+{
+  int a0; int a1; float af;
+  zBakedFrames( aAnim.x, aAnim.y, aAnim.z, a0, a1, af );
+  float wb = aAnim.w;
+  int b0 = 0; int b1 = 0; float bf = 0.0;
+  if ( wb > 0.001 ) zBakedFrames( aMotion.x, aMotion.y, aMotion.z, b0, b1, bf );
+  int bones[ 3 ];
+  float ws[ 3 ];
+  bones[ 0 ] = zp == 0 ? 0 : zp == 1 ? 3 : zp == 2 ? 5 : zp == 3 ? 4 : zp == 4 ? 6 : zp == 5 ? 7 : zp == 6 ? 9 : zp == 7 ? 8 : zp == 8 ? 10 : 2;
+  bones[ 1 ] = 1; bones[ 2 ] = 2;
+  ws[ 0 ] = 1.0; ws[ 1 ] = 0.0; ws[ 2 ] = 0.0;
+  if ( zp == 0 ) {
+    float wc = smoothstep( 1.02, 1.28, position.y );
+    float wh = smoothstep( 1.5, 1.6, position.y );
+    ws[ 0 ] = 1.0 - wc; ws[ 1 ] = wc * ( 1.0 - wh ); ws[ 2 ] = wc * wh;
+  }
+  zSkin = mat4( 0.0 );
+  for ( int k = 0; k < 3; k++ ) {
+    if ( ws[ k ] < 0.001 ) continue;
+    mat4 m = zBakedBone( a0, bones[ k ] ) * ( 1.0 - af ) + zBakedBone( a1, bones[ k ] ) * af;
+    if ( wb > 0.001 ) m = m * ( 1.0 - wb ) + ( zBakedBone( b0, bones[ k ] ) * ( 1.0 - bf ) + zBakedBone( b1, bones[ k ] ) * bf ) * wb;
+    zSkin += m * ws[ k ];
+  }
+}
+#endif
 `;
 
 const NORMAL = /* glsl */ `
@@ -494,11 +558,16 @@ objectNormal.x /= zFaceWidth;
 objectNormal.z /= zTorsoZ;
 objectNormal = zRotXn( objectNormal, zJaw );
 objectNormal = zRotZn( objectNormal, zTilt );
+#ifdef Z_BAKED
+objectNormal = normalize( mat3( zSkin ) * objectNormal );
+objectNormal.y -= objectNormal.z * ( aGore.z - aGore.y * 0.9 ) * smoothstep( 0.9, 1.5, position.y );
+#else
 objectNormal = zRotXn( objectNormal, zOwn );
 if ( zp == 3 || zp == 4 || zp == 7 || zp == 8 ) objectNormal = zRotXn( objectNormal, zPar );
 // Approximate the inverse transpose of the upper-body hunch shear.
 objectNormal.y -= objectNormal.z * ( zLean + aGore.z - aGore.y * 0.9 ) * smoothstep( 0.9, 1.5, position.y );
 objectNormal = zRotZn( objectNormal, zRoll );
+#endif
 objectNormal.x /= zWidth;
 objectNormal.z /= zDepth;
 #ifdef USE_TANGENT
@@ -563,6 +632,20 @@ if ( zp == 9 ) {
   transformed = aPivot + ( transformed - aPivot ) * zHeadSize;
   transformed = zRotZ( transformed, aPivot, zTilt );
 }
+#ifdef Z_BAKED
+if ( zp >= 5 && zp <= 8 ) transformed.x += zShoulderOffset;
+// Clothing this look does not wear folds to its joint before the body moves, so it rides along hidden.
+if ( !zKeepWear( zWear, zOutfit, zBottoms, zFootwear ) ) transformed = aPivot;
+transformed = ( zSkin * vec4( transformed, 1.0 ) ).xyz;
+{
+  // The game's own lean (a legless body dragging itself) and a hit's reel ride on top of the clip.
+  float zl = smoothstep( 0.9, 1.5, transformed.y );
+  transformed.z += aGore.z * zl * ( transformed.y - 0.9 );
+  transformed.z -= aGore.y * 0.9 * zl * ( transformed.y - 0.9 );
+}
+transformed.x *= zWidth;
+transformed.z *= zDepth;
+#else
 transformed = zRotX( transformed, zPivot, zOwn );
 if ( zp == 3 || zp == 4 || zp == 7 || zp == 8 ) transformed = zRotX( transformed, zParent, zPar );
 if ( zp >= 5 && zp <= 8 ) transformed.x += zShoulderOffset;
@@ -580,6 +663,7 @@ transformed.x *= zWidth;
 transformed.z *= zDepth;
 // Each optional piece collapses to a point, so hidden clothing casts no shadow either.
 if ( !zKeepWear( zWear, zOutfit, zBottoms, zFootwear ) ) transformed = aPivot;
+#endif
 `;
 
 const COLOR = /* glsl */ `
@@ -660,12 +744,21 @@ const GHOST_FRAG = /* glsl */ `
 
 function patchVertex(shader: THREE.WebGLProgramParametersWithUniforms, uniforms: Record<string, THREE.IUniform>, ghost = false) {
   Object.assign(shader.uniforms, uniforms);
-  shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', `#include <common>\n${PARS}${ghost ? GHOST_VERT_PARS : ''}`)
-    .replace('void main() {', `void main() {\n${WARDROBE}`)
-    .replace('#include <beginnormal_vertex>', NORMAL)
-    .replace('#include <begin_vertex>', BEGIN + (ghost ? GHOST_VERT_MAIN : ''));
-  if (shader.vertexShader.includes('#include <color_vertex>')) shader.vertexShader = shader.vertexShader.replace('#include <color_vertex>', COLOR);
+  // A wounded body (`fleshShader.ts`) reads its cuts and breaks first, and the chunks below read what is left of it.
+  const flesh = !!uniforms.tFlesh;
+  const f = (glsl: string) => (flesh ? fleshChunk(glsl) : glsl);
+  let normal = f(NORMAL);
+  let begin = f(BEGIN);
+  if (flesh) {
+    normal = normal.replace('objectNormal = normalize( mat3( zSkin ) * objectNormal );', `if ( !zfPiece ) objectNormal = normalize( mat3( zSkin ) * objectNormal );\n${FLESH_BEND_NRM}`);
+    begin = begin.replace('transformed = ( zSkin * vec4( transformed, 1.0 ) ).xyz;', `if ( !zfPiece ) transformed = ( zSkin * vec4( transformed, 1.0 ) ).xyz;\n${FLESH_BEND_POS}`);
+  }
+  shader.vertexShader = (uniforms.tZAnim ? '#define Z_BAKED\n' : '') + shader.vertexShader
+    .replace('#include <common>', `#include <common>\n${PARS}${flesh ? FLESH_PARS_V : ''}${ghost ? GHOST_VERT_PARS : ''}`)
+    .replace('void main() {', `void main() {\n${flesh ? FLESH_PRE : ''}${f(WARDROBE)}`)
+    .replace('#include <beginnormal_vertex>', normal)
+    .replace('#include <begin_vertex>', begin + (ghost ? GHOST_VERT_MAIN : ''));
+  if (shader.vertexShader.includes('#include <color_vertex>')) shader.vertexShader = shader.vertexShader.replace('#include <color_vertex>', f(COLOR));
 }
 
 const linear = (hex: number) => new THREE.Color(hex);
@@ -675,26 +768,36 @@ export interface ZombieRendererOpts {
   ghost?: boolean;
   /** Most instances at once. */
   max?: number;
+  /** Keep the procedural walk even when the motion library is loaded. */
+  procedural?: boolean;
+  /** Draw wounded bodies: cuts, breaks and wounds read per instance from `tFlesh` (see `FleshRenderer`). Both sides are drawn. */
+  flesh?: boolean;
 }
 
 export class ZombieRenderer {
   mesh: THREE.InstancedMesh;
-  private max: number;
-  private anim: Float32Array;
-  private kind: Float32Array;
-  private animAttr: THREE.InstancedBufferAttribute;
-  private kindAttr: THREE.InstancedBufferAttribute;
-  private gore: Float32Array;
-  private goreAttr: THREE.InstancedBufferAttribute;
-  private motion: Float32Array;
-  private motionAttr: THREE.InstancedBufferAttribute;
-  private uniforms: Record<string, THREE.IUniform> = {
+  protected max: number;
+  protected anim: Float32Array;
+  protected kind: Float32Array;
+  protected animAttr: THREE.InstancedBufferAttribute;
+  protected kindAttr: THREE.InstancedBufferAttribute;
+  protected gore: Float32Array;
+  protected goreAttr: THREE.InstancedBufferAttribute;
+  protected motion: Float32Array;
+  protected motionAttr: THREE.InstancedBufferAttribute;
+  protected uniforms: Record<string, THREE.IUniform> = {
     uTime: { value: 0 },
     uShirt: { value: [0x5a5446, 0x3e4a58, 0x6a3a32, 0x7a7262, 0x2e3a2c, 0x8a8478, 0x4a3a52, 0x9a8a5a].map(linear) },
     uPants: { value: [0x2e3036, 0x3a3a2e, 0x4a4238, 0x252830, 0x5a5040, 0x30343a].map(linear) },
     // Per kind: walker, runner, screamer, bloater, brute, stalker.
     uSkin: { value: [0x6f7660, 0x7a7660, 0x8e889a, 0x87904e, 0x7a5a4c, 0x5c6670].map(linear) },
   };
+  /** The motion library's clips by role, when it drives the bodies (see `pushBaked`). */
+  protected clips: Record<string, ClipInfo> | null = null;
+  /** Every take of each move (`walk`, `walk.1` ...): a body keeps its own, chosen by its looks. */
+  private takes: Record<string, ClipInfo[]> = {};
+  /** The deaths by the way they go down. */
+  private deaths: { back: ClipInfo[]; front: ClipInfo[] } = { back: [], front: [] };
   private m = new THREE.Matrix4();
   private q = new THREE.Quaternion();
   private e = new THREE.Euler();
@@ -710,6 +813,29 @@ export class ZombieRenderer {
     this.gore = new Float32Array(this.max * 4);
     this.motion = new Float32Array(this.max * 4);
     this.uniforms.uGhostTint = { value: 1 };
+    const flesh = !!opts.flesh;
+    if (flesh) {
+      this.uniforms.tFlesh = { value: null };
+      this.uniforms.uFleshTime = { value: 0 };
+    }
+    // Moves from the motion library, when its bank is loaded (`zombie-anims.bin`); the procedural walk otherwise.
+    const bank = opts.procedural ? null : bakedModel('zombie-anims');
+    if (bank) {
+      this.clips = bank.data.clips;
+      this.uniforms.tZAnim = { value: bank.anim };
+      for (const [name, c] of Object.entries(bank.data.clips)) (this.takes[name.split('.')[0]] ??= []).push(c);
+      // Which way each death goes down: its head ends behind the hips (on its back) or ahead of them (on its face).
+      const d = bank.data;
+      const rowZ = (line: number, bone: number, j: readonly number[]) => {
+        const o = (line * d.bones * 3 + bone * 3 + 2) * 4;
+        const h = (k: number) => THREE.DataUtils.fromHalfFloat(d.anim[o + k]);
+        return h(0) * j[0] + h(1) * j[1] + h(2) * j[2] + h(3);
+      };
+      for (const c of this.takes.death ?? []) {
+        const last = c.start + c.frames - 1;
+        (rowZ(last, 2, J.neck) < rowZ(last, 0, [0, 0.94, 0]) ? this.deaths.back : this.deaths.front).push(c);
+      }
+    }
     const geo = zombieGeometry();
     this.animAttr = new THREE.InstancedBufferAttribute(this.anim, 4);
     this.animAttr.setUsage(THREE.DynamicDrawUsage);
@@ -728,16 +854,27 @@ export class ZombieRenderer {
       mat.transparent = true;
       mat.depthWrite = false;
     }
+    // Through a hole in the skin the inside of the body shows, so a wounded body draws both sides.
+    if (flesh) mat.side = THREE.DoubleSide;
     mat.onBeforeCompile = (shader) => {
       patchVertex(shader, this.uniforms, ghost);
+      if (flesh) patchFleshFragment(shader);
       applyKit(shader, false);
       shader.vertexShader = shader.vertexShader.replace('vSurf = surf;',
         'vSurf = surf;\nif ( zSleeveCloth ) { vSurf.x = 0.95; vSurf.z = 0.7; }');
       if (ghost) {
         shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>\n${GHOST_FRAG_PARS}`).replace('#include <opaque_fragment>', GHOST_FRAG);
+      } else {
+        // A body that has just come into sight dissolves in (`push`'s alpha, see dissolve.ts) rather than popping.
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nvarying float vZFade;')
+          .replace('vSurf = surf;', 'vSurf = surf;\nvZFade = aKind.w;');
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', `#include <common>\nvarying float vZFade;\n${DISSOLVE_NOISE}`)
+          .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nif ( vZFade < 1.0 && inDissolveNoise() >= vZFade ) discard;');
       }
     };
-    mat.customProgramCacheKey = () => (ghost ? 'zombieGhost' : 'zombie');
+    mat.customProgramCacheKey = () => (ghost ? 'zombieGhost' : 'zombie') + (flesh ? 'Flesh' : '') + (bank ? 'Baked' : '');
     this.mesh = new THREE.InstancedMesh(geo, mat, this.max);
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     if (ghost) {
@@ -749,7 +886,7 @@ export class ZombieRenderer {
       // Shadows use the same skeleton animation.
       const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
       depth.onBeforeCompile = (shader) => patchVertex(shader, this.uniforms);
-      depth.customProgramCacheKey = () => 'zombieDepth';
+      depth.customProgramCacheKey = () => (flesh ? 'zombieDepthFlesh' : 'zombieDepth') + (bank ? 'Baked' : '');
       this.mesh.customDepthMaterial = depth;
       this.mesh.castShadow = true;
       this.mesh.receiveShadow = true;
@@ -763,13 +900,16 @@ export class ZombieRenderer {
   }
 
   /**
-   * Add one instance. `fall` runs 0..1 for the death animation (topples backwards and sinks).
+   * Add one instance. `fall` runs 0..1 for the death animation (topples backwards and sinks). `alpha` is a phantom's fade,
+   * and for a real body how far it has dissolved into sight.
    */
   push(kind: ZombieKind, scale: number, x: number, y: number, z: number, yaw: number, phase: number, stride: number, chase: number, fall: number, variant: number, alpha = 1, goneMask = 0, reel = 0, lean = 0, motion?: ZombieMotion) {
     if (this.count >= this.max) return;
     const i = this.count++;
-    this.p.set(x, y, z);
-    this.e.set(-fall * (Math.PI / 2) * 0.95, yaw, 0, 'YXZ');
+    // A death clip lies the body down itself, on the ground the whole way: no topple, no lift to keep a toppled body off
+    // the ground, only the slope it lies on.
+    this.p.set(x, y - (this.clips && fall > 0 ? 0.1 : 0), z);
+    this.e.set(this.clips ? (motion?.pitch ?? 0) : -fall * (Math.PI / 2) * 0.95, yaw, this.clips ? (motion?.roll ?? 0) : 0, 'YXZ');
     this.q.setFromEuler(this.e);
     this.s.set(scale, scale, scale);
     this.m.compose(this.p, this.q, this.s);
@@ -792,6 +932,101 @@ export class ZombieRenderer {
     this.motion[i * 4 + 1] = motion?.action ?? 0;
     this.motion[i * 4 + 2] = motion?.weight ?? 0;
     this.motion[i * 4 + 3] = outfit + (female ? 8 : 0);
+    if (this.clips) this.pushBaked(i, kind, phase, stride, fall, look, goneMask, motion, reel);
+  }
+
+  /** This body's own take of a move: the same one every frame, different from most of its neighbours'. */
+  private take(move: string, look: number): ClipInfo {
+    const list = this.takes[move];
+    // A different stride through the takes per move, so the looks that share a walk do not all share a death too.
+    const salt = move.length * 7 + move.charCodeAt(0);
+    return list[(look * 5 + salt + Math.floor(look / list.length)) % list.length];
+  }
+
+  /**
+   * Its own death, of those that go down the way the blow sends it (onto its back when hit from the front): picked by the
+   * seed it died with, or by its looks.
+   */
+  private death(look: number, motion?: ZombieMotion): ClipInfo {
+    const way = motion?.back === undefined ? null : motion.back ? this.deaths.back : this.deaths.front;
+    const list = way?.length ? way : this.takes.death;
+    if (motion?.death === undefined) return this.take('death', look);
+    return list[Math.min(list.length - 1, Math.floor(motion.death * list.length))];
+  }
+
+  /**
+   * Clips for one body from what it is doing: the gait its kind moves in (a shamble, a runner's jog, a stalker's crouch, a
+   * sprint when it bursts, a crawl on its arms with both legs gone), each in one of several takes the body keeps, blended
+   * up from its idle by how fast it goes and kept on its legs' own phase so the feet do not slide; then what it does with
+   * its arms and body over that (clawing at what it holds, kneeling to feed, screaming, a smashing blow and its wind-up) or,
+   * just hit, its flinch; its own death as it falls. Packed into aAnim (clip A, B's weight) and aMotion.xyz (B).
+   */
+  protected pushBaked(i: number, kind: ZombieKind, phase: number, stride: number, fall: number, look: number, goneMask: number, motion?: ZombieMotion, reel = 0) {
+    const C = this.clips!;
+    const t = this.uniforms.uTime.value as number;
+    const off = look * 0.137;
+    const legsGone = ((goneMask & 10) === 10 ? 1 : 0) + ((goneMask & 20) === 20 ? 1 : 0);
+    const crawling = legsGone >= 2 && !!C.crawl;
+    let A: ClipInfo = crawling ? C.crawl : this.take('idle', look);
+    let pa = t / A.dur + off;
+    let B: ClipInfo | null = null;
+    let pb = 0;
+    let wb = 0;
+    if (fall > 0) {
+      A = this.death(look, motion);
+      // At its own pace when the time it has been dead is known; the first moments blend out of what it was doing.
+      const dt = motion?.deadT;
+      pa = dt === undefined ? Math.min(1, fall) : Math.min(1, (dt * DEATH_PACE) / A.dur);
+      if (dt !== undefined && dt < DEATH_BLEND) {
+        B = this.take('idle', look);
+        pb = t / B.dur + off;
+        wb = 1 - dt / DEATH_BLEND;
+      }
+    } else {
+      const act = motion?.action ?? 0;
+      const w = motion?.weight ?? 0;
+      const move = motion ? motion.move : Math.min(1, Math.max(0, (stride - 0.6) / 2));
+      // Phantoms move by time; the infected pass the phase their legs have travelled.
+      const legs = (motion ? phase : phase + stride * t) / (Math.PI * 2);
+      const gait = crawling ? C.crawl : act === ZOMBIE_ACTION.burst ? C.sprint : kind === 'runner' ? this.take('jog', look)
+        : kind === 'stalker' ? this.take('crouch', look) : this.take('walk', look);
+      // Lying on its arms it holds the crawl still between pulls.
+      if (crawling) pa = 0.1;
+      if (move > 0.5) {
+        A = gait;
+        pa = legs;
+      } else if (move > 0.02) {
+        B = gait;
+        pb = legs;
+        wb = move / 0.5;
+      }
+      const action = act === ZOMBIE_ACTION.grab ? C.scratch : act === ZOMBIE_ACTION.feed ? C.kneel : act === ZOMBIE_ACTION.scream ? this.take('scream', look)
+        : act === ZOMBIE_ACTION.wind || act === ZOMBIE_ACTION.smash ? this.take('punch', look) : null;
+      if (action) {
+        B = action;
+        if (act === ZOMBIE_ACTION.wind) { pb = 0.3 * w; wb = Math.max(0.2, w); }
+        else if (act === ZOMBIE_ACTION.smash) { pb = 1 - w; wb = 1; }
+        // Kneeling holds on the knees: the clip's first quarter is getting down.
+        else if (act === ZOMBIE_ACTION.feed) { pb = 0.25 + 0.7 * ((t / (action.dur * 0.7) + off) % 1); wb = Math.max(0.6, w); }
+        else { pb = t / action.dur + off; wb = Math.max(0.6, w); }
+      } else if (reel > 0.03 && this.takes.hit) {
+        // Just hit: its flinch, from the blow on, fading as the reel does.
+        B = this.take('hit', look + Math.floor(t * 0.37));
+        pb = Math.min(1, (1 - reel) * 1.15);
+        wb = Math.min(1, reel * 2.5);
+      }
+    }
+    this.anim[i * 4] = A.start;
+    this.anim[i * 4 + 1] = A.loop ? A.frames : -A.frames;
+    this.anim[i * 4 + 2] = pa;
+    this.anim[i * 4 + 3] = B ? Math.min(1, wb) : 0;
+    this.motion[i * 4] = B?.start ?? 0;
+    this.motion[i * 4 + 1] = B ? (B.loop ? B.frames : -B.frames) : 1;
+    this.motion[i * 4 + 2] = pb;
+    // The clips carry charging, feeding and crawling postures; a body on one leg still leans by hand, and the flinch takes
+    // most of a hit's reel.
+    this.gore[i * 4 + 2] = crawling ? 0 : legsGone >= 2 ? 0.75 : legsGone === 1 ? 0.12 : 0;
+    if (reel > 0.03 && this.takes.hit) this.gore[i * 4 + 1] = reel * 0.45;
   }
 
   /** Ghosts only: how much of the colour is rainbow (1 is plainly unreal, 0 is nearly the real thing). */

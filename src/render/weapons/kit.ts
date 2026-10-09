@@ -336,10 +336,18 @@ const HALF = Math.PI / 2;
 
 /** Collects a weapon's parts, with their finishes and edges. */
 export class WB {
-  readonly b = new MeshBuilder();
+  /** Where the parts go: the gun's body, or (inside `part`) the moving part being drawn. */
+  b = new MeshBuilder();
   readonly hi: boolean;
   private wp: number[] = [];
-  private part = 0;
+  private part_ = 0;
+  /**
+   * Built in parts (the close-up first-person model): what `part` draws becomes a mesh of its own that can move on the gun
+   * (a magazine, a slide, a bolt, a cylinder), and `inner` draws what a moving part uncovers (the barrel under a slide).
+   * Built whole (the default), everything lands in the one mesh and `inner` draws nothing.
+   */
+  split = false;
+  private parts = new Map<string, { b: MeshBuilder; wp: number[] }>();
   /**
    * Put in front of every template key while it is set: add-ons are drawn at each gun's own anchors, so one add-on's
    * templates differ from gun to gun (see `drawMods`).
@@ -366,7 +374,7 @@ export class WB {
   }
 
   private tag(v0: number, f: number, edge?: THREE.BufferAttribute, e0 = 0) {
-    const seed = ((this.part++ * 0.6180339887) % 1) * 0.999;
+    const seed = ((this.part_++ * 0.6180339887) % 1) * 0.999;
     const n = this.b.vertexCount - v0;
     for (let i = 0; i < n; i++) this.wp.push(f, edge ? edge.getX(i) : e0, seed);
   }
@@ -629,10 +637,62 @@ export class WB {
     return this;
   }
 
+  /**
+   * Draw a moving part (see `split`): `name` is the part ('mag', 'slide', 'bolt', ...) or a thing the hands carry to the
+   * gun ('prop:rounds'). Drawn in the gun's own frame where it sits when the gun is closed and loaded.
+   */
+  piece(name: string, fn: () => void) {
+    if (!this.split) {
+      fn();
+      return this;
+    }
+    let p = this.parts.get(name);
+    if (!p) {
+      const b = new MeshBuilder();
+      b.jitter = this.b.jitter;
+      b.roundSeg = this.b.roundSeg;
+      this.parts.set(name, (p = { b, wp: [] }));
+    }
+    const b0 = this.b;
+    const wp0 = this.wp;
+    this.b = p.b;
+    this.wp = p.wp;
+    try {
+      fn();
+    } finally {
+      this.b = b0;
+      this.wp = wp0;
+    }
+    return this;
+  }
+
+  /** What only shows once a moving part has moved (the barrel under a slide, a magazine's body up in the grip): split models only. */
+  inner(fn: () => void) {
+    if (this.split) fn();
+    return this;
+  }
+
+  /** A thing the hands carry to the gun (rounds, shells, a speedloader), drawn where it sits in the gun: split models only. */
+  prop(name: string, fn: () => void) {
+    if (this.split) this.piece(`prop:${name}`, fn);
+    return this;
+  }
+
   /** The finished geometry. */
   build(): THREE.BufferGeometry {
-    const g = this.b.build();
-    g.setAttribute('wpn', new THREE.Float32BufferAttribute(this.wp, 3));
-    return g;
+    return finishWB(this.b, this.wp);
   }
+
+  /** The moving parts and props of a split model, each its own geometry in the gun's frame. */
+  buildParts(): Record<string, THREE.BufferGeometry> {
+    const out: Record<string, THREE.BufferGeometry> = {};
+    for (const [name, p] of this.parts) if (p.b.vertexCount > 0) out[name] = finishWB(p.b, p.wp);
+    return out;
+  }
+}
+
+function finishWB(b: MeshBuilder, wp: number[]): THREE.BufferGeometry {
+  const g = b.build();
+  g.setAttribute('wpn', new THREE.Float32BufferAttribute(wp, 3));
+  return g;
 }

@@ -3,6 +3,7 @@ import type { ZombieKind } from '../data';
 import type { DelveRecord } from './delveScene';
 import type { CarField } from './cars';
 import type { TrackSnapshot } from '../render/trackMarks';
+import type { GroundSnapshot } from '../sim/groundField';
 import type { Carried } from '../sim/carry';
 import type { Picked } from './foraging';
 import type { VegetationMemory, VegetationRecord } from '../sim/vegetation';
@@ -50,6 +51,8 @@ export class WorldMemory {
   cars: CarField['states'] | null = null;
   /** Tyre grooves and skid marks laid so far, so a road stays marked from one day to the next. */
   tracks: TrackSnapshot | null = null;
+  /** The loose ground's ruts, prints and craters (`sim/groundField.ts`), kept with the tracks. */
+  ground: GroundSnapshot | null = null;
   /** Parts and cans lying on the ground (torn off a vehicle, or set down) when the convoy made camp. */
   drops: { x: number; z: number; carried: Carried }[] = [];
   zombies: SavedZombie[] = [];

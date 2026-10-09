@@ -33,6 +33,7 @@ import {
   wallBlend,
 } from '../src/sim/gait';
 import { ViewModel } from '../src/render/viewmodel';
+import { weaponMaterial } from '../src/render/weapons';
 import { FRAMES } from '../src/sim/gunFrames';
 import { defaultSettings, InputManager } from '../src/input/input';
 import { Brass } from '../src/render/brass';
@@ -660,7 +661,8 @@ describe('reloads are animated', () => {
       sc.renderFrame(1, DT);
       maxDown = Math.max(maxDown, p.human.gunPose.down);
       maxTilt = Math.max(maxTilt, p.human.gunPose.tilt);
-      if (p.reloadT < 0.2) rackLate = Math.max(rackLate, p.human.gunPose.rack);
+      // Run dry: the slide is let go off its stop in the last third, once the new magazine is in.
+      if (p.reloadT < 0.4) rackLate = Math.max(rackLate, p.human.gunPose.rack);
     }
     expect(maxDown).toBeGreaterThan(0.9);
     expect(maxTilt).toBeGreaterThan(0.3);
@@ -684,18 +686,24 @@ describe('reloads are animated', () => {
     sc.tick(DT);
     h.intents[0].held = 0;
     h.intents[0].pressed = 0;
-    const downs: number[] = [];
-    let wasDown = false;
+    const starts: number[] = [];
+    let lastT = 1;
+    let maxDown = 0;
     for (let i = 0; i < 400 && p.reloadT > 0; i++) {
       sc.tick(DT);
       sc.renderFrame(1, DT);
-      const d = p.human.gunPose.down > 0.9;
-      if (d && !wasDown) downs.push(i);
-      wasDown = d;
+      const rs = p.human.reload;
+      // Each shell is the same routine played again: the hand to the pouch, the shell up into the port.
+      if (rs.r?.id === 'pump-shell') {
+        if (rs.t < lastT) starts.push(i);
+        lastT = rs.t;
+      } else lastT = 1;
+      maxDown = Math.max(maxDown, p.human.gunPose.down);
     }
     // Three shells to load, so the hand goes to the pouch three times.
-    expect(downs).toHaveLength(3);
-    expect(downs[1] - downs[0]).toBeGreaterThan(15);
+    expect(starts).toHaveLength(3);
+    expect(starts[1] - starts[0]).toBeGreaterThan(15);
+    expect(maxDown).toBeGreaterThan(0.9);
     expect(p.mag).toBe(6);
   });
 
@@ -920,24 +928,54 @@ describe('aiming down the sights', () => {
       expect(r.rear, m).toBeLessThan(0.002);
       expect(r.front, m).toBeLessThan(0.004);
       expect(r.angle, m).toBeLessThan(0.01);
-      // In front of the eye, out far enough that the gun leaves most of the view clear, but not at arm's full stretch.
-      expect(r.distance, m).toBeGreaterThan(0.33);
-      expect(r.distance, m).toBeLessThan(0.5);
+      // In front of the eye: a handgun out at arm's length, a long gun's sights wherever its stock in the shoulder puts them.
+      expect(r.distance, m).toBeGreaterThan(m === 'pistol' || m === 'revolver' ? 0.5 : 0.07);
+      expect(r.distance, m).toBeLessThan(0.66);
     }
   });
 
-  it('with the sights up the firing hand stays clear of the near plane, its elbow down, on every gun', () => {
-    const ALL = ['pistol', 'compact', 'mp', 'revolver', 'cannon', 'smg', 'smg2', 'sawn', 'coach', 'pump', 'combat', 'rifle', 'sniper', 'lever', 'carbine', 'ar', 'br', 'dmr', 'lmg', 'crossbow'] as const;
-    for (const m of ALL) {
+  const LONG = ['smg', 'smg2', 'coach', 'pump', 'combat', 'rifle', 'sniper', 'lever', 'carbine', 'ar', 'br', 'dmr', 'lmg', 'crossbow'] as const;
+  const HANDGUN = ['pistol', 'compact', 'mp', 'revolver', 'cannon'] as const;
+
+  it('with the sights up a long gun is shouldered: the butt in the shoulder behind the eye, the cheek on the stock', () => {
+    for (const m of LONG) {
       const { vm, cam } = posed(m, 1);
-      const r = vm as unknown as { handR: THREE.Mesh; foreR: THREE.Mesh };
+      const w = vm.weaponMesh!;
+      const g = w.geometry;
+      g.computeBoundingBox();
+      const b = g.boundingBox!;
+      // The middle of the butt plate, in the eye's own space (-z ahead, +y up).
+      const butt = cam.worldToLocal(w.localToWorld(new THREE.Vector3(0, (b.min.y + b.max.y) / 2, b.min.z)));
+      expect(butt.z, m).toBeGreaterThan(0.08);
+      expect(butt.z, m).toBeLessThan(0.26);
+      // Under the eye, a little to the side at most: the gun runs straight out from the cheek.
+      expect(butt.y, m).toBeLessThan(-0.02);
+      expect(butt.y, m).toBeGreaterThan(-0.2);
+      expect(Math.abs(butt.x), m).toBeLessThan(0.03);
+    }
+    // A stockless sawn-off is held out instead, like a handgun.
+    expect(sighted('sawn', 1).distance).toBeGreaterThan(0.4);
+  });
+
+  it('with the sights up a handgun is pushed out on near-straight arms, a long gun\'s firing hand drops out of the frame', () => {
+    for (const m of [...HANDGUN, ...LONG]) {
+      const { vm, cam } = posed(m, 1);
+      const r = vm as unknown as { handR: THREE.Mesh; foreR: THREE.Mesh; upperR: THREE.Mesh };
       const local = (o: THREE.Object3D) => cam.worldToLocal(o.getWorldPosition(new THREE.Vector3()));
-      // The grip a hand's breadth beyond the 0.2 m near plane (a lever gun's far-forward rear sight is held further out).
-      expect(-local(r.handR).z, m).toBeGreaterThan(0.24);
-      expect(sighted(m as (typeof GUNS)[number], 1).distance, m).toBeLessThan(0.6);
-      // On a long gun the elbow is well below the hand: the forearm runs back and down out of the frame, not across it. (A
-      // handgun is held out on near-straight arms; its forearms' slant on screen is checked below.)
-      if (!['pistol', 'compact', 'mp', 'revolver', 'cannon'].includes(m)) expect(local(r.handR).y - local(r.foreR).y, m).toBeGreaterThan(0.06);
+      if ((HANDGUN as readonly string[]).includes(m)) {
+        // The grip half a metre and more out, the elbow nearly straight.
+        expect(-local(r.handR).z, m).toBeGreaterThan(0.48);
+        const a = local(r.upperR);
+        const e = local(r.foreR);
+        const hnd = local(r.handR);
+        const bend = e.clone().sub(a).normalize().dot(hnd.clone().sub(e).normalize());
+        expect(bend, m).toBeGreaterThan(0.8);
+      } else {
+        // The grip hand is close in under the gun, at the bottom edge of the frame or below it; the elbow lower still.
+        const p = r.handR.getWorldPosition(new THREE.Vector3()).project(cam);
+        expect(p.y, m).toBeLessThan(-0.8);
+        expect(local(r.handR).y - local(r.foreR).y, m).toBeGreaterThan(0.06);
+      }
     }
     // A handgun's support arm too: both forearms rise steeply from the bottom corners, not in level from the sides.
     for (const m of ['pistol', 'compact', 'mp', 'revolver', 'cannon'] as const) {
@@ -949,6 +987,29 @@ describe('aiming down the sights', () => {
         expect(Math.atan2(wrist.y - elbow.y, Math.abs(wrist.x - elbow.x) * cam.aspect), m).toBeGreaterThan(0.7);
       }
     }
+  });
+
+  it('a scope\'s eyepiece cuts the gun and the arms away inside it, and the line of the sights passes the eye', () => {
+    const { vm, cam } = posed('rifle', 1);
+    // At rest the eye is on the scope's line.
+    expect(Math.hypot(vm.sightOff.x, vm.sightOff.y)).toBeLessThan(0.02);
+    // Still coming up to the eye, it is off the line: the exit pupil's shadow is in.
+    const rising = posed('rifle', 0.85).vm;
+    expect(Math.hypot(rising.sightOff.x, rising.sightOff.y)).toBeGreaterThan(0.1);
+    // The cut is handed to the shaders when the view is placed.
+    vm.cut = 0.8;
+    vm.place(cam);
+    const mat = vm.weaponMesh!.material as THREE.MeshStandardMaterial;
+    const shader = { vertexShader: THREE.ShaderLib.standard.vertexShader, fragmentShader: THREE.ShaderLib.standard.fragmentShader, uniforms: {} as Record<string, THREE.IUniform> };
+    mat.onBeforeCompile(shader as unknown as THREE.WebGLProgramParametersWithUniforms, null as unknown as THREE.WebGLRenderer);
+    expect(shader.fragmentShader).toContain('discard');
+    expect((shader.uniforms.uCut.value as THREE.Vector4).z).toBeCloseTo(0.8, 5);
+    expect((shader.uniforms.uCut.value as THREE.Vector4).w).toBeCloseTo(cam.aspect, 5);
+    // The world's own guns keep the plain weapon material: nothing is cut out of them.
+    expect(mat).not.toBe(weaponMaterial());
+    vm.cut = 0;
+    vm.place(cam);
+    expect((shader.uniforms.uCut.value as THREE.Vector4).z).toBe(0);
   });
 
   it('an optic\'s zoom magnifies the world, not the gun and the arms in front of it', () => {
@@ -1360,8 +1421,11 @@ describe('reloading drops the empty magazine', () => {
     return { sc, p };
   };
 
-  it('a pistol drops it part-way through the reload, once', () => {
-    const { sc, p } = reload(null, 4);
+  it('a pistol run dry drops it part-way through the reload, once; one with rounds left keeps it', () => {
+    const kept = reload(null, 4);
+    runFor(kept.sc, 2);
+    expect(kept.sc.gore.brass.magCount).toBe(0);
+    const { sc, p } = reload(null, 0);
     expect(sc.gore.brass.magCount).toBe(0);
     let at = -1;
     for (let i = 0; i < 200 && p.reloadT > 0; i++) {
@@ -1380,7 +1444,7 @@ describe('reloading drops the empty magazine', () => {
   });
 
   it('an SMG drops a longer one; a revolver, a pump and a rifle drop none', () => {
-    const smg = reload('w_smg', 5);
+    const smg = reload('w_smg', 0);
     runFor(smg.sc, 2.5);
     expect(smg.sc.gore.brass.magCount).toBe(1);
     for (const id of ['w_revolver', 'w_pump', 'w_rifle']) {
@@ -1391,7 +1455,7 @@ describe('reloading drops the empty magazine', () => {
   });
 
   it('a reload that is cancelled before it comes to the magazine drops nothing', () => {
-    const { sc, p } = reload(null, 3);
+    const { sc, p } = reload(null, 0);
     runFor(sc, 0.05);
     p.reloadT = 0;
     runFor(sc, 1);

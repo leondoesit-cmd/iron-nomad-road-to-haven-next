@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { modelKey } from '../render/workFx';
 import { prepareVehicleVisual } from '../render/vehicleModels';
+import { Fades } from '../render/dissolve';
+import { CarStandIns, type StandInCar } from '../render/carStandIns';
 import { chassisDef } from '../data';
 import { sitePos } from './hauling';
 import { partName, type PartItem } from '../sim/parts';
@@ -35,6 +37,8 @@ const SPAWN_R = 175;
 const DESPAWN_R = 250;
 /** Chunks this far round a car (about half the longest one, with a margin) must be loaded before it appears. */
 const CLEAR_R = 3;
+/** A car put in or away nearer than this to someone (metres) does so at once rather than dissolving. */
+const CAR_FADE_NEAR = 30;
 
 /**
  * Every abandoned car in the world. They are spawned as real vehicles near the players (so they can be driven,
@@ -48,6 +52,12 @@ export class CarField {
   private obsT = 0;
   /** Spawn everything at once, for the small fixed camp arena. */
   everything = false;
+  /** Cars dissolving in as they appear, or out before they are put away (`dissolve.ts`). */
+  private fades = new Fades();
+  /** Every car of the world drawn plainly while it is not a live vehicle (`carStandIns.ts`); made on the first update. */
+  private standIns: CarStandIns | null = null;
+  /** Cars someone else took over while live: whatever became of them, they are not where their stand-in is. */
+  private taken = new Set<string>();
 
   constructor(private ctx: Ctx) {}
 
@@ -61,6 +71,7 @@ export class CarField {
   private forget(v: Vehicle) {
     const st = this.states.get(v.carId);
     if (st) this.states.delete(v.carId);
+    this.standIns?.setCut(v.carId, 1);
     v.carId = '';
   }
 
@@ -71,11 +82,13 @@ export class CarField {
   update(dt: number) {
     this.t -= dt;
     this.obsT -= dt;
+    this.fades.update(dt);
     if (this.t <= 0) {
       // Put one car in or away per pass, soonest again while there is more to do: building a vehicle is a few
-      // milliseconds, and a street full of them in one tick is a dropped frame.
+      // milliseconds, and a street full of them in one tick is a dropped frame. Until a car is in, its stand-in is.
       this.t = this.stream() ? 0.1 : 0.4;
     }
+    this.syncStandIns();
     if (this.obsT <= 0) {
       this.obsT = 0.25;
       this.syncObstacles();
@@ -106,8 +119,12 @@ export class CarField {
           next = st;
         }
       } else if (!this.everything && d > DESPAWN_R && !st.live.driver && !st.live.passenger) {
+        if (this.fades.leaving(st.live.group)) continue;
         queued++;
         away ??= st;
+      } else if (this.fades.leaving(st.live.group)) {
+        // Wanted again while it was dissolving away: it turns round.
+        this.fades.fadeIn(st.live.group);
       }
     }
     if (next) {
@@ -116,11 +133,19 @@ export class CarField {
       if (next.prep.next().done) {
         next.prep = null;
         this.spawn(next);
+        // It may have been moved clear of something: its stand-in goes where it is, and it dissolves in over that.
+        if (next.live) {
+          this.standIns?.place(next.spawn.id, this.standInOf(next));
+          if (nextD > CAR_FADE_NEAR) this.fades.fadeIn(next.live.group);
+        }
         return queued > 1;
       }
       return true;
     }
-    if (away) this.despawn(away);
+    if (away) {
+      const st = away;
+      this.fades.fadeOut(st.live!.group, () => this.despawn(st));
+    }
     return queued > 1;
   }
 
@@ -178,6 +203,7 @@ export class CarField {
     if (!spot) {
       // Nowhere clear nearby (a wreck wedged in a building): better gone than spawned inside the wall and thrown on its side.
       this.states.delete(st.spawn.id);
+      this.standIns?.setCut(st.spawn.id, 1);
       return;
     }
     st.x = spot.x;
@@ -195,6 +221,7 @@ export class CarField {
     // Claimed or reclassified in the meantime: not ours to put away.
     if (v.faction !== 'neutral') {
       st.live = null;
+      this.taken.add(st.spawn.id);
       return;
     }
     if (v.wreck) st.status = 'hulk';
@@ -206,6 +233,7 @@ export class CarField {
     st.z = p.z;
     st.yaw = v.yaw;
     st.salvaged = v.salvaged;
+    this.standIns?.place(st.spawn.id, this.standInOf(st));
     this.dropObstacle(v);
     const i = this.ctx.vehicles.indexOf(v);
     if (i >= 0) this.ctx.vehicles.splice(i, 1);
@@ -213,8 +241,32 @@ export class CarField {
     st.live = null;
   }
 
+  private standInOf(st: CarState): StandInCar {
+    return { chassis: st.build.chassis, x: st.x, y: st.y, z: st.z, yaw: st.yaw, paint: st.build.paint, hulk: st.status === 'hulk' };
+  }
+
+  /**
+   * The stand-ins show the cars that are not live, and dissolve out as a live one dissolves in (the same fade), so a car
+   * is seen from afar and never pops. Made once the world's cars are known; not for the small camp arena.
+   */
+  private syncStandIns() {
+    if (this.everything) return;
+    if (!this.standIns) {
+      if (!this.states.size) return;
+      const cars = new Map<string, StandInCar>();
+      for (const [id, st] of this.states) cars.set(id, this.standInOf(st));
+      this.standIns = new CarStandIns(cars);
+      this.ctx.root.add(this.standIns.group);
+    }
+    for (const [id, st] of this.states) this.standIns.setCut(id, this.taken.has(id) ? 1 : st.live ? this.fades.value(st.live.group) : 0);
+    this.standIns.flush();
+  }
+
   /** Put every live car away (end of a scene): their state is kept so a save mid-leg would not lose a stripped car. */
   clear() {
+    this.fades.clear();
+    this.standIns?.dispose();
+    this.standIns = null;
     for (const st of this.states.values()) if (st.live) this.despawn(st);
     for (const o of this.obstacles.values()) this.ctx.obs.remove(o.a);
     this.obstacles.clear();

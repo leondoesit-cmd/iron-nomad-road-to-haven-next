@@ -28,6 +28,7 @@ import {
   tracerTint,
 } from '../src/sim/weaponfx';
 import { Tracers } from '../src/render/particles';
+import { STAGE } from '../src/sim/reloads';
 import { fakeServices } from './helpers/sim';
 
 vi.setConfig({ testTimeout: 90000 });
@@ -100,20 +101,23 @@ describe('muzzle, tracer and bloom tables', () => {
 });
 
 describe('reloading', () => {
-  it('a pistol or SMG with a round still in it reloads faster than an empty one; other guns do not care', () => {
+  it('a magazine gun with a round still in it reloads faster than an empty one; other guns do not care', () => {
     expect(reloadPlan('pistol', 1.3, 12, 0).first).toBe(1.3);
     expect(reloadPlan('pistol', 1.3, 12, 3).first).toBeCloseTo(1.3 * TACTICAL, 6);
     expect(reloadPlan('smg', 1.9, 30, 1).first).toBeCloseTo(1.9 * TACTICAL, 6);
-    for (const m of ['revolver', 'sawn', 'rifle'] as const) expect(reloadPlan(m, 2.2, 6, 2).first).toBe(2.2);
+    expect(reloadPlan('ar', 2.3, 30, 1).first).toBeCloseTo(2.3 * TACTICAL, 6);
+    for (const m of ['revolver', 'sawn', 'crossbow'] as const) expect(reloadPlan(m, 2.2, 6, 2).first).toBe(2.2);
     expect(reloadPlan('pistol', 1.3, 12, 3).each).toBe(0);
+    expect(reloadPlan('pistol', 1.3, 12, 3).close).toBe(0);
   });
 
-  it('a pump loads a shell at a time: the full magazine takes the whole reload, and the plan has no all-at-once step', () => {
+  it('a pump loads a shell at a time: the full magazine takes the whole reload, a little more from dry to chamber the first', () => {
     const plan = reloadPlan('pump', 3, 6, 0);
     expect(plan.each).toBeGreaterThan(0);
-    // Opening the action and the first shell, then five more.
-    expect(plan.first + 5 * plan.each).toBeCloseTo(3, 6);
-    expect(plan.first - plan.each).toBeCloseTo(3 * PUMP_OPEN, 6);
+    // Turning the gun to load, six shells, and from dry the pump worked once.
+    expect(plan.first).toBeCloseTo(3 * PUMP_OPEN, 6);
+    expect(plan.first + 6 * plan.each + plan.close).toBeCloseTo(3 * (1 + STAGE.closeEmpty - STAGE.close), 6);
+    expect(reloadPlan('pump', 3, 6, 2).close).toBeLessThan(plan.close);
   });
 });
 
@@ -401,6 +405,10 @@ describe('melee in a real scene', () => {
     const hit = vi.spyOn(sc.zombies, 'meleeHit').mockImplementation(() => 0);
     equip(p, 'm_axe', 3);
     expect(p.equip).toBe('melee');
+    // A blade only strikes what its swing passes through: one of the dead in front.
+    p.aimYaw = 0;
+    const zb = sc.zombies.spawn('walker', p.pos.x, p.pos.z + 1.2, true);
+    zb.y = sc.groundAt(zb.x, zb.z);
     h.intents[0].device = 'pad';
     h.intents[0].rt = 1;
     sc.tick(DT);
@@ -437,17 +445,21 @@ describe('melee in a real scene', () => {
     expect(bat.held).toBeGreaterThan(0);
   });
 
-  it('an axe goes through three, a knife only one', () => {
+  it('an axe goes through a neck and on into the next body, a knife stops in the first', () => {
     const hitsOf = (id: string) => {
       const { h, sc, p } = scene();
       equip(p, id, 3);
       p.aimYaw = 0;
-      const zs = [0, 1, 2, 3].map((i) => {
-        const zb = sc.zombies.spawn('walker', p.pos.x + (i - 1.5) * 0.35, p.pos.z + 1.2, true);
+      // Two side by side, facing the swing; it comes down from the right (-x), so it crosses the right one's neck first.
+      const zs = [-0.18, 0.18].map((dx) => {
+        const zb = sc.zombies.spawn('walker', p.pos.x + dx, p.pos.z + 1.2, true);
         zb.y = sc.groundAt(zb.x, zb.z);
+        zb.yaw = Math.PI;
         zb.hp = 5000;
         return zb;
       });
+      const eye = p.pos.y + (p as unknown as { eyeH: number }).eyeH;
+      p.aimPitch = Math.atan2(zs[0].y + 1.45 - eye, 1.12);
       h.intents[0].device = 'pad';
       h.intents[0].rt = 1;
       sc.tick(DT);
@@ -455,7 +467,7 @@ describe('melee in a real scene', () => {
       run(sc, 0.3);
       return zs.filter((z) => z.hp < 5000).length;
     };
-    expect(hitsOf('m_axe')).toBe(3);
+    expect(hitsOf('m_axe')).toBe(2);
     expect(hitsOf('m_knife')).toBe(1);
   });
 

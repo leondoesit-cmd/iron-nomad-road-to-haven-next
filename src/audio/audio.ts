@@ -69,7 +69,8 @@ export type SoundId =
   | 'twang'
   | 'creak'
   | 'thunk'
-  | 'rustle' | 'treeHit' | 'treeCreak' | 'footGrass' | 'footStone' | 'footSand' | 'footWood' | 'thunder';
+  | 'rustle' | 'treeHit' | 'treeCreak' | 'footGrass' | 'footStone' | 'footSand' | 'footWood' | 'thunder'
+  | 'boneCrack' | 'squelch' | 'gutSpill';
 
 /**
  * The sound of the water around the players, 0..1 each: `roar` of the nearest waterfall and how `tall` it is (a tall one is
