@@ -33,6 +33,132 @@
       ],
       "port": 5207,
       "autoPort": true
+    },
+    {
+      "name": "fade-nohmr",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/leonkhey/Desktop/iron_nomad_road_to_heaven && exec npx vite --config /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/448076a3-f333-4056-b398-6d4e8b3b578b/scratchpad/vite.nohmr.config.ts"
+      ],
+      "port": 5301
+    },
+    {
+      "name": "fade-abA",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/448076a3-f333-4056-b398-6d4e8b3b578b/scratchpad/abA && exec npx vite --port 5302 --strictPort --host 127.0.0.1"
+      ],
+      "port": 5302
+    },
+    {
+      "name": "fade-abB",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/448076a3-f333-4056-b398-6d4e8b3b578b/scratchpad/abB && exec npx vite --port 5303 --strictPort --host 127.0.0.1"
+      ],
+      "port": 5303
+    },
+    {
+      "name": "hitch-base",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/leonkhey/Desktop/iron_nomad_road_to_heaven && PROF_ROOT=/private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/fa37c356-9166-4f0c-a035-23f57c74a429/scratchpad/base PROF_PORT=5311 exec npx vite --config /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/fa37c356-9166-4f0c-a035-23f57c74a429/scratchpad/vite.prof.config.ts"
+      ],
+      "port": 5311
+    },
+    {
+      "name": "hitch-work",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/leonkhey/Desktop/iron_nomad_road_to_heaven && PROF_ROOT=/Users/leonkhey/Desktop/iron_nomad_road_to_heaven PROF_PORT=5312 exec npx vite --config /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/fa37c356-9166-4f0c-a035-23f57c74a429/scratchpad/vite.prof.config.ts"
+      ],
+      "port": 5312
+    },
+    {
+      "name": "assets-mirror",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/dd3a861e-8933-4b9a-9b07-ed37ef6babfb/scratchpad/mirror && exec npx vite --config vite.mirror.config.ts"
+      ],
+      "port": 5219
+    },
+    {
+      "name": "ground-nohmr",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/leonkhey/Desktop/iron_nomad_road_to_heaven && exec npx vite --config /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/83d9ebcf-6d17-41b4-8842-f1aeafea10c4/scratchpad/vite.ground.config.ts"
+      ],
+      "port": 5341
+    },
+    {
+      "name": "fire-mirror",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/f1011a43-d01f-4007-bd02-eb940c55b187/scratchpad/mirror && exec npx vite --config vite.mirror.config.ts"
+      ],
+      "port": 5321
+    },
+    {
+      "name": "blade-nohmr",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/leonkhey/Desktop/iron_nomad_road_to_heaven && exec npx vite --config /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/9a7a624e-f7c0-4094-9aa5-90914537f066/scratchpad/vite.blade.config.ts"
+      ],
+      "port": 5351
+    },
+    {
+      "name": "bark-mirror",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/a34d2295-9426-4dfd-978d-1a47c39b589c/scratchpad/mirror && exec npx vite --config vite.mirror.config.ts"
+      ],
+      "port": 5233
+    },
+    {
+      "name": "aim-nohmr",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/leonkhey/Desktop/iron_nomad_road_to_heaven && exec npx vite --config /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/e49ac5b9-2c88-4b21-9929-77ba993be8c1/scratchpad/vite.aim.config.ts"
+      ],
+      "port": 5361
+    },
+    {
+      "name": "cam-nohmr",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/leonkhey/Desktop/iron_nomad_road_to_heaven && exec npx vite --config /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/417a27ef-96db-4090-aa87-838132d5cd72/scratchpad/vite.cam.config.ts"
+      ],
+      "port": 5371
+    },
+    {
+      "name": "deaths-view",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/leonkhey/Desktop/iron_nomad_road_to_heaven && exec npx vite --config /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/6d5118ff-7bf9-407c-87f3-323a7f9c1b67/scratchpad/dv/vite.config.ts"
+      ],
+      "port": 5381
+    },
+    {
+      "name": "qwheel-nohmr",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/leonkhey/Desktop/iron_nomad_road_to_heaven && exec npx vite --config /private/tmp/claude-501/-Users-leonkhey-Desktop-iron-nomad-road-to-heaven/784b35dc-60d5-4396-bbfc-e373bcc2fca2/scratchpad/vite.qwheel.config.ts"
+      ],
+      "port": 5391
     }
   ]
 }

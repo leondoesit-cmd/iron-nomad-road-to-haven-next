@@ -28,10 +28,12 @@ import { navOf } from './mapnav';
 import { distLabel } from '../render/navMarkers';
 import { keyLabel, live } from '../input/bindings';
 import { heatLabel, stormLabel, stormMapRadius, windAt } from '../sim/weather';
+import { applyReticle, DEFAULT_RETICLE, RETICLE_MARKS, type ReticleStyle } from './reticle';
 import { STALK } from '../sim/hunting';
 import { wildSlot } from '../game/wildShrooms';
 import { glanceExtras, glanceVehicle, updateCarHud, type CarHudState } from './carCard';
 import { updateDrugStrip } from './drugStrip';
+import { updateQuickWheel } from './quickWheelHud';
 
 /** The key or button a prompt names, as this seat has it bound. */
 export function btnLabel(slot: Slot | null, btn: string): string {
@@ -107,7 +109,7 @@ class PlayerHud {
         <div class="prompt" data-k="prompt"><span class="btn" data-k="pbtn">A</span><span data-k="ptext"></span><div class="hold" data-k="phold"></div></div>
         <div class="prompt alt" data-k="prompt2"><span class="btn x" data-k="pbtn2">X</span><span data-k="ptext2"></span></div>
       </div>
-      <div class="reticle" data-k="reticle"><div class="drawring" data-k="drawring"></div></div>
+      <div class="reticle" data-k="reticle">${RETICLE_MARKS}<div class="drawring" data-k="drawring"></div></div>
       <div class="handdot" data-k="handdot"></div>
       <div class="lookinfo" data-k="look"></div>
       <div class="handhints" data-k="hands"></div>
@@ -334,6 +336,13 @@ export class Hud {
   setSeats(n: 1 | 2) {
     this.seats = n;
     this.setLayout(this.layoutName);
+  }
+
+  /** The crosshair's look (Settings), on every half. */
+  reticle: ReticleStyle = { ...DEFAULT_RETICLE };
+  setReticle(s: ReticleStyle) {
+    this.reticle = s;
+    for (const h of this.huds) applyReticle(h.el('reticle'), s);
   }
 
   setScale(s: number) {
@@ -578,7 +587,12 @@ export class Hud {
       // A small gear letter beside the speed and a thin rev bar under it, from the real drivetrain.
       const dr = v.powertrain ? v.drive : null;
       const gear = !dr || dr.redline <= 0 || !v.engineOn ? '' : dr.gear < 0 ? 'R' : dr.cvt ? 'D' : String(dr.gear);
-      h.setHtml('speed', `${Math.round(Math.abs(v.speed) * 3.6)}<small>km/h</small>${gear ? `<small class="gear">${gear}</small>` : ''}`);
+      // The dash lamps of whichever driving aid is working right now.
+      const wheels = v.body as { aids?: { abs: number; tcs: number; esc: number }; brakeHeat?: number };
+      const aids = wheels.aids;
+      const lamp = (on: number, txt: string) => (on > 0.3 ? `<small class="aid">${txt}</small>` : '');
+      const lamps = aids ? lamp(aids.abs, 'ABS') + lamp(aids.tcs, 'TC') + lamp(aids.esc, 'ESC') : '';
+      h.setHtml('speed', `${Math.round(Math.abs(v.speed) * 3.6)}<small>km/h</small>${gear ? `<small class="gear">${gear}</small>` : ''}${lamps}`);
       h.setStyle('tach', 'display', gear ? '' : 'none');
       if (gear) {
         h.setStyle('tachfill', 'width', `${Math.round(Math.min(1, dr!.rpmFrac) * 100)}%`);
@@ -594,6 +608,8 @@ export class Hud {
       const flats = c.tires.filter((x) => x <= 0).length;
       if (flats) fault(`${flats} FLAT TYRE${flats > 1 ? 'S' : ''}`, 'bad');
       if (v.health.leaking) fault('FUEL LEAK', 'bad');
+      const hot = wheels.brakeHeat ?? 0;
+      if (hot > 1.1) fault('BRAKES FADING', hot > 1.6 ? 'bad' : 'warn');
       if (c.mount <= 0.001) fault('GUN MOUNT GONE', 'bad');
       else if (c.mount < 0.99) fault('GUN MOUNT DAMAGED', 'warn');
       const gb = c.gearbox ?? 1;
@@ -910,6 +926,7 @@ export class Hud {
     h.setStyle('drugfx', '--haze', String(haze));
     h.setStyle('drugfx', '--dark', String(dark));
     updateDrugStrip(h.root, p, scene.campaign, slot);
+    updateQuickWheel(h.root, p, scene.campaign, slot);
     if (!p.beltOpen) {
       h.setStyle('belt', 'display', 'none');
       return;
@@ -980,7 +997,7 @@ export function escapeHtml(s: string) {
 void t;
 
 /** What a quick-belt slot shows: the body's chores and the dressings are ours, everything else is a drug. */
-function quickDef(id: QuickId, p?: Player): { name: string; glyph: string; color: string; blurb: string } {
+export function quickDef(id: QuickId, p?: Player): { name: string; glyph: string; color: string; blurb: string } {
   if (id === 'wild') return p ? wildSlot(p) : { name: 'Wild mushrooms', glyph: '🍄', color: '#c9a36a', blurb: '' };
   if (id === 'eat') return { name: 'Eat', glyph: '🍖', color: '#d6a45a', blurb: 'Eat a ration from the stores: fills you up by half. Hungry slows your recovery, starving hurts. Your hands are busy for a moment.' };
   if (id === 'drink') return { name: 'Drink', glyph: '🚰', color: '#5fb6e8', blurb: 'Drink three quarters of a litre from the water reserve, or from the lake if you stand at one: free, but raw water can upset your stomach.' };
@@ -991,7 +1008,7 @@ function quickDef(id: QuickId, p?: Player): { name: string; glyph: string; color
   return DRUGS[id];
 }
 /** What a belt slot counts: doses in the stores, or for the body's chores, a share of the stores or of the need. */
-function quickCount(id: QuickId, p: Player, c: Campaign): { slot: string; label: string; none: boolean } {
+export function quickCount(id: QuickId, p: Player, c: Campaign): { slot: string; label: string; none: boolean } {
   if (!isNeedAct(id)) {
     const n = id === 'wild' ? wildSlot(p).n : c.items[id];
     return { slot: String(n), label: `×${n}`, none: n <= 0 };

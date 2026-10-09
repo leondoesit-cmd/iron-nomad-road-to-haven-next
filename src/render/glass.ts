@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { shared } from './dispose';
 import { COPLANAR, coplanarOffset } from './depth';
+import { drawSidesWithTwins } from './drawFilter';
 import type { GlassKind, PaneStage } from '../sim/glass';
 
 /**
@@ -56,7 +57,8 @@ let crackTex: THREE.Texture | null = null;
 function glassMaterial(opacity: number, color: number, rough: number): THREE.MeshStandardMaterial {
   const m = coplanarOffset(new THREE.MeshStandardMaterial({ color, transparent: true, opacity, roughness: rough, metalness: 0.1, side: THREE.DoubleSide, depthWrite: false, envMapIntensity: 1.5 }), COPLANAR.detail);
   m.userData.shared = true;
-  return m;
+  // Every window in the world shares these: draw their two sides without a program look-up per pane (see drawFilter).
+  return drawSidesWithTwins(m);
 }
 
 export const paneMaterials = () => ({

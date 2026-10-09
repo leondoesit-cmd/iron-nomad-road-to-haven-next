@@ -236,7 +236,7 @@
     {
       "id": "w_rifle", "name": "Hunting Rifle", "kind": "gun", "short": "RIFLE", "rarity": 3, "weight": 2, "scrap": 20, "tags": ["waste", "vault"],
       "blurb": "Bolt action and a worn scope. Reaches far, goes through armour, and the whole county hears it.",
-      "gun": { "dmg": 80, "cd": 0.9, "mag": 5, "reload": 2.6, "spread": 0.012, "adsSpread": 0.002, "range": 110, "noise": 90, "pierce": 0.5, "model": "rifle", "sound": "sniper", "zoom": 1.4, "slots": {"optic": ["dot", "scope", "long"], "muzzle": ["sup_r", "brake"], "barrel": ["bar_r"], "under": ["bipod"], "mag": ["mag_b"], "stock": ["butt"], "rail": ["rail"]} }
+      "gun": { "dmg": 80, "cd": 0.9, "mag": 5, "reload": 2.6, "spread": 0.012, "adsSpread": 0.002, "range": 110, "noise": 90, "pierce": 0.5, "model": "rifle", "sound": "sniper", "zoom": 3.5, "slots": {"optic": ["dot", "scope", "long"], "muzzle": ["sup_r", "brake"], "barrel": ["bar_r"], "under": ["bipod"], "mag": ["mag_b"], "stock": ["butt"], "rail": ["rail"]} }
     },
 
     {
@@ -282,7 +282,7 @@
     {
       "id": "w_sniper", "name": "Bolt Sniper", "kind": "gun", "short": "SNIPER", "rarity": 3, "weight": 1, "scrap": 30, "tags": ["vault"],
       "blurb": "A long bolt action in a heavy chassis. One round, one problem solved, a mile of echo.",
-      "gun": {"dmg": 130, "cd": 1.25, "mag": 5, "reload": 3.2, "spread": 0.015, "adsSpread": 0.0012, "range": 160, "noise": 94, "pierce": 0.8, "model": "sniper", "sound": "sniper", "slots": {"optic": ["scope", "long"], "muzzle": ["sup_r", "brake"], "barrel": ["bar_r"], "under": ["bipod"], "mag": ["mag_b"], "stock": ["butt"], "rail": ["rail"]}}
+      "gun": {"dmg": 130, "cd": 1.25, "mag": 5, "reload": 3.2, "spread": 0.015, "adsSpread": 0.0012, "range": 160, "noise": 94, "pierce": 0.8, "model": "sniper", "sound": "sniper", "zoom": 6, "slots": {"optic": ["scope", "long"], "muzzle": ["sup_r", "brake"], "barrel": ["bar_r"], "under": ["bipod"], "mag": ["mag_b"], "stock": ["butt"], "rail": ["rail"]}}
     },
     {
       "id": "w_lever", "name": "Lever-Action Rifle", "kind": "gun", "short": "LEVER", "rarity": 2, "weight": 3, "scrap": 14, "tags": ["waste"],
@@ -373,12 +373,12 @@
     {
       "id": "a_reflex", "name": "Reflex Sight", "kind": "mod", "short": "REFLX", "rarity": 2, "weight": 5, "scrap": 5,
       "blurb": "Wide window, thin frame. A touch of magnification and a steadier aim.",
-      "mod": {"slot": "optic", "fam": "dot", "look": "reflex", "zoom": 1.25, "ads": -0.18, "aimSpeed": 0.05}
+      "mod": {"slot": "optic", "fam": "dot", "look": "reflex", "zoom": 1.6, "ads": -0.18, "aimSpeed": 0.05}
     },
     {
       "id": "a_holo", "name": "Holographic Sight", "kind": "mod", "short": "HOLO", "rarity": 3, "weight": 2, "scrap": 9,
       "blurb": "A reticle that floats on the target. Fast to find, tight to hold, and the glass is clean.",
-      "mod": {"slot": "optic", "fam": "dot", "look": "holo", "zoom": 1.35, "ads": -0.25, "aimSpeed": 0.08, "sway": -0.05}
+      "mod": {"slot": "optic", "fam": "dot", "look": "holo", "zoom": 1.7, "ads": -0.25, "aimSpeed": 0.08, "sway": -0.05}
     },
     {
       "id": "a_pdot", "name": "Pistol Micro Dot", "kind": "mod", "short": "PDOT", "rarity": 1, "weight": 5, "scrap": 3,
@@ -388,17 +388,17 @@
     {
       "id": "a_scope2", "name": "2x Scope", "kind": "mod", "short": "2X", "rarity": 1, "weight": 5, "scrap": 4,
       "blurb": "Short and wide. Brings the target close without making the sights slow.",
-      "mod": {"slot": "optic", "fam": "scope", "look": "scope", "zoom": 1.7, "ads": -0.15, "aimSpeed": -0.04}
+      "mod": {"slot": "optic", "fam": "scope", "look": "scope", "zoom": 2.5, "ads": -0.15, "aimSpeed": -0.04}
     },
     {
       "id": "a_scope4", "name": "4x Scope", "kind": "mod", "short": "4X", "rarity": 2, "weight": 4, "scrap": 7,
       "blurb": "A proper tube with an etched reticle. Reaches out well, and the barrel wander shows.",
-      "mod": {"slot": "optic", "fam": "scope", "look": "scope4", "zoom": 2.4, "ads": -0.22, "aimSpeed": -0.1, "sway": 0.08}
+      "mod": {"slot": "optic", "fam": "scope", "look": "scope4", "zoom": 4, "ads": -0.22, "aimSpeed": -0.1, "sway": 0.08}
     },
     {
       "id": "a_scope8", "name": "8x Sniper Scope", "kind": "mod", "short": "8X", "rarity": 3, "weight": 2, "scrap": 14,
       "blurb": "A long tube and a big objective lens. Every wobble is magnified, so breathe and brace.",
-      "mod": {"slot": "optic", "fam": "long", "look": "scope8", "zoom": 4.2, "ads": -0.3, "aimSpeed": -0.2, "sway": 0.18}
+      "mod": {"slot": "optic", "fam": "long", "look": "scope8", "zoom": 8, "ads": -0.3, "aimSpeed": -0.2, "sway": 0.18}
     },
     {
       "id": "a_sup_h", "name": "Pistol Suppressor", "kind": "mod", "short": "SUPP", "rarity": 2, "weight": 4, "scrap": 8,

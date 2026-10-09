@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import { GLOBALS } from './materials';
+import { FAR_CUT_FRAG, FAR_CUT_FRAG_PARS } from './dissolve';
+import { BARK, BARK_DEPTH, BARK_ROUGH, BARK_SIZE, BARK_TILE, barkStats, barkTextures } from './barkTex';
 import { shared } from './dispose';
 import { LEAF_ATLAS, LEAF_CELL, leafAtlas, spriteAtlasTexture } from './proctex';
-import { WIND } from './scatter';
+import { WIND_GLSL, windUniforms } from './wind';
 import { hash2 } from '../core/rng';
+import { TREE_MECHANICS } from '../sim/vegetation';
 import { smoothstep } from '../core/math';
 import { TREE_DIMS, TREE_SPECIES, woodSpecies, type TreeSpecies, type TreeSpot } from '../world/flora';
 import { courseAt, forestAt, lushAt, swampQ, woodsAt } from '../world/hydro';
@@ -75,11 +78,180 @@ function cellUv(cell: number) {
 
 const _col = new THREE.Color();
 
+// ---------------------------------------------------------------------------------------- the wind in a tree
+
+/** A tube of wood or a strip of foliage as the kit laid it: its vertices (`rows` of `per` from `base`) and centre line. */
+interface KitPiece {
+  leaf: boolean;
+  variant: number;
+  base: number;
+  rows: number;
+  per: number;
+  pts: V3[];
+  rad?: number[];
+  /** A strip's most flutter, as its species code gave it. */
+  loose?: number;
+  /** Shed bark hanging off a limb: it rides its wood, but nothing grows from it. */
+  ribbon?: boolean;
+}
+
+/**
+ * How each species' leaves take the wind: how quickly they flutter (Hz) and how loosely they hang. A poplar's flat stalks
+ * shiver, pine needles barely stir, palm fronds and willow strands swing slowly and far.
+ */
+const LEAF_WIND: Record<TreeSpecies, { hz: number; loose: number }> = {
+  oak: { hz: 2.6, loose: 1 },
+  pine: { hz: 1.7, loose: 0.5 },
+  willow: { hz: 0.9, loose: 1.1 },
+  poplar: { hz: 4.2, loose: 1.25 },
+  palm: { hz: 0.7, loose: 0.75 },
+  acacia: { hz: 2.2, loose: 0.7 },
+  cypress: { hz: 1.5, loose: 0.75 },
+  snag: { hz: 1.0, loose: 0.9 },
+  eucalyptus: { hz: 1.6, loose: 1 },
+};
+
+/**
+ * How each species stands in the wind: the height its trunk bends over (m), how far its top goes (m) at a trunk drive of 1
+ * (a gale), how quickly it sways (Hz: the spring a car bends it with, `TREE_MECHANICS`) and how quickly its leaves flutter.
+ * A trunk is a cantilever with the crown for its sail and the stem's section (d^4) for its stiffness. Trees grow into their
+ * load, so the raw ratio is softened (^0.4): slender poplars, pines and gums still sway several times further than a stout
+ * oak or willow, and a leafless snag has little sail.
+ */
+const TREE_WIND = TREE_SPECIES.map((sp) => {
+  const d = TREE_DIMS[sp];
+  const sail = 2 * d.crown * Math.max(1, d.h - d.bole) * (sp === 'snag' ? 0.25 : 1);
+  const slender = (sail * d.h * d.h) / (2 * d.trunk) ** 4;
+  return { h: d.h, lean: 0.0055 * slender ** 0.4 * (d.h / 10), hz: TREE_MECHANICS[sp].frequency / (2 * Math.PI), leaf: LEAF_WIND[sp].hz };
+});
+
+const frac = (x: number) => x - Math.floor(x);
+const q6 = (x: number) => Math.min(63, Math.floor(frac(x) * 64));
+/** Three phases (0..1, in 64 steps) and the species, in one float that holds them exactly. */
+const packPhases = (p1: number, p2: number, pl: number, sp: number) => q6(p1) + 64 * q6(p2) + 4096 * q6(pl) + 262144 * sp;
+/** A limb's and a twig's give (m, in mm up to 4.095 m), in one float that holds them exactly. */
+const packFlex = (f1: number, f2: number) => Math.min(4095, Math.round(f1 * 1000)) + 4096 * Math.min(4095, Math.round(f2 * 1000));
+/** A unit axis, octahedral (folded about y), 12 bits a side, in one float. */
+function packAxis(a: V3): number {
+  const l1 = Math.abs(a[0]) + Math.abs(a[1]) + Math.abs(a[2]) || 1;
+  let u = a[0] / l1;
+  let v = a[2] / l1;
+  if (a[1] < 0) [u, v] = [(1 - Math.abs(v)) * (u < 0 ? -1 : 1), (1 - Math.abs(u)) * (v < 0 ? -1 : 1)];
+  return Math.round((u * 0.5 + 0.5) * 4095) + 4096 * Math.round((v * 0.5 + 0.5) * 4095);
+}
+/** Which way a piece grows, as a phase: pieces growing alike move alike, each other angle at its own time. */
+const growPhase = (d: V3) => frac(Math.atan2(d[2], d[0]) / Math.PI + d[1] * 0.45);
+
+/**
+ * The wind data of every vertex of a kit. Wood: each tube finds the piece it grows from (the nearest point of the wood laid
+ * before it); a tube off the trunk is a limb, anything further out a twig, and a tube that reaches the ground (the trunk, a
+ * root, a knee) stays put. Each gives more toward its tip, the more the longer and thinner it is, and swings at its own time,
+ * set by the way it grows; its foot rides the piece it grows from, so nothing comes apart. Leaves: each hangs from its end
+ * nearer the wood (a strip from its first point), rides that wood, and turns about that point at the time the angle it grows
+ * at gives it.
+ *
+ * `tree`: x how loosely it hangs (0 for wood), y the variant, z the phases and species (`packPhases`), w the limb's and the
+ * twig's give there (`packFlex`). `aLeaf`: the point a leaf hangs from (xyz) and the axis it grows along (w, `packAxis`).
+ */
+function treeWindData(k: TreeKit): { tree: Float32Array; leaf: Float32Array } {
+  const n = k.pos.length / 3;
+  const tree = new Float32Array(n * 4);
+  const leaf = new Float32Array(n * 4);
+  const still = packPhases(0, 0, 0, k.sp);
+  for (let i = 0; i < n; i++) {
+    tree[i * 4 + 1] = k.tree[i * 3 + 1];
+    tree[i * 4 + 2] = still;
+  }
+  interface Wood { pc: KitPiece; level: number; f1: number[]; f2: number[]; p1: number; p2: number }
+  const woods: Wood[] = [];
+  /** The nearest point of the wood laid so far (of one variant): which piece, how far, and its give there. */
+  const nearest = (p: V3, variant: number) => {
+    let best: { w: Wood | null; d: number; f1: number; f2: number } = { w: null, d: Infinity, f1: 0, f2: 0 };
+    for (const w of woods) {
+      if (w.pc.variant !== variant || w.pc.ribbon) continue;
+      const P = w.pc.pts;
+      for (let i = 0; i < P.length - 1; i++) {
+        const ab = sub(P[i + 1], P[i]);
+        const t = Math.min(1, Math.max(0, dot(sub(p, P[i]), ab) / Math.max(1e-6, dot(ab, ab))));
+        const d = Math.hypot(...sub(p, add(P[i], mul(ab, t))));
+        if (d < best.d) best = { w, d, f1: w.f1[i] + (w.f1[i + 1] - w.f1[i]) * t, f2: w.f2[i] + (w.f2[i + 1] - w.f2[i]) * t };
+      }
+    }
+    return best;
+  };
+  for (const pc of k.pieces) {
+    if (pc.leaf) continue;
+    const P = pc.pts;
+    const s = [0];
+    for (let i = 1; i < P.length; i++) s.push(s[i - 1] + Math.hypot(...sub(P[i], P[i - 1])));
+    const L = Math.max(1e-3, s[s.length - 1]);
+    const own = growPhase(norm(sub(P[P.length - 1], P[0])));
+    const zero = s.map(() => 0);
+    const at = !pc.ribbon && Math.min(...P.map((p) => p[1])) < 0.3 ? null : nearest(P[0], pc.variant);
+    let w: Wood;
+    if (!at?.w) w = { pc, level: 0, f1: zero, f2: zero, p1: own, p2: own };
+    else {
+      const from = at.w;
+      const rMean = pc.rad!.reduce((a, b) => a + b, 0) / pc.rad!.length;
+      const limb = from.level === 0;
+      const give = limb ? 0.15 * L * Math.min(2, Math.max(0.3, 0.12 / rMean)) : 0.12 * L * Math.min(2, Math.max(0.3, 0.05 / rMean));
+      const grow = s.map((x) => give * (x / L) ** 1.5);
+      w = limb
+        ? { pc, level: 1, f1: grow, f2: zero, p1: own, p2: own }
+        : { pc, level: 2, f1: s.map(() => at.f1), f2: grow.map((g) => at.f2 + g), p1: from.p1, p2: from.level === 1 ? own : from.p2 };
+    }
+    woods.push(w);
+    for (let r = 0; r < pc.rows; r++) {
+      const ph = packPhases(w.p1, w.p2, 0, k.sp);
+      const fl = packFlex(w.f1[r], w.f2[r]);
+      for (let j = 0; j < pc.per; j++) {
+        const v = (pc.base + r * pc.per + j) * 4;
+        tree[v + 2] = ph;
+        tree[v + 3] = fl;
+      }
+    }
+  }
+  const lw = LEAF_WIND[TREE_SPECIES[k.sp]];
+  for (const pc of k.pieces) {
+    if (!pc.leaf) continue;
+    const P = pc.pts;
+    let hinge = P[0];
+    let tip = P[P.length - 1];
+    let at = nearest(hinge, pc.variant);
+    if (P.length === 2) {
+      // A card hangs from whichever end is nearer its wood (between equals, the one nearer the trunk and lower down).
+      const other = nearest(tip, pc.variant);
+      const score = (p: V3, a: { d: number }) => a.d + 0.25 * Math.hypot(p[0], p[2]) + 0.05 * p[1];
+      if (score(tip, other) < score(hinge, at)) [hinge, tip, at] = [tip, hinge, other];
+    }
+    const ax = norm(sub(tip, hinge));
+    const pl = growPhase(ax);
+    // A leaf well away from any drawn wood hangs on a twig nobody drew, and has that twig's give.
+    const twig = Math.max(0, at.d - 0.3) * 0.1;
+    const ph = packPhases(at.w?.p1 ?? 0, at.w && at.w.level > 0 ? at.w.p2 : pl, pl, k.sp);
+    const fl = packFlex(at.f1, at.f2 + twig);
+    const loose = lw.loose * Math.min(1, Math.max(0.4, pc.loose ?? 1));
+    const pa = packAxis(ax);
+    for (let r = 0; r < pc.rows * pc.per; r++) {
+      const v = (pc.base + r) * 4;
+      tree[v] = loose;
+      tree[v + 2] = ph;
+      tree[v + 3] = fl;
+      leaf[v] = hinge[0];
+      leaf[v + 1] = hinge[1];
+      leaf[v + 2] = hinge[2];
+      leaf[v + 3] = pa;
+    }
+  }
+  return { tree, leaf };
+}
+
 // ---------------------------------------------------------------------------------------- the kit
 
 /**
- * Accumulates one species' geometry: tubes for wood and strips of cards for foliage. Every vertex carries `tree`: (how much
- * it flutters, 0 for wood; which variant it belongs to; a flutter phase).
+ * Accumulates one species' geometry: tubes for wood and strips of cards for foliage. Every vertex carries `tree` (`kit.tree`
+ * here: how much it flutters, 0 for wood; which variant it belongs to; a flutter phase), which `build` turns into the wind
+ * data (`treeWindData`).
  */
 class TreeKit {
   pos: number[] = [];
@@ -87,10 +259,25 @@ class TreeKit {
   uv: number[] = [];
   col: number[] = [];
   tree: number[] = [];
+  /** Per vertex: the bark's (u, v) in tiles of its layer, the layer, and the rough layer + how far it covers (leaves: layer -1). */
+  bark: number[] = [];
   idx: number[] = [];
   variant = 0;
+  /** The species' bark layer (`BARK`), for every tube not told otherwise. */
+  barkLayer: number = BARK.furrow;
+  private woodN = 0;
   /** Convex pieces of the actual wood rings, for a fallen tree's compound rigid body. */
   woodHulls: { variant: number; vertices: Float32Array }[] = [];
+  /** Which species this is (its index in TREE_SPECIES), for the wind. */
+  sp = 0;
+  /** Every tube and strip as laid, for the wind (`treeWindData`). */
+  pieces: KitPiece[] = [];
+
+  /** A stable random number for the next piece of wood (where its bark starts). */
+  private nextRand(): number {
+    const x = Math.sin(++this.woodN * 12.9898 + this.variant * 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  }
 
   private rgb(hex: number, k: number): V3 {
     _col.setHex(hex);
@@ -98,15 +285,48 @@ class TreeKit {
   }
 
   /**
-   * A tapered tube through `pts` with radius `rad[i]` at each point and `seg` sides, wrapped in bark (`cell`, the plain
-   * fissured bark unless told otherwise). `flute` ripples the radius round the ring (a buttressed foot), `ring` shades a ring
-   * (a palm's leaf scars). Darker at the foot.
+   * A tapered tube through `pts` with radius `rad[i]` at each point and `seg` sides, wrapped in bark: `bark` (the species'
+   * layer unless told otherwise) at its true size, a whole number of tiles round (so the seam never shows) and as many up it
+   * as keep the bark's grain square, its scale following the girth as real bark's does; a twig too thin for one tile round
+   * takes it mirrored at full size rather than squeezed. `rough` (0..1 per ring) fades in the layer's rough partner
+   * (`BARK_ROUGH`, a gum's rough foot). `cell` is the atlas bark the impostors are baked from. `flute` ripples the radius
+   * round the ring (a buttressed foot), `ring` shades a ring (a palm's leaf scars). Darker at the foot. `hull: false` keeps
+   * a small piece (a burl, a stub) out of a fallen tree's rigid body.
    */
-  tube(pts: V3[], rad: number[], seg: number, hex: number, o: { flute?: (i: number, a: number) => number; ring?: (i: number) => number; cell?: number } = {}) {
+  tube(
+    pts: V3[],
+    rad: number[],
+    seg: number,
+    hex: number,
+    o: { flute?: (i: number, a: number) => number; ring?: (i: number) => number; cell?: number; bark?: number; rough?: (i: number) => number; hull?: boolean } = {},
+  ) {
+    if (pts.length === 2 && rad[0] > 0.06 && rad[0] > rad[1] * 2.5 && !o.flute && !o.ring && !o.rough) {
+      // A short piece tapering hard (a bough, a root wedge, a knee) gets a ring halfway, so its bark stays square at both ends.
+      pts = [pts[0], mix3(pts[0], pts[1], 0.5), pts[1]];
+      rad = [rad[0], (rad[0] + rad[1]) / 2, rad[1]];
+    }
     const n = pts.length;
     const { u0, u1, v0, v1 } = cellUv(o.cell ?? LEAF_CELL.bark);
     const L = [0];
     for (let i = 1; i < n; i++) L.push(L[i - 1] + Math.hypot(...sub(pts[i], pts[i - 1])));
+    const layer = o.bark ?? this.barkLayer;
+    const tile = BARK_TILE[layer];
+    const roughL = o.rough ? BARK_ROUGH[layer]?.layer ?? -1 : -1;
+    // The girth the bark is sized to: the tube's mean, leaning on its low stretch, where it is seen from close by.
+    let girth = 0;
+    let weight = 0;
+    for (let i = 0; i < n - 1; i++) {
+      const w = (L[i + 1] - L[i]) / (1 + Math.max(0, (pts[i][1] + pts[i + 1][1]) / 2 - 2) / 3);
+      girth += Math.PI * (rad[i] + rad[i + 1]) * w;
+      weight += w;
+    }
+    girth /= Math.max(1e-3, weight);
+    const round = Math.round(girth / tile);
+    const mirror = round < 1;
+    const tileAt = (i: number) => (mirror ? tile : Math.min(tile * 2, Math.max(tile * 0.25, (Math.PI * 2 * rad[i]) / round)));
+    const bu = this.nextRand();
+    const bv = [this.nextRand() * 8];
+    for (let i = 1; i < n; i++) bv.push(bv[i - 1] + ((L[i] - L[i - 1]) * 2) / (tileAt(i - 1) + tileAt(i)));
     const t0 = norm(sub(pts[1], pts[0]));
     let N = norm(cross(Math.abs(t0[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0], t0));
     const base = this.pos.length / 3;
@@ -118,20 +338,31 @@ class TreeKit {
       // Bark ping-pongs every 4 m along the tube so a tall trunk is not one smear of the cell.
       const ph = (L[i] / 4) % 2;
       const vv = v0 + (v1 - v0) * (ph > 1 ? 2 - ph : ph);
+      const bw = roughL >= 0 ? roughL + Math.min(1, Math.max(0, o.rough!(i))) * 0.99 : 0;
+      const around = mirror ? (Math.PI * rad[i]) / tile : round;
+      const ring: V3[] = [];
+      const dirs: V3[] = [];
+      const arc = [0];
       for (let j = 0; j <= seg; j++) {
         const a = (j / seg) * Math.PI * 2;
         const d = add(mul(N, Math.cos(a)), mul(B, Math.sin(a)));
-        const r = rad[i] * (o.flute ? o.flute(i, a) : 1);
-        const p = add(pts[i], mul(d, r));
-        this.pos.push(...p);
-        this.nor.push(...d);
+        ring.push(add(pts[i], mul(d, rad[i] * (o.flute ? o.flute(i, a) : 1))));
+        dirs.push(d);
+        if (j > 0) arc.push(arc[j - 1] + Math.hypot(...sub(ring[j], ring[j - 1])));
+      }
+      for (let j = 0; j <= seg; j++) {
+        // Round the ring by its true length, so a fluted foot's bark does not bunch in the hollows and spread on the ribs.
+        const f = arc[j] / (arc[seg] || 1);
+        this.pos.push(...ring[j]);
+        this.nor.push(...dirs[j]);
         this.uv.push(u0 + ((u1 - u0) * j) / seg, vv);
         this.col.push(...c);
         this.tree.push(0, this.variant, 0);
+        this.bark.push(bu + around * (mirror ? 1 - Math.abs(1 - 2 * f) : f), bv[i], layer, bw);
       }
     }
     for (let i = 0; i < n - 1; i++) {
-      this.woodHulls.push({ variant: this.variant, vertices: Float32Array.from(this.pos.slice((base + i * (seg + 1)) * 3, (base + (i + 2) * (seg + 1)) * 3)) });
+      if (o.hull !== false) this.woodHulls.push({ variant: this.variant, vertices: Float32Array.from(this.pos.slice((base + i * (seg + 1)) * 3, (base + (i + 2) * (seg + 1)) * 3)) });
       for (let j = 0; j < seg; j++) {
         const a = base + i * (seg + 1) + j;
         const b = a + 1;
@@ -140,6 +371,7 @@ class TreeKit {
         this.idx.push(a, b, c, b, d, c);
       }
     }
+    this.pieces.push({ leaf: false, variant: this.variant, base, rows: n, per: seg + 1, pts: pts.map((p): V3 => [p[0], p[1], p[2]]), rad: rad.slice() });
   }
 
   /**
@@ -172,17 +404,52 @@ class TreeKit {
         const ao = (0.5 + 0.5 * smoothstep(0.1, 1, e)) * (0.8 + 0.2 * Math.min(1, Math.max(0, q[1] * 0.5 + 0.5)));
         this.col.push(...this.rgb(hex, tone * ao));
         this.tree.push(flutter[i], this.variant, phase);
+        this.bark.push(0, 0, -1, 0);
       }
     }
     for (let i = 0; i < n - 1; i++) {
       const a = base + i * 2;
       this.idx.push(a, a + 1, a + 3, a, a + 3, a + 2);
     }
+    this.pieces.push({ leaf: true, variant: this.variant, base, rows: n, per: 2, pts: pts.map((p): V3 => [p[0], p[1], p[2]]), loose: Math.max(...flutter) });
   }
 
   /** One card centred at `c`: `w` wide along `right`, `h` tall along `up` (the top of the picture toward +up). */
   card(c: V3, right: V3, up: V3, w: number, h: number, cell: number, hex: number, tone: number, flutter: number, C: V3, R: V3, phase: number) {
     this.strip([add(c, mul(up, h / 2)), add(c, mul(up, -h / 2))], [right, right], [w / 2, w / 2], cell, 'v', hex, tone, [flutter, flutter * 0.6], C, R, phase);
+  }
+
+  /**
+   * A ribbon of shed bark hanging along `pts`, `hw[i]` either side along `side[i]`: thin wood, seen from both sides, in bark
+   * layer `layer` at its true size. Not part of a fallen tree's rigid body.
+   */
+  ribbon(pts: V3[], side: V3[], hw: number[], hex: number, layer: number, cell: number) {
+    const n = pts.length;
+    const { u0, u1, v0, v1 } = cellUv(cell);
+    const tile = BARK_TILE[layer];
+    const bu = this.nextRand();
+    let bv = this.nextRand() * 8;
+    const base = this.pos.length / 3;
+    for (let i = 0; i < n; i++) {
+      if (i > 0) bv += Math.hypot(...sub(pts[i], pts[i - 1])) / tile;
+      const tg = norm(sub(pts[Math.min(n - 1, i + 1)], pts[Math.max(0, i - 1)]));
+      const face = norm(cross(side[i], tg));
+      const c = this.rgb(hex, 0.62 + 0.38 * Math.min(1, Math.max(0, pts[i][1]) / 1.8));
+      for (const s of [-1, 1]) {
+        this.pos.push(...add(pts[i], mul(side[i], hw[i] * s)));
+        this.nor.push(...face);
+        this.uv.push(s < 0 ? u0 : u1, v0 + ((v1 - v0) * i) / (n - 1));
+        this.col.push(...c);
+        this.tree.push(0, this.variant, 0);
+        this.bark.push(bu + ((s + 1) * hw[i]) / tile, bv, layer, 0);
+      }
+    }
+    for (let i = 0; i < n - 1; i++) {
+      const a = base + i * 2;
+      this.idx.push(a, a + 1, a + 3, a, a + 3, a + 2);
+    }
+    // In the wind a ribbon is thin wood off its limb: it rides the limb and swings a little further, like a twig.
+    this.pieces.push({ leaf: false, variant: this.variant, base, rows: n, per: 2, pts: pts.map((p): V3 => [p[0], p[1], p[2]]), rad: hw.map(() => 0.02), ribbon: true });
   }
 
   build(): THREE.BufferGeometry {
@@ -191,7 +458,10 @@ class TreeKit {
     g.setAttribute('normal', new THREE.Float32BufferAttribute(this.nor, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uv, 2));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
-    g.setAttribute('tree', new THREE.Float32BufferAttribute(this.tree, 3));
+    const wind = treeWindData(this);
+    g.setAttribute('tree', new THREE.Float32BufferAttribute(wind.tree, 4));
+    g.setAttribute('aLeaf', new THREE.Float32BufferAttribute(wind.leaf, 4));
+    g.setAttribute('bark', new THREE.Float32BufferAttribute(this.bark, 4));
     g.setIndex(this.pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(this.idx, 1) : new THREE.Uint16BufferAttribute(this.idx, 1));
     g.userData.woodHulls = this.woodHulls;
     g.computeBoundingSphere();
@@ -217,7 +487,7 @@ function limb(k: TreeKit, r: () => number, a: V3, dir: V3, len: number, r0: numb
  * Surface roots: `n` of them flaring off the foot of a trunk `rb` thick, humped over the ground for `reach` metres and diving
  * into it, so a tree on a river bank stands on a tangle of them where the water has washed the soil from under it.
  */
-function roots(k: TreeKit, r: () => number, n: number, rb: number, reach: number, hex: number, cell?: number) {
+function roots(k: TreeKit, r: () => number, n: number, rb: number, reach: number, hex: number, o: Parameters<TreeKit['tube']>[4] = {}) {
   const a0 = r() * Math.PI * 2;
   for (let i = 0; i < n; i++) {
     const a = a0 + (i / n) * Math.PI * 2 + (r() - 0.5) * 0.7;
@@ -225,7 +495,7 @@ function roots(k: TreeKit, r: () => number, n: number, rb: number, reach: number
     const c = Math.cos(a);
     const s = Math.sin(a);
     const at = (d: number, y: number): V3 => [c * d, y, s * d];
-    k.tube([at(rb * 0.45, 0.55), at(rb + L * 0.22, 0.2 + r() * 0.12), at(rb + L * 0.6, 0.04 + r() * 0.06), at(rb + L, -0.6)], [rb * 0.42, rb * 0.3, rb * 0.17, 0.03], 4, hex, { cell });
+    k.tube([at(rb * 0.45, 0.55), at(rb + L * 0.22, 0.2 + r() * 0.12), at(rb + L * 0.6, 0.04 + r() * 0.06), at(rb + L, -0.6)], [rb * 0.42, rb * 0.3, rb * 0.17, 0.03], 4, hex, o);
   }
 }
 
@@ -386,7 +656,9 @@ const poplar: Grow = (k, r, v) => {
     tp.push(i === 0 ? [0, -0.3, 0] : [Math.sin(y * 0.4 + v) * 0.08, y, Math.cos(y * 0.33) * 0.06]);
     tr.push(D.trunk * (i === 0 ? 1.25 : 1) * (1 - (i / 5) * 0.85));
   }
-  k.tube(tp, tr, 7, bark);
+  // Smooth and pale up the stem, fissured at the foot.
+  const footTo = 1.2 + r() * 1.6;
+  k.tube(tp, tr, 7, bark, { rough: (i) => 1 - smoothstep(footTo * 0.3, footTo, tp[i][1]) });
   for (let i = 0; i < 12; i++) {
     const y = 2.2 + (i / 12) * h * 0.75;
     const a = i * 2.4 + r() * 0.4;
@@ -428,9 +700,9 @@ const palm: Grow = (k, r, v) => {
     pts.push(i === 0 ? [0, -0.3, 0] : P(t));
     rad.push(i === 0 ? D.trunk * 1.6 : i === 1 ? D.trunk * 1.15 : D.trunk * (1 - t * 0.12));
   }
-  k.tube(pts, rad, 8, bark, { ring: (i) => (i % 2 ? 0.78 : 1) });
+  k.tube(pts, rad, 8, bark, { ring: (i) => (i % 2 ? 0.9 : 1), cell: LEAF_CELL.palmBark });
   const top = P(1);
-  k.tube([add(top, [0, -0.5, 0]), add(top, [0, 0.35, 0]), add(top, [0, 0.8, 0])], [0.34, 0.36, 0.16], 8, 0x7a5f3e);
+  k.tube([add(top, [0, -0.5, 0]), add(top, [0, 0.35, 0]), add(top, [0, 0.8, 0])], [0.34, 0.36, 0.16], 8, 0x7a5f3e, { bark: BARK.fibre });
   const H0 = add(top, [0, 0.55, 0]);
   const C: V3 = add(H0, [0, 0.2, 0]);
   const R: V3 = [D.crown, 2.2, D.crown];
@@ -625,16 +897,24 @@ function gumSpray(k: TreeKit, r: () => number, p: V3, C: V3, R: V3, hex: number)
 
 /**
  * River red gum (eucalyptus), as the Yarkon is lined with, in three shapes that do not look alike. Variant 0 is the old red gum:
- * a massive short bole, rough and brownish to a few metres up, parting low into four great sinuous pale limbs that sweep out
- * into a broad, open, weeping crown. Variant 1 is the many-stemmed clump. Variant 2 is the V: a short bole forking at head
- * height into two tall stems leaning apart, smooth-barked and shedding. The leaves hang in loose drooping sprays at the twig
- * ends, an open crown with the sky through it. Each tree's bark takes its own colour in the shader (white, cream, salmon,
- * grey-brown), so the same shape never looks twice the same.
+ * a massive short bole, its old bark rough and grey-brown to a few metres up and breaking up into flakes above that, parting
+ * low into four great sinuous pale limbs that sweep out into a broad, open, weeping crown. Variant 1 is the many-stemmed
+ * clump. Variant 2 is the V: a short bole forking at head height into two tall stems leaning apart, smooth-barked and
+ * shedding. The leaves hang in loose drooping sprays at the twig ends, an open crown with the sky through it. The bark is one
+ * bark from the roots to the twigs (`BARK.gum`, fading into `BARK.gumRough` at the foot), and the things bark does that a
+ * texture should not be stretched to fake are parts of their own: ribbons of shed bark hanging from the forks and limbs,
+ * dead stubs where small limbs broke off. Each tree's bark takes its own colour, patches and placing in
+ * the shader (white, cream, salmon, grey-brown), so the same shape never looks twice the same.
  */
+/** A eucalyptus model's triangle budget: its parts fill what its shape leaves of it. */
+const GUM_TRIS = 880;
+
 const eucalyptus: Grow = (k, r, v) => {
   const D = TREE_DIMS.eucalyptus;
+  const i0 = k.idx.length;
   const bark = 0xcfcac0;
-  const rough = 0x9a8a78;
+  const dead = 0xb4ad9f;
+  const shed = 0xa89a88;
   const leaf = 0x5f7350;
   const cell = LEAF_CELL.gumBark;
   const h = D.h * (v === 0 ? 0.9 : v === 1 ? 0.94 : 1.04);
@@ -642,9 +922,11 @@ const eucalyptus: Grow = (k, r, v) => {
   const C: V3 = [0, h * (v === 0 ? 0.64 : 0.7), 0];
   const R: V3 = [crown, h * 0.28, crown];
   const sprays: V3[] = [];
+  /** Where the parts go: each stem's axis and girth, its fork, and its limbs' middles. */
+  const stems: { at: (y: number) => V3; girth: (y: number) => number; foot: V3; fork: number; T: V3; mids: [V3, number][] }[] = [];
   const a0 = r() * Math.PI * 2;
   /** One stem from `foot` leaning `lean` toward `a`, forking at `fork` into `nL` limbs spread `spread` wide. */
-  const stem = (foot: V3, a: number, lean: number, hs: number, rs: number, fork: number, nL: number, spread: [number, number], seg: number, roughTo = 0) => {
+  const stem = (foot: V3, a: number, lean: number, hs: number, rs: number, fork: number, nL: number, spread: [number, number], seg: number, roughTo = 0, roughMax = 1) => {
     const ph = r() * Math.PI * 2;
     const lx = Math.cos(a) * Math.tan(lean);
     const lz = Math.sin(a) * Math.tan(lean);
@@ -656,13 +938,16 @@ const eucalyptus: Grow = (k, r, v) => {
       tp.push(i === 0 ? [foot[0] - lx * 0.4, foot[1] - 0.3, foot[2] - lz * 0.4] : at((i / nS) * fork));
       tr.push(rs * (i === 0 ? 1.45 : i === 1 ? 1.12 : 1 - (i / nS) * 0.3));
     }
-    if (roughTo > 0) {
-      // The old bark of the foot: rough, brownish, a separate sleeve up to `roughTo`, the smooth pale stem rising out of it.
-      const m = Math.max(2, Math.round((roughTo / fork) * nS));
-      k.tube(tp.slice(0, m + 1), tr.slice(0, m + 1).map((q) => q * 1.04), seg, rough, { cell: LEAF_CELL.bark });
-      k.tube(tp.slice(m - 1), tr.slice(m - 1), seg, bark, { cell });
-    } else k.tube(tp, tr, seg, bark, { cell });
+    // The old bark of the foot thins out up the stem flake by flake into the smooth bark: one bark, not a sleeve.
+    const rough = roughTo > 0 ? (i: number) => roughMax * (1 - smoothstep(roughTo * 0.25, roughTo * 1.2, tp[i][1] - foot[1])) : undefined;
+    k.tube(tp, tr, seg, bark, { cell, rough });
     const T = at(fork);
+    const girth = (y: number) => {
+      const f = Math.min(nS, Math.max(1, (y / fork) * nS));
+      const i = Math.min(nS - 1, Math.floor(f));
+      return tr[i] + (tr[i + 1] - tr[i]) * (f - i);
+    };
+    const mids: [V3, number][] = [];
     for (let l = 0; l < nL; l++) {
       const b = a + (l / nL) * Math.PI * 2 + (r() - 0.5) * 0.8;
       const sp = spread[0] + r() * (spread[1] - spread[0]);
@@ -673,6 +958,7 @@ const eucalyptus: Grow = (k, r, v) => {
       mid[2] += (r() - 0.5) * len * 0.22;
       const end = add(T, mul(dir, len));
       k.tube([T, mid, end], [rs * 0.62, rs * 0.42, rs * 0.15], Math.max(4, seg - 2), bark, { cell });
+      mids.push([mid, rs * 0.42]);
       const sb = b + (r() < 0.5 ? -1 : 1) * (0.6 + r() * 0.5);
       const sdir = norm([Math.cos(sb), 0.45 + r() * 0.35, Math.sin(sb)]);
       const slen = crown * (0.5 + r() * 0.3);
@@ -683,22 +969,24 @@ const eucalyptus: Grow = (k, r, v) => {
       k.tube([end, tw], [rs * 0.13, 0.03], 3, bark, { cell });
       sprays.push(end, send, tw);
     }
+    stems.push({ at, girth, foot, fork, T, mids });
   };
   if (v === 0) {
-    // The old red gum: thick, low-forked, broad.
-    roots(k, r, 5, D.trunk * 1.55, 2.8, rough, LEAF_CELL.bark);
+    // The old red gum: thick, low-forked, broad, rough-footed.
+    roots(k, r, 5, D.trunk * 1.55, 2.8, bark, { cell, rough: () => 0.95 });
     stem([0, 0, 0], a0, 0.03 + r() * 0.04, h, D.trunk * 1.3, h * (0.3 + r() * 0.05), 4, [0.65, 1.0], 8, 2.6 + r() * 1.4);
   } else if (v === 1) {
-    roots(k, r, 4, D.trunk * 1.1, 2.4, bark, cell);
+    roots(k, r, 4, D.trunk * 1.1, 2.4, bark, { cell, rough: () => 0.55 });
     for (let s = 0; s < 3; s++) {
       const a = a0 + (s / 3) * Math.PI * 2 + (r() - 0.5) * 0.5;
-      stem([0, 0, 0], a, 0.15 + r() * 0.1, h * (0.86 + r() * 0.12), D.trunk * 0.6, h * (0.42 + r() * 0.08), 2, [0.38, 0.68], 6);
+      stem([0, 0, 0], a, 0.15 + r() * 0.1, h * (0.86 + r() * 0.12), D.trunk * 0.6, h * (0.42 + r() * 0.08), 2, [0.38, 0.68], 6, 1.4, 0.7);
     }
   } else {
     // The V: a short common bole, then two stems leaning apart.
-    roots(k, r, 5, D.trunk * 1.25, 2.4, bark, cell);
+    roots(k, r, 5, D.trunk * 1.25, 2.4, bark, { cell, rough: () => 0.6 });
     const forkY = 1.3 + r() * 0.8;
-    k.tube([[0, -0.3, 0], [0, forkY * 0.5, 0], [0, forkY + 0.3, 0]], [D.trunk * 1.5, D.trunk * 1.2, D.trunk * 1.05], 8, bark, { cell });
+    const bole: V3[] = [[0, -0.3, 0], [0, forkY * 0.5, 0], [0, forkY + 0.3, 0]];
+    k.tube(bole, [D.trunk * 1.5, D.trunk * 1.2, D.trunk * 1.05], 8, bark, { cell, rough: (i) => 0.75 * (1 - smoothstep(0.2, forkY + 0.3, bole[i][1])) });
     for (const sgn of [0, Math.PI]) {
       const a = a0 + sgn + (r() - 0.5) * 0.3;
       const off: V3 = [Math.cos(a) * D.trunk * 0.35, forkY, Math.sin(a) * D.trunk * 0.35];
@@ -706,9 +994,84 @@ const eucalyptus: Grow = (k, r, v) => {
     }
   }
   for (const p of sprays) gumSpray(k, r, p, C, R, leaf);
+  // The parts, from their own numbers so the shape above stays as it was, most telling first and only while the model stays
+  // within its triangle budget (a grove of them is a lot of trees).
+  const q = rng(Math.floor(r() * 1e6) + 1);
+  const budget = (cost: number) => (k.idx.length - i0) / 3 + cost <= GUM_TRIS;
+  const out = (ang: number): V3 => [Math.cos(ang), 0, Math.sin(ang)];
+  // Ribbons of shed bark caught at each fork, hanging down the stem a little off it, twisting as they go.
+  for (const st of stems) {
+    const nF = v === 0 ? 3 : 1 + (q() < 0.5 ? 1 : 0);
+    for (let i = 0; i < nF && budget(6); i++) {
+      const ang = q() * Math.PI * 2;
+      const o = out(ang);
+      const len = 0.6 + q() * (v === 0 ? 1.6 : 1.1);
+      const y0 = st.fork - 0.1 - q() * 0.5;
+      const twist = (q() - 0.5) * 2.4;
+      const pts: V3[] = [];
+      const side: V3[] = [];
+      const hw: number[] = [];
+      for (let j = 0; j < 4; j++) {
+        const f = j / 3;
+        const y = y0 - len * f;
+        const lift = st.girth(y - st.foot[1]) * 1.04 + 0.015 + f * f * 0.12;
+        const ax = st.at(y - st.foot[1]);
+        const sw = ang + twist * f * 0.4;
+        pts.push([ax[0] + Math.cos(sw) * lift, y, ax[2] + Math.sin(sw) * lift]);
+        side.push(turn([-o[2], 0, o[0]], [0, 1, 0], twist * f * 0.5));
+        hw.push((0.035 + q() * 0.03) * (1 - f * 0.45));
+      }
+      k.ribbon(pts, side, hw, shed, BARK.gum2, cell);
+    }
+  }
+  // Dead stubs where a small limb broke off long ago, weathered grey.
+  for (const st of stems) {
+    const nD = 1 + (v === 0 && q() < 0.6 ? 1 : 0);
+    for (let i = 0; i < nD && budget(8); i++) {
+      const y = st.fork * (0.35 + q() * 0.6);
+      const ax = st.at(y);
+      const g = st.girth(y);
+      const d = norm([Math.cos(q() * 6.283), 0.35 + q() * 0.4, Math.sin(q() * 6.283)]);
+      const sr = 0.04 + q() * 0.04;
+      k.tube([add(ax, mul(d, g * 0.6)), add(ax, mul(d, g + 0.15 + q() * 0.35))], [sr, sr * 0.3], 4, dead, { cell, bark: BARK.silver, hull: false });
+    }
+  }
+  // Ribbons hanging free from the limbs.
+  for (const st of stems) {
+    for (const [mid, mr] of st.mids) {
+      if (q() < 0.35 || !budget(6)) continue;
+      const len = 0.5 + q() * 1.2;
+      const ang = q() * Math.PI * 2;
+      const o = out(ang);
+      const twist = (q() - 0.5) * 3;
+      const top: V3 = [mid[0] + o[0] * mr * 0.6, mid[1] - mr * 0.8, mid[2] + o[2] * mr * 0.6];
+      const pts: V3[] = [];
+      const side: V3[] = [];
+      const hw: number[] = [];
+      for (let j = 0; j < 4; j++) {
+        const f = j / 3;
+        pts.push([top[0] + o[0] * 0.08 * f * f, top[1] - len * f, top[2] + o[2] * 0.08 * f * f]);
+        side.push(turn([-o[2], 0, o[0]], [0, 1, 0], twist * f));
+        hw.push((0.03 + q() * 0.025) * (1 - f * 0.5));
+      }
+      k.ribbon(pts, side, hw, shed, BARK.gum2, cell);
+    }
+  }
 };
 
 const GROW: Record<TreeSpecies, Grow> = { oak, pine, willow, poplar, palm, acacia, cypress, snag, eucalyptus };
+/** Each species' bark (`barkTex.ts`): oak and acacia fissured, a pine's plates, a willow's deep net, a poplar smooth over a fissured foot. */
+const SPECIES_BARK: Record<TreeSpecies, number> = {
+  oak: BARK.furrow,
+  pine: BARK.plate,
+  willow: BARK.interlace,
+  poplar: BARK.smooth,
+  palm: BARK.palm,
+  acacia: BARK.furrow,
+  cypress: BARK.fibre,
+  snag: BARK.silver,
+  eucalyptus: BARK.gum,
+};
 
 const speciesGeos: THREE.BufferGeometry[] = [];
 
@@ -717,8 +1080,10 @@ export function treeGeometry(sp: number): THREE.BufferGeometry {
   const hit = speciesGeos[sp];
   if (hit) return hit;
   const k = new TreeKit();
+  k.sp = sp;
   for (let v = 0; v < 3; v++) {
     k.variant = v;
+    k.barkLayer = SPECIES_BARK[TREE_SPECIES[sp]];
     GROW[TREE_SPECIES[sp]](k, rng(sp * 31 + v * 7 + 1), v);
   }
   return (speciesGeos[sp] = k.build());
@@ -770,11 +1135,12 @@ function bakeImpostor(sp: number, atlas: Uint8Array, out: Uint8Array, ox: number
   const U = g.attributes.uv.array as Float32Array;
   const Cc = g.attributes.color.array as Float32Array;
   const T = g.attributes.tree.array as Float32Array;
+  const TS = g.attributes.tree.itemSize;
   const I = g.index!.array;
   let hw = 0;
   let top = 0;
   for (let i = 0; i < P.length / 3; i++) {
-    if (T[i * 3 + 1] !== 0) continue;
+    if (T[i * TS + 1] !== 0) continue;
     hw = Math.max(hw, Math.abs(P[i * 3]), Math.abs(P[i * 3 + 2]));
     top = Math.max(top, P[i * 3 + 1]);
   }
@@ -799,7 +1165,7 @@ function bakeImpostor(sp: number, atlas: Uint8Array, out: Uint8Array, ox: number
     const a = I[t];
     const b = I[t + 1];
     const c = I[t + 2];
-    if (T[a * 3 + 1] !== 0) continue;
+    if (T[a * TS + 1] !== 0) continue;
     const x0 = X(P[a * 3]);
     const y0 = Y(P[a * 3 + 1]);
     const x1 = X(P[b * 3]);
@@ -932,15 +1298,87 @@ float treeDither( vec2 p ) { return fract( 52.9829189 * fract( dot( p, vec2( 0.0
  * from a hash of where the tree stands. Darker barks are left as they are.
  */
 const BARK_FN = /* glsl */ `
-#ifdef USE_INSTANCING
-vec3 barkTint( vec3 c ) {
-  vec3 bO = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
-  float bh = fract( sin( dot( floor( bO.xz * 2.0 ), vec2( 12.9898, 78.233 ) ) ) * 43758.5453 );
-  vec3 bt = bh < 0.24 ? vec3( 1.06, 1.06, 1.08 ) : bh < 0.44 ? vec3( 1.02, 0.94, 0.8 ) : bh < 0.64 ? vec3( 1.04, 0.66, 0.46 ) : bh < 0.8 ? vec3( 1.0, 0.8, 0.72 ) : vec3( 0.74, 0.68, 0.62 );
+// A tree's own two random numbers, from its leaf tint: the stump and the falling top of a snapped tree keep them.
+vec2 barkSeed( vec3 tint ) {
+  return fract( sin( vec2( dot( tint.rg, vec2( 127.1, 311.7 ) ), dot( tint.gb, vec2( 269.5, 183.3 ) ) ) ) * 43758.5453 );
+}
+// Darker barks only a little lighter or darker, warmer or greyer.
+vec3 barkTint( vec3 c, vec2 s ) {
+  vec3 bt = s.x < 0.26 ? vec3( 1.06, 1.06, 1.08 ) : s.x < 0.48 ? vec3( 1.03, 0.96, 0.86 ) : s.x < 0.64 ? vec3( 1.04, 0.8, 0.64 ) : s.x < 0.8 ? vec3( 1.01, 0.88, 0.82 ) : vec3( 0.8, 0.76, 0.7 );
+  vec3 dk = vec3( 1.0 + ( s.y - 0.5 ) * 0.16, 1.0 + ( s.y - 0.5 ) * 0.08, 1.0 - ( s.y - 0.5 ) * 0.06 ) * ( 0.9 + s.x * 0.2 );
   float pale = smoothstep( 0.22, 0.42, dot( c, vec3( 0.3333 ) ) );
-  return mix( vec3( 1.0 ), bt, pale );
+  return mix( dk, bt, pale );
+}
+`;
+
+/**
+ * The bark's fragment work (`barkTex.ts`): wood samples its layer in metres instead of the atlas, fades in its rough partner
+ * by the rough layer's own relief, varies broadly in tone along the stem, and keeps its relief (`tBarkH`, metres per unit in
+ * `tBarkDepth`) for the bump in the normal.
+ */
+const BARK_PARS = /* glsl */ `
+uniform highp sampler2DArray tBark;
+varying vec4 vBark;
+const float BARK_DEPTH[${BARK_DEPTH.length}] = float[]( ${BARK_DEPTH.map((d) => d.toFixed(4)).join(', ')} );
+float barkRoughScale( float l ) {
+  ${[...new Map(Object.values(BARK_ROUGH).map((p) => [p!.layer, p!.scale]))]
+    .map(([l, k]) => `if ( l == ${l.toFixed(1)} ) return ${k.toFixed(1)};`)
+    .join('\n  ')}
+  return 1.0;
+}
+`;
+const BARK_MAP = /* glsl */ `
+float tBarkH = -1.0;
+float tBarkDepth = 0.0;
+// How many bark texels a pixel spans: under one, the layer is magnified and a finer grain fades in.
+float tBarkFine = 1.0 - smoothstep( 0.5, 1.4, length( fwidth( vBark.xy ) ) * ${BARK_SIZE}.0 );
+#ifdef USE_MAP
+if ( vBark.z < -0.5 ) {
+  diffuseColor *= texture2D( map, vMapUv );
+} else {
+  float bl = floor( vBark.z + 0.5 );
+  vec4 bk = texture( tBark, vec3( vBark.xy, bl ) );
+  float bh = bk.a;
+  tBarkDepth = BARK_DEPTH[ int( bl ) ];
+  // Broad changes of tone up the stem: the layer's own relief, far coarser and blurred.
+  vec2 macS = BARK_MAC[ int( bl ) ];
+  float mac = clamp( ( texture( tBark, vec3( vBark.x + 0.37, vBark.y * 0.19 + 0.21, bl ), 4.0 ).a - macS.x ) / ( macS.y * 2.5 ), -1.0, 1.0 );
+  float ra = fract( vBark.w );
+  // The rough foot gives out higher on one side than the other, never in a level ring.
+  ra = ra > 0.004 ? clamp( ra + mac * 0.3, 0.0, 1.0 ) : 0.0;
+  if ( ra > 0.004 ) {
+    // The rough layer outlasts the smooth where it is thickest: its thin edges give out first as it fades up the stem.
+    float rl = floor( vBark.w );
+    vec4 rk = texture( tBark, vec3( vBark.xy * barkRoughScale( rl ), rl ) );
+    float m = smoothstep( -0.05, 0.05, rk.a - ( 1.0 - ra ) );
+    bk.rgb = mix( bk.rgb, rk.rgb, m );
+    bh = mix( bh, 0.45 + rk.a * 0.55, m );
+    tBarkDepth = mix( tBarkDepth, BARK_DEPTH[ int( rl ) ], m );
+  }
+  if ( tBarkFine > 0.01 ) {
+    // Close up, the same bark four times finer over it: grain where the layer alone would go soft.
+    float fine = texture( tBark, vec3( vBark.xy * 4.0 + vec2( 0.31, 0.57 ), bl ) ).a - 0.5;
+    bk.rgb *= 1.0 + fine * 0.18 * tBarkFine;
+    bh += fine * 0.22 * tBarkFine;
+  }
+  diffuseColor.rgb *= bk.rgb * ( 1.0 + 0.1 * mac );
+  tBarkH = bh;
 }
 #endif
+`;
+const BARK_NORMAL = /* glsl */ `
+vec3 tBpx = dFdx( -vViewPosition );
+vec3 tBpy = dFdy( -vViewPosition );
+vec2 tBh = vec2( dFdx( tBarkH ), dFdy( tBarkH ) ) * tBarkDepth;
+if ( tBarkH >= 0.0 ) {
+  // Wood is closed or two-sided: light whichever side faces the camera. Then the bark's relief as a bump (its slope on
+  // screen, no extra fetch), in metres.
+  normal *= faceDirection;
+  vec3 r1 = cross( tBpy, normal );
+  vec3 r2 = cross( normal, tBpx );
+  float det = dot( tBpx, r1 );
+  normal = normalize( abs( det ) * normal - sign( det ) * ( tBh.x * r1 + tBh.y * r2 ) );
+}
 `;
 
 function encode(tint: V3, slot: number, out: THREE.Color) {
@@ -1042,14 +1480,118 @@ void treeWound( inout vec3 col, out float cap ) {
 }
 `;
 
+const glslFloats = (k: 'h' | 'lean' | 'hz' | 'leaf') => `float[${TREE_WIND.length}]( ${TREE_WIND.map((w) => w[k].toFixed(4)).join(', ')} )`;
+
 /**
- * The 3D trees' vertex work: keep only this instance's variant (and, for the colour pass, only near the camera), then sway.
- * Variant indices remove unused models before submission; the guard remains for callers using the complete species geometry.
- * The colour pass also skips trees beyond the cross-fade before lighting. Shadows keep the existing wind and alpha test.
+ * A tree's trunk in the wind, shared by the 3D trees and their impostors so the two halves of the cross-fade agree. At model
+ * height `y`, for species `s` at scale `tS` with its own timing `ph`, in the air `wh` (`windHere`), `W` downwind and `C`
+ * across the wind in the tree's frame: it leans over as the wind presses it (a big tree further, but slower than a small
+ * one), sways about that lean at its own pace and a little across the wind, and bends most toward its top.
+ */
+const TREE_TRUNK_GLSL = /* glsl */ `
+const float TREE_BEND_H[${TREE_WIND.length}] = ${glslFloats('h')};
+const float TREE_LEAN[${TREE_WIND.length}] = ${glslFloats('lean')};
+const float TREE_HZ[${TREE_WIND.length}] = ${glslFloats('hz')};
+const float TREE_LEAF_HZ[${TREE_WIND.length}] = ${glslFloats('leaf')};
+
+vec3 treeTrunk( int s, float y, float tS, float ph, vec4 wh, vec3 W, vec3 C ) {
+  float h = max( y, 0.0 ) / TREE_BEND_H[ s ];
+  float w = TREE_HZ[ s ] * 6.2832 * inversesqrt( tS );
+  float D = windTrunk( wh.z ) * TREE_LEAN[ s ] * pow( tS, -0.3 ) * uWind.w;
+  float o = sin( uTime * w + ph ) * 0.75 + sin( uTime * w * 2.7 + ph * 2.0 ) * 0.25;
+  return ( W * ( 1.0 + 0.45 * o ) + C * 0.3 * sin( uTime * w * 1.13 + ph * 1.7 ) ) * D * h * h;
+}
+`;
+
+/**
+ * A 3D tree's vertex in the wind (`treeWindData` says what each vertex is). Wood and leaves answer the wind by their size:
+ * a leaf stirs in a breath of air, a twig in a breeze, a limb in a wind, the trunk only in a gale.
+ */
+const TREE_SWAY_GLSL = /* glsl */ `
+// The unit axis a leaf grows along (octahedral, 12 bits a side, folded about y).
+vec3 treeLeafAxis( float w ) {
+  float qv = floor( w / 4096.0 );
+  vec2 f = vec2( w - qv * 4096.0, qv ) / 4095.0 * 2.0 - 1.0;
+  vec3 n = vec3( f.x, 1.0 - abs( f.x ) - abs( f.y ), f.y );
+  float t = max( -n.y, 0.0 );
+  n.x += n.x >= 0.0 ? -t : t;
+  n.z += n.z >= 0.0 ? -t : t;
+  return normalize( n );
+}
+
+// p (a vertex in the tree's own frame) moved by the wind; n, its normal, turns with a leaf.
+vec3 treeSway( vec3 p, inout vec3 n ) {
+#ifdef USE_INSTANCING
+  mat3 tM = mat3( instanceMatrix );
+  float tS = length( tM[ 1 ] );
+  mat3 tR = mat3( normalize( tM[ 0 ] ), tM[ 1 ] / tS, normalize( tM[ 2 ] ) );
+  // Only a standing tree sways: a falling top, or a tree down on the ground, is done with the wind.
+  float stand = smoothstep( 0.75, 0.97, tR[ 1 ].y ) * ( aNotch.w > 0.5 ? 0.0 : 1.0 );
+  if ( stand * uWind.w <= 0.0 ) return p;
+  vec3 tO = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
+  vec4 wh = windHere( tO.xz );
+  wh.zw *= stand;
+  vec3 W = transpose( tR ) * vec3( wh.x, 0.0, wh.y );
+  vec3 U = transpose( tR ) * vec3( 0.0, 1.0, 0.0 );
+  vec3 C = cross( U, W );
+  float ph = windSeed( tO.xz );
+  float q = tree.z;
+  float sp = floor( q / 262144.0 );
+  q -= sp * 262144.0;
+  float pl = floor( q / 4096.0 );
+  q -= pl * 4096.0;
+  float p2 = floor( q / 64.0 );
+  float p1 = q - p2 * 64.0;
+  int s = int( sp + 0.5 );
+  float f2 = floor( tree.w / 4096.0 );
+  float f1 = ( tree.w - f2 * 4096.0 ) * 0.001;
+  f2 *= 0.001;
+  vec3 pos = p;
+  // A leaf turns about the point it grows from: pushed round downwind (the more squarely it meets the wind, the more),
+  // fluttering about that, twisting about its own axis, its tip a beat behind its base. Leaves growing alike move alike,
+  // each at the time the angle it grows at gives it, and a gust reaches the near side of the crown before the far.
+  if ( tree.x > 0.0 ) {
+    vec3 hinge = aLeaf.xyz;
+    vec3 ax = treeLeafAxis( aLeaf.w );
+    vec3 rel = p - hinge;
+    float drive = windLeaf( wh.w ) * tree.x * uWind.w;
+    float t = uTime * TREE_LEAF_HZ[ s ] * 6.2832 + pl * 0.0982 - dot( hinge, W ) * 0.25;
+    float lag = length( rel ) * 1.1;
+    float flap = sin( t - lag ) + 0.35 * min( wh.w * 0.1, 1.0 ) * sin( t * 2.63 + pl * 0.17 - lag * 1.6 );
+    float twist = sin( t * 1.37 + pl * 0.23 );
+    vec3 om = ( cross( ax, W ) * ( 0.22 + 0.13 * flap ) + ax * 0.15 * twist + U * 0.05 * flap ) * drive;
+    pos = hinge + windTurn( rel, om );
+    n = windTurn( n, om );
+  }
+  // Limbs and twigs: each swings at its own time (set by the way it grows) about a lean downwind, bobbing as it goes. A twig
+  // rides its limb and a leaf its twig, so whatever grows from a piece moves with it.
+  float bw = TREE_HZ[ s ] * 6.2832 * inversesqrt( tS );
+  float a1 = p1 * 0.0982 + ph;
+  float a2 = p2 * 0.0982 + ph;
+  float o1 = sin( uTime * bw * 2.4 + a1 );
+  float o1b = sin( uTime * bw * 3.1 + a1 * 1.7 + 1.0 );
+  float o2 = sin( uTime * bw * 5.0 + a2 );
+  float o2b = sin( uTime * bw * 6.3 + a2 * 1.9 + 2.0 );
+  float d1 = windLimb( mix( wh.z, wh.w, 0.4 ) ) * f1 * uWind.w;
+  float d2 = windTwig( wh.w ) * f2 * uWind.w;
+  pos += W * ( d1 * ( 0.55 + 0.45 * o1 ) + d2 * ( 0.5 + 0.5 * o2 ) ) + U * ( d1 * 0.35 * o1b + d2 * 0.4 * o2b ) + C * ( d1 * 0.25 * o1b + d2 * 0.3 * o2b );
+  // The trunk carries all of it, keeping its length as it bends.
+  float len = length( pos );
+  vec3 bent = pos + treeTrunk( s, p.y, tS, ph, wh, W, C );
+  return len > 1e-3 ? normalize( bent ) * len : bent;
+#else
+  return p;
+#endif
+}
+`;
+
+/**
+ * The 3D trees' vertex work: keep only this instance's variant (and, for the colour pass, only near the camera), then sway
+ * (`treeSway`, the same in the shadow). Variant indices remove unused models before submission; the guard remains for
+ * callers using the complete species geometry. The colour pass also skips trees beyond the cross-fade before lighting.
  */
 function treeVertex(shader: THREE.WebGLProgramParametersWithUniforms, colour: boolean) {
-  shader.uniforms.uTime = GLOBALS.uTime;
-  shader.uniforms.uWind = WIND.uWind;
+  windUniforms(shader);
   shader.uniforms.uTreeLod = LOD_U.uTreeLod;
   const keep = /* glsl */ `
 #if defined( USE_INSTANCING ) && defined( USE_INSTANCING_COLOR )
@@ -1067,9 +1609,11 @@ function treeVertex(shader: THREE.WebGLProgramParametersWithUniforms, colour: bo
   shader.vertexShader = shader.vertexShader
     .replace(
       '#include <common>',
-      `#include <common>\nattribute vec3 tree;\nuniform float uTime;\nuniform vec4 uWind;\nuniform vec2 uTreeLod;\n${WOUND_V}${colour ? 'varying float vTreeKeep;\nvarying vec3 vTCam;\nvarying vec3 vTCapN;' : ''}`,
+      `#include <common>\nattribute vec4 tree;\nattribute vec4 aLeaf;\nuniform vec2 uTreeLod;\n${WOUND_V}${WIND_GLSL}${TREE_TRUNK_GLSL}${TREE_SWAY_GLSL}${colour ? 'varying float vTreeKeep;\nvarying vec3 vTCam;\nvarying vec3 vTCapN;' : ''}`,
     )
     .replace(colour ? '#include <uv_vertex>' : '#include <project_vertex>', colour ? `${keep}\n#include <uv_vertex>` : `${keep}\n#include <project_vertex>`)
+    // A leaf's normal turns with it, so the light glints and darkens on it as it moves.
+    .replace('#include <beginnormal_vertex>', colour ? '#include <beginnormal_vertex>\nvec3 tSwayed = treeSway( position, objectNormal );' : '#include <beginnormal_vertex>')
     .replace(
       '#include <begin_vertex>',
       /* glsl */ `#include <begin_vertex>
@@ -1090,18 +1634,7 @@ if ( aNotch.w != 0.0 ) {
 #endif`
     : ''
 }
-#if defined( USE_INSTANCING ) && defined( USE_INSTANCING_COLOR )
-{
-  vec3 tO = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
-  float tPh = tO.x * 0.137 + tO.z * 0.091;
-  float tS = sin( uTime * 0.83 + tPh ) * 0.65 + sin( uTime * 1.97 + tPh * 1.3 ) * 0.3;
-  vec3 tW = transpose( mat3( instanceMatrix ) ) * vec3( uWind.x, 0.0, uWind.z );
-  float tY = max( transformed.y, 0.0 );
-  transformed += tW * tS * tY * tY * 0.0016 * uWind.w;
-  float tF = sin( uTime * 4.7 + tree.z * 6.283 + tPh * 5.0 ) * tree.x * uWind.w;
-  transformed += ( normal * 0.05 + vec3( uWind.x, 0.03, uWind.z ) * 0.05 ) * tF;
-}
-#endif`,
+${colour ? 'transformed = tSwayed;' : '{\n  vec3 tN = vec3( 0.0, 1.0, 0.0 );\n  transformed = treeSway( position, tN );\n}'}`,
     );
 }
 
@@ -1114,20 +1647,26 @@ export function treeMaterial(): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({ map: leafAtlas().tex, alphaTest: 0.5, side: THREE.DoubleSide, vertexColors: true, roughness: 0.82, metalness: 0 });
   m.onBeforeCompile = (shader) => {
     treeVertex(shader, true);
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\n${BARK_FN}`);
+    shader.uniforms.tBark = { value: barkTextures() };
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\nattribute vec4 bark;\nvarying vec4 vBark;\n${BARK_FN}`);
+    // Each tree its own bark: tinted, its layer laid from its own place round and up the stem, a gum's patches its own.
     shader.vertexShader = shader.vertexShader.replace(
       '#include <color_vertex>',
-      `#include <color_vertex>\n#ifdef USE_INSTANCING_COLOR\n{\n${DECODE}\nvColor = vec4( color * ( tree.x > 0.0 ? treeTint : barkTint( color ) ), 1.0 );\n}\n#endif`,
+      `#include <color_vertex>\nvBark = bark;\n#ifdef USE_INSTANCING_COLOR\n{\n${DECODE}\nvec2 bS = barkSeed( treeTint );\nvColor = vec4( color * ( bark.z < 0.0 ? treeTint : barkTint( color, bS ) ), 1.0 );\nif ( bark.z >= 0.0 ) {\n  vBark.xy += bS * vec2( 7.0, 13.0 );\n  if ( fract( bark.w ) > 0.0 ) vBark.w = floor( bark.w ) + clamp( fract( bark.w ) + ( fract( bS.x * 5.17 ) - 0.5 ) * 0.4, 0.0, 0.99 );\n  if ( bark.z == ${BARK.gum.toFixed(1)} && fract( bS.y * 7.31 ) > 0.5 ) vBark.z = ${BARK.gum2.toFixed(1)};\n}\n}\n#endif`,
     );
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\nvarying float vTreeKeep;\n${DITHER}\n${WOUND_F}\n${WOUND_COLOUR}`)
+      .replace(
+        '#include <common>',
+        `#include <common>\nvarying float vTreeKeep;\n${DITHER}\n${WOUND_F}\n${WOUND_COLOUR}\n${BARK_PARS}\nconst vec2 BARK_MAC[${barkStats().length}] = vec2[]( ${barkStats().map(([m, d]) => `vec2( ${m.toFixed(4)}, ${d.toFixed(4)} )`).join(', ')} );`,
+      )
+      .replace('#include <map_fragment>', BARK_MAP)
       .replace(
         '#include <alphatest_fragment>',
         '#include <alphatest_fragment>\nif ( treeDither( gl_FragCoord.xy ) >= vTreeKeep ) discard;\nif ( treeCutAway() ) discard;\nfloat tCap = 0.0;\ntreeWound( diffuseColor.rgb, tCap );',
       )
       // Leaf normals were bent round the crown: keep them whichever side of a card faces the camera. A break's face is lit as
       // the plane it is.
-      .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal = normalize( vNormal );\nif ( tCap > 0.5 ) normal = normalize( vTCapN );');
+      .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>\nnormal = normalize( vNormal );\n${BARK_NORMAL}\nif ( tCap > 0.5 ) normal = normalize( vTCapN );`);
   };
   m.customProgramCacheKey = () => 'tree3d';
   return (treeMat = shared(m));
@@ -1154,25 +1693,30 @@ export interface LoadedMask {
 
 function impostorShader(shader: THREE.WebGLProgramParametersWithUniforms, far: LoadedMask | null) {
   shader.uniforms.uTreeLod = LOD_U.uTreeLod;
+  windUniforms(shader);
   if (far) Object.assign(shader.uniforms, far);
+  // Each species' impostor card is its model's height: a card's height share is a height on the model.
+  const impH = `const float TREE_IMP_H[${TREE_SPECIES.length}] = float[${TREE_SPECIES.length}]( ${TREE_SPECIES.map((_, sp) => impostorDims(sp).h.toFixed(4)).join(', ')} );`;
   shader.vertexShader = shader.vertexShader
     .replace(
       '#include <common>',
-      `#include <common>\nattribute vec3 tang;\nvarying vec3 vImpT;\nvarying vec2 vImpUv;\nvarying float vImpKeep;\nuniform vec2 uTreeLod;\n${far ? 'uniform sampler2D tLoaded;\nuniform vec4 uLoadedRect;' : ''}`,
+      `#include <common>\nattribute vec3 tang;\nvarying vec3 vImpT;\nvarying vec2 vImpUv;\nvarying float vImpKeep;\nuniform vec2 uTreeLod;\n${WIND_GLSL}${TREE_TRUNK_GLSL}${impH}\n${far ? 'uniform sampler2D tLoaded;\nuniform vec4 uLoadedRect;\nvarying float vFarCut;' : ''}`,
     )
     .replace('#include <color_vertex>', `#include <color_vertex>\n#ifdef USE_INSTANCING_COLOR\n{\n${DECODE}\nvColor = vec4( treeTint, 1.0 );\n}\n#endif`)
     .replace(
       '#include <begin_vertex>',
       /* glsl */ `#include <begin_vertex>
+${far ? 'vFarCut = 0.0;' : ''}
 #if defined( USE_INSTANCING ) && defined( USE_INSTANCING_COLOR )
 {
   ${DECODE}
   vec3 iO = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
   ${
     far
-      ? `// Inside a loaded chunk the chunk draws its own trees.
+      ? `// Inside a loaded chunk the chunk draws its own trees: this one dissolves out as they dissolve in (dissolve.ts).
   vec2 iLc = ( iO.xz - uLoadedRect.xy ) / uLoadedRect.zw;
-  float iKeep = ( iLc.x >= 0.0 && iLc.y >= 0.0 && iLc.x < 1.0 && iLc.y < 1.0 && texture2D( tLoaded, iLc ).r > 0.5 ) ? 0.0 : 1.0;`
+  vFarCut = ( iLc.x >= 0.0 && iLc.y >= 0.0 && iLc.x < 1.0 && iLc.y < 1.0 ) ? texture2D( tLoaded, iLc ).r : 0.0;
+  float iKeep = vFarCut >= 1.0 ? 0.0 : 1.0;`
       : 'float iKeep = smoothstep( uTreeLod.x, uTreeLod.y, distance( iO.xz, cameraPosition.xz ) );'
   }
   if ( iKeep <= 0.0 ) {
@@ -1185,12 +1729,26 @@ function impostorShader(shader: THREE.WebGLProgramParametersWithUniforms, far: L
     vMapUv = ( vec2( mod( treeSlot, ${LEAF_ATLAS.cols.toFixed(1)} ), floor( treeSlot / ${LEAF_ATLAS.cols.toFixed(1)} + 0.001 ) ) + uv ) * vec2( ${(1 / LEAF_ATLAS.cols).toFixed(6)}, ${(1 / LEAF_ATLAS.rows).toFixed(6)} );
   #endif
   vImpT = normalize( mat3( modelViewMatrix ) * ( mat3( instanceMatrix ) * tang ) );
+  {
+    // The far tree's trunk sways as its 3D self's does (same air, same timing), so the cross-fade between them never shows.
+    int s = int( treeSlot + 0.5 );
+    mat3 iM = mat3( instanceMatrix );
+    vec3 iSc = vec3( length( iM[ 0 ] ), length( iM[ 1 ] ), length( iM[ 2 ] ) );
+    mat3 iR = mat3( iM[ 0 ] / iSc.x, iM[ 1 ] / iSc.y, iM[ 2 ] / iSc.z );
+    float tS = iSc.y / TREE_IMP_H[ s ];
+    vec4 wh = windHere( iO.xz );
+    vec3 W = transpose( iR ) * vec3( wh.x, 0.0, wh.y );
+    vec3 C = cross( vec3( 0.0, 1.0, 0.0 ), W );
+    transformed += treeTrunk( s, transformed.y * TREE_IMP_H[ s ], tS, windSeed( iO.xz ), wh, W, C ) * tS / iSc;
+  }
 }
 #endif`,
     );
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <common>', `#include <common>\nvarying vec3 vImpT;\nvarying vec2 vImpUv;\nvarying float vImpKeep;\n${DITHER}`)
     .replace('#include <alphatest_fragment>', '#include <alphatest_fragment>\nif ( treeDither( gl_FragCoord.xy ) < 1.0 - vImpKeep ) discard;')
+    .replace('#include <clipping_planes_fragment>', far ? FAR_CUT_FRAG : '#include <clipping_planes_fragment>')
+    .replace('#include <common>', far ? `#include <common>\n${FAR_CUT_FRAG_PARS}` : '#include <common>')
     .replace(
       '#include <normal_fragment_begin>',
       /* glsl */ `#include <normal_fragment_begin>

@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { clamp, clamp01, smoothstep, TAU } from '../core/math';
-import { FUELS, fireLight, flameHeight, flameLean, flicker, rainCooling, spreadRate, stepHeat, waterFate, windFeed, type Fuel } from '../sim/combustion';
+import { FUELS, fireLight, flameHeight, flameLean, flameWind, flicker, heatRelease, plumeInflow, plumeRise, rainCooling, spreadRate, stepHeat, waterFate, windFeed, type Fuel } from '../sim/combustion';
 import { fireDanger } from '../sim/climate';
+import { TUNING } from '../sim/tuning';
 import { FLAME_KIND, FireView } from '../render/fireRender';
-import { FIRE_HAZE, FIRE_MAX, HAZE_MAX, clearFireLights, setFireLights, type FireLightIn } from '../render/fireLight';
+import { FIRE_HAZE, FIRE_MAX, HAZE_MAX, aimFireShadow, clearFireLights, keepFireShadow, setFireLights, setFireShadowSize, type FireLightIn } from '../render/fireLight';
 import { CELL as DECAL, Decals } from '../render/decals';
 import { catchChance } from './wildfire';
 import type { Scene } from './scene';
@@ -56,6 +57,11 @@ export interface FireOpts {
   /** How fast it moves through the air (m/s, x and z): its flames stream back as they would in a headwind. */
   vx?: number;
   vz?: number;
+  /**
+   * Casts shadows when it is the fire nearest a view. A fire on open ground does by default; one burning on a car, a body or
+   * up a tree does not: its light sits inside what holds it, which would shadow everything round.
+   */
+  shadow?: boolean;
 }
 
 /** One patch of ground on the burning grid. */
@@ -66,7 +72,13 @@ interface GroundCell {
   src: FireSource | null;
   burnt: boolean;
   charred: boolean;
-  t: number;
+  /** How far the flames beside it have heated it toward catching, 0..1, and how fast they heat it this pass. */
+  heatUp: number;
+  pull: number;
+  /** Who lit the patch heating it fastest. */
+  by: number;
+  /** How readily this patch takes, about 1: the grass is never even, so the front stays ragged. */
+  vary: number;
 }
 
 export class FireSource {
@@ -90,6 +102,7 @@ export class FireSource {
   owner: number;
   vx = 0;
   vz = 0;
+  shadow: boolean;
   readonly seed = Math.random();
   held = false;
   heldT = 0;
@@ -131,6 +144,7 @@ export class FireSource {
     this.owner = o.owner ?? -1;
     this.vx = o.vx ?? 0;
     this.vz = o.vz ?? 0;
+    this.shadow = o.shadow ?? (this.shape !== 'crown' && this.fuel !== 'rubber' && this.fuel !== 'flesh');
   }
 
   /** Height of the flames now. */
@@ -159,6 +173,16 @@ interface Cand extends FireLightIn {
   wx: number;
   wy: number;
   wz: number;
+  /** How much of its raw power comes from fires that may cast shadows. */
+  shade: number;
+}
+
+/** The rising air over the fires of one stretch of ground: where, how much heat (kW), how wide. */
+interface Plume {
+  x: number;
+  z: number;
+  q: number;
+  r: number;
 }
 
 /** Side of a cell of the burning-ground grid, metres. */
@@ -167,19 +191,28 @@ export const GROUND_CELL = 2.5;
 const MAX_GROUND = 300;
 /** A fire this far from every camera is not drawn. */
 const DRAW_FAR = 1100;
-const NEIGH: [number, number, number][] = [
-  [1, 0, 1],
-  [-1, 0, 1],
-  [0, 1, 1],
-  [0, -1, 1],
-  [1, 1, 0.7],
-  [1, -1, 0.7],
-  [-1, 1, 0.7],
-  [-1, -1, 0.7],
+/**
+ * Shadows from the nearest fire: only within this of the camera, out to this far from the fire, redrawn every so many
+ * frames while it is the same fire, at this size a cube face.
+ */
+const SHADOW_NEAR = 45;
+const SHADOW_REACH = 32;
+const SHADOW_EVERY = 2;
+const SHADOW_SIZE: Record<string, number> = { low: 0, medium: 256, high: 512 };
+const NEIGH: [number, number][] = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1],
 ];
 const STILL: [number, number] = [0, 0];
 
 const _v = new THREE.Vector3();
+const _iw: [number, number] = [0, 0];
 const _t = new THREE.Vector3();
 
 function cellKey(ix: number, iz: number): number {
@@ -209,6 +242,13 @@ export class FireEngine {
   treesNear: (x: number, z: number, r: number) => import('../world/flora').TreeSpot[] = () => [];
   /** Wind (m/s, x and z) and how ready the land is to burn, this tick. */
   wind: [number, number] = [0, 0];
+  /** The plumes over the fires, merged by stretch of ground, a few times a second: the wind the fires make. */
+  private plumes: Plume[] = [];
+  private plumeAt = new Map<number, number>();
+  private plumeT = 0;
+  /** Seconds since the burning ground last heated its neighbours, and the patches it heats this pass. */
+  private groundT = 0;
+  private pulled: GroundCell[] = [];
   danger = 0;
   /** How thick the air is for the glow round the fires, this frame (1/m). */
   haze = 0.004;
@@ -216,6 +256,9 @@ export class FireEngine {
   private dim = 1;
   /** Firelight falling on the eye, eased the way an eye adapts. */
   private eye = 0;
+  /** Frames laid out, and where (and in which frame) the shadow cube was last drawn: both halves of a split screen share it. */
+  private frameNo = 0;
+  private shadowAt = { frame: -1, x: 0, y: 0, z: 0, far: 0 };
 
   constructor(private sc: Scene) {
     sc.root.add(this.view.group);
@@ -256,6 +299,7 @@ export class FireEngine {
     if (o.fuel) f.fuel = o.fuel;
     if (o.light !== undefined) f.light = o.light;
     if (o.spreads !== undefined) f.spreads = o.spreads;
+    if (o.shadow !== undefined) f.shadow = o.shadow;
     f.vx = o.vx ?? 0;
     f.vz = o.vz ?? 0;
     f.want = clamp01(o.heat);
@@ -311,7 +355,7 @@ export class FireEngine {
     let c = this.cells.get(k);
     if (!c) {
       const fuel = this.fuelAt((ix + 0.5) * GROUND_CELL, (iz + 0.5) * GROUND_CELL);
-      c = { ix, iz, fuel, src: null, burnt: false, charred: false, t: Math.random() * 0.3 };
+      c = { ix, iz, fuel, src: null, burnt: false, charred: false, heatUp: 0, pull: 0, by: -1, vary: 0.7 + 0.6 * Math.random() };
       this.cells.set(k, c);
     }
     return c;
@@ -366,13 +410,24 @@ export class FireEngine {
     this.burningCells.push(c);
   }
 
+  /**
+   * The burning ground: patches burn out and go black, and heat their unburnt neighbours until they catch. A patch heats at
+   * the pace of the fastest edge reaching it (`spreadRate`, the speed of real grassland fire over the distance), so the
+   * front moves at that speed, not faster for having many burning patches behind it.
+   */
   private tickGround(dt: number) {
     const danger = this.danger;
     const [wx, wz] = this.wind;
+    const wl = Math.hypot(wx, wz);
+    this.groundT += dt;
+    const pass = this.groundT >= 0.25;
+    const step = this.groundT;
+    if (pass) this.groundT = 0;
+    const pulled = this.pulled;
+    pulled.length = 0;
     for (let i = this.burningCells.length - 1; i >= 0; i--) {
       const c = this.burningCells[i];
       const f = c.src!;
-      // Black ground goes down under the bed as the flames pass their height.
       // Once the flames have passed their height the grass is gone and the ground under it black, though it smoulders on.
       if (!c.charred && (f.out || (f.age > 4 && f.heat < 0.55 && f.burn < FUELS.grass.life * 0.5))) {
         c.charred = true;
@@ -385,22 +440,28 @@ export class FireEngine {
         this.burningCells.splice(i, 1);
         continue;
       }
-      c.t -= dt;
-      if (c.t > 0 || f.heat < 0.25 || danger < 0.03) continue;
-      const step = 0.3 + Math.random() * 0.05;
-      c.t = step;
-      for (const [dx, dz, k] of NEIGH) {
-        if (this.burningCells.length >= MAX_GROUND) break;
+      if (!pass || f.heat < 0.25 || danger < 0.03) continue;
+      for (const [dx, dz] of NEIGH) {
         const n = this.cellAt(c.ix + dx, c.iz + dz);
         if (n.src || n.burnt || n.fuel < 0.04) continue;
-        const along = (dx * wx + dz * wz) / Math.hypot(dx, dz);
-        if (Math.random() < spreadRate(f.heat, n.fuel, danger, along) * k * step) this.lightCell(n, f.owner);
+        const d = Math.hypot(dx, dz);
+        const cos = wl > 1e-3 ? (dx * wx + dz * wz) / (d * wl) : 0;
+        const rate = spreadRate(f.heat, n.fuel, danger, wl, cos, d * GROUND_CELL) * TUNING.fire;
+        if (rate <= n.pull) continue;
+        if (n.pull === 0) pulled.push(n);
+        n.pull = rate;
+        n.by = f.owner;
       }
       // Into the trees standing in it.
       if (f.heat > 0.55 && Math.random() < 0.25) {
         const wf = this.sc.weather.fire;
         for (const t of this.treesNear(f.x, f.z, 3.2)) wf.ignite(t, catchChance(danger, true) * 0.6);
       }
+    }
+    for (const n of pulled) {
+      n.heatUp += n.pull * step * n.vary;
+      n.pull = 0;
+      if (n.heatUp >= 1 && this.burningCells.length < MAX_GROUND) this.lightCell(n, n.by);
     }
   }
 
@@ -424,6 +485,11 @@ export class FireEngine {
     // Dew settles at night and a grass fire slows to a creep; it runs again in the heat of the day.
     this.danger = outdoors && sc.mode === 'leg' ? fireDanger(w.wet, w.rain, sc.heat) * (1 - 0.4 * sc.night) : 0;
     const wl = Math.hypot(this.wind[0], this.wind[1]);
+    this.plumeT -= dt;
+    if (this.plumeT <= 0) {
+      this.plumeT = 0.2;
+      this.gatherPlumes();
+    }
     // Smoke and embers share the particle pools with everything else: a big fire thins its own out.
     const load = clamp(70 / Math.max(1, this.sources.length), 0.18, 1);
     for (let i = this.sources.length - 1; i >= 0; i--) {
@@ -492,6 +558,65 @@ export class FireEngine {
     }
   }
 
+  /** Merge the fires burning into plumes, one per stretch of ground (7 m), for the wind they draw. */
+  private gatherPlumes() {
+    const P = this.plumes;
+    const at = this.plumeAt;
+    P.length = 0;
+    at.clear();
+    for (const f of this.sources) {
+      const heat = f.heat * (1 - f.drowned);
+      if (heat < 0.05) continue;
+      const q = heatRelease(f.fuel, f.r, heat, f.shape === 'crown');
+      if (q < 20) continue;
+      const key = cellKey(Math.floor(f.x / 7), Math.floor(f.z / 7));
+      const i = at.get(key);
+      if (i === undefined) {
+        at.set(key, P.length);
+        P.push({ x: f.x, z: f.z, q, r: f.r });
+        continue;
+      }
+      const p = P[i];
+      const qq = p.q + q;
+      p.x = (p.x * p.q + f.x * q) / qq;
+      p.z = (p.z * p.q + f.z * q) / qq;
+      p.r = Math.max(p.r, f.r, Math.sqrt(p.r * p.r + f.r * f.r));
+      p.q = qq;
+    }
+  }
+
+  /**
+   * The wind the fires make at a point near the ground, m/s (x and z): air drawn in toward every plume round it. Nothing
+   * to speak of by a campfire; toward a big grass fire, a metre or two a second.
+   */
+  inducedWind(x: number, z: number, out: [number, number] = [0, 0]): [number, number] {
+    let ix = 0;
+    let iz = 0;
+    for (const p of this.plumes) {
+      const dx = p.x - x;
+      const dz = p.z - z;
+      const d = Math.hypot(dx, dz);
+      if (d < 1e-3 || d > 120) continue;
+      const u = plumeInflow(p.q, d, p.r);
+      ix += (dx / d) * u;
+      iz += (dz / d) * u;
+    }
+    // However many fires pull, the inflow stays within what a big fire front really draws.
+    const m = Math.hypot(ix, iz);
+    const k = m > 8 ? 8 / m : 1;
+    out[0] = ix * k;
+    out[1] = iz * k;
+    return out;
+  }
+
+  /** The wind near the ground at a point: the weather's, plus what the fires draw. */
+  windAt(x: number, z: number, out: [number, number] = [0, 0]): [number, number] {
+    this.inducedWind(x, z, out);
+    out[0] += this.wind[0];
+    out[1] += this.wind[1];
+    return out;
+  }
+
   private drop(i: number) {
     const f = this.sources[i];
     this.sources.splice(i, 1);
@@ -544,8 +669,11 @@ export class FireEngine {
     const crown = f.shape === 'crown';
     const area = crown ? Math.PI * f.r * f.r * 0.6 : Math.PI * Math.max(0.05, f.r * f.r);
     const size = Math.pow(Math.min(area, 40), 0.75);
-    const [wx, wz] = this.wind;
-    const [lx, lz] = flameLean(wx, wz, H);
+    // The weather's wind and the air the fires draw in; the smoke leaves at the plume's own updraft.
+    const [wx, wz] = this.windAt(f.x, f.z, _iw);
+    const [gx, gz] = flameWind(this.wind[0], this.wind[1], H);
+    const [lx, lz] = flameLean(gx + wx - this.wind[0], gz + wz - this.wind[1], H);
+    const rise = plumeRise(heatRelease(f.fuel, f.r, f.heat, crown));
     const baseY = crown ? f.y + (f.top - f.y) * 0.75 : f.y;
     f.smokeAcc += dt * spec.smokeRate * f.smoke * f.heat * (1 + size * 0.8) * load;
     let n = 0;
@@ -556,7 +684,7 @@ export class FireEngine {
       const y = crown ? f.top - 0.5 : f.y + H * 0.85;
       const s0 = 0.3 + f.r * 0.45 + H * 0.12;
       const g = 0.9 + Math.random() * 0.2;
-      fx.smoke.emit(f.x + Math.cos(a) * rr + lx * H * 0.7, y, f.z + Math.sin(a) * rr + lz * H * 0.7, wx * 0.55 + (Math.random() - 0.5) * 0.4, 0.9 + f.heat * 1.4 + Math.sqrt(H) * 0.5, wz * 0.55 + (Math.random() - 0.5) * 0.4, 4.2 + Math.random() * 2.6 + H * 0.25, s0, s0 * 2.6 + 1.8 + f.r * 1.2, spec.smoke[0] * g, spec.smoke[1] * g, spec.smoke[2] * g, spec.smokeAlpha, -0.28, 0.16);
+      fx.smoke.emit(f.x + Math.cos(a) * rr + lx * H * 0.7, y, f.z + Math.sin(a) * rr + lz * H * 0.7, wx * 0.55 + (Math.random() - 0.5) * 0.4, rise * (0.8 + 0.4 * Math.random()), wz * 0.55 + (Math.random() - 0.5) * 0.4, 4.2 + Math.random() * 2.6 + H * 0.25, s0, s0 * 2.6 + 1.8 + f.r * 1.2, spec.smoke[0] * g, spec.smoke[1] * g, spec.smoke[2] * g, spec.smokeAlpha, -0.28, 0.16);
     }
     if (n >= 4) f.smokeAcc = 0;
     f.emberAcc += dt * spec.embers * f.heat * (0.5 + size * 0.6) * (1 + Math.hypot(wx, wz) * 0.05) * load;
@@ -567,7 +695,7 @@ export class FireEngine {
       const rr = Math.sqrt(Math.random()) * f.r * 0.7;
       const y = crown ? baseY + (f.top - baseY) * Math.random() : f.y + H * (0.2 + 0.5 * Math.random());
       const hot = 0.55 + Math.random() * 0.45;
-      fx.glow.emit(f.x + Math.cos(a) * rr, y, f.z + Math.sin(a) * rr, wx * 0.4 + (Math.random() - 0.5) * 1.4, 1.4 + Math.random() * 2.6 + f.heat * 1.4, wz * 0.4 + (Math.random() - 0.5) * 1.4, 1.1 + Math.random() * 2.2, 0.045 + Math.random() * 0.05, 0.012, 3.2 * hot, 1.15 * hot, 0.22 * hot, 1, -0.35, 0.55);
+      fx.glow.emit(f.x + Math.cos(a) * rr, y, f.z + Math.sin(a) * rr, wx * 0.4 + (Math.random() - 0.5) * 1.4, rise * (0.6 + 0.9 * Math.random()) + 0.6, wz * 0.4 + (Math.random() - 0.5) * 1.4, 1.1 + Math.random() * 2.2, 0.045 + Math.random() * 0.05, 0.012, 3.2 * hot, 1.15 * hot, 0.22 * hot, 1, -0.35, 0.55);
     }
     if (n >= 6) f.emberAcc = 0;
     // Wood pops.
@@ -617,6 +745,7 @@ export class FireEngine {
     const t = sc.time;
     const view = this.view;
     view.begin();
+    this.frameNo++;
     this.nCand = 0;
     this.clusterIdx.clear();
     const cams = this.cameras();
@@ -633,7 +762,7 @@ export class FireEngine {
     for (const fl of this.flashes) {
       const k = Math.exp(-fl.t / (fl.life * 0.35)) * (1 - fl.t / fl.life);
       const p = fl.power * k;
-      if (p > 0.5) this.addCand(fl.x, fl.y, fl.z, 0.8, fl.r * p, fl.g * p, fl.b * p, p, this.nearCam(cams, fl.x, fl.z));
+      if (p > 0.5) this.addCand(fl.x, fl.y, fl.z, 0.8, fl.r * p, fl.g * p, fl.b * p, p, this.nearCam(cams, fl.x, fl.z), false);
     }
     view.end();
     this.char.time = sc.time;
@@ -677,17 +806,22 @@ export class FireEngine {
     const spec = FUELS[f.fuel];
     const kind = FLAME_KIND[spec.look];
     const H = flameHeight(f.fuel, f.r, heat);
-    // Gusts come and go: the lean swings with them.
-    const gust = 1 + 0.3 * Math.sin(t * 0.63 + f.seed * 40) * Math.sin(t * 1.37 + f.seed * 13);
-    // The air it burns in moves past it with the wind, and against it as it moves.
-    const wx = this.wind[0] - f.vx;
-    const wz = this.wind[1] - f.vz;
+    // Gusts come and go: the lean swings slowly with them.
+    const gust = 1 + 0.2 * Math.sin(t * 0.41 + f.seed * 40) * Math.sin(t * 0.97 + f.seed * 13);
+    // The air it burns in moves past it with the wind (slower down at the flame than up in the open), and against it as
+    // it moves.
+    // Air the fires round about draw past it, at the ground already: a fire beside a bigger one leans in toward it.
+    const [ix, iz] = this.inducedWind(f.x, f.z, _iw);
+    const lean = (h: number) => {
+      const [gx, gz] = flameWind(this.wind[0] * gust, this.wind[1] * gust, h);
+      return flameLean(gx + ix - f.vx, gz + iz - f.vz, h);
+    };
     const alpha = clamp01(heat * 4);
     // Far away a fire is a few big flames; close up, many.
     const detail = dist > 250 ? 0.4 : dist > 90 ? 0.7 : 1;
     if (f.shape === 'crown') {
       const h = f.top - f.y;
-      const [lx, lz] = flameLean(wx * gust, wz * gust, h * 0.4);
+      const [lx, lz] = lean(h * 0.4);
       const climb = Math.min(1, 0.25 + heat * 1.1);
       const n = Math.max(4, Math.round((6 + heat * 18) * detail));
       for (let k = 0; k < n && view.flameRoom > 0; k++) {
@@ -697,13 +831,13 @@ export class FireEngine {
         const y = f.y + h * (0.08 + 0.85 * up);
         const rr = (0.15 + up * 0.85) * f.r * Math.sqrt(hashK(f.seed + 0.71, k)) * Math.min(1, heat * 1.6);
         const a = k * 2.39996 + f.seed * 31;
-        const life = 0.5 + 0.5 * Math.sin(t * (0.6 + hk * 0.8) + hk * 50);
+        const life = 0.5 + 0.5 * Math.sin(t * (0.1 + hk * 0.12) + hk * 50);
         const th = Math.min(h * 0.55, (1.2 + 3.8 * heat) * (0.55 + 0.6 * hk) * (0.75 + 0.35 * life) * (0.6 + 0.4 * h / 10));
         view.flame({ x: f.x + Math.cos(a) * rr, y, z: f.z + Math.sin(a) * rr, seed: hk * 97 + k * 0.13, w: th * 0.62, h: th, heat: heat * (0.8 + 0.2 * life), kind, lx, lz, flick: spec.flick, alpha: alpha * (0.7 + 0.3 * life) });
       }
       return;
     }
-    const [lx, lz] = flameLean(wx * gust, wz * gust, H);
+    const [lx, lz] = lean(H);
     const point = f.shape === 'point';
     const grass = f.cell !== null;
     // A dying patch of grass is embers with the odd flame, not a carpet of little ones.
@@ -714,11 +848,12 @@ export class FireEngine {
       const rr = point ? 0 : f.r * 0.78 * Math.sqrt(u) * (0.8 + 0.4 * hashK(f.seed + 0.5, k));
       const a = k * 2.39996 + f.seed * 31;
       // Each tongue lives its own life: grows, shrinks, comes back.
-      const life = 0.5 + 0.5 * Math.sin(t * (0.7 + hk * 0.9) + hk * 60);
+      const life = 0.5 + 0.5 * Math.sin(t * (0.12 + hk * 0.14) + hk * 60);
       const centre = 1 - 0.5 * (rr / Math.max(f.r, 0.01));
       const th = H * centre * (0.7 + 0.45 * hk) * (0.72 + 0.38 * life);
       const tw = point ? Math.max(0.08, f.r * 2.2) : Math.min(th * 0.72, f.r * 1.4 + 0.15) * (0.8 + 0.4 * hashK(f.seed + 0.9, k));
-      view.flame({ x: f.x + Math.cos(a) * rr, y: f.y - 0.04, z: f.z + Math.sin(a) * rr, seed: hk * 97 + k * 0.13, w: tw, h: th, heat: heat * (0.82 + 0.18 * life), kind, lx, lz, flick: spec.flick, alpha: alpha * (0.8 + 0.2 * life) });
+      // The tongues in the middle burn hottest; the ones round the edge, fed less, cooler and redder.
+      view.flame({ x: f.x + Math.cos(a) * rr, y: f.y - 0.04, z: f.z + Math.sin(a) * rr, seed: hk * 97 + k * 0.13, w: tw, h: th, heat: heat * (0.62 + 0.38 * centre) * (0.86 + 0.14 * life), kind, lx, lz, flick: spec.flick, alpha: alpha * (0.8 + 0.2 * life) });
     }
     if (f.bed && dist < 400) view.bed(f.x, f.y, f.z, f.r * 1.12, f.nx, f.ny, f.nz, Math.max(f.char, 0.4), heat, f.seed * 13, kind);
   }
@@ -732,18 +867,21 @@ export class FireEngine {
     const L = fireLight(f.fuel, crown ? f.r * 0.8 : f.r, heat, fl * f.light);
     if (L.power < 0.3) return;
     const H = crown ? (f.top - f.y) * 0.6 : flameHeight(f.fuel, f.r, heat);
-    const [lx, lz] = flameLean(this.wind[0] - f.vx, this.wind[1] - f.vz, Math.max(H, 0.3));
+    const [gx, gz] = flameWind(this.wind[0], this.wind[1], Math.max(H, 0.3));
+    const [lx, lz] = flameLean(gx - f.vx, gz - f.vz, Math.max(H, 0.3));
     // The light's centre wanders with the flames, so the shadows they throw move.
     const j = 0.12 * f.r * spec.flick;
-    const x = f.x + lx * H * 0.3 + j * Math.sin(t * 7.3 + f.seed * 50);
-    const z = f.z + lz * H * 0.3 + j * Math.sin(t * 6.1 + f.seed * 70);
+    const x = f.x + lx * H * 0.3 + j * Math.sin(t * 0.48 + f.seed * 50);
+    const z = f.z + lz * H * 0.3 + j * Math.sin(t * 0.38 + f.seed * 70);
     const y = crown ? f.y + (f.top - f.y) * 0.55 : f.y + Math.max(0.25, H * 0.42);
     const k = this.dim;
-    // The glowing body is the whole flame, not a point: close by, the light falls off as from something that size.
-    this.addCand(x, y, z, Math.max(0.3, crown ? f.r * 0.7 : f.r * 0.6 + H * 0.45), L.r * k, L.g * k, L.b * k, L.power * k, dist);
+    // The glowing body is the whole flame, not a point: close by, the light falls off as from something that size. A fire
+    // being carried along (a molotov in the air) throws no shadow: its cube would be redrawn from somewhere new every frame.
+    const shade = f.shadow && Math.abs(f.vx) + Math.abs(f.vz) < 0.5;
+    this.addCand(x, y, z, Math.max(0.3, crown ? f.r * 0.7 : f.r * 0.6 + H * 0.45), L.r * k, L.g * k, L.b * k, L.power * k, dist, shade);
   }
 
-  private addCand(x: number, y: number, z: number, r: number, cr: number, cg: number, cb: number, power: number, dist: number) {
+  private addCand(x: number, y: number, z: number, r: number, cr: number, cg: number, cb: number, power: number, dist: number, shade: boolean) {
     // Near fires keep their own lights a few metres apart; far ones are lumped coarsely.
     const cs = dist < 110 ? 7 : 40;
     const key = cellKey(Math.floor(x / cs), Math.floor(z / cs)) + (cs === 7 ? 0 : 0.5);
@@ -758,6 +896,7 @@ export class FireEngine {
       // Many fires crowded together light their surroundings less than their sum: they shade each other, and the eye
       // takes in a wall of flame as bright, not as a hundred campfires.
       const raw = c.raw + power;
+      if (shade) c.shade += power;
       // The summed colour stands for the cluster's old power plus this flame's; scale it to the compressed total.
       const k = raw / (1 + raw / 900) / Math.max(1e-6, c.power + power);
       c.cr = (c.cr + cr) * k;
@@ -773,7 +912,7 @@ export class FireEngine {
     }
     let c = this.cands[this.nCand];
     if (!c) {
-      c = { x: 0, y: 0, z: 0, r: 1, cr: 0, cg: 0, cb: 0, range: 1, power: 0, raw: 0, wx: 0, wy: 0, wz: 0 };
+      c = { x: 0, y: 0, z: 0, r: 1, cr: 0, cg: 0, cb: 0, range: 1, power: 0, raw: 0, wx: 0, wy: 0, wz: 0, shade: 0 };
       this.cands.push(c);
     }
     c.x = c.wx = x;
@@ -785,6 +924,7 @@ export class FireEngine {
     c.cb = cb;
     c.power = power;
     c.raw = power;
+    c.shade = shade ? power : 0;
     c.range = clamp(Math.sqrt(power / 0.025), 4, 120);
     this.clusterIdx.set(key, this.nCand++);
   }
@@ -824,6 +964,36 @@ export class FireEngine {
     }
     const m = Math.min(FIRE_MAX, order.length);
     const next = order.length > FIRE_MAX ? scores[FIRE_MAX] : 0;
+    // The best-lit fire near the camera that stands on its own ground casts shadows: it goes first in the list, where the
+    // light loop looks for it. The fire already casting keeps them until another outshines it twice over (more than
+    // flicker alone ever does), so two fires alike do not trade them back and forth, and both halves of a split screen
+    // tend to share one. They deepen as night falls (by day the sun swamps firelight) and fade with distance: never a pop.
+    const size = SHADOW_SIZE[this.sc.R.quality] ?? 0;
+    let sh = -1;
+    let strength = 0;
+    const dusk = smoothstep(0.2, 0.4, this.dim);
+    if (size > 0 && dusk > 0) {
+      const at = this.shadowAt;
+      let best = -1;
+      let held = -1;
+      for (let k = 0; k < m; k++) {
+        const c = this.cands[order[k]];
+        if (c.shade < 0.5 * c.raw) continue;
+        if ((c.x - p.x) ** 2 + (c.y - p.y) ** 2 + (c.z - p.z) ** 2 > SHADOW_NEAR * SHADOW_NEAR) continue;
+        if (best < 0) best = k;
+        if (held < 0 && Math.abs(c.x - at.x) + Math.abs(c.y - at.y) + Math.abs(c.z - at.z) < 1.5) held = k;
+      }
+      sh = held >= 0 && scores[held] >= 0.5 * scores[best] ? held : best;
+      if (sh >= 0) {
+        const c = this.cands[order[sh]];
+        strength = dusk * (1 - smoothstep(SHADOW_NEAR - 10, SHADOW_NEAR, Math.hypot(c.x - p.x, c.y - p.y, c.z - p.z)));
+        if (strength <= 0.01) sh = -1;
+      }
+    }
+    if (sh > 0) {
+      [order[0], order[sh]] = [order[sh], order[0]];
+      [scores[0], scores[sh]] = [scores[sh], scores[0]];
+    }
     for (let k = 0; k < m; k++) {
       const c = this.cands[order[k]];
       const w = next > 0 ? clamp01((scores[k] - next) / (0.35 * scores[k])) : 1;
@@ -838,6 +1008,28 @@ export class FireEngine {
       o.range = c.range;
     }
     setFireLights(this.picks, m, this.haze);
+    if (sh < 0) {
+      keepFireShadow(0);
+      return;
+    }
+    // Its cube. Shadows move with whoever casts them, but every other frame is enough to follow someone walking past a fire,
+    // and both halves of a split screen looking at the same fire share one drawing. The flames' wander moves the light less
+    // than the cube can show between drawings.
+    setFireShadowSize(size);
+    const c = this.cands[order[0]];
+    const far = clamp(c.range, 6, SHADOW_REACH);
+    const at = this.shadowAt;
+    const same = Math.abs(at.x - c.x) + Math.abs(at.y - c.y) + Math.abs(at.z - c.z) < 0.5 && Math.abs(at.far - far) < 0.5;
+    if (same && this.frameNo - at.frame < SHADOW_EVERY) {
+      keepFireShadow(strength);
+      return;
+    }
+    at.frame = this.frameNo;
+    at.x = c.x;
+    at.y = c.y;
+    at.z = c.z;
+    at.far = far;
+    aimFireShadow(c.x, c.y, c.z, far, strength);
   };
 
   /**
@@ -849,6 +1041,8 @@ export class FireEngine {
     FIRE_HAZE.fill(0, base, base + HAZE_MAX * 8);
     if (!this.sources.length || !(cam as THREE.PerspectiveCamera).isPerspectiveCamera) return;
     const P = cam.projectionMatrix.elements;
+    // A view with no size (the window shrunk to nothing) has no projection: a NaN here would fail the composite's upload.
+    if (!Number.isFinite(P[0]) || !Number.isFinite(P[5])) return;
     const best = this.hazeBest;
     best.length = 0;
     for (const f of this.sources) {
@@ -956,7 +1150,7 @@ export class FireEngine {
       const ix = Math.floor(k / 65536) - 32768;
       const iz = (k % 65536) - 32768;
       if (this.cells.get(k)?.burnt) continue;
-      this.cells.set(k, { ix, iz, fuel: 0, src: null, burnt: true, charred: true, t: 0 });
+      this.cells.set(k, { ix, iz, fuel: 0, src: null, burnt: true, charred: true, heatUp: 0, pull: 0, by: -1, vary: 1 });
       this.scorch((ix + 0.5) * GROUND_CELL, (iz + 0.5) * GROUND_CELL, GROUND_CELL * 0.85);
     }
   }

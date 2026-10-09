@@ -105,6 +105,67 @@ function clamp(w: WB, y: number, z: number, len: number, wide = 0.024) {
   if (w.hi) w.turnAlong('mod.bolt', [[0, 0], [0.003, 0], [0.003, 1], [0, 1]], [wide / 2, y + 0.004, z], [wide / 2 + 0.003, y + 0.004, z], steel, 8);
 }
 
+/** A magazine add-on below the well (or on the end of a tube), or a carrier for spare rounds on the gun. */
+function drawMag(w: WB, mgk: string, A: Anchors) {
+  const y = A.mag.y;
+  const z = A.mag.z;
+  switch (mgk) {
+    case 'mag_ext':
+      // An extension on the magazine's floor: a longer body and a fatter base plate.
+      w.rbox(0, y - 0.024, z, 0.024, 0.05, 0.036, 0.002, M.park(0x1a1b1d, 0.35));
+      w.rbox(0, y - 0.05, z, 0.028, 0.008, 0.042, 0.0025, polymer);
+      break;
+    case 'mag_q':
+      w.rbox(0, y - 0.006, z, 0.028, 0.01, 0.046, 0.003, polymer);
+      w.torus(0, y - 0.02, z, 0.01, 0.0026, M.cord(0x1e1f21), HALF, 0, 0);
+      break;
+    case 'drum':
+      // A drum hanging off the well: two drums side by side and the feed tower up into the gun.
+      w.rbox(0, y + 0.02, z, 0.024, 0.06, 0.04, 0.003, M.park(0x1a1b1d, 0.35));
+      for (const sx of [1, -1]) {
+        w.turnAlong('mod.drum', [[0, 0], [0.045, 0], [0.052, 0.12], [0.052, 0.88], [0.045, 1], [0, 1]], [sx * 0.004, y - 0.03, z], [sx * 0.036, y - 0.03, z], M.anod(0x1c1d1f, 0.4));
+        if (w.hi) w.turnAlong('mod.drumW', [[0, 0], [0.008, 0], [0.008, 1], [0, 1]], [sx * 0.036, y - 0.03, z], [sx * 0.04, y - 0.03, z], M.knurl(0x2a2c2e));
+      }
+      break;
+    case 'loader': {
+      // A speedloader's rounds ready in their ring, carried beside the cylinder.
+      const r = 0.012;
+      w.torus(0.03, y, z, r, 0.004, polymer, 0, HALF, 0);
+      if (w.hi) for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        w.turnAlong('mod.round', [[0, 0], [0.0045, 0], [0.0045, 0.6], [0.003, 0.9], [0, 1]], [0.026, y + Math.cos(a) * r, z + Math.sin(a) * r], [0.046, y + Math.cos(a) * r, z + Math.sin(a) * r], M.brass(0xb08a46, 0.3));
+      }
+      break;
+    }
+    case 'tube':
+      w.tube(0, y, z - 0.01, z + 0.12, 0.0118, steel);
+      w.turn('mod.tubecap', [[0, z + 0.118], [0.0125, z + 0.118], [0.0125, z + 0.134], [0.009, z + 0.138], [0, z + 0.138]], 0, y, M.knurl(0x2a2c2e));
+      break;
+    case 'saddle': {
+      // A side saddle on the receiver's left with four shells in it.
+      const sy = A.top.y - 0.03;
+      const sz = A.top.z + 0.01;
+      w.rbox(0.021, sy, sz, 0.004, 0.032, 0.1, 0.002, M.leather(0x2a2018));
+      for (let i = 0; i < 4; i++) {
+        w.turnAlong('mod.shell', [[0, 0], [0.0105, 0], [0.0105, 0.22], [0.0098, 0.24], [0.0098, 1], [0, 1]], [0.03, sy - 0.03, sz - 0.036 + i * 0.024], [0.03, sy + 0.035, sz - 0.036 + i * 0.024], M.paint(0xa8281c, 0.4));
+        w.turnAlong('mod.head', [[0, 0], [0.0108, 0], [0.0108, 1], [0, 1]], [0.03, sy - 0.032, sz - 0.036 + i * 0.024], [0.03, sy - 0.024, sz - 0.036 + i * 0.024], M.brass(0xb08a46, 0.3));
+      }
+      break;
+    }
+    case 'crank': {
+      // A cocking crank on the stock's side: its drum and the folded handle.
+      const s = A.stock;
+      w.turnAlong('mod.crank', [[0, 0], [0.024, 0], [0.024, 1], [0, 1]], [0.017, s.y + 0.02, s.z + 0.12], [0.03, s.y + 0.02, s.z + 0.12], metal);
+      w.rod([0.032, s.y + 0.02, s.z + 0.12], [0.032, s.y + 0.06, s.z + 0.1], 0.0035, steel);
+      w.turnAlong('mod.crankK', [[0, 0], [0.006, 0], [0.006, 1], [0, 1]], [0.032, s.y + 0.06, s.z + 0.1], [0.048, s.y + 0.06, s.z + 0.1], polymer);
+      break;
+    }
+    case 'mag_b':
+      w.rbox(0, y - 0.02, z, 0.028, 0.04, 0.07, 0.003, M.park(0x1a1b1d, 0.35));
+      break;
+  }
+}
+
 /** Add every fitted add-on's solids to a gun being built. */
 export function drawMods(w: WB, model: GunModel, looks: Partial<Record<AttachSlot, string>>) {
   const was = w.prefix;
@@ -299,66 +360,12 @@ function drawModsAt(w: WB, model: GunModel, looks: Partial<Record<AttachSlot, st
     }
   }
 
-  // ---- magazine, below the well (or out the end of a tube)
+  // ---- magazine, below the well (or out the end of a tube); an extension or a drum comes off with the magazine
   const mgk = looks.mag;
   if (mgk) {
-    const y = A.mag.y;
-    const z = A.mag.z;
-    switch (mgk) {
-      case 'mag_ext':
-        // An extension on the magazine's floor: a longer body and a fatter base plate.
-        w.rbox(0, y - 0.024, z, 0.024, 0.05, 0.036, 0.002, M.park(0x1a1b1d, 0.35));
-        w.rbox(0, y - 0.05, z, 0.028, 0.008, 0.042, 0.0025, polymer);
-        break;
-      case 'mag_q':
-        w.rbox(0, y - 0.006, z, 0.028, 0.01, 0.046, 0.003, polymer);
-        w.torus(0, y - 0.02, z, 0.01, 0.0026, M.cord(0x1e1f21), HALF, 0, 0);
-        break;
-      case 'drum':
-        // A drum hanging off the well: two drums side by side and the feed tower up into the gun.
-        w.rbox(0, y + 0.02, z, 0.024, 0.06, 0.04, 0.003, M.park(0x1a1b1d, 0.35));
-        for (const sx of [1, -1]) {
-          w.turnAlong('mod.drum', [[0, 0], [0.045, 0], [0.052, 0.12], [0.052, 0.88], [0.045, 1], [0, 1]], [sx * 0.004, y - 0.03, z], [sx * 0.036, y - 0.03, z], M.anod(0x1c1d1f, 0.4));
-          if (w.hi) w.turnAlong('mod.drumW', [[0, 0], [0.008, 0], [0.008, 1], [0, 1]], [sx * 0.036, y - 0.03, z], [sx * 0.04, y - 0.03, z], M.knurl(0x2a2c2e));
-        }
-        break;
-      case 'loader': {
-        // A speedloader's rounds ready in their ring, carried beside the cylinder.
-        const r = 0.012;
-        w.torus(0.03, y, z, r, 0.004, polymer, 0, HALF, 0);
-        if (w.hi) for (let i = 0; i < 6; i++) {
-          const a = (i / 6) * Math.PI * 2;
-          w.turnAlong('mod.round', [[0, 0], [0.0045, 0], [0.0045, 0.6], [0.003, 0.9], [0, 1]], [0.026, y + Math.cos(a) * r, z + Math.sin(a) * r], [0.046, y + Math.cos(a) * r, z + Math.sin(a) * r], M.brass(0xb08a46, 0.3));
-        }
-        break;
-      }
-      case 'tube':
-        w.tube(0, y, z - 0.01, z + 0.12, 0.0118, steel);
-        w.turn('mod.tubecap', [[0, z + 0.118], [0.0125, z + 0.118], [0.0125, z + 0.134], [0.009, z + 0.138], [0, z + 0.138]], 0, y, M.knurl(0x2a2c2e));
-        break;
-      case 'saddle': {
-        // A side saddle on the receiver's left with four shells in it.
-        const sy = A.top.y - 0.03;
-        const sz = A.top.z + 0.01;
-        w.rbox(0.021, sy, sz, 0.004, 0.032, 0.1, 0.002, M.leather(0x2a2018));
-        for (let i = 0; i < 4; i++) {
-          w.turnAlong('mod.shell', [[0, 0], [0.0105, 0], [0.0105, 0.22], [0.0098, 0.24], [0.0098, 1], [0, 1]], [0.03, sy - 0.03, sz - 0.036 + i * 0.024], [0.03, sy + 0.035, sz - 0.036 + i * 0.024], M.paint(0xa8281c, 0.4));
-          w.turnAlong('mod.head', [[0, 0], [0.0108, 0], [0.0108, 1], [0, 1]], [0.03, sy - 0.032, sz - 0.036 + i * 0.024], [0.03, sy - 0.024, sz - 0.036 + i * 0.024], M.brass(0xb08a46, 0.3));
-        }
-        break;
-      }
-      case 'crank': {
-        // A cocking crank on the stock's side: its drum and the folded handle.
-        const s = A.stock;
-        w.turnAlong('mod.crank', [[0, 0], [0.024, 0], [0.024, 1], [0, 1]], [0.017, s.y + 0.02, s.z + 0.12], [0.03, s.y + 0.02, s.z + 0.12], metal);
-        w.rod([0.032, s.y + 0.02, s.z + 0.12], [0.032, s.y + 0.06, s.z + 0.1], 0.0035, steel);
-        w.turnAlong('mod.crankK', [[0, 0], [0.006, 0], [0.006, 1], [0, 1]], [0.032, s.y + 0.06, s.z + 0.1], [0.048, s.y + 0.06, s.z + 0.1], polymer);
-        break;
-      }
-      case 'mag_b':
-        w.rbox(0, y - 0.02, z, 0.028, 0.04, 0.07, 0.003, M.park(0x1a1b1d, 0.35));
-        break;
-    }
+    const fitted = () => drawMag(w, mgk, A);
+    if (mgk === 'mag_ext' || mgk === 'mag_q' || mgk === 'drum' || mgk === 'mag_b') w.piece('mag', fitted);
+    else fitted();
   }
 
   // ---- stock: a pad on the end of the gun's own, or a whole stock in place of it

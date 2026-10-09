@@ -216,7 +216,9 @@ describe('training', () => {
       it[w].releasedAfter[Btn.B] = 0.1;
       run(DT);
     }
-    run(14);
+    // Long enough for the hundred metres (about 8.5 s from a standstill); the throttle is pinned and nobody steers, so
+    // much longer and a moped wanders off the road into a wreck, and the crash sets the meter off before the horn.
+    run(9);
     expect(at()).toBe('6:Noise and dust');
     expect(lastCard(t).goals[0].done).toBe(true);
     expect(lastCard(t).goals[1].done).toBe(false);
@@ -233,7 +235,14 @@ describe('training', () => {
       x.rt = 0;
       x.lt = 1;
     }
-    run(1.8);
+    // Each lets go of the brake once stopped (held on, it backs up): a moped that has wandered onto the sand brakes with
+    // less grip and takes longer.
+    for (let k = 0; k < 40; k++) {
+      run(0.1);
+      sc.players.forEach((p, w) => {
+        if (Math.abs(p.vehicle?.speed ?? 0) < 1) it[w].lt = 0;
+      });
+    }
     for (const x of it) x.lt = 0;
     run(2);
     expect(Math.abs(a.vehicle!.speed)).toBeLessThan(1);

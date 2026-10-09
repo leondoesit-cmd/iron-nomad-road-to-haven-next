@@ -109,9 +109,16 @@ export class ControlsMenu {
                 if (p) p.viewFirst = st().vehicleView[i] === 'first';
               },
             })),
+            // Arcade: the hands catch a slide and the pedals are eased at the limit. Pro: only the car's own electronics.
+            ...perSeat('da', 'Driving assists', (i) => ({
+              value: () => (st().driveAssist[i] === 'pro' ? 'PRO' : 'ARCADE'),
+              step: () => (st().driveAssist[i] = st().driveAssist[i] === 'pro' ? 'arcade' : 'pro'),
+            })),
             num('cfov', 'Field of view', () => st().chaseFov, (v) => (st().chaseFov = v), 5, 70, 130, (v) => `${Math.round(v)}°`),
+            num('cmot', 'Chase camera motion', () => st().chaseMotion, (v) => (st().chaseMotion = v), 0.1, 0, 2, (v) => (v < 0.01 ? 'OFF' : `${Math.round(v * 100)}%`)),
             num('fov', 'First-person field of view', () => st().fpFov, (v) => (st().fpFov = v), 5, 70, 120, (v) => `${Math.round(v)}°`),
             num('lens', 'Bodycam lens (first person)', () => st().fpLens, (v) => (st().fpLens = v), 0.1, 0, 1, (v) => (v < 0.01 ? 'OFF' : `${Math.round(v * 100)}%`)),
+            num('dof', 'Depth of field (aiming)', () => st().fpDof, (v) => (st().fpDof = v), 0.1, 0, 1, (v) => (v < 0.01 ? 'OFF' : `${Math.round(v * 100)}%`)),
             ...perSeat('cr', 'Crouch', (i) => ({ value: () => (st().toggleCrouch[i] ? 'TOGGLE' : 'HOLD'), step: () => (st().toggleCrouch[i] = !st().toggleCrouch[i]) })),
           ];
       }
@@ -184,8 +191,11 @@ export class ControlsMenu {
         s.toggleSprint = [true, true];
         s.fpFov = 100;
         s.chaseFov = 110;
+        s.chaseMotion = 1;
         s.fpLens = 0.7;
+        s.fpDof = 1;
         s.vehicleView = ['third', 'third'];
+        s.driveAssist = ['arcade', 'arcade'];
         for (const p of g.scene?.players ?? []) p.viewFirst = false;
       }
       input.bindingsChanged();

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Sparks } from './sparks';
 import { atmoUniforms } from './atmosphere';
 import { GLOBALS } from './materials';
 import { smokeTexture } from './proctex';
@@ -146,6 +147,8 @@ export class ParticleLayer {
   private rot: Float32Array;
   private spin: Float32Array;
   private blood: Float32Array;
+  /** How far each sprite's drift settles to the wind instead of to still air (0 = still air, 1 = the full wind). */
+  private carry: Float32Array;
   private next = 0;
   private active: LiveSlots;
   private bloodFirst = Infinity;
@@ -153,6 +156,8 @@ export class ParticleLayer {
   private uniforms: Record<string, THREE.IUniform>;
   private geo: THREE.BufferGeometry;
   budget = 1;
+  /** The wind at ground level, m/s along x and z, that carried sprites drift with. */
+  wind: [number, number] = [0, 0];
 
   constructor(n: number, additive: boolean) {
     this.n = n;
@@ -171,6 +176,7 @@ export class ParticleLayer {
     this.rot = new Float32Array(n);
     this.spin = new Float32Array(n);
     this.blood = new Float32Array(n);
+    this.carry = new Float32Array(n);
     this.geo = new THREE.BufferGeometry();
     this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
     this.geo.setAttribute('aColor', new THREE.BufferAttribute(this.col, 4).setUsage(THREE.DynamicDrawUsage));
@@ -208,7 +214,7 @@ export class ParticleLayer {
     this.uniforms.uScale.value = viewHeightPx / (2 * Math.tan((fovDeg * Math.PI) / 360));
   }
 
-  emit(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, s0: number, s1: number, r: number, g: number, b: number, a: number, gravity = 0, drag = 0.5, blood = false) {
+  emit(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, s0: number, s1: number, r: number, g: number, b: number, a: number, gravity = 0, drag = 0.5, blood = false, carry = 0) {
     if (this.budget < 1 && Math.random() > this.budget) return;
     const i = this.next;
     this.next = (this.next + 1) % this.n;
@@ -231,6 +237,7 @@ export class ParticleLayer {
     this.rot[i] = Math.random() * Math.PI * 2;
     this.spin[i] = (Math.random() - 0.5) * 1.2;
     this.blood[i] = blood ? 1 : 0;
+    this.carry[i] = carry;
     this.active.add(i);
     this.bloodFirst = Math.min(this.bloodFirst, i);
     this.bloodLast = Math.max(this.bloodLast, i);
@@ -250,9 +257,10 @@ export class ParticleLayer {
       this.life[i] -= dt;
       const t = 1 - Math.max(0, this.life[i]) / this.maxLife[i];
       const damping = Math.exp(-this.drag[i] * dt);
-      this.vel[i * 3] *= damping;
+      const cx = this.wind[0] * this.carry[i], cz = this.wind[1] * this.carry[i];
+      this.vel[i * 3] = cx + (this.vel[i * 3] - cx) * damping;
       this.vel[i * 3 + 1] = this.vel[i * 3 + 1] * damping - this.grav[i] * dt;
-      this.vel[i * 3 + 2] *= damping;
+      this.vel[i * 3 + 2] = cz + (this.vel[i * 3 + 2] - cz) * damping;
       this.pos[i * 3] += this.vel[i * 3] * dt;
       this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt;
       this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
@@ -278,18 +286,65 @@ export class ParticleLayer {
   }
 }
 
+/** Seconds for the powder smoke hanging where a gun went off to clear enough that a fresh shot there reads at full strength. */
+const HAZE_TAU = 1.6;
+/** How close (m) a shot has to be to earlier ones to be fired into their smoke. */
+const HAZE_REACH = 2.5;
+/** A spot where guns have gone off lately and how much of their smoke still hangs there (one shot = 1, fading over `HAZE_TAU`). */
+type Haze = { x: number; y: number; z: number; load: number };
+
 export class Particles {
   smoke = new ParticleLayer(3000, false);
   glow = new ParticleLayer(1500, true);
+  /** Sparks: hot streaks a pixel wide (`render/sparks.ts`). */
+  sparks = new Sparks();
+  /** The wind at ground level, m/s along x and z, that carries powder smoke off. Set every frame by the scene. */
+  wind: [number, number] = [0, 0];
+  private haze: Haze[] = [];
 
   setBudget(b: number) {
     this.smoke.budget = b;
     this.glow.budget = b;
+    this.sparks.budget = b;
   }
 
   update(dt: number) {
+    this.smoke.wind = this.wind;
     this.smoke.update(dt);
     this.glow.update(dt);
+    this.sparks.update(dt);
+    const fade = Math.exp(-dt / HAZE_TAU);
+    for (let i = this.haze.length - 1; i >= 0; i--) {
+      this.haze[i].load *= fade;
+      if (this.haze[i].load < 0.05) this.haze.splice(i, 1);
+    }
+  }
+
+  /**
+   * How much of a shot's smoke to put out here: all of it into clean air, less and less into air its own earlier shots
+   * have already fogged. However fast a gun fires, the smoke round it builds to about what two shots a second would leave.
+   */
+  private hazeThin(x: number, y: number, z: number): number {
+    let spot: Haze | null = null;
+    let best = HAZE_REACH * HAZE_REACH;
+    for (const h of this.haze) {
+      const d = (h.x - x) ** 2 + (h.y - y) ** 2 + (h.z - z) ** 2;
+      if (d < best) {
+        best = d;
+        spot = h;
+      }
+    }
+    if (!spot) {
+      if (this.haze.length >= 16) this.haze.sort((a, b) => b.load - a.load).pop();
+      spot = { x, y, z, load: 0 };
+      this.haze.push(spot);
+    }
+    const thin = 1 / (1 + 0.3 * spot.load);
+    spot.load += 1;
+    spot.x = x;
+    spot.y = y;
+    spot.z = z;
+    return thin;
   }
 
   setViewScale(h: number, fov: number) {
@@ -307,6 +362,19 @@ export class Particles {
     this.smoke.emit(x, y, z, (Math.random() - 0.5) * 1.5, 0.8 + Math.random(), (Math.random() - 0.5) * 1.5, life, size * 0.5, size * 2, r, g, b, 0.5, -0.4, 1.2);
   }
 
+  /**
+   * Rubber smoke off a tyre scrubbing the tarmac: low, pale and spreading, a little of the car's way carried into it, so a
+   * slide trails a hanging cloud rather than a row of puffs. `strength` 0..1 is how hard the tyre is scrubbing.
+   */
+  tyreSmoke(x: number, y: number, z: number, vx: number, vz: number, strength = 1) {
+    const k = Math.min(1, Math.max(0, strength));
+    this.smoke.emit(
+      x + (Math.random() - 0.5) * 0.3, y + 0.08, z + (Math.random() - 0.5) * 0.3,
+      vx * 0.25 + (Math.random() - 0.5) * 0.7, 0.3 + Math.random() * 0.45, vz * 0.25 + (Math.random() - 0.5) * 0.7,
+      1.1 + Math.random() * 1.5 * k, 0.3 + 0.25 * k, 2.4 + 2.4 * k, 0.86, 0.86, 0.88, 0.22 + 0.2 * k, -0.12, 1.7,
+    );
+  }
+
   blackSmoke(x: number, y: number, z: number) {
     this.smoke.emit(x + (Math.random() - 0.5) * 0.3, y, z + (Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.6, 1.8 + Math.random(), (Math.random() - 0.5) * 0.6, 1.8, 0.4, 2.2, 0.08, 0.08, 0.08, 0.6, -0.5, 0.6);
   }
@@ -316,12 +384,32 @@ export class Particles {
     this.glow.emit(x + (Math.random() - 0.5) * 0.4 * scale, y, z + (Math.random() - 0.5) * 0.4 * scale, (Math.random() - 0.5) * 0.8, 1.6 + Math.random() * 1.4, (Math.random() - 0.5) * 0.8, 0.55 + Math.random() * 0.3, 0.8 * scale, 0.1, 1.0, deep ? 0.3 : 0.55, deep ? 0.05 : 0.15, deep ? 0.7 : 0.9, -1, 1.0);
   }
 
+  /** A spray of sparks up and out of a point (a grinder, a scrape, a blow with no one face to it). Always small: `n` is how many. */
   spark(x: number, y: number, z: number, n = 6, speed = 6) {
-    for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const e = Math.random() * 1.2;
-      this.glow.emit(x, y, z, Math.cos(a) * speed * Math.random(), Math.random() * speed * e, Math.sin(a) * speed * Math.random(), 0.35 + Math.random() * 0.3, 0.18, 0.03, 1, 0.8, 0.35, 1, 14, 0.8);
-    }
+    this.sparks.shower(x, y, z, 0, 1, 0, n, speed, 1.35);
+    // The pinpoint flash where they came from.
+    if (n > 0) this.glow.emit(x, y, z, 0, 0, 0, 0.05, 0.05, 0.015, 1, 0.85, 0.5, 0.9, 0, 0);
+  }
+
+  /**
+   * Sparks off a surface (normal n) struck along (dx, dy, dz): they leave along the glance, the blow's direction turned off
+   * the surface, a tight fan when it came in low and a wide splash back off it when it came in square. Only how many and
+   * which way change with the blow, never how big they look.
+   */
+  sparkOff(x: number, y: number, z: number, nx: number, ny: number, nz: number, dx: number, dy: number, dz: number, n: number, speed: number) {
+    if (n <= 0) return;
+    const dl = Math.hypot(dx, dy, dz) || 1;
+    dx /= dl;
+    dy /= dl;
+    dz /= dl;
+    const dn = dx * nx + dy * ny + dz * nz;
+    // The glance: the blow's direction with its part into the surface turned back out, less (the surface takes most of it).
+    const rx = dx - 1.6 * dn * nx;
+    const ry = dy - 1.6 * dn * ny;
+    const rz = dz - 1.6 * dn * nz;
+    const square = Math.min(1, Math.abs(dn));
+    this.sparks.shower(x + nx * 0.01, y + ny * 0.01, z + nz * 0.01, rx, ry, rz, n, speed * (1.15 - 0.4 * square), 0.25 + 1.0 * square);
+    this.glow.emit(x + nx * 0.01, y + ny * 0.01, z + nz * 0.01, 0, 0, 0, 0.04, 0.05, 0.015, 1, 0.85, 0.5, 0.9, 0, 0);
   }
 
   blood(x: number, y: number, z: number, n = 6, color: [number, number, number] = [0.55, 0.06, 0.06]) {
@@ -387,20 +475,36 @@ export class Particles {
       const k = 6 + Math.random() * 12;
       this.glow.emit(x + dx * 0.1, y + dy * 0.1, z + dz * 0.1, dx * k + (Math.random() - 0.5) * 5, dy * k + (Math.random() - 0.2) * 4, dz * k + (Math.random() - 0.5) * 5, 0.18 + Math.random() * 0.2, 0.07, 0.015, 1, 0.78, 0.35, 1, 12, 1.2);
     }
-    // Powder smoke: a drift of puffs thrown out along the barrel that swell and hang in the air for a couple of seconds, greyer
-    // than the dust so it reads against a bright sky.
-    for (let i = 0; i < m.smoke * 2; i++) {
-      const k = 0.6 + Math.random() * 2.6;
-      const d = 0.15 + 0.12 * i;
-      this.smoke.emit(x + dx * d, y + dy * d, z + dz * d, dx * k + (Math.random() - 0.5) * 0.6, dy * k + 0.25 + Math.random() * 0.35, dz * k + (Math.random() - 0.5) * 0.6, 1.4 + Math.random() * 1.2, 0.18 + m.flash * 0.12, 0.9 + m.flash * 0.6, 0.44, 0.44, 0.47, 0.66, -0.2, 1.4);
+    // Powder smoke. Smokeless powder leaves little of it: a faint, ragged puff thrown out along the barrel that the air pulls
+    // apart in a second or two. It is a few knots of thicker smoke in a thin veil, each its own size, shade and thickness, all
+    // leaning the same way off a shared curl and then drifting off on the wind. Fired again into the same air a shot adds
+    // less (`hazeThin`), so a long burst leaves a thin uneven haze rather than a grey wall.
+    const thin = this.hazeThin(x, y, z);
+    const ca = Math.random() * Math.PI * 2;
+    const curl = 0.15 + Math.random() * 0.35;
+    const cx = Math.cos(ca) * curl, cz = Math.sin(ca) * curl;
+    const thick = 0.8 + 0.2 * m.flash;
+    const knots = m.smoke * 0.9 * thin;
+    for (let i = 0, n = Math.floor(knots + Math.random()); i < n; i++) {
+      const k = 0.4 + Math.random() * 2.2;
+      const d = 0.12 + Math.random() * (0.15 + m.reach * 0.4);
+      const shade = 0.4 + Math.random() * 0.14;
+      const a = (0.07 + 0.24 * Math.random() ** 2) * thick;
+      const grow = 0.55 + Math.random() * 0.9;
+      this.smoke.emit(x + dx * d, y + dy * d, z + dz * d, dx * k + cx + (Math.random() - 0.5) * 0.5, dy * k + 0.12 + Math.random() * 0.3, dz * k + cz + (Math.random() - 0.5) * 0.5, 0.8 + Math.random() * 1.4, (0.08 + m.flash * 0.06) * grow, (0.45 + m.flash * 0.35) * grow, shade, shade, shade + 0.03, a, -0.12, 1.6, false, 0.8);
     }
-    // A fatter cloud that stays near the muzzle.
-    this.smoke.emit(x + dx * 0.25, y + dy * 0.25, z + dz * 0.25, dx * 0.5, 0.2, dz * 0.5, 2.2 + Math.random() * 0.8, 0.25 + m.flash * 0.2, 1.3 + m.flash * 0.8, 0.48, 0.48, 0.5, 0.46, -0.12, 1.0);
+    // The thin veil round the muzzle, there only some of the time once the air is already fogged.
+    if (Math.random() < thin) {
+      const s = 0.7 + Math.random() * 0.6;
+      this.smoke.emit(x + dx * 0.2, y + dy * 0.2, z + dz * 0.2, dx * 0.4 + cx * 0.5, 0.1 + Math.random() * 0.15, dz * 0.4 + cz * 0.5, 1.4 + Math.random() * 1.0, (0.2 + m.flash * 0.15) * s, (0.8 + m.flash * 0.55) * s, 0.48, 0.48, 0.5, (0.05 + 0.08 * Math.random()) * thick, -0.1, 1.2, false, 0.9);
+    }
   }
 
   /** A thin wisp curling off a hot barrel or an open breech in the seconds after a shot. */
   wisp(x: number, y: number, z: number, strength = 1) {
-    this.smoke.emit(x + (Math.random() - 0.5) * 0.02, y, z + (Math.random() - 0.5) * 0.02, (Math.random() - 0.5) * 0.12, 0.3 + Math.random() * 0.25, (Math.random() - 0.5) * 0.12, 1.1 + Math.random() * 0.9, 0.04 + 0.03 * strength, 0.22 + 0.12 * strength, 0.62, 0.62, 0.64, 0.2 + 0.12 * strength, -0.15, 1.1);
+    // Each wisp its own thickness, so the thread comes in strands and gaps, and the breeze bends it off the barrel.
+    const a = (0.06 + 0.12 * strength) * (0.35 + Math.random() * 0.9);
+    this.smoke.emit(x + (Math.random() - 0.5) * 0.02, y, z + (Math.random() - 0.5) * 0.02, (Math.random() - 0.5) * 0.12, 0.3 + Math.random() * 0.25, (Math.random() - 0.5) * 0.12, 0.9 + Math.random() * 0.9, 0.04 + 0.03 * strength, 0.2 + 0.12 * strength, 0.62, 0.62, 0.64, a, -0.15, 1.1, false, 0.5);
   }
 
   /** Embers and a lick of flame thrown out along the ground from where a burning bottle bursts. */

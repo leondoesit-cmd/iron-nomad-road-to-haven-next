@@ -1023,7 +1023,7 @@ export class RaiderSystem {
     ctx.obs.resolveCircle(p, 0.4);
     u.x = p.x;
     u.z = p.z;
-    u.y = ctx.groundAt(u.x, u.z);
+    u.y = ctx.groundAt(u.x, u.z) + (ctx.ground?.heightAt(u.x, u.z) ?? 0);
     if (tgt) {
       const want = Math.atan2(tgt.x - u.x, tgt.z - u.z);
       u.yaw = dampAngle(u.yaw, spd > 0.3 && u.kind === 'saboteur' ? Math.atan2(wantX, wantZ) : want, 10, dt);

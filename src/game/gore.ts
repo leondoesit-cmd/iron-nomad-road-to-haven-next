@@ -1,17 +1,21 @@
 import * as THREE from 'three';
-import { G, groups } from '../physics/physics';
-import { SURFACES, type Surface, type Zone } from '../sim/ballistics';
+import { G, RAPIER, groups } from '../physics/physics';
+import { AMMO, SURFACES, type AmmoKind, type Surface, type Zone } from '../sim/ballistics';
 import { Brass, type MagKind, type ShellKind } from '../render/brass';
-import { CELL, Decals } from '../render/decals';
+import { CELL, PITS, PUNCHES, SPALLS, Decals, anyOf } from '../render/decals';
+import { SOILS } from '../sim/soil';
+import { clamp } from '../core/math';
 import { roadLift } from '../render/chunkview';
 import { Gibs } from '../render/gibs';
 import { Timber } from './timber';
+import { FleshFx } from './fleshFx';
 import type { AnimalKind, ZombieKind } from '../data';
 import type { Ctx } from './ctx';
 import { BODY, type AnimalPart } from '../sim/anatomy';
 import type { Zombie } from './zombies';
 import type { Animal } from './wildlife';
-import { groundImpact, type GroundMaterial, type GroundWeapon } from '../sim/groundImpact';
+import { MELEE_ENERGY, groundImpact, type GroundMaterial, type GroundWeapon } from '../sim/groundImpact';
+import type { MeleeKind } from '../sim/weaponfx';
 
 const RAY = groups(0xffff, G.STATIC | G.VEHICLE | G.BUILD | G.FURN);
 const _c = new THREE.Color();
@@ -75,6 +79,22 @@ interface Bleeder {
  * Everything a fight leaves behind and everything that flies off in one: blood on walls and roads, limbs and meat thrown
  * clear, spent brass, bullet holes. It owns the pooled meshes and decides where each mark lands by casting into the world.
  */
+/** Bare steel where a round tore the paint off. */
+const METAL = [0.7, 0.69, 0.66] as const;
+/** Metals: holed, they throw sparks and no chips. */
+const METALS = new Set<Surface>(['sheet', 'car', 'steel']);
+/** What it costs to knock a cubic metre out of a hard brittle face, J (a rifle round takes 30-45 cm^3 out of stone or concrete). */
+const SPALL_Q: Partial<Record<Surface, number>> = { stone: 4e7, concrete: 3e7, plaster: 1e7 };
+const SPALL_ASPHALT = 3e7;
+
+/** How many sparks a blow of `ke` joules strikes off a surface: steel most, sheet and a car body fewer, stone and concrete a rare few. */
+function sparkCount(surface: Surface, ke: number): number {
+  const per = surface === 'steel' ? 110 : surface === 'sheet' || surface === 'car' ? 220 : surface === 'stone' ? 900 : surface === 'concrete' ? 1300 : 0;
+  if (!per) return 0;
+  const n = ke / per;
+  return Math.min(16, Math.floor(n) + (Math.random() < n - Math.floor(n) ? 1 : 0));
+}
+
 export class Gore {
   /** Blood: wet, drying, recycled oldest first. */
   readonly decals = new Decals();
@@ -84,6 +104,8 @@ export class Gore {
   readonly gibs: Gibs;
   /** Gunfire in the trees: chips, bark, leaves, scars, and trees snapping and coming down (`game/timber.ts`). */
   readonly timber: Timber;
+  /** What blows do under the skin of the dead: wounds, breaks, severed pieces, spilled gut (`fleshFx.ts`). */
+  readonly anatomy: FleshFx;
   private bleeders: Bleeder[] = [];
   /** Marks laid since the scene began, for tests. */
   placed = 0;
@@ -93,7 +115,9 @@ export class Gore {
     const lift = (x: number, z: number) => (ctx.terrain ? roadLift(ctx.terrain, x, z) : 0);
     const floorAt = (x: number, y: number, z: number): number | null => {
       const r = ctx.P.raycast(x, y, z, 0, -1, 0, 3, RAY);
-      return (r ? y - r.toi : ctx.groundAt(x, z)) + (!r || r.normal.y > 0.7 ? lift(x, z) : 0);
+      // On the ground itself, the loose ground's dents and heaps: a clod lies in the crater it came out of.
+      const loose = ctx.ground && (!r || r.collider.shapeType() === RAPIER.ShapeType.HeightField) ? ctx.ground.heightAt(x, z) : 0;
+      return (r ? y - r.toi : ctx.groundAt(x, z)) + (!r || r.normal.y > 0.7 ? lift(x, z) : 0) + loose;
     };
     this.brass = new Brass({
       floorAt,
@@ -121,6 +145,9 @@ export class Gore {
     });
     this.gibs = new Gibs({
       floorAt,
+      // Sand and mud swallow what falls on them; asphalt, concrete and rock let it bounce and skitter.
+      give: (x, z) => ctx.ground?.soilAt(x, z)?.give ?? 0,
+      thud: (x, z, r, mass, vy) => ctx.ground?.lay(x, z, 1, 0, r, r, mass, vy, 0.4),
       ring: () => {},
       trail: (x, y, z, vx, vy, vz) => {
         ctx.fx.bloodSpray(x, y, z, -vx * 0.03, 0.1, -vz * 0.03, 1, 1.2, 0.5);
@@ -134,6 +161,7 @@ export class Gore {
       },
     });
     this.timber = new Timber(ctx, this);
+    this.anatomy = new FleshFx(ctx, this);
   }
 
   /** Add the meshes to a scene root. */
@@ -143,6 +171,7 @@ export class Gore {
     for (const m of this.brass.meshes) root.add(m);
     root.add(this.gibs.group);
     root.add(this.timber.chips.group);
+    this.anatomy.attach(root);
   }
 
   // ------------------------------------------------------------------ blood on surfaces
@@ -235,8 +264,16 @@ export class Gore {
     const nl = Math.hypot(nx, ny, nz) || 1;
     nx /= nl; ny /= nl; nz /= nl;
     const incidence = Math.abs(dx * nx + dy * ny + dz * nz);
-    const f = groundImpact(weapon, material, speed, incidence, ctx.groundDust?.(x, z) ?? 1);
-    const [r, g, b] = f.tint;
+    // Soft ground gives: the round or the blow digs its crater and throws real soil, crumbs, pebbles or chips (groundWork.ts),
+    // so it needs no chips of its own. Bare rock is struck as stone: it rings and sparks, and it is chipped, not dug.
+    const hit = ctx.ground?.strike(weapon, x, z, nx, ny, nz, dx, dy, dz, speed) ?? null;
+    const dug = !!hit;
+    // Bare rock too steep for the field to hold is still stone, and its own colour.
+    const rock = !hit && material !== 'asphalt' && material !== 'concrete' && !!ctx.ground?.bareRock(x, z);
+    if (rock) material = 'stone';
+    const f = groundImpact(weapon, hit?.soil.brittle ? 'stone' : material, speed, incidence, ctx.groundDust?.(x, z) ?? 1);
+    // Its dust is the colour of the ground it came out of.
+    const [r, g, b] = hit ? hit.tint : rock ? ctx.ground!.groundTint(x, z, SOILS.rock) : f.tint;
     // Ground normals face out; shallow shots throw material ahead along the surface.
     const along = dx * nx + dy * ny + dz * nz;
     const tx = dx - along * nx, ty = dy - along * ny, tz = dz - along * nz;
@@ -244,27 +281,127 @@ export class Gore {
     y += lift;
     const px = x + nx * 0.025, py = y + ny * 0.025, pz = z + nz * 0.025;
     if (f.dust > 0.02) {
-      const count = Math.min(5, Math.ceil(f.dust * 2));
+      // Sand is heavy: it goes up as grains and comes down, with only a little dust off it.
+      const count = Math.min(5, Math.ceil(f.dust * (hit?.soil.kind === 'sand' ? 0.8 : 2)));
       for (let i = 0; i < count; i++) {
         const out = f.eject * (0.3 + Math.random() * 0.35);
+        // Dust is the finest of what is thrown: it hangs and goes with the wind.
         ctx.fx.smoke.emit(px, py, pz, nx * out + tx * f.eject * 0.5, ny * out + ty * f.eject * 0.5, nz * out + tz * f.eject * 0.5,
-          f.life, f.plume * 0.35, f.plume, r, g, b, 0.35, 0.5, 2);
+          f.life, f.plume * 0.35, f.plume, r, g, b, 0.35, 0.5, 2, false, 0.9);
       }
     }
-    // Debris stays tiny even for a rifle. Mud throws clods rather than dry smoke.
-    for (let i = 0; i < f.chips; i++) {
-      const rx = Math.random() - 0.5, ry = Math.random() - 0.5, rz = Math.random() - 0.5;
-      const dot = rx * nx + ry * ny + rz * nz;
-      const out = f.eject * (0.5 + Math.random() * 0.5);
-      this.gibs.throw('chunk', px, py, pz, nx * out + (tx + rx - dot * nx) * f.eject * 0.5,
-        ny * out + (ty + ry - dot * ny) * f.eject * 0.5, nz * out + (tz + rz - dot * nz) * f.eject * 0.5,
-        f.chipSize * (0.65 + Math.random() * 0.6), r, g, b);
+    // Hard ground (asphalt, concrete, stone) loses a cone of itself in chips as big as the blow and its angle make them, and
+    // strikes a few sparks off its stone; soft ground with no field to dig keeps its little chips.
+    const hard = !dug && f.hard && !f.shaft;
+    const ke = weapon in AMMO ? 0.5 * AMMO[weapon as AmmoKind].mass * speed * speed : (MELEE_ENERGY[weapon as MeleeKind] ?? 30) * speed * speed;
+    let spallW = 0;
+    if (hard) {
+      const face = material === 'asphalt' ? 'asphalt' : material === 'stone' ? 'stone' : 'concrete';
+      const fresh: [number, number, number] = material === 'asphalt' ? [r * 0.55, g * 0.55, b * 0.55] : [Math.min(1, r * 1.1), Math.min(1, g * 1.1), Math.min(1, b * 1.1)];
+      spallW = this.spall(face, fresh, px, py, pz, nx, ny, nz, dx, dy, dz, ke);
+      const sc = sparkCount(material === 'stone' ? 'stone' : 'concrete', ke);
+      if (sc) ctx.fx.sparkOff(px, py, pz, nx, ny, nz, dx, dy, dz, sc, 5 + Math.min(6, ke / 300));
+    } else {
+      for (let i = 0; i < (dug ? 0 : f.chips); i++) {
+        const rx = Math.random() - 0.5, ry = Math.random() - 0.5, rz = Math.random() - 0.5;
+        const dot = rx * nx + ry * ny + rz * nz;
+        const out = f.eject * (0.5 + Math.random() * 0.5);
+        this.gibs.throw('chunk', px, py, pz, nx * out + (tx + rx - dot * nx) * f.eject * 0.5,
+          ny * out + (ty + ry - dot * ny) * f.eject * 0.5, nz * out + (tz + rz - dot * nz) * f.eject * 0.5,
+          f.chipSize * (0.65 + Math.random() * 0.6), r, g, b);
+      }
     }
-    if (f.sparks) ctx.fx.spark(px, py, pz, f.sparks, f.eject);
-    this.marks.add(x, y, z, { cell: f.hard && !f.shaft ? CELL.hole : CELL.scuff, w: f.size * f.stretch, h: f.size,
-      nx, ny, nz, dx, dy, dz, r: r * 0.6, g: g * 0.6, b: b * 0.6, opacity: f.shaft ? 0.45 : 0.8, hole: true });
-    this.placed++;
+    if (!dug) {
+      // Hard ground loses a chip of itself: a spall of fresh material, asphalt darker where its skin of dust is knocked off,
+      // concrete and stone paler. A shaft only scuffs it.
+      const spall = f.hard && !f.shaft;
+      // Stone takes a small round pit; asphalt and concrete a ragged spall, asphalt dark where its dusty skin is knocked off.
+      const pit = material === 'stone';
+      const k = material === 'asphalt' ? 0.5 : pit ? 1 : 1.15;
+      // A chip a few centimetres across, not the round's whole disturbance.
+      const sw = spall ? (spallW > 0 ? spallW * (pit ? 0.7 : 1) : Math.min(pit ? 0.05 : 0.12, Math.max(pit ? 0.015 : 0.035, f.size * (pit ? 0.25 : 0.55)))) * (0.85 + 0.3 * Math.random()) : f.size;
+      this.marks.add(x, y, z, { cell: spall ? anyOf(pit ? PITS : SPALLS) : CELL.scuff, w: sw * (pit ? 1 : f.stretch), h: sw,
+        nx, ny, nz, dx, dy, dz, r: spall ? Math.min(1, r * k) : r * 0.6, g: spall ? Math.min(1, g * k) : g * 0.6, b: spall ? Math.min(1, b * k) : b * 0.6, opacity: f.shaft ? 0.45 : 0.92, hole: true });
+      this.placed++;
+    } else if (hit.soil.brittle) {
+      // Bare rock: the field holds the chip's volume, but its cone is finer than the field's grid. A pit shows it: small,
+      // round, smooth-walled and shading darker to its bottom.
+      const w = Math.max(0.02, 2.2 * Math.max(hit.along, hit.across)) * (0.85 + 0.3 * Math.random());
+      this.marks.add(hit.x, y, hit.z, { cell: anyOf(PITS), w, h: w * Math.max(0.7, hit.across / Math.max(1e-3, hit.along)),
+        nx, ny, nz, dx: hit.dx, dy: 0, dz: hit.dz, r: r * 0.9, g: g * 0.9, b: b * 0.9, opacity: 0.95, hole: true });
+      this.placed++;
+    }
     ctx.audio.play(f.sound, x, z, f.volume, { intensity: Math.min(1, f.power / 2), pitch: f.shaft ? 1.1 : 1.15 - Math.min(0.3, f.power * 0.1) });
+  }
+
+  /**
+   * A blow knocks a cone out of a hard brittle face (stone, concrete, plaster, asphalt): its volume is the blow's energy
+   * over what the material costs to break, less for a glancing one. Square on, it is crushed: many small chips splash back
+   * off the face, and dust. Glancing, it flakes: a few bigger, flat pieces skate off along the way the blow was going. Each
+   * chip is a real tumbling piece; the finest grit flies by its weight. Returns how wide the spall it leaves is, m.
+   */
+  spall(surface: Surface | 'asphalt', tint: readonly number[], x: number, y: number, z: number, nx: number, ny: number, nz: number, dx: number, dy: number, dz: number, ke: number): number {
+    const q = SPALL_Q[surface as Surface] ?? SPALL_ASPHALT;
+    const dl = Math.hypot(dx, dy, dz) || 1;
+    dx /= dl;
+    dy /= dl;
+    dz /= dl;
+    const dn = dx * nx + dy * ny + dz * nz;
+    const square = Math.min(1, Math.abs(dn));
+    const glance = 1 - square;
+    const vol = (Math.max(0, ke) * (0.3 + 0.7 * square)) / q;
+    const r = Math.cbrt(vol);
+    // Square on, crushed small; glancing, flaked big.
+    const mean = r * (0.3 + 0.55 * glance * glance);
+    const n = clamp(Math.round((0.45 * vol) / (mean * mean * mean)), 1, 12);
+    // Where they go: back off the face, or on along the glance.
+    const ox = dx - 1.7 * dn * nx;
+    const oy = dy - 1.7 * dn * ny;
+    const oz = dz - 1.7 * dn * nz;
+    const spread = 0.3 + 1.0 * square;
+    for (let k = 0; k < n; k++) {
+      const sz = mean * (0.45 + 1.1 * Math.random());
+      const t = spread * Math.sqrt(Math.random());
+      const p = Math.random() * Math.PI * 2;
+      // A random direction about the throw: tilt it off by t round a random axis.
+      const jx = Math.cos(p) * Math.sin(t);
+      const jz = Math.sin(p) * Math.sin(t);
+      const ax = ox * Math.cos(t) + jx;
+      const ay = oy * Math.cos(t) + (Math.random() - 0.3) * Math.sin(t);
+      const az = oz * Math.cos(t) + jz;
+      const al = Math.hypot(ax, ay, az) || 1;
+      // Small ones leave faster.
+      const sp = clamp(2.5 + 0.035 / Math.max(0.002, sz), 2.5, 13) * (0.6 + 0.6 * Math.random());
+      const k2 = 0.85 + 0.3 * Math.random();
+      const shape: [number, number, number] = [1 + 0.6 * Math.random(), 0.25 + 0.35 * Math.random() * (1 - 0.5 * glance), 0.6 + 0.5 * Math.random()];
+      this.gibs.throw('chunk', x + nx * 0.02, y + ny * 0.02, z + nz * 0.02, (ax / al) * sp, (ay / al) * sp, (az / al) * sp, clamp(sz / 0.1, 0.02, 2.2), tint[0] * k2, tint[1] * k2, tint[2] * k2, false, shape);
+    }
+    // The crushed rest: grit and powder.
+    this.ctx.ground?.grit(x + nx * 0.02, y + ny * 0.02, z + nz * 0.02, nx, ny, nz, ox * glance, oy * glance, oz * glance, clamp(Math.round(3 + ke / 200), 3, 14), 2.5 + 3 * square, [tint[0], tint[1], tint[2]], Math.max(0.0015, mean * 0.3));
+    this.ctx.fx.puff(x + nx * 0.05, y + ny * 0.05, z + nz * 0.05, tint[0], tint[1], tint[2], 0.1 + Math.min(0.35, r * 7), 0.45);
+    return clamp(r * (2.2 + 1.2 * glance), 0.015, 0.4);
+  }
+
+  /**
+   * The mark a round leaves in a surface, by what it is made of: stone a small round pit, darker to its bottom; concrete and
+   * plaster a ragged spall of fresh, paler material round a deep dark hole; metal a punched hole with bright torn petals of
+   * bare steel; wood a dark hole, or splinters where a heavy round or an exit tore it. `size` is the round's own mark size.
+   */
+  private holeMark(surface: Surface, size: number, heavy: boolean, exit: boolean): { cell: number; w: number; c: readonly number[] } {
+    const jitter = 0.85 + 0.3 * Math.random();
+    switch (surface) {
+      case 'stone':
+        return { cell: anyOf(PITS), w: size * (exit ? 0.45 : 0.25) * jitter, c: SURFACES.stone.tint };
+      case 'concrete':
+      case 'plaster':
+        return { cell: anyOf(SPALLS), w: size * (exit ? 1.1 : 0.7) * jitter, c: this.pale(surface, 1.08) };
+      case 'sheet':
+      case 'car':
+      case 'steel':
+        return { cell: anyOf(PUNCHES), w: size * (exit ? 0.42 : 0.32) * jitter, c: METAL };
+      default:
+        return { cell: heavy || exit ? CELL.splinter : CELL.hole, w: size, c: this.pale(surface) };
+    }
   }
 
   /** The colour of the exposed material around a hole: the surface, paler, as if the paint were blown off it. */
@@ -273,11 +410,18 @@ export class Gore {
     return [Math.min(1, t[0] * k), Math.min(1, t[1] * k), Math.min(1, t[2] * k)];
   }
 
-  /** Chips of the surface thrown back out of a hit, or forward out of an exit. */
+  /**
+   * Chips of the surface thrown back out of a hit, or forward out of an exit. Stone, concrete and plaster break off in flat
+   * angular flakes of fresh material, paler than the weathered face.
+   */
   private chips(surface: Surface, x: number, y: number, z: number, dx: number, dy: number, dz: number, n: number, speed: number) {
-    const t = SURFACES[surface].tint;
+    const masonry = surface === 'stone' || surface === 'concrete' || surface === 'plaster';
+    const t = masonry ? this.pale(surface, 1.05) : SURFACES[surface].tint;
+    const wood = surface === 'wood';
     for (let i = 0; i < n; i++) {
       const k = 0.8 + Math.random() * 0.4;
+      // Masonry in flat angular flakes, wood in long splinters.
+      const shape: [number, number, number] | undefined = masonry ? [1 + 0.5 * Math.random(), 0.3 + 0.3 * Math.random(), 0.6 + 0.4 * Math.random()] : wood ? [0.3, 0.25, 1.6 + Math.random()] : undefined;
       this.gibs.throw(
         'chunk',
         x,
@@ -286,10 +430,13 @@ export class Gore {
         dx * speed * (0.5 + Math.random()) + (Math.random() - 0.5) * 2.4,
         dy * speed * (0.5 + Math.random()) + 0.8 + Math.random() * 1.8,
         dz * speed * (0.5 + Math.random()) + (Math.random() - 0.5) * 2.4,
-        0.3 + Math.random() * 0.45,
+        // Masonry breaks into chips a centimetre or two across.
+        masonry ? 0.1 + Math.random() * 0.22 : 0.3 + Math.random() * 0.45,
         t[0] * k,
         t[1] * k,
         t[2] * k,
+        false,
+        shape,
       );
     }
   }
@@ -299,7 +446,7 @@ export class Gore {
    * exposed material with splinters, as wide as the round made it; the ground and stone keep a scuffed pit. Nothing that
    * moves keeps a mark (it would stay behind in the air), and nor does a box that only roughly stands for something round.
    */
-  impact(surface: Surface, x: number, y: number, z: number, nx: number, ny: number, nz: number, dx: number, dz: number, energy: number, o: { moving?: boolean; size?: number; heavy?: boolean; mark?: boolean; shaft?: boolean } = {}) {
+  impact(surface: Surface, x: number, y: number, z: number, nx: number, ny: number, nz: number, dx: number, dz: number, energy: number, o: { moving?: boolean; size?: number; heavy?: boolean; mark?: boolean; shaft?: boolean; dy?: number; ke?: number; tint?: readonly number[] } = {}) {
     const ctx = this.ctx;
     const s = SURFACES[surface];
     const e = Math.max(0.2, Math.min(1.5, energy));
@@ -308,18 +455,35 @@ export class Gore {
       if (surface === 'wood' || surface === 'plaster') ctx.fx.puff(x, y, z, ...s.tint, 0.08, 0.2);
       return;
     }
-    if (s.spark) ctx.fx.spark(x + nx * 0.05, y + ny * 0.05, z + nz * 0.05, Math.round(s.spark * e), 3 + e * 2);
-    // Dust kicked back off the surface, or splinters for wood.
-    ctx.fx.puff(x + nx * 0.08, y + ny * 0.08, z + nz * 0.08, s.tint[0], s.tint[1], s.tint[2], 0.5 + e * 0.5, 0.45);
+    const dy = o.dy ?? 0;
+    // The round's kinetic energy, J (callers that do not know it give a rough one from its share of a rifle round's).
+    const ke = o.ke ?? 1300 * e;
+    const metal = METALS.has(surface);
+    // Sparks off metal (and a few off stone and the grit in concrete): how many by the blow, which way by its angle.
+    const sparks = sparkCount(surface, ke);
+    if (sparks) ctx.fx.sparkOff(x, y, z, nx, ny, nz, dx, dy, dz, sparks, 5 + Math.min(6, ke / 300));
+    // Dust kicked back off the surface: paint and lead off metal is a little grey puff.
+    const pk = metal ? 0.55 : 1;
+    // As big as the blow: a pellet's is a wisp, a rifle round's a small cloud.
+    const pz = clamp(Math.cbrt(ke / 1300), 0.3, 1.3);
+    ctx.fx.puff(x + nx * 0.08, y + ny * 0.08, z + nz * 0.08, s.tint[0] * pk, s.tint[1] * pk, s.tint[2] * pk, metal ? 0.08 + e * 0.05 : 0.15 + 0.35 * pz, metal ? 0.25 : 0.4);
     if (surface === 'dirt') ctx.fx.dust(x, y, z, nx * 2, nz * 2, 0.35, s.tint);
     if (o.moving) return;
     const size = (o.size ?? 0.1) * (0.9 + 0.2 * Math.min(1, e));
-    if (surface !== 'glass') this.chips(surface, x + nx * 0.03, y + ny * 0.03, z + nz * 0.03, nx, ny, nz, 1 + Math.round(e * size * 14), 2.2);
+    // Stone, concrete and plaster lose a cone of themselves, in chips as big as the blow and its angle make them; wood
+    // splinters; metal is holed and loses nothing that flies but sparks.
+    let spallW = 0;
+    // A stone of its own colour (`o.tint`) breaks paler inside.
+    const own = o.tint ? [Math.min(1, o.tint[0] * 1.15), Math.min(1, o.tint[1] * 1.15), Math.min(1, o.tint[2] * 1.15)] : null;
+    if (SPALL_Q[surface]) spallW = this.spall(surface, own ?? this.pale(surface, 1.05), x, y, z, nx, ny, nz, dx, dy, dz, ke);
+    else if (surface === 'wood') this.chips(surface, x + nx * 0.03, y + ny * 0.03, z + nz * 0.03, nx, ny, nz, 1 + Math.round(e * size * 14), 2.2);
     if (o.mark === false) return;
     if (ny > 0.7 && ctx.terrain) y += roadLift(ctx.terrain, x, z);
     if (s.hole) {
-      const c = this.pale(surface);
-      this.marks.add(x, y, z, { cell: o.heavy ? CELL.splinter : CELL.hole, w: size, h: size, nx, ny, nz, r: c[0], g: c[1], b: c[2], opacity: 0.97, hole: true });
+      const m = this.holeMark(surface, size, o.heavy ?? false, false);
+      const w = spallW > 0 ? spallW * (surface === 'stone' ? 0.7 : 1) : m.w;
+      const mc = o.tint ?? m.c;
+      this.marks.add(x, y, z, { cell: m.cell, w, h: w, nx, ny, nz, r: mc[0], g: mc[1], b: mc[2], opacity: 0.97, hole: true });
       this.placed++;
     } else if (surface === 'dirt' || surface === 'stone') {
       const sc = size * 1.7;
@@ -333,14 +497,20 @@ export class Gore {
     const s = SURFACES[surface];
     if (!s.hole) return;
     const e = Math.max(0.25, Math.min(1.5, energy));
-    const c = this.pale(surface, 1.15);
     let y2 = y;
     if (dy > 0.7 && this.ctx.terrain) y2 += roadLift(this.ctx.terrain, x, z);
     const size = entrySize * 1.8 * (0.9 + 0.2 * Math.min(1, e));
-    this.marks.add(x, y2, z, { cell: CELL.splinter, w: size, h: size, nx: dx, ny: dy, nz: dz, r: c[0], g: c[1], b: c[2], opacity: 0.97, hole: true });
+    // Out the back masonry blows a wider cone and metal tears its petals outward; wood splinters.
+    const m = this.holeMark(surface, size, true, true);
+    let w = m.w;
+    // What comes out the back flies on with the round: masonry blows a wide cone of chips, metal sprays sparks on ahead.
+    if (SPALL_Q[surface]) w = Math.max(w, 1.3 * this.spall(surface, this.pale(surface, 1.05), x, y2, z, dx, dy, dz, -dx, -dy, -dz, 1300 * e * 0.6));
+    else if (METALS.has(surface)) this.ctx.fx.sparks.shower(x + dx * 0.02, y2 + dy * 0.02, z + dz * 0.02, dx, dy, dz, sparkCount(surface, 1300 * e), 7, 0.5);
+    else this.chips(surface, x + dx * 0.04, y2 + dy * 0.04, z + dz * 0.04, dx, dy, dz, 2 + Math.round(e * size * 12), 3.4);
+    this.marks.add(x, y2, z, { cell: m.cell, w, h: w, nx: dx, ny: dy, nz: dz, r: m.c[0], g: m.c[1], b: m.c[2], opacity: 0.97, hole: true });
     this.placed++;
-    this.chips(surface, x + dx * 0.04, y2 + dy * 0.04, z + dz * 0.04, dx, dy, dz, 2 + Math.round(e * size * 12), 3.4);
-    this.ctx.fx.puff(x + dx * 0.15, y2, z + dz * 0.15, s.tint[0], s.tint[1], s.tint[2], 0.6, 0.5);
+    const mk = METALS.has(surface) ? 0.55 : 1;
+    this.ctx.fx.puff(x + dx * 0.15, y2, z + dz * 0.15, s.tint[0] * mk, s.tint[1] * mk, s.tint[2] * mk, METALS.has(surface) ? 0.12 : 0.6, 0.5);
   }
 
   /** A pane of glass breaks: shards thrown both ways off the window, and a glitter of dust. */
@@ -407,7 +577,8 @@ export class Gore {
   }
 
   /** A charred ring where something blew up. */
-  groundBlast(x: number, y: number, z: number, radius: number, damage: number) {
+  /** `soft`: the loose ground took the blast (a crater dug, its soil thrown, the ground charred), so no clods or scorch mark here. */
+  groundBlast(x: number, y: number, z: number, radius: number, damage: number, soft = false) {
     const ctx = this.ctx;
     const gy = ctx.groundAt(x, z);
     // Airbursts disturb the ground less; explosions high overhead leave no ground mark.
@@ -424,10 +595,10 @@ export class Gore {
       const out = (1 + Math.random() * 3) * coupling;
       if (f.dust > 0.02) ctx.fx.smoke.emit(px, py, pz, Math.sin(a) * out, 1 + out, Math.cos(a) * out,
         0.6 + coupling, 0.12, Math.min(2, radius * 0.25) * coupling, ...f.tint, 0.35, 1, 1);
-      this.gibs.throw('chunk', px, py, pz, Math.sin(a) * out, 1 + out, Math.cos(a) * out,
+      if (!soft) this.gibs.throw('chunk', px, py, pz, Math.sin(a) * out, 1 + out, Math.cos(a) * out,
         (0.12 + Math.random() * 0.22) * coupling, ...f.tint);
     }
-    if (radius >= 3) this.scorch(x, z, radius * 0.6 * coupling);
+    if (radius >= 3 && !soft) this.scorch(x, z, radius * 0.6 * coupling);
   }
 
   /** A charred ring where something burned. */
@@ -462,6 +633,11 @@ export class Gore {
 
   /** Something came off a body. Throw it, spray the stump, and leave the stump bleeding. */
   sever(zb: Zombie, zone: Exclude<Zone, 'torso'>, dx: number, dy: number, dz: number, power: number) {
+    // The dead come apart as themselves: the piece that was cut, at the height it was cut (`fleshFx.ts`).
+    if (this.anatomy) {
+      this.anatomy.sever(zb, zone, dx, dy, dz, power);
+      return;
+    }
     const ctx = this.ctx;
     const sc = zb.def.scale;
     const [lx, ly, lz] = this.joint(zone, sc);
@@ -562,6 +738,11 @@ export class Gore {
     this.bleeders.push({ zb: a, lx, ly, lz, t: part === 'head' ? 3 : 4.5, power: p, pulse: 0, dx, dz, head: part === 'head', roll: Math.PI * 0.475 * (a.id % 2 ? 1 : -1), lift: a.flying ? 0 : 0.04 });
   }
 
+  /** A stump left pumping blood for `t` seconds: `lx, ly, lz` in the body's own frame (x to its left, z ahead), scaled. */
+  bleed(zb: Bleedable, lx: number, ly: number, lz: number, t: number, power: number, dx: number, dz: number, head: boolean) {
+    this.bleeders.push({ zb, lx, ly, lz, t, power, pulse: 0, dx, dz, head });
+  }
+
   // ------------------------------------------------------------------ brass
 
   /** Throw an empty case out of a gun held at (x, y, z) facing `yaw`, with the shooter's own motion carried over. */
@@ -598,6 +779,7 @@ export class Gore {
     this.brass.update(dt);
     this.gibs.update(dt);
     this.timber.update(dt);
+    this.anatomy.update(dt);
     for (let i = this.bleeders.length - 1; i >= 0; i--) {
       const b = this.bleeders[i];
       b.t -= dt;
@@ -643,6 +825,7 @@ export class Gore {
     this.brass.clear();
     this.gibs.clear();
     this.timber.clear();
+    this.anatomy.clear();
   }
 
   dispose() {
@@ -652,5 +835,6 @@ export class Gore {
     this.brass.dispose();
     this.gibs.dispose();
     this.timber.dispose();
+    this.anatomy.dispose();
   }
 }

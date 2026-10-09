@@ -15,7 +15,8 @@ describe('spatial far-prop batches', () => {
     props.push({ kind: 'rock', x: -256.01, y: 0, z: -512.01, scale: 2, yaw: 0.2, seed: 4 });
     const detail = new FarDetail(def, props, { tLoaded: { value: null }, uLoadedRect: { value: new THREE.Vector4(-5000, -5000, 20000, 20000) } });
     const batches = detail.group.children.filter(o => (o as THREE.InstancedMesh).isInstancedMesh) as THREE.InstancedMesh[];
-    expect(batches.length).toBeGreaterThan(20);
+    // 2048 m batches: five along the 10 km strip, two across it (x = -20 falls west of 0), and the lone rock behind.
+    expect(batches.length).toBe(11);
     expect(new Set(batches.map(b => b.geometry)).size).toBe(1);
     expect(new Set(batches.map(b => b.material)).size).toBe(1);
     const expected = new Map(props.map(p => {

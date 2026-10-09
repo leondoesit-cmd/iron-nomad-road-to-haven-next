@@ -22,11 +22,25 @@ export interface GibWorld extends BrassWorld {
   trail(x: number, y: number, z: number, vx: number, vy: number, vz: number): void;
   /** A gib hit the floor hard enough to splash. */
   splash(x: number, y: number, z: number, speed: number): void;
+  /**
+   * How much the ground at a point gives, 0 hard (asphalt, concrete, rock: a chip bounces and skitters) to 1 soft (sand,
+   * mud: a clod plops in and stops where it lands). Missing: hard.
+   */
+  give?(x: number, z: number): number;
+  /**
+   * A piece came down on the ground at (x, z): about `r` across its face, `mass` kg, falling at `vy` m/s. Soft ground takes
+   * a dent. Missing: nothing happens.
+   */
+  thud?(x: number, z: number, r: number, mass: number, vy: number): void;
 }
+
+/** What each kind of piece is made of, kg/m^3, and how much of its bounds it fills. */
+const DENSITY: Record<GibKind, number> = { limb: 1050 * 0.6, head: 1050 * 0.5, animalHead: 1050 * 0.5, chunk: 1600 * 0.5, plank: 600 * 0.7, shard: 2500 * 0.3 };
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
 const _qd = new THREE.Quaternion();
+const _ext = new THREE.Vector3();
 const _p = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _a = new THREE.Vector3();
@@ -88,6 +102,8 @@ class GibSet {
   used: Uint8Array;
   trailT: Float32Array;
   bloody: Uint8Array;
+  /** Each piece's own proportions against the pool's shape (x, y, z): no two clods or chips alike. */
+  shape: Float32Array;
   count = 0;
 
   constructor(geo: THREE.BufferGeometry, n: number, glassy = false) {
@@ -126,7 +142,26 @@ class GibSet {
     this.used = new Uint8Array(n);
     this.trailT = new Float32Array(n);
     this.bloody = new Uint8Array(n);
+    this.shape = new Float32Array(n * 3).fill(1);
   }
+}
+
+/**
+ * A lump of rubble: an icosahedron with its corners pushed in and out (the same corner moved the same way on every face
+ * that shares it, so it stays closed), flat-shaded so it catches the light in facets like a broken stone or a dry clod.
+ */
+function rubbleGeometry(r: number): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(r, 1);
+  const pos = g.attributes.position as THREE.BufferAttribute;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const h = Math.sin(Math.round(v.x * 997) * 12.9898 + Math.round(v.y * 991) * 78.233 + Math.round(v.z * 983) * 37.719) * 43758.5453;
+    v.multiplyScalar(0.72 + 0.5 * (h - Math.floor(h)));
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  g.computeVertexNormals();
+  return g;
 }
 
 export class Gibs {
@@ -137,7 +172,7 @@ export class Gibs {
     // Limbs lie along Y; the head is a rounded lump; chunks are small and ragged.
     const limb = fleshGeometry(false);
     const head = fleshGeometry(true);
-    const chunk = new THREE.IcosahedronGeometry(0.05, 0);
+    const chunk = rubbleGeometry(0.05);
     const plank = new THREE.BoxGeometry(0.07, 0.6, 0.12);
     // A shard of glass is a flat three-sided sliver.
     const shard = new THREE.CylinderGeometry(0, 0.05, 0.004, 3);
@@ -147,7 +182,11 @@ export class Gibs {
   }
 
   /** Throw a gib. `bloody` distinguishes organic fragments from rubble sharing the chunk pool. */
-  throw(kind: GibKind, x: number, y: number, z: number, vx: number, vy: number, vz: number, size: number, r: number, g: number, b: number, bloody = kind === 'limb' || kind === 'head' || kind === 'animalHead') {
+  /**
+   * Throw a gib. `shape` stretches this one piece along its own x, y and z (a flake of crust is flat, a pebble round); a
+   * chunk left without one gets proportions of its own.
+   */
+  throw(kind: GibKind, x: number, y: number, z: number, vx: number, vy: number, vz: number, size: number, r: number, g: number, b: number, bloody = kind === 'limb' || kind === 'head' || kind === 'animalHead', shape?: readonly [number, number, number]) {
     const set = this.sets[kind];
     const pl = set.pool;
     const i = pl.next;
@@ -159,6 +198,9 @@ export class Gibs {
     set.trailT[i] = 0;
     set.bloody[i] = bloody ? 1 : 0;
     set.size[i] = size;
+    if (shape) set.shape.set(shape, i * 3);
+    else if (kind === 'chunk') set.shape.set([0.75 + 0.5 * Math.random(), 0.55 + 0.5 * Math.random(), 0.75 + 0.5 * Math.random()], i * 3);
+    else set.shape.set([1, 1, 1], i * 3);
     set.pos.set([x, y, z], i * 3);
     set.vel.set([vx, vy, vz], i * 3);
     _q.setFromEuler(new THREE.Euler(Math.random() * 6.28, Math.random() * 6.28, Math.random() * 6.28));
@@ -192,6 +234,7 @@ export class Gibs {
       set.age[i] += dt;
       const o3 = i * 3;
       const sz = set.size[i];
+      _ext.set(pl.extent.x * set.shape[o3], pl.extent.y * set.shape[o3 + 1], pl.extent.z * set.shape[o3 + 2]);
       if (!set.rest[i]) {
         _q.fromArray(set.quat, i * 4);
         _a.fromArray(set.spin, o3);
@@ -214,14 +257,19 @@ export class Gibs {
           }
         }
         const floor = set.vel[o3 + 1] <= 0 ? this.world.floorAt(nx, Math.max(set.pos[o3 + 1], ny) + 0.4, nz) : null;
-        let rr = support(pl.extent, _q, sz);
+        let rr = support(_ext, _q, sz);
         if (floor !== null && ny - rr <= floor) {
           ny = floor + rr;
           const impact = -set.vel[o3 + 1];
-          if (impact > 1.4) {
-            set.vel[o3 + 1] = impact * (set.bloody[i] ? 0.22 : 0.32);
-            set.vel[o3] *= 0.65;
-            set.vel[o3 + 2] *= 0.65;
+          const give = this.world.give?.(nx, nz) ?? 0;
+          if (impact > 1 && give > 0 && this.world.thud) {
+            const e = _ext;
+            this.world.thud(nx, nz, sz * 0.5 * (e.x + e.z), DENSITY[kind] * 8 * e.x * e.y * e.z * sz * sz * sz, impact);
+          }
+          if (impact > 1.4 + 3 * give) {
+            set.vel[o3 + 1] = impact * (set.bloody[i] ? 0.22 : 0.32) * (1 - 0.8 * give);
+            set.vel[o3] *= 0.65 * (1 - 0.6 * give);
+            set.vel[o3 + 2] *= 0.65 * (1 - 0.6 * give);
             for (let k = 0; k < 3; k++) set.spin[o3 + k] *= 0.5;
             // Only flesh splashes; wood, masonry and glass keep their own debris behavior.
             if (set.bloody[i]) {
@@ -230,7 +278,7 @@ export class Gibs {
             }
           } else {
             set.vel[o3 + 1] = 0;
-            const friction = Math.exp(-9 * dt);
+            const friction = Math.exp(-9 * (1 + 3 * give) * dt);
             set.vel[o3] *= friction;
             set.vel[o3 + 2] *= friction;
             for (let k = 0; k < 3; k++) set.spin[o3 + k] *= Math.exp(-12 * dt);
@@ -241,7 +289,7 @@ export class Gibs {
               _qd.setFromUnitVectors(_a, _flat.normalize());
               _target.copy(_q).premultiply(_qd);
               _q.slerp(_target, 1 - Math.exp(-10 * dt));
-              rr = support(pl.extent, _q, sz);
+              rr = support(_ext, _q, sz);
               ny = floor + rr;
             }
             const flatEnough = kind !== 'limb' && kind !== 'plank' || Math.abs(_a.y) < 0.025;
@@ -258,7 +306,7 @@ export class Gibs {
       }
       _q.set(set.quat[i * 4], set.quat[i * 4 + 1], set.quat[i * 4 + 2], set.quat[i * 4 + 3]);
       _p.set(set.pos[o3], set.pos[o3 + 1], set.pos[o3 + 2]);
-      _s.set(sz, sz, sz);
+      _s.set(sz * set.shape[o3], sz * set.shape[o3 + 1], sz * set.shape[o3 + 2]);
       _m.compose(_p, _q, _s);
       pl.mesh.setMatrixAt(i, _m);
     }

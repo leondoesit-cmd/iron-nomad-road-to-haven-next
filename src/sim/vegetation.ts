@@ -68,6 +68,8 @@ export interface VegetationRecord {
   notchDir?: [number, number];
   /** Snapped there by gunfire, at this height up its own model (model units): its stump stands, its top lies at `pose`. */
   cut?: number;
+  /** Cut down by a blade: the share of its height still standing (a mown clump, a lopped bush, a stalk's stub). */
+  trim?: number;
 }
 export type VegetationMemory = Map<string, VegetationRecord>;
 export const vegetationKey = (kind: string, x: number, z: number) => `${kind}:${Math.round(x * 100)}:${Math.round(z * 100)}`;

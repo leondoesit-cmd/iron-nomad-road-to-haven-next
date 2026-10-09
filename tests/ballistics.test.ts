@@ -464,7 +464,9 @@ describe('gore', () => {
     expect(zb.wounds.mask & maskOf('armL')).toBe(maskOf('armL'));
     expect(limbsGone(zb.wounds.mask).arms).toBe(1);
     expect(zb.biteMult).toBeLessThan(1);
-    expect(sc.gore.gibs.counts().limb).toBeGreaterThan(0);
+    // The arm itself flies, cut where the round hit it (the flesh engine throws the zombie's own arm).
+    expect(sc.gore.anatomy.pieces.length).toBe(1);
+    expect(sc.gore.anatomy.pieces[0].chain).toBe(0);
     expect(sc.gore.gibs.counts().chunk).toBeGreaterThan(0);
   });
 
@@ -494,7 +496,10 @@ describe('gore', () => {
     run(sc, 0.4);
     expect(zb.dead).toBe(true);
     expect(limbsGone(zb.wounds.mask).head).toBe(true);
-    expect(sc.gore.gibs.counts().head).toBe(1);
+    // A rifle round bursts the skull: the jaw stays, bone and brain fly.
+    expect(zb.flesh?.head).toBe('burst');
+    expect(sc.gore.anatomy.organs.counts().skull).toBeGreaterThan(0);
+    expect(sc.gore.anatomy.organs.counts().brain).toBeGreaterThan(0);
     // It was shot from the -z side, so it faces back toward the shooter and topples along +z.
     expect(Math.cos(zb.yaw)).toBeLessThan(-0.8);
   });

@@ -578,11 +578,18 @@ export class BuildingView {
   /** The glass of each storey. */
   paneSets: PaneSet[] = [];
   roof: THREE.Group | null = null;
+  /**
+   * The outside of the building, which never changes until a rebuild: storey shells (facade) and the trim and roof (kit).
+   * Far away these are drawn by the landscape's merged batch for their cell instead (`buildingBatch.ts`).
+   */
+  exterior: { facade: THREE.Mesh[]; kit: THREE.Mesh[] } = { facade: [], kit: [] };
+  /** Counts rebuilds, so a batch made from the old meshes knows it no longer matches. */
+  version = 0;
   private geos: THREE.BufferGeometry[] = [];
   readonly plan: BuildingPlan;
-  private cx: number;
-  private cz: number;
-  private radius: number;
+  readonly cx: number;
+  readonly cz: number;
+  readonly radius: number;
 
   constructor(public rb: RuralBuilding) {
     this.plan = rb.plan;
@@ -598,19 +605,22 @@ export class BuildingView {
     const g = buildBuildingGeometry(this.rb);
     const kit = kitMaterial();
     const facade = facadeMaterial();
+    this.exterior = { facade: [], kit: [] };
     const add = (parent: THREE.Group, geo: THREE.BufferGeometry | null, mat: THREE.Material, inside = false) => {
-      if (!geo) return;
+      if (!geo) return null;
       this.geos.push(geo);
       const m = staticTransform(new THREE.Mesh(geo, mat));
       m.castShadow = true;
       m.receiveShadow = true;
       parent.add(m);
       if (inside) this.insides.push(m);
+      return m;
     };
+    const outside = (list: THREE.Mesh[], m: THREE.Mesh | null) => m && list.push(m);
     g.levels.forEach((lv) => {
       const lg = staticTransform(new THREE.Group());
-      add(lg, lv.shell, facade);
-      add(lg, lv.trim, kit);
+      outside(this.exterior.facade, add(lg, lv.shell, facade));
+      outside(this.exterior.kit, add(lg, lv.trim, kit));
       add(lg, lv.inside, kit, true);
       if (lv.glass) {
         this.geos.push(lv.glass);
@@ -628,9 +638,17 @@ export class BuildingView {
     });
     if (g.roof) {
       this.roof = staticTransform(new THREE.Group());
-      add(this.roof, g.roof, kit);
+      outside(this.exterior.kit, add(this.roof, g.roof, kit));
       this.group.add(this.roof);
     }
+  }
+
+  /** Swap an exterior mesh's geometry for a view into a batch's shared buffers (`buildingBatch.ts`). */
+  shareGeometry(mesh: THREE.Mesh, view: THREE.BufferGeometry) {
+    const i = this.geos.indexOf(mesh.geometry);
+    if (i >= 0) this.geos[i] = view;
+    mesh.geometry.dispose();
+    mesh.geometry = view;
   }
 
   /** The plan changed (a wall was breached): throw the meshes away and build them again. */
@@ -640,8 +658,9 @@ export class BuildingView {
     for (const ps of this.paneSets) for (const k of ps.keys()) if (ps.stageOf(k) > 0 && ps.stageOf(k) < 3) hurt.push([k, ps.stageOf(k)]);
     for (const ps of this.paneSets) ps.dispose();
     this.paneSets = [];
-    for (const g of this.geos) g.dispose();
+    for (const g of this.geos) releaseGeometry(g);
     this.geos = [];
+    this.version++;
     for (const l of this.levels) l.removeFromParent();
     this.roof?.removeFromParent();
     this.levels = [];
@@ -692,7 +711,19 @@ export class BuildingView {
 
   dispose() {
     for (const ps of this.paneSets) ps.dispose();
-    for (const g of this.geos) g.dispose();
+    for (const g of this.geos) releaseGeometry(g);
     this.group.removeFromParent();
   }
+}
+
+/**
+ * Dispose a geometry, leaving alone buffers it shares with a batch: three deletes every attribute's GPU buffer on dispose,
+ * and the batch and the other buildings of its cell still draw from them.
+ */
+function releaseGeometry(g: THREE.BufferGeometry) {
+  if (g.userData.sharedBuffers) {
+    g.setIndex(null);
+    for (const k of Object.keys(g.attributes)) g.deleteAttribute(k);
+  }
+  g.dispose();
 }

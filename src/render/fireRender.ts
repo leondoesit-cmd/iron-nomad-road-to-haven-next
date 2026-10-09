@@ -9,17 +9,22 @@ import { shared } from './dispose';
  *
  * A flame is a few tongues, each a strip that stands on the fuel, turns about its own axis to face the camera and bends
  * downwind along its length (more at the tip, as a real flame does: the hot gas is pushed sideways as it rises). The
- * fragment shader draws the flame itself: a teardrop eaten into by turbulence that scrolls up it at the speed hot gas rises
- * (faster in a small flame, as fire puffs faster the smaller it is), the noise bent sideways more toward the tip so the
- * flame licks and tears into loose tongues. How hot each point is picks its colour off a black-body ramp: white-yellow in the
- * body, orange, a deep red where the edges cool, and soot for the dirty fuels. It is drawn in HDR, premultiplied, so the
- * core blooms at night while the flame still hides a little of what is behind it by day.
+ * fragment shader draws the flame itself: a teardrop eaten into by turbulence carried up it by the rising gas. The gas
+ * speeds up as it climbs, so a puff leaves the root slowly and stretches out toward the tip, about seven and a half seconds
+ * root to tip in a metre-tall flame (a big one slower): the shapes a flame makes are seen to swell, lick and part, not churn. The noise is bent sideways more toward the tip so the flame licks and tears into
+ * loose tongues, and every tongue reads its noise turned, sized and paced its own way, so no two share a pattern.
+ *
+ * How hot each point is picks its colour off a black-body ramp: white-yellow in the core, orange, a deep red where the edges
+ * and the tip cool. Pockets of hotter and cooler gas ride up inside it, each tongue burns a little hotter or cooler than its
+ * neighbour, and each fuel has its own temper: a log fire yellow, coals orange-red, burning fat a dirty yellow, oil and
+ * rubber orange under thick soot. It is drawn in HDR, premultiplied, so the core blooms at night while the flame still hides
+ * a little of what is behind it by day.
  *
  * Under it the bed: charred ground with coals that breathe, lying on the ground's slope.
  */
 
 /** Fuel looks, by the index the shaders take (`FireLook`). */
-export const FLAME_KIND = { wood: 0, oil: 1, flare: 2, grass: 3, gas: 4 } as const;
+export const FLAME_KIND = { wood: 0, oil: 1, flare: 2, grass: 3, gas: 4, ember: 5, fat: 6 } as const;
 export type FlameKind = keyof typeof FLAME_KIND;
 
 let noiseTex: THREE.DataTexture | null = null;
@@ -96,7 +101,7 @@ vec3 fireRamp( float T, float kind ) {
     // A road flare: strontium red round a white core.
     c = mix( vec3( 0.5, 0.02, 0.03 ), vec3( 1.0, 0.12, 0.1 ), smoothstep( 0.0, 0.5, T ) );
     c = mix( c, vec3( 1.0, 0.75, 0.7 ), smoothstep( 0.75, 1.0, T ) );
-  } else if ( kind > 3.5 ) {
+  } else if ( kind > 3.5 && kind < 4.5 ) {
     // Gas: blue at the root.
     c = mix( vec3( 0.1, 0.25, 1.0 ), c, smoothstep( 0.35, 0.8, T ) );
   }
@@ -112,18 +117,20 @@ uniform float uTime;
 varying vec2 vUv;
 varying vec4 vB;
 varying vec2 vS;
+varying vec4 vM;
 #include <fog_pars_vertex>
 void main() {
   float y = position.y;
   float seed = iA.w;
   float w = iB.x;
   float h = iB.y;
-  float t = uTime;
-  // The flame breathes: its height swells and drops, and now and then shoots up.
-  float br = 0.86 + 0.08 * sin( t * 6.1 + seed * 41.0 ) + 0.06 * sin( t * 11.3 + seed * 17.0 ) + 0.05 * sin( t * 2.3 + seed * 5.0 );
+  // A big flame moves slower than a small one (it puffs at about 1 / sqrt(its size)); all of it slow and heavy.
+  float t = uTime * 0.16 * inversesqrt( clamp( h, 0.5, 6.0 ) );
+  // The flame breathes: its height swells and drops, and now and then reaches up.
+  float br = 0.88 + 0.06 * sin( t * 3.1 + seed * 41.0 ) + 0.04 * sin( t * 5.3 + seed * 17.0 ) + 0.06 * sin( t * 1.2 + seed * 5.0 );
   h *= mix( 1.0, br, iC.z );
-  // Wind lean plus the flame's own sway.
-  vec2 sway = vec2( sin( t * 2.1 + seed * 31.0 ) + 0.6 * sin( t * 4.7 + seed * 13.0 ), sin( t * 1.7 + seed * 23.0 ) + 0.6 * sin( t * 5.3 + seed * 7.0 ) ) * 0.06 * iC.z;
+  // Wind lean plus the flame's own slow sway.
+  vec2 sway = vec2( sin( t * 1.1 + seed * 31.0 ) + 0.5 * sin( t * 2.3 + seed * 13.0 ), sin( t * 0.9 + seed * 23.0 ) + 0.5 * sin( t * 2.7 + seed * 7.0 ) ) * 0.05 * iC.z;
   vec2 L = iC.xy + sway;
   vec3 c = iA.xyz + vec3( L.x * y * y * h, y * h, L.y * y * y * h );
   vec3 ax = normalize( vec3( L.x * 2.0 * y, 1.0, L.y * 2.0 * y ) );
@@ -139,6 +146,10 @@ void main() {
   vUv = vec2( position.x * 2.0, y );
   vB = vec4( w, h, iB.z, iB.w );
   vS = vec2( seed, iC.w );
+  // This tongue's own turn and size of turbulence.
+  float an = fract( seed * 0.618034 ) * 6.2832;
+  float sc = 0.8 + 0.45 * fract( seed * 0.754878 + 0.31 );
+  vM = vec4( cos( an ), sin( an ), - sin( an ), cos( an ) ) * sc;
   vec4 mvPosition = viewMatrix * vec4( p, 1.0 );
   gl_Position = projectionMatrix * mvPosition;
   #include <fog_vertex>
@@ -151,40 +162,60 @@ uniform float uOcclude;
 varying vec2 vUv;
 varying vec4 vB;
 varying vec2 vS;
+varying vec4 vM;
 #include <fog_pars_fragment>
 ${RAMP}
 void main() {
   float y = vUv.y;
+  float x = vUv.x;
   float seed = vS.x;
   float heat = vB.z;
   float kind = vB.w;
-  // Fire puffs faster the smaller it is (about 1.5 / sqrt(size) times a second), so the turbulence climbs a short flame quickly.
-  float ts = uTime * 1.25 * inversesqrt( max( vB.y, 0.25 ) );
-  float x = vUv.x;
-  // The flame licks from side to side, more toward the tip.
-  float wa = texture2D( tNoise, vec2( x * 0.22 + seed * 7.31, y * 0.42 - ts * 0.55 ) ).r - 0.5;
-  float wb = texture2D( tNoise, vec2( x * 0.5 + seed * 3.7 + 0.37, y * 0.85 - ts * 1.15 ) ).g - 0.5;
-  float xw = x + ( wa * 0.9 + wb * 0.45 ) * ( 0.1 + y * 0.9 );
-  // Rising cells of hot gas.
-  float n = texture2D( tNoise, vec2( xw * 0.3 + seed * 3.1, y * 0.7 - ts * 0.95 ) ).b * 0.5
-    + texture2D( tNoise, vec2( xw * 0.62 - seed, y * 1.4 - ts * 1.7 ) ).a * 0.32
-    + texture2D( tNoise, vec2( xw * 1.3 + seed * 0.7, y * 2.8 - ts * 2.9 ) ).r * 0.18;
-  // A teardrop: round at the root, drawn out to a point.
-  float prof = ( 0.55 + 0.45 * smoothstep( 0.0, 0.22, y ) ) * pow( max( 1.0 - y, 0.0 ), 0.75 );
+  // The noise, turned and sized for this tongue alone.
+  mat2 m = mat2( vM.x, vM.y, vM.z, vM.w );
+  vec2 o = vec2( seed * 0.731, seed * 0.317 );
+  // Hot gas speeds up as it rises (as the square root of the height), so the noise is laid out in rise time, not height: a
+  // puff leaves the root slowly and stretches out as it climbs. A metre-tall flame takes about 7.5 seconds root to tip.
+  float ts = uTime * ( 0.084 + 0.032 * fract( seed * 0.56984 + 0.67 ) ) * inversesqrt( clamp( vB.y, 0.5, 6.0 ) );
+  float v = sqrt( y + 0.04 ) - ts;
+  // The flame licks from side to side, slowly, and more toward the tip.
+  float wa = texture2D( tNoise, m * vec2( x * 0.16, v * 0.55 ) + o ).r - 0.5;
+  float wb = texture2D( tNoise, m * vec2( x * 0.42, v * 1.1 - ts * 0.08 ) + o + 0.37 ).g - 0.5;
+  float xw = x + ( wa * 0.8 + wb * 0.32 ) * ( 0.08 + y * 0.92 );
+  // Rising cells of hot gas. The small ones turn over a little faster than the big ones carry them, so the pattern changes
+  // as it climbs instead of sliding up whole.
+  float n = texture2D( tNoise, m * vec2( xw * 0.3, v * 0.95 ) + o + 0.13 ).b * 0.52
+    + texture2D( tNoise, m * vec2( xw * 0.62, v * 1.7 - ts * 0.12 ) + o + 0.61 ).a * 0.3
+    + texture2D( tNoise, m * vec2( xw * 1.2, v * 3.0 - ts * 0.3 ) + o + 0.83 ).r * 0.18;
+  // A teardrop: round at the root, full in the shoulders, closing toward the top, where the turbulence shapes the tip
+  // rather than the strip.
+  float prof = ( 0.55 + 0.45 * smoothstep( 0.0, 0.22, y ) ) * pow( max( 1.0 - y, 0.0 ), 0.5 );
   float d = abs( xw ) / max( prof, 0.02 );
-  // The turbulence tears at the flame more the higher it climbs; the root stays whole.
-  float f = ( 1.0 - d ) * 1.3 - ( n - 0.42 ) * ( 0.3 + y * 1.6 ) - y * 0.3;
+  // The turbulence tears at the flame more the higher it climbs, so the top breaks into loose tongues; the root stays whole.
+  float f = ( 1.0 - d ) * 1.3 - ( n - 0.42 ) * ( 0.3 + y * 2.1 ) - y * 0.22;
   if ( f <= 0.0 ) discard;
-  // Hottest a little above the root (the very root is starved of air and burns dimmer); it cools as it climbs.
-  float T = clamp( f * ( 1.0 - 0.3 * y ) * ( 0.75 + 0.25 * smoothstep( 0.0, 0.22, y ) ) * ( 0.62 + 0.36 * heat ), 0.0, 1.0 );
-  vec3 col = fireRamp( T, kind ) * ( 0.35 + 1.2 * T + 3.4 * T * T * T ) * ( 0.45 + 0.55 * heat );
+  // Pockets of hotter and cooler gas ride up inside it, so the colour moves within the flame and not only at its edge.
+  float hot = texture2D( tNoise, m * vec2( xw * 0.45, v * 1.3 - ts * 0.05 ) + o + 0.29 ).g;
+  // The fuel's temper: coals burn orange-red, fat and grass a little cooler than a log fire, petrol and rubber orange.
+  float temper = kind > 4.5 ? ( kind < 5.5 ? 0.66 : 0.9 ) : ( kind > 2.5 && kind < 3.5 ) ? 0.94 : ( kind > 0.5 && kind < 1.5 ) ? 0.9 : 1.0;
+  // Hottest a little above the root (the very root is starved of air and burns dimmer); it cools as it climbs, and each
+  // tongue burns a touch hotter or cooler than the one beside it.
+  float T = f * ( 1.0 - 0.52 * y ) * ( 0.72 + 0.28 * smoothstep( 0.0, 0.2, y ) ) * ( 0.55 + 0.38 * heat );
+  T = clamp( T * temper * ( 0.86 + 0.26 * fract( seed * 0.41421 + 0.13 ) ) * ( 0.76 + 0.48 * hot ), 0.0, 1.0 );
+  // Brightness climbs steeply with heat: only the core runs white-hot, and the orange body and the red tips stay dim
+  // enough to keep their colour through the night exposure instead of all blooming the same pale yellow.
+  vec3 col = fireRamp( T, kind ) * ( 0.05 + 0.32 * T + 4.2 * T * T * T * T ) * ( 0.45 + 0.55 * heat );
   // Soft at the root (it stands in the fuel) and never cut off by the sides of its strip, however far the noise blows it.
+  // The cool red wisps are thin.
   float a = smoothstep( 0.0, 0.2, f ) * smoothstep( 0.0, 0.12, y ) * ( 1.0 - smoothstep( 0.72, 1.0, abs( x ) ) ) * vS.y;
-  float occ = uOcclude;
-  // Burning oil and rubber: the cool fringe high up is soot, dark and thick.
-  if ( kind > 0.5 && kind < 1.5 ) {
-    float soot = smoothstep( 0.35, 0.95, y ) * ( 1.0 - smoothstep( 0.05, 0.45, T ) );
-    col *= 1.0 - soot * 0.95;
+  a *= 0.72 + 0.28 * smoothstep( 0.08, 0.45, T );
+  // Clean flame is glowing gas: where it runs cool it turns see-through, never dark. Only soot hides what is behind.
+  float occ = uOcclude * smoothstep( 0.12, 0.6, T );
+  // Burning oil and rubber: the cool fringe high up is soot, dark and thick. Burning fat smokes less.
+  float sootK = kind > 0.5 && kind < 1.5 ? 0.95 : kind > 5.5 ? 0.6 : 0.0;
+  if ( sootK > 0.0 ) {
+    float soot = smoothstep( 0.25, 0.85, y ) * ( 1.0 - smoothstep( 0.15, 0.62, T ) ) * sootK;
+    col *= 1.0 - soot;
     occ = mix( occ, 0.9, soot );
   }
   // Grass flames are thin and quick: less body to hide what is behind them.

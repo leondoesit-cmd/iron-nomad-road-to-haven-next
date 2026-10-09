@@ -1,4 +1,5 @@
 import { clamp01, smoothstep } from '../core/math';
+import { TUNING } from './tuning';
 
 /**
  * Dust storms. A storm is a window of the day, fixed by the campaign seed and the day number, so it needs no save data and
@@ -106,7 +107,9 @@ export function windAt(storm: number, time: number): [number, number] {
   const s = clamp01(storm);
   const gust = 0.78 + 0.22 * Math.sin(time * 0.9) * Math.sin(time * 0.37 + 1.3) + 0.12 * Math.sin(time * 2.3);
   const breeze = 1.6;
-  return [STORM_WIND[0] * s * gust + breeze * 0.8, STORM_WIND[1] * s * gust - breeze * 0.6];
+  // Settings can calm it or whip it up (`sim/tuning.ts`).
+  const k = TUNING.wind;
+  return [(STORM_WIND[0] * s * gust + breeze * 0.8) * k, (STORM_WIND[1] * s * gust - breeze * 0.6) * k];
 }
 
 /** The first day a heat wave can roll. */

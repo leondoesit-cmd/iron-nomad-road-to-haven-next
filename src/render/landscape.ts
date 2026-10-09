@@ -10,11 +10,13 @@ import { forestAt, lushAt } from '../world/hydro';
 import { dryGround, mixDry, mixWater, wetGround, type GroundMix } from './groundMix';
 import { farForestMaterial, farForestMeshes, planFarForest, treeWarmup, type FarTree } from './trees';
 import { scatterWarmup } from './scatter';
-import { FacadeBuilder, facadeMaterial } from './facade';
+import { FacadeBuilder, facadeMaterial, farFacadeMaterial } from './facade';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { MeshBuilder } from './builder';
 import { kitMaterial } from './materials';
 import { appendLandmark, LANDMARK_KINDS } from './landmarks';
 import { BuildingView } from './buildingView';
+import { BuildingBatches } from './buildingBatch';
 import type { LegLayout } from '../world/layout';
 import { shoreShade } from '../world/lakes';
 import { buildLakeWater, buildSpringWater, buildSwampWater } from './water';
@@ -46,9 +48,8 @@ export class Landscape {
   private farDetail: FarDetail | null = null;
   /** Every roadside building of the leg, each cut away on its own when someone steps inside. */
   buildings: BuildingView[] = [];
-
-  /** The open world's city, drawn whole from far away: one mesh per chunk, put away when that chunk is loaded in detail. */
-  private cityFar = new Map<string, THREE.Mesh>();
+  /** Far cells of those buildings, drawn two calls a cell (`buildingBatch.ts`). */
+  private batches: BuildingBatches | null = null;
 
   /** The far mesh's grid (open world), to stand the far forest on exactly what is drawn, and the loaded-chunk mask. */
   private farGrid: { us: number[]; zs: number[]; pos: Float32Array } | null = null;
@@ -78,7 +79,11 @@ export class Landscape {
     this.farDetail?.group.traverse(staticTransform);
   }
 
-  /** Plain walls and roofs for every building of a district, so Petah Tikva shows on the horizon before its chunks stream in. */
+  /**
+   * Plain walls and roofs for every building of a district, so Petah Tikva shows on the horizon before its chunks stream in.
+   * The whole district is one mesh: each building folds away once its chunk is loaded in detail (`farFacadeMaterial`), so it
+   * costs one draw however many chunks it spans (a chunk's worth of walls is a few dozen triangles, not worth a draw).
+   */
   private buildDistrictFar(buildings: BuildingSpec[]) {
     const byChunk = new Map<string, FacadeBuilder>();
     for (const bs of buildings) {
@@ -110,15 +115,30 @@ export class Landscape {
       }
       fb.idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
     }
+    if (!this.lod || !byChunk.size) return;
+    // Every vertex carries the centre of its building's chunk, where the loaded-chunk mask is read.
+    const parts: THREE.BufferGeometry[] = [];
     for (const [key, fb] of byChunk) {
       const g = fb.build();
-      this.geos.push(g);
-      const m = new THREE.Mesh(g, facadeMaterial());
-      m.frustumCulled = true;
-      m.receiveShadow = false;
-      this.group.add(m);
-      this.cityFar.set(key, m);
+      const [cx, cz] = key.split(':').map(Number);
+      const at = new Float32Array(g.attributes.position.count * 2);
+      for (let i = 0; i < at.length; i += 2) {
+        at[i] = (cx + 0.5) * CHUNK;
+        at[i + 1] = (cz + 0.5) * CHUNK;
+      }
+      g.setAttribute('lodAt', new THREE.BufferAttribute(at, 2));
+      parts.push(g);
     }
+    const g = mergeGeometries(parts)!;
+    for (const p of parts) p.dispose();
+    g.computeBoundingSphere();
+    this.geos.push(g);
+    const mat = farFacadeMaterial(this.lod);
+    this.mats.push(mat);
+    const m = new THREE.Mesh(g, mat);
+    m.receiveShadow = false;
+    m.name = 'cityFar';
+    this.group.add(m);
   }
 
   /**
@@ -143,6 +163,8 @@ export class Landscape {
       this.buildings.push(v);
       this.group.add(v.group);
     }
+    this.batches = new BuildingBatches(this.buildings);
+    this.group.add(this.batches.group);
     // A city leg's chunks draw its landmarks themselves (see ChunkView.buildProps); only the wasteland needs them here.
     for (const p of layout.props) {
       if (this.def.biome !== 'city' && LANDMARK_KINDS.has(p.kind)) appendLandmark(cell(p.x, p.z).det, p);
@@ -312,6 +334,7 @@ export class Landscape {
    */
   updateView(focus: { x: number; y: number; z: number } | null, camX: number, camY: number, camZ: number) {
     for (const b of this.buildings) b.setView(focus, camX, camY, camZ);
+    this.batches?.updateView(camX, camZ);
   }
 
   /**
@@ -344,31 +367,21 @@ export class Landscape {
   }
 
   /**
-   * Mark a detailed chunk's ground as loaded (the far terrain steps aside) or the chunk as unloaded. The mask's red
-   * channel is the ground; green is the whole chunk (see setBuilt).
+   * How far a detailed chunk is in, 0..1 each: `ground` is its ground (the far terrain, the far forest and the far rivers
+   * step aside), `built` the whole chunk (the far roads, props and district buildings step aside). In between, the far
+   * side dissolves out pixel for pixel as the chunk dissolves in (`dissolve.ts`): the mask holds the fade itself.
    */
-  setLoaded(cx: number, cz: number, on: boolean) {
+  setFade(cx: number, cz: number, ground: number, built: number) {
     if (!this.loaded || !this.loadedTex) return;
     const x = cx - this.cx0;
     const z = cz - this.cz0;
     if (x < 0 || z < 0 || x >= this.cw || z >= this.ch) return;
     const i = (z * this.cw + x) * 4;
-    this.loaded[i] = on ? 255 : 0;
-    if (!on) this.loaded[i + 1] = 0;
-    this.loadedTex.needsUpdate = true;
-    const far = this.cityFar.get(`${cx}:${cz}`);
-    if (far) far.visible = !on;
-  }
-
-  /** Mark a detailed chunk as fully built, roads and props included: the far roads and props step aside. */
-  setBuilt(cx: number, cz: number) {
-    if (!this.loaded || !this.loadedTex) return;
-    const x = cx - this.cx0;
-    const z = cz - this.cz0;
-    if (x < 0 || z < 0 || x >= this.cw || z >= this.ch) return;
-    const i = (z * this.cw + x) * 4 + 1;
-    if (this.loaded[i]) return;
-    this.loaded[i] = 255;
+    const r = Math.round(Math.min(1, Math.max(0, ground)) * 255);
+    const g = Math.round(Math.min(1, Math.max(0, built)) * 255);
+    if (this.loaded[i] === r && this.loaded[i + 1] === g) return;
+    this.loaded[i] = r;
+    this.loaded[i + 1] = g;
     this.loadedTex.needsUpdate = true;
   }
 
@@ -426,6 +439,7 @@ export class Landscape {
     this.farDetail?.dispose();
     for (const w of this.water) w.dispose();
     for (const b of this.buildings) b.dispose();
+    this.batches?.dispose();
     for (const g of this.geos) g.dispose();
     for (const im of this.farTrees) im.dispose();
     for (const m of this.mats) m.dispose();

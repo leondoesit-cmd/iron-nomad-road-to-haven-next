@@ -1,10 +1,18 @@
-import { detailNormalTexture, grungeTexture, leafAtlas, macroTexture, meadowTexture, roadTextures, terrainTextures } from './proctex';
+import { detailNormalTexture, grungeTexture, leafAtlas, macroTexture, meadowTexture, roadTextures, terrainTexturesStep } from './proctex';
 import { impostorTexture, treeWarmup } from './trees';
+import { barkTexturesStep } from './barkTex';
 import { scatterWarmup } from './scatter';
 import { LANDMARK_KINDS, landmarkProto } from './landmarks';
 import { buildLakeWater, buildSwampWater } from './water';
 import { buildRiverWater } from './riverWater';
 import type { ChunkSource } from '../world/chunkgen';
+import { warmGroundDetail } from './terrainMaterial';
+import { wallGrain } from './facade';
+import { CHASSIS } from '../data';
+import { calibrate } from '../sim/powertrain';
+import { portraitGeometry, warmPortrait } from './portrait';
+import { MelabesWorker, MELABES_WORKER_LOOK } from './shopWorker';
+import { shopFrontGeometry } from './shopFront';
 
 /**
  * One slice of warm-up work. It fills a cache the first scene would otherwise fill on its way up; a step that returns
@@ -19,7 +27,8 @@ export type WarmStep = readonly [string, () => boolean | void];
  * running one twice, or before or after a scene made it, costs nothing.
  */
 export const WARMUPS: readonly WarmStep[] = [
-  ['terrain textures', () => void terrainTextures()],
+  // A ground layer per slice (about 60 ms each from the scans).
+  ['terrain textures', terrainTexturesStep],
   ['meadow', () => void meadowTexture()],
   ['ground detail', () => {
     macroTexture();
@@ -30,7 +39,26 @@ export const WARMUPS: readonly WarmStep[] = [
     roadTextures('wasteland');
     roadTextures('city');
   }],
+  // Photo scans packed for the road, sidewalk and wall shaders (nothing to do without them).
+  ['photo detail', () => {
+    warmGroundDetail();
+    wallGrain();
+  }],
+  // Each chassis' drive is fitted to its table on the first car of it the world spawns, about 10 ms in that frame.
+  ['car tuning', sliced(Object.values(CHASSIS).filter((d) => d.physics.kind !== 'boat'), (d) => void calibrate(d), 8)],
+  // The shop workers' shared face: its head is sculpted on the CPU (about 100 ms) when the first shop streams in.
+  ['shop face', () => {
+    portraitGeometry(MELABES_WORKER_LOOK, 'full');
+    warmPortrait(MELABES_WORKER_LOOK);
+  }],
+  // The rest of a shop: its worker's body and its front (built once and shared by every shop), 10-20 ms in a chunk's slice.
+  ['shop front', () => {
+    new MelabesWorker().dispose();
+    shopFrontGeometry('malabes');
+  }],
   ['leaves', () => void leafAtlas()],
+  // The trees' bark, a layer per slice (60-200 ms each).
+  ['bark', barkTexturesStep],
   ['tree impostors', () => void impostorTexture()],
   // Ground cover and tree cards: their textures and materials (the meshes they hand back are only for a scene's first draw).
   ['cards', () => {

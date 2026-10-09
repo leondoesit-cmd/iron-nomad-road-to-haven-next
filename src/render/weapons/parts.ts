@@ -79,7 +79,16 @@ export function trigger(w: WB, key: string, z: number, y: number, len: number, m
  * A box magazine below a well: its back and front at `zb`, `zf` where it leaves the well at `y`, `len` long, its bottom
  * swung forward by `curve` (a banana magazine), `width` across, with stiffening ribs down its sides and a floor plate.
  */
-export function boxMag(w: WB, key: string, zb: number, zf: number, y: number, len: number, curve: number, width: number, m: WS, opts: { ribs?: number; plate?: WS; flare?: number } = {}) {
+export function boxMag(w: WB, key: string, zb: number, zf: number, y: number, len: number, curve: number, width: number, m: WS, opts: { ribs?: number; plate?: WS; flare?: number; top?: number; round?: [number, number, number] } = {}) {
+  // Up in the well, only seen once it is out: the top of its body, `top` tall, the lips and the top round lying in them.
+  if (opts.top) {
+    const t = opts.top;
+    w.inner(() => {
+      w.rbox(0, y + t / 2 - 0.001, (zb + zf) / 2, width - 0.003, t + 0.002, zf - zb - 0.002, 0.0012, m);
+      const r = opts.round;
+      if (r) cartridge(w, `mag:${key}:top`, [0, y + t + r[0] * 0.7, zb + 0.004], r[0], r[1], r[2]);
+    });
+  }
   const n = 6;
   const back: [number, number][] = [];
   const front: [number, number][] = [];
@@ -114,6 +123,17 @@ export function boxMag(w: WB, key: string, zb: number, zf: number, y: number, le
   const ff = front[n];
   const run = Math.atan2(ff[0] - front[n - 1][0], front[n - 1][1] - ff[1]);
   w.rbox(0, y - len - 0.0025, (fb[0] + ff[0]) / 2, width + 0.002, 0.005, ff[0] - fb[0] + 0.005, 0.0018, opts.plate ?? m, run, 0, 0);
+}
+
+/**
+ * A cartridge lying along +z from its head at `at`: a brass case `r` across and `len` long, the bullet `bl` long in front of
+ * it (copper, or lead-grey for a revolver round), a primer in the head.
+ */
+export function cartridge(w: WB, key: string, at: [number, number, number], r: number, len: number, bl: number, lead = false) {
+  const [x, y, z] = at;
+  w.turnAlong(`${key}.case`, [[0, 0], [r * 1.02, 0], [r * 1.02, 0.04], [r * 0.9, 0.07], [r, 0.12], [r, 0.9], [r * 0.96, 1], [0, 1]], [x, y, z], [x, y, z + len], M.brass(0xb08a46, 0.3));
+  w.turnAlong(`${key}.ball`, [[0, 0], [r * 0.93, 0], [r * 0.93, 0.3], [r * 0.75, 0.7], [r * 0.4, 0.93], [0, 1]], [x, y, z + len - 0.001], [x, y, z + len + bl], lead ? M.steel(0x7a7672, 0.6) : M.brass(0xb8703a, 0.25));
+  if (w.hi) w.turnAlong(`${key}.primer`, [[0, 0], [r * 0.4, 0], [r * 0.4, 1], [0, 1]], [x, y, z - 0.0003], [x, y, z + 0.0004], M.steel(0x9a9ea2, 0.3));
 }
 
 /** An aperture (peep) rear sight: a ring at height `y` on a post standing on `base` (at z). */

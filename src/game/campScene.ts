@@ -17,6 +17,7 @@ import { NEEDS } from '../sim/needs';
 import { modsOf } from '../sim/parts';
 import { convoyPower, pickRaidKind, planRaid } from '../sim/threat';
 import { DayClock, lightAt } from '../sim/dayclock';
+import { TUNING } from '../sim/tuning';
 import { clamp, wrapAngle } from '../core/math';
 import { Rng } from '../core/rng';
 import type { Aabb, CarSpawn } from '../world/layout';
@@ -156,7 +157,7 @@ export class CampScene extends Scene {
     this.rng2 = new Rng(leg.seed + svc.campaign.day * 101 + siteId.length);
     this.legRngSeed = leg.seed * 13 + svc.campaign.day;
     this.raidRng = new Rng(this.legRngSeed);
-    this.clock = new DayClock(leg.dayLength, ledgerOnly ? 0.04 : 0.8);
+    this.clock = new DayClock(TUNING.dayLength, ledgerOnly ? 0.04 : 0.8);
     this.clock.frozen = true;
     this.bounds = { minX: -ARENA - 8, maxX: ARENA + 8, minZ: -ARENA - 8, maxZ: ARENA + 8 };
     this.campHook = (p, it, dt) => this.buildInput(p, it, dt);
@@ -386,7 +387,7 @@ export class CampScene extends Scene {
   enterLedgerMode() {
     this.phase = 'ledger';
     this.clock.elapsed = 0.04 * this.clock.dayLength;
-    this.zombies.list.length = 0;
+    this.zombies.clearBodies();
     this.raiders.clearAll();
     for (const p of this.players) {
       p.buildMode = false;
@@ -1051,7 +1052,7 @@ export class CampScene extends Scene {
     this.clock.elapsed = 0.04 * this.clock.dayLength;
     this.raiders.clearAll();
     for (const z of this.zombies.list) z.dead = true;
-    this.zombies.list.length = 0;
+    this.zombies.clearBodies();
     this.projectiles.clear();
     this.combat.clear();
     const c = this.campaign;

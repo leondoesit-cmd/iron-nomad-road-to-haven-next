@@ -52,13 +52,15 @@ export function playerShows(ctx: Ctx, ex: number, ey: number, ez: number, p: Pla
   surfaces = ctx.P.surfaces;
   const d = Math.hypot(p.pos.x - ex, p.pos.z - ez);
   if (p.underwater) return { show: 0, aimY: p.pos.y + SWIM_HEAD };
+  // Down in a crater or a rut the body is lower than its capsule, and the rim can hide it.
+  const fy = p.pos.y + p.soilDrop;
   const leafK = Math.min(1, Math.max(0, (d - LEAF_NEAR) / (LEAF_FULL - LEAF_NEAR)));
   let show = 0;
-  let aimY = p.pos.y + (p.crouch ? PARTS[1].crouch : PARTS[1].stand);
+  let aimY = fy + (p.crouch ? PARTS[1].crouch : PARTS[1].stand);
   let best = 0;
   const parts = p.swimming ? [{ y: SWIM_HEAD, w: 0.5 }] : PARTS.map((q) => ({ y: p.crouch ? q.crouch : q.stand, w: q.w }));
   for (const part of parts) {
-    const y = p.pos.y + part.y;
+    const y = fy + part.y;
     if (!clearTo(ctx, ex, ey, ez, p.pos.x, y, p.pos.z, SIGHT_FILTER, exclude)) continue;
     const leaves = leafK > 0 && ctx.leavesAlong ? ctx.leavesAlong(ex, ey, ez, p.pos.x, y, p.pos.z) * leafK : 0;
     const s = part.w * (1 - leaves);

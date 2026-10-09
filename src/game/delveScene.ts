@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { LegDef } from '../data';
 import { GROUPS, type Collider } from '../physics/physics';
 import { DayClock } from '../sim/dayclock';
+import { TUNING } from '../sim/tuning';
 import { kitMaterial } from '../render/materials';
 import { makeBeam } from '../render/props';
 import { DELVE_LOOK, DelveView, chestGeometry, keyGeometry } from '../render/delveView';
@@ -120,7 +121,7 @@ export class DelveScene extends Scene {
   ) {
     super(svc);
     this.biome = leg.biome;
-    this.clock = new DayClock(leg.dayLength, 0.3);
+    this.clock = new DayClock(TUNING.dayLength, 0.3);
     this.clock.frozen = true;
     this.map = generateDelve(site.theme, site.seed, site.tier);
     this.view = new DelveView(this.map);
@@ -212,7 +213,7 @@ export class DelveScene extends Scene {
       const zb = this.zombies.spawn(s.kind, s.x, s.z, s.dormant, s.cluster);
       if (s.boss) {
         // The things that guard a hoard are bigger than their kind.
-        zb.hp *= 1.7 + this.site.tier * 0.25;
+        zb.hp = zb.maxHp *= 1.7 + this.site.tier * 0.25;
         this.bossZ.push(zb);
       }
       this.spawned.push({ idx, zb });

@@ -12,12 +12,16 @@ import type { TreeSpot } from '../world/flora';
 import type { Aabb, PickupSpawn, ScavContainer, ScavZone } from '../world/layout';
 import { heritageRoofAt } from '../world/heritage';
 import { chunkKey } from '../world/layout';
-import { ChunkView, disposeChunkMaterials, makeChunkMaterials, type ChunkMaterials } from '../render/chunkview';
+import { ChunkView, disposeChunkMaterials, makeChunkMaterials, roadLift, type ChunkMaterials } from '../render/chunkview';
+import { terrainPalette } from '../render/terrainMaterial';
+import { GroundWork } from './groundWork';
+import { SOILS, type Soil } from '../sim/soil';
 import { makePickup } from '../render/props';
 import { grantLoot } from './lootGrant';
 import { rollGunLoot } from '../sim/gunLoot';
 import { GroundGearField } from './groundGear';
 import { Landscape } from '../render/landscape';
+import { DISSOLVE_TIME, Fades, markDissolvable, markDissolve } from '../render/dissolve';
 import { Destruction } from './destruction';
 import { clamp, smoothstep } from '../core/math';
 import { Scene, type CompassPin, type SceneServices } from './scene';
@@ -27,6 +31,7 @@ import type { Player } from './player';
 import { StoryDirector, storyTrike, storyWake } from './story';
 import { PartyMission } from './partyMission';
 import { DAWN_AT, DUSK_BELL_AT, DayClock } from '../sim/dayclock';
+import { TUNING } from '../sim/tuning';
 import { STOP_PROMPT, crewMorning, hostilesNear } from './nightfall';
 import { Rng, hashString } from '../core/rng';
 import { gearDrop } from '../sim/gear';
@@ -116,6 +121,12 @@ interface ZoneState {
 }
 
 /** Milliseconds of chunk work a tick may start: for the look-ahead, and for a chunk next to a player. */
+/** Within this many metres of somebody a chunk is drawn at once, built or not, rather than dissolving in when it is. */
+const CHUNK_CLOSE = 48;
+/** Farthest ahead of a fast vehicle (metres) the streaming looks, so the faster it goes the sooner chunks are built. */
+const STREAM_AHEAD_MAX = 240;
+/** Seconds a built chunk waits, out of sight, for its programs to compile before it dissolves in regardless. */
+const CHUNK_WARM_WAIT = 1.5;
 const STREAM_CALM_MS = 4;
 const STREAM_URGENT_MS = 10;
 const MINE_COLOR = new THREE.Color(0x1d1b19);
@@ -142,6 +153,8 @@ export class LegScene extends Scene {
   private cityMats: ChunkMaterials | null = null;
   chunks = new Map<number, ChunkView>();
   private streamBudget = new FrameBudget();
+  /** Built chunks waiting out of sight for their programs to compile (`chunkWarm`). */
+  private warming = new WeakMap<ChunkView, { ready: boolean; t: number }>();
 
   override beginFrame() {
     super.beginFrame();
@@ -219,7 +232,7 @@ export class LegScene extends Scene {
     this.biome = leg.biome;
     if (leg.open) this.cityMix = 0;
     // Training holds the sun at midday until the last lesson rings the Dusk Bell.
-    this.clock = new DayClock(leg.dayLength, this.training ? 0.4 : 0.1);
+    this.clock = new DayClock(TUNING.dayLength, this.training ? 0.4 : 0.1);
     if (this.training) this.clock.frozen = true;
     // A pristine copy of the leg's plan, made once per page (`world/planCache.ts`), unless the run has its own already.
     this.src = opts.memory?.src ?? takePlan(leg);
@@ -255,6 +268,21 @@ export class LegScene extends Scene {
       },
     });
     this.root.add(this.landscape.group);
+    // The loose ground: tyres, boots, rounds and blasts press and dig it, and the tiles they touch are drawn finer.
+    const T0 = this.terrain;
+    this.ground = new GroundWork(this, {
+      view: (tx, tz) => {
+        const v = this.chunks.get(chunkKey(Math.floor(tx / CELLS), Math.floor(tz / CELLS)));
+        return v?.terrainMesh ? v : null;
+      },
+      soilAt: (x, z) => this.soilAt(x, z),
+      palette: terrainPalette(leg.biome, leg.theme),
+      roadLift: (x, z) => roadLift(T0, x, z),
+      compile: (objects) => this.R.compileObjects?.(objects) ?? Promise.resolve(),
+    });
+    this.root.add(this.ground.group);
+    // Its tiles' material exists from the start, so it compiles behind the loading veil with everything else.
+    this.ground.deform.prepare(this.mats.terrain);
     if (this.terrain.bends?.length) {
       const T = this.terrain;
       this.faceGums = new FaceGums(T.bends!, (x, z) => heightAt(T, x, z));
@@ -345,6 +373,8 @@ export class LegScene extends Scene {
       for (const q of this.memory?.zombies ?? []) this.zombies.spawn(q.kind, q.x, q.z, q.dormant, q.cluster);
       // What the last day left on the road: tyre marks, and parts that were torn off and not picked up.
       if (this.memory?.tracks) this.marks.restore(this.memory.tracks);
+      // ...and the ruts, prints and craters under them, a little filled in by the night's wind.
+      if (this.memory?.ground) this.ground?.restore(this.memory.ground, 1);
       for (const d of this.memory?.drops ?? []) this.looseDrop(d.x, d.z, d.carried);
       // A story run has its director: Nar, the yard's parts on the first morning, the objective and the lines.
       if (this.campaign.flags.story && !this.training) this.story = new StoryDirector(this, !!yard);
@@ -411,6 +441,7 @@ export class LegScene extends Scene {
     m.camp = this.campPose;
     for (const z of this.zones) for (const c of z.zone.containers) if (c.taken) m.searched.add(c.id);
     m.tracks = this.marks.snapshot();
+    m.ground = this.ground?.snapshot() ?? null;
     // Trees still burning at dusk burn out in the night, and so does the grass.
     for (const f of this.weather.fire.fires) m.burnt.set(f.key, 1);
     this.fires.burnOutGround();
@@ -538,6 +569,7 @@ export class LegScene extends Scene {
     m.camp = this.convoyPose();
     for (const z of this.zones) for (const c of z.zone.containers) if (c.taken) m.searched.add(c.id);
     m.tracks = this.marks.snapshot();
+    m.ground = this.ground?.snapshot() ?? null;
     m.scorched = this.fires.scorchedCells();
     const drops: WorldMemory['drops'] = [];
     for (const p of this.debris.pieces) {
@@ -623,7 +655,9 @@ export class LegScene extends Scene {
     const cx = Math.floor(x / CHUNK);
     const cz = Math.floor(z / CHUNK);
     const h = this.chunks.get(chunkKey(cx, cz))?.data.heights;
-    if (!h) return this.groundAt(x, z);
+    // Pressed down in a rut or a crater, heaped up on a berm: the loose ground is drawn where its field puts it.
+    const loose = this.ground ? this.ground.heightAt(x, z) : 0;
+    if (!h) return this.groundAt(x, z) + loose;
     const N1 = CELLS + 1;
     const fc = Math.min(CELLS - 1e-4, Math.max(0, (x - cx * CHUNK) / CELL));
     const fr = Math.min(CELLS - 1e-4, Math.max(0, (z - cz * CHUNK) / CELL));
@@ -635,7 +669,40 @@ export class LegScene extends Scene {
     const b = h[(c + 1) * N1 + r];
     const d = h[c * N1 + r + 1];
     const e = h[(c + 1) * N1 + r + 1];
-    return tx > tz ? a + (b - a) * tx + (e - b) * tz : a + (e - d) * tx + (d - a) * tz;
+    return (tx > tz ? a + (b - a) * tx + (e - b) * tz : a + (e - d) * tx + (d - a) * tz) + loose;
+  }
+
+  private nrmTmp: [number, number, number] = [0, 1, 0];
+
+  /**
+   * What the loose ground is at a point, for the ground field (`sim/soil.ts`): the sand patches and dunes, packed earth
+   * (hardpan, tracks, meadows, the city's bare lots), mud by the water and on clay in the wet, dry clay crust in the pans.
+   * Null where nothing gives: asphalt, water, and ground too steep to be anything but rock.
+   */
+  private soilMix = new Float32Array(9);
+
+  /**
+   * The ground at a point as it gives (or does not) under a tyre, a boot, a round: from what the surface is and what the
+   * ground is drawn as there. Bare rock is chipped, not dug, on any slope a round can strike; a pavement of stones is gravel;
+   * a pan's dry clay a crust; the rest of the hard ground packed earth.
+   */
+  private soilAt(x: number, z: number): Soil | null {
+    const T = this.terrain!;
+    if (this.waterAt(x, z)) return null;
+    const sf = this.surfaceAt(x, z);
+    if (sf.name === 'asphalt') return null;
+    const up = normalAt(T, x, z, this.nrmTmp)[1];
+    const cx = Math.floor(x / CHUNK);
+    const cz = Math.floor(z / CHUNK);
+    const m = this.chunks.get(chunkKey(cx, cz))?.groundAt(x - cx * CHUNK, z - cz * CHUNK, this.soilMix) ? this.soilMix : null;
+    // Bare: grass or a wood's floor over it is soil, whatever lies under.
+    if (m && m[2] > 0.5 && m[7] < 0.25 && m[8] < 0.25 && sf.name !== 'mud') return up > 0.45 ? SOILS.rock : null;
+    if (up < 0.8) return null;
+    if (sf.name === 'sand') return SOILS.sand;
+    if (sf.name === 'mud') return SOILS.mud;
+    if (clayAt(T, x, z)) return SOILS.clay;
+    if (m && m[3] > m[1] && m[3] > m[0]) return SOILS.gravel;
+    return SOILS.loam;
   }
 
   interiorAt(x: number, z: number, y: number) {
@@ -1045,9 +1112,9 @@ export class LegScene extends Scene {
     for (const p of this.players) p.cam.snap();
   }
 
-  /** True once the chunk under a point has its physics ground, so a car can be dropped there. */
+  /** True once the chunk under a point has its physics ground and props, so a car can be dropped there. */
   colliderReady(x: number, z: number): boolean {
-    return this.chunks.has(chunkKey(Math.floor(x / CHUNK), Math.floor(z / CHUNK)));
+    return !!this.chunks.get(chunkKey(Math.floor(x / CHUNK), Math.floor(z / CHUNK)))?.collidersIn;
   }
 
   surfaceAt(x: number, z: number) {
@@ -1158,8 +1225,13 @@ export class LegScene extends Scene {
         if (a && stumpTop !== undefined) a.y1 = Math.min(a.y1, Math.max(a.y0 + 0.3, stumpTop));
         else if (a) { a.physOnly = true; this.obs.remove(a); }
       },
-      onGround: () => this.landscape.setLoaded(cx, cz, true),
     });
+    // A staged chunk stays out of sight until it is built, then dissolves in (`fadeChunks`); a whole one is in at once.
+    if (staged) {
+      view.shown = false;
+      view.group.visible = false;
+      view.fadeRaw = view.fade.value = 0;
+    } else this.landscape.setFade(cx, cz, 1, 1);
     this.root.add(view.group);
     view.group.updateMatrixWorld(true);
     this.chunks.set(key, view);
@@ -1208,7 +1280,7 @@ export class LegScene extends Scene {
     this.looseProps.release(String(key));
     this.forage?.removeChunk(key);
     this.chunks.delete(key);
-    this.landscape.setLoaded(view.data.cx, view.data.cz, false);
+    this.landscape.setFade(view.data.cx, view.data.cz, 0, 0);
   }
 
   /**
@@ -1294,15 +1366,16 @@ export class LegScene extends Scene {
       const v = p.vehicle;
       pts.push({ x: v ? v.position.x : p.pos.x, z: v ? v.position.z : p.pos.z });
     }
-    // Look ahead of a fast vehicle so the road is there before it arrives.
+    // Look ahead of a fast vehicle so the road is there, built and dissolved in, before it arrives: about five seconds ahead.
     for (const p of this.players) {
       if (p.vehicle && Math.abs(p.vehicle.speed) > 12) {
         const [fx, , fz] = p.vehicle.body.forward();
-        pts.push({ x: p.vehicle.position.x + fx * 120, z: p.vehicle.position.z + fz * 120 });
+        const ahead = Math.min(STREAM_AHEAD_MAX, Math.max(120, Math.abs(p.vehicle.speed) * 5));
+        pts.push({ x: p.vehicle.position.x + fx * ahead, z: p.vehicle.position.z + fz * ahead });
       }
     }
     this.streamWork(pts, pts.slice(0, this.players.length));
-    // Unload far chunks (hysteresis of one chunk).
+    // Unload far chunks (hysteresis of one chunk), dissolving out first if they are on screen.
     const R = QUALITY[this.R.quality].stream;
     for (const [key, view] of this.chunks) {
       let near = false;
@@ -1312,7 +1385,70 @@ export class LegScene extends Scene {
           break;
         }
       }
-      if (!near) this.unloadChunk(key);
+      if (near) view.leaving = false;
+      else if (!view.shown || view.fadeRaw <= 0) this.unloadChunk(key);
+      else view.leaving = true;
+    }
+    this.fadeChunks(dt);
+  }
+
+  /** Someone is close enough to a chunk that it must be drawn now, built or not. */
+  private chunkClose(view: ChunkView): boolean {
+    const x0 = view.data.cx * CHUNK;
+    const z0 = view.data.cz * CHUNK;
+    for (const p of this.players) {
+      const at = p.vehicle ? p.vehicle.position : p.pos;
+      const dx = Math.max(x0 - at.x, 0, at.x - x0 - CHUNK);
+      const dz = Math.max(z0 - at.z, 0, at.z - z0 - CHUNK);
+      if (dx * dx + dz * dz < CHUNK_CLOSE * CHUNK_CLOSE) return true;
+    }
+    return false;
+  }
+
+  /**
+   * A built chunk still out of sight has the programs it will draw with compiled first, in parallel and off the frame
+   * (its materials' dissolve twins, and any material nothing has drawn yet): true once they are ready, or after a while.
+   */
+  private chunkWarm(view: ChunkView, dt: number): boolean {
+    let w = this.warming.get(view);
+    if (!w) {
+      const p = this.R.warmTwins?.(view.group) ?? null;
+      const ww = { ready: !p, t: 0 };
+      p?.then(() => (ww.ready = true), () => (ww.ready = true));
+      this.warming.set(view, (w = ww));
+    }
+    w.t += dt;
+    return w.ready || w.t > CHUNK_WARM_WAIT;
+  }
+
+  /**
+   * Streamed chunks come in without popping. A staged chunk stays hidden while it is built and then dissolves in over
+   * DISSOLVE_TIME while the far stand-ins over it (terrain, forest, roads, props, district) dissolve out pixel for pixel:
+   * the far landscape's mask holds the same fade. A chunk somebody is already close to shows at once, built or not. One
+   * being unloaded dissolves out first, and turns round if it is wanted again meanwhile.
+   */
+  private fadeChunks(dt: number) {
+    const step = dt / DISSOLVE_TIME;
+    for (const [key, view] of this.chunks) {
+      view.detailFades.update(dt);
+      if (!view.shown) {
+        const close = this.chunkClose(view);
+        if (!close && (view.pending || !this.chunkWarm(view, dt))) continue;
+        view.shown = true;
+        view.group.visible = true;
+        view.fadeRaw = close ? 1 : 0;
+        if (!close) markDissolve(view.group, view.fade);
+      } else if (view.leaving) {
+        if (view.fadeRaw >= 1) markDissolve(view.group, view.fade);
+        view.fadeRaw = Math.max(0, view.fadeRaw - step);
+      } else if (view.fadeRaw < 1) {
+        view.fadeRaw = Math.min(1, view.fadeRaw + step);
+        if (view.fadeRaw >= 1) markDissolve(view.group, null);
+      }
+      // Rounded to the mask's steps, so the chunk and its stand-ins split every pixel between them exactly.
+      const f = (view.fade.value = Math.round(view.fadeRaw * 255) / 255);
+      this.landscape.setFade(view.data.cx, view.data.cz, view.groundIn ? f : 0, view.pending ? 0 : f);
+      if (view.leaving && view.fadeRaw <= 0) this.unloadChunk(key);
     }
   }
 
@@ -1634,6 +1770,7 @@ export class LegScene extends Scene {
     outer.add(m.group);
     // Finds are just lying there, with no coloured beam to spot them by from afar: the player asked for things to be found
     // by looking, and picked up by hand (beams stay only for delve chests and the training's markers).
+    markDissolvable(outer);
     this.root.add(outer);
     let loose: Carried | undefined;
     if (p.kind === 'part' && p.part) loose = { kind: 'part', item: newPart(p.part.id, p.part.cond) };
@@ -1811,9 +1948,12 @@ export class LegScene extends Scene {
   }
 
   private pickupCullT = 0;
+  /** Pickups dissolving in or out at the edge of the drawn range. */
+  private pickupFades = new Fades();
 
   /** Pickups do nothing but lie there. Every third of a second those far from every player are hidden and those near are shown. */
   private updatePickups(dt: number) {
+    this.pickupFades.update(dt);
     this.pickupCullT -= dt;
     if (this.pickupCullT > 0) return;
     this.pickupCullT = 0.33;
@@ -1823,7 +1963,14 @@ export class LegScene extends Scene {
         const pos = pl.vehicle ? pl.vehicle.position : pl.pos;
         d = Math.min(d, Math.hypot(pos.x - e.spawn.x, pos.z - e.spawn.z));
       }
-      e.group.visible = d < PICKUP_DRAW_R;
+      // At the edge of the drawn range a pickup dissolves in and out rather than popping (`dissolve.ts`).
+      const g = e.group;
+      if (d < PICKUP_DRAW_R) {
+        if (!g.visible) {
+          g.visible = true;
+          if (d > PICKUP_DRAW_R / 2) this.pickupFades.fadeIn(g);
+        } else if (this.pickupFades.leaving(g)) this.pickupFades.fadeIn(g);
+      } else if (g.visible && !this.pickupFades.leaving(g)) this.pickupFades.fadeOut(g, () => (g.visible = false));
     }
   }
 
@@ -2418,8 +2565,6 @@ export class LegScene extends Scene {
       for (const p of pts) d = Math.min(d, Math.hypot(p.x - cx, p.z - cz));
       view.setDetailDistance(Math.max(0, d - CHUNK * 0.71));
       view.updateShopWorkers(this.time, this.melabesService?.remaining ?? 2);
-      // Once its roads and props are in, the far stand-ins over this chunk step aside.
-      if (!view.pending) this.landscape.setBuilt(view.data.cx, view.data.cz);
       if (!view.pending && !view.charred) this.charChunk(view);
     }
     void alpha;

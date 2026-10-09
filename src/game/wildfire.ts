@@ -1,4 +1,5 @@
 import { clamp, clamp01 } from '../core/math';
+import { TUNING } from '../sim/tuning';
 import { TREE_DIMS, TREE_SPECIES, type TreeSpot } from '../world/flora';
 import type { Ctx } from './ctx';
 
@@ -109,7 +110,7 @@ export class Wildfire {
         ctx.zombies.burnArea(t.x, t.z, reach, 14 * f.heat, 0.5, -1);
       }
       // Sparks: a neighbour catches, downwind more often and further.
-      f.sparkT -= dt * f.heat;
+      f.sparkT -= dt * f.heat * TUNING.fire;
       if (f.sparkT <= 0 && f.heat > 0.55) {
         f.sparkT = 3 + Math.random() * 5;
         const cand = this.hooks.treesNear(t.x + wind[0] * 1.2, t.z + wind[1] * 1.2, 9 + wl * 0.6).filter((n) => {

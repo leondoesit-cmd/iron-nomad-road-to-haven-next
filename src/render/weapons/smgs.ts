@@ -39,8 +39,10 @@ export function scrapSmg(w: WB, looks: Looks = {}) {
   // The cocking slot on the left with the handle forward in it; the port on the right.
   const h = f.spots!.handle;
   w.box(0.0186, B, (h[2] + f.spots!.handleBack[2]) / 2, 0.0012, 0.0055, h[2] - f.spots!.handleBack[2] + 0.012, M.hole());
-  w.rod([0.012, B, h[2]], [h[0], h[1], h[2]], 0.003, raw);
-  w.turnAlong('sm.knob', [[0, 0], [0.006, 0.05], [0.0065, 0.4], [0.006, 0.9], [0, 1]], [h[0] - 0.002, h[1], h[2]], [h[0] + 0.01, h[1], h[2]], black);
+  w.piece('handle', () => {
+    w.rod([0.012, B, h[2]], [h[0], h[1], h[2]], 0.003, raw);
+    w.turnAlong('sm.knob', [[0, 0], [0.006, 0.05], [0.0065, 0.4], [0.006, 0.9], [0, 1]], [h[0] - 0.002, h[1], h[2]], [h[0] + 0.01, h[1], h[2]], black);
+  });
   w.box(-0.0186, B + 0.008, f.port[2], 0.0012, 0.011, 0.04, M.hole());
   // The well, welded on; the magazine in it.
   const wz0 = f.well[2] - 0.02;
@@ -48,7 +50,7 @@ export function scrapSmg(w: WB, looks: Looks = {}) {
   w.side('sm.well', () => shape([[wz0, B - 0.012], [wz1, B - 0.012], [wz1, f.well[1]], [wz0, f.well[1]]]), 0, 0.03, 0, raw);
   weld([[0.015, B - 0.014, wz0 + 0.004], [0.015, B - 0.014, wz0 + 0.014], [0.015, B - 0.014, wz0 + 0.024], [0.015, B - 0.014, wz0 + 0.034]]);
   weld([[-0.015, B - 0.014, wz0 + 0.004], [-0.015, B - 0.014, wz0 + 0.014], [-0.015, B - 0.014, wz0 + 0.024], [-0.015, B - 0.014, wz0 + 0.034]]);
-  boxMag(w, 'sm', wz0 + 0.003, wz1 - 0.003, f.well[1] + 0.004, f.well[1] - f.mag.y - 0.006, 0, 0.0235, black, { ribs: 1, flare: 0.002 });
+  w.piece('mag', () => boxMag(w, 'sm', wz0 + 0.003, wz1 - 0.003, f.well[1] + 0.004, f.well[1] - f.mag.y - 0.006, 0, 0.0235, black, { ribs: 1, flare: 0.002, top: 0.026, round: [0.0049, 0.019, 0.0105] }));
   // The bracket and grip, the bent strap guard and the trigger.
   w.side('sm.bracket', () => shape([[-0.05, B - 0.016], [0.06, B - 0.016], [0.06, 0.0], [-0.05, 0.0]]), 0, 0.022, 0, raw);
   weld([[0.0112, B - 0.017, -0.04], [0.0112, B - 0.017, -0.02], [0.0112, B - 0.017, 0.0], [0.0112, B - 0.017, 0.02], [0.0112, B - 0.017, 0.04]]);
@@ -107,8 +109,10 @@ export function policeSmg(w: WB, looks: Looks = {}) {
   const ct = f.spots!.tube;
   w.tube(0, ct[1], 0.15, 0.322, 0.0115, steel);
   w.box(0.0112, ct[1], 0.215, 0.0012, 0.004, 0.09, M.hole());
-  w.rod([0.008, ct[1], ct[2]], [ct[0], ct[1] + 0.002, ct[2] - 0.004], 0.0028, steel);
-  w.turnAlong('mp5.knob', [[0, 0], [0.005, 0.05], [0.0055, 0.5], [0.005, 0.95], [0, 1]], [ct[0] - 0.004, ct[1] + 0.002, ct[2] - 0.004], [ct[0] + 0.012, ct[1] + 0.003, ct[2] - 0.005], poly);
+  w.piece('handle', () => {
+    w.rod([0.008, ct[1], ct[2]], [ct[0], ct[1] + 0.002, ct[2] - 0.004], 0.0028, steel);
+    w.turnAlong('mp5.knob', [[0, 0], [0.005, 0.05], [0.0055, 0.5], [0.005, 0.95], [0, 1]], [ct[0] - 0.004, ct[1] + 0.002, ct[2] - 0.004], [ct[0] + 0.012, ct[1] + 0.003, ct[2] - 0.005], poly);
+  });
   // The front sight: a ring hood round a post, on a block at the front of the tube.
   w.rbox(0, ct[1] + 0.012, f.front[2], 0.012, 0.024, 0.012, 0.002, steel);
   w.torus(0, f.front[1] - 0.001, f.front[2], 0.0095, 0.0016, steel);
@@ -137,7 +141,7 @@ export function policeSmg(w: WB, looks: Looks = {}) {
   // The magazine well, the paddle release behind it, the curved 30-rounder.
   w.side('mp5.well', () => shape([[0.08, 0.01], [0.128, 0.01], [0.128, -0.002, 0.002], [0.08, -0.002, 0.002]]), 0, 0.03, 0.001, steel);
   w.side('mp5.paddle', () => shape([[0.074, -0.002], [0.08, -0.002], [0.08, -0.016, 0.002], [0.072, -0.014, 0.002]]), 0, 0.012, 0.001, steel);
-  boxMag(w, 'mp5', 0.084, 0.124, 0.002, f.well[1] - f.mag.y - 0.002, 0.032, 0.022, M.park(0x232526, 0.35), { ribs: 2, flare: 0.004 });
+  w.piece('mag', () => boxMag(w, 'mp5', 0.084, 0.124, 0.002, f.well[1] - f.mag.y - 0.002, 0.032, 0.022, M.park(0x232526, 0.35), { ribs: 2, flare: 0.004, top: 0.02, round: [0.0049, 0.019, 0.0105] }));
   // The retractable stock: two struts and the butt plate, the latch on the end cap.
   const sz = f.stock.z;
   const own = !replacesStock(looks.stock);

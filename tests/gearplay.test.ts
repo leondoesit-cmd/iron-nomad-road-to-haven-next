@@ -209,6 +209,9 @@ describe('what is in hand', () => {
     equip(p, 'm_machete', 3);
     expect(p.equip).toBe('melee');
     expect(p.heldName()).toBe('Machete');
+    p.aimYaw = 0;
+    const zb = sc.zombies.spawn('walker', p.pos.x, p.pos.z + 1.3, true);
+    zb.y = sc.groundAt(zb.x, zb.z);
     h.intents[0].device = 'pad';
     h.intents[0].rt = 1;
     run(sc, 0.2);
@@ -216,9 +219,10 @@ describe('what is in hand', () => {
     expect(hit).toHaveBeenCalled();
     const [, , , , reach, dmg] = hit.mock.calls[0];
     expect(reach).toBe(2.0);
-    // Machete 58, bare-handed.
-    expect(dmg).toBeCloseTo(58, 5);
+    // Machete 58, bare-handed: the full blow at the sweet spot, less where it lands nearer the hilt.
     expect(p.meleeDamage()).toBeCloseTo(58, 5);
+    expect(dmg).toBeLessThanOrEqual(58 * 1.1);
+    expect(dmg).toBeGreaterThan(58 * 0.3);
   });
 
   it('a melee weapon does not fire the gun, and swings no faster than its pace', () => {
@@ -226,12 +230,23 @@ describe('what is in hand', () => {
     const hit = vi.spyOn(sc.zombies, 'meleeHit').mockImplementation(() => 0);
     const shoot = vi.spyOn(sc.combat, 'shoot');
     equip(p, 'm_axe', 3);
+    p.aimYaw = 0;
+    const zb = sc.zombies.spawn('walker', p.pos.x, p.pos.z + 1.2, true);
+    zb.y = sc.groundAt(zb.x, zb.z);
     h.intents[0].device = 'pad';
     h.intents[0].rt = 1;
-    run(sc, 1.0); // an axe swings every 0.85 s
+    // An axe swings every 0.85 s: count the swings begun in a second.
+    let swings = 0;
+    let was = 0;
+    for (let i = 0; i < 60; i++) {
+      sc.tick(DT);
+      if (p.swingT > was + 0.5) swings++;
+      was = p.swingT;
+    }
     h.intents[0].rt = 0;
     expect(shoot).not.toHaveBeenCalled();
-    expect(hit.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(swings).toBeLessThanOrEqual(2);
+    expect(swings).toBeGreaterThanOrEqual(1);
     expect(hit.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 

@@ -330,6 +330,17 @@ canvas.minimap {
   font-size: 0.42em;
   letter-spacing: 0;
 }
+/* A driving aid at work (anti-lock, traction or stability control): an amber dash lamp, lit only while it acts. */
+.speed small.aid {
+  margin-left: 5px;
+  padding: 0 2px;
+  border: 1px solid #e0a33a;
+  border-radius: 2px;
+  color: #e0a33a;
+  font-size: 0.3em;
+  vertical-align: middle;
+  letter-spacing: 0;
+}
 .vitals .tach {
   height: 2px;
   margin: 2px 0 3px;
@@ -665,26 +676,145 @@ canvas.minimap {
   margin: -13px 0 0 -13px;
   display: none;
 }
-.reticle::before,
-.reticle::after {
-  content: '';
+/* The marks (ui/reticle.ts): which show, and how the arms are clipped, is up to data-look. */
+.reticle i {
   position: absolute;
-  background: #fff;
-  box-shadow: 0 0 3px #000;
+  display: none;
+  --rs: 0 0 1px #000, 0 0 3px rgba(0, 0, 0, 0.85);
 }
-.reticle::before {
+.reticle .r-arms {
+  inset: 0;
+}
+.reticle .r-v,
+.reticle .r-h {
+  display: block;
+  background: var(--rc, #fff);
+  box-shadow: var(--rs);
+}
+.reticle .r-v {
   left: 12px;
   top: 0;
   width: 2px;
   height: 26px;
-  clip-path: polygon(0 0, 100% 0, 100% 30%, 0 30%, 0 70%, 100% 70%, 100% 100%, 0 100%);
 }
-.reticle::after {
+.reticle .r-h {
   top: 12px;
   left: 0;
   height: 2px;
   width: 26px;
-  clip-path: polygon(0 0, 30% 0, 30% 100%, 0 100%, 70% 100%, 70% 0, 100% 0, 100% 100%);
+}
+/* Open: a gap round the centre. */
+.reticle:not([data-look]) .r-v,
+.reticle[data-look='gap'] .r-v,
+.reticle[data-look='gapdot'] .r-v,
+.reticle[data-look='ringcross'] .r-v,
+.reticle[data-look='x'] .r-v,
+.reticle[data-look='xdot'] .r-v {
+  clip-path: polygon(-50% -10%, 150% -10%, 150% 30%, -50% 30%, -50% 70%, 150% 70%, 150% 110%, -50% 110%);
+}
+.reticle:not([data-look]) .r-h,
+.reticle[data-look='gap'] .r-h,
+.reticle[data-look='gapdot'] .r-h,
+.reticle[data-look='ringcross'] .r-h,
+.reticle[data-look='t'] .r-h,
+.reticle[data-look='x'] .r-h,
+.reticle[data-look='xdot'] .r-h {
+  clip-path: polygon(-10% -50%, -10% 150%, 30% 150%, 30% -50%, 70% -50%, 70% 150%, 110% 150%, 110% -50%);
+}
+/* T: no arm above. */
+.reticle[data-look='t'] .r-v {
+  clip-path: polygon(-50% 70%, 150% 70%, 150% 110%, -50% 110%);
+}
+.reticle:not([data-look]) .r-arms,
+.reticle[data-look='gap'] .r-arms,
+.reticle[data-look='gapdot'] .r-arms,
+.reticle[data-look='cross'] .r-arms,
+.reticle[data-look='ringcross'] .r-arms,
+.reticle[data-look='t'] .r-arms,
+.reticle[data-look='x'] .r-arms,
+.reticle[data-look='xdot'] .r-arms {
+  display: block;
+}
+.reticle[data-look='x'] .r-arms,
+.reticle[data-look='xdot'] .r-arms {
+  transform: rotate(45deg);
+}
+.reticle .r-dot {
+  left: 50%;
+  top: 50%;
+  width: var(--rd, 4px);
+  height: var(--rd, 4px);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--rc, #fff);
+  box-shadow: var(--rs);
+}
+.reticle[data-look='gapdot'] .r-dot,
+.reticle[data-look='dot'] .r-dot,
+.reticle[data-look='ringdot'] .r-dot,
+.reticle[data-look='xdot'] .r-dot,
+.reticle[data-look='brackets'] .r-dot {
+  display: block;
+}
+.reticle .r-ring {
+  left: 50%;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid var(--rc, #fff);
+  box-sizing: border-box;
+  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px rgba(0, 0, 0, 0.7));
+}
+.reticle[data-look='ring'] .r-ring,
+.reticle[data-look='ringdot'] .r-ring,
+.reticle[data-look='ringcross'] .r-ring {
+  display: block;
+}
+.reticle[data-look='ringcross'] .r-ring {
+  width: 30px;
+  height: 30px;
+}
+.reticle .r-chev {
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -15%) rotate(45deg);
+  border-left: 2px solid var(--rc, #fff);
+  border-top: 2px solid var(--rc, #fff);
+  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px rgba(0, 0, 0, 0.7));
+}
+.reticle[data-look='chevron'] .r-chev {
+  display: block;
+}
+/* Brackets: [ ] either side of the dot. */
+.reticle .r-brk {
+  left: 1px;
+  right: 1px;
+  top: 5px;
+  bottom: 5px;
+  border: 2px solid var(--rc, #fff);
+  -webkit-mask: linear-gradient(90deg, #000 0 6px, transparent 6px calc(100% - 6px), #000 calc(100% - 6px));
+  mask: linear-gradient(90deg, #000 0 6px, transparent 6px calc(100% - 6px), #000 calc(100% - 6px));
+  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px rgba(0, 0, 0, 0.7));
+}
+.reticle[data-look='brackets'] .r-brk {
+  display: block;
+}
+/* A crosshair drawn in Settings, beside the choice. */
+.retprev {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  background: #4a5560;
+  vertical-align: middle;
+}
+.retprev .reticle {
+  display: block;
 }
 .reticle.hit {
   filter: drop-shadow(0 0 4px #ff3a2a);

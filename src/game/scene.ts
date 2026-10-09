@@ -11,6 +11,7 @@ import { QUALITY, type GameRenderer } from '../render/renderer';
 import { SignatureGrid } from '../sim/signature';
 import { splitLoot, whole } from '../sim/resources';
 import { DayClock, lightMix } from '../sim/dayclock';
+import { TUNING } from '../sim/tuning';
 import { heatLevel, stormImminent, stormLevel, stormWindow, STORM_WIND, type StormWindow } from '../sim/weather';
 import { engineSpec } from '../sim/engines';
 import { exhaustSpec, gearboxSpec } from '../sim/drivetrain';
@@ -18,6 +19,8 @@ import type { AudioTire } from '../audio/vehicleAcoustics';
 import { TANK_DREGS, takeReserve } from '../sim/fuel';
 import { Rng } from '../core/rng';
 import { clamp, clamp01, smoothstep } from '../core/math';
+import { VehicleBody } from '../physics/vehicle';
+import { tyreScrub } from '../sim/tyreModel';
 import { LEGS, VEHICLES, STOCK_IDS, gearDef, t, type Stocks } from '../data';
 import type { GearItem } from '../sim/gear';
 import type { Surface, TerrainDef } from '../world/terrain';
@@ -34,6 +37,7 @@ import type { Ctx, NoteKind } from './ctx';
 import { CrewSystem } from './crew';
 import { CarField } from './cars';
 import { DebrisField } from './debris';
+import { settleThrown } from './grab';
 import { LooseProps } from './looseProps';
 import { TrackMarks } from '../render/trackMarks';
 import { clearShells } from '../render/shellCache';
@@ -60,6 +64,7 @@ import { mapNavInput } from '../ui/mapnav';
 import type { NavActions } from './navigation';
 import { WeatherSystem } from './weatherSystem';
 import { FireEngine } from './fires';
+import type { GroundWork } from './groundWork';
 
 const _flashDir = new THREE.Vector3();
 
@@ -146,6 +151,8 @@ export abstract class Scene implements Ctx {
   debris = new DebrisField(this);
   looseProps = new LooseProps(this);
   marks = new TrackMarks();
+  /** The loose ground: ruts, prints and craters (`groundWork.ts`). Only a leg has one. */
+  ground?: GroundWork;
   vehicleByCollider = new Map<number, Vehicle>();
   interact = new InteractRegistry();
   /** Gear lying in the world, waiting to be taken. */
@@ -163,7 +170,7 @@ export abstract class Scene implements Ctx {
   mapInput: Ctx['mapInput'] = (p, it, dt) => mapNavInput(this, p, it, dt);
   loose?: Ctx['loose'];
   structureHit?: Ctx['structureHit'];
-  clock = new DayClock(540, 0.02);
+  clock = new DayClock(TUNING.dayLength, 0.02);
   protected zr = new ZombieRenderer();
   /** Phantoms are drawn with their own translucent copy of the body, into one player's view at a time. */
   protected ghosts = new ZombieRenderer({ ghost: true, max: 24 });
@@ -226,6 +233,7 @@ export abstract class Scene implements Ctx {
     this.root.add(this.arrows.mesh);
     this.R.scene.add(this.fx.smoke.points);
     this.R.scene.add(this.fx.glow.points);
+    this.root.add(this.fx.sparks.lines);
     this.R.scene.add(this.tracers.mesh);
     this.root.add(this.zr.mesh);
     this.ghosts.mesh.visible = false;
@@ -395,6 +403,7 @@ export abstract class Scene implements Ctx {
     // Point sprites (fireflies, gnats) are sized for this view's own height and field of view: the halves can differ.
     const v = this.R.views[i];
     this.lr.setViewScale(v.rect.h * this.R.renderPixelRatio(), v.camera.fov);
+    this.ground?.setViewScale(v.rect.h * this.R.renderPixelRatio(), v.camera.fov);
   };
   private afterViewHook = (i: number) => {
     this.players[i]?.endOwnView();
@@ -722,8 +731,11 @@ export abstract class Scene implements Ctx {
     this.arrows.update(dt);
     this.groundGear?.update(dt);
     this.debris.update(dt);
+    settleThrown(this);
     this.looseProps.update();
     this.P.step();
+    // Soil in the air comes down, steep walls slump.
+    this.ground?.tick(dt);
     // Post-step gameplay systems.
     for (const v of this.vehicles) if (v.faction === 'convoy' || v.kind !== 'wagon') {
         this.zombies.plow(v, dt);
@@ -865,6 +877,7 @@ export abstract class Scene implements Ctx {
     this.marks.update(dt);
     if (!this.idleCam) for (const p of this.players) p.renderCamera(alpha, dt);
     this.fx.setBudget(QUALITY[R.quality].particles);
+    this.fx.wind = this.fires.wind;
     this.fx.update(dt);
     this.work.update(dt);
     this.tracers.update(dt);
@@ -878,13 +891,20 @@ export abstract class Scene implements Ctx {
       }
       v.active = true;
       p.cam.apply(v.camera);
-      R.setViewMode(i, p.viewEyes, this.input.settings.fpFov, this.input.settings.chaseFov, this.input.settings.fpLens);
+      R.setViewMode(i, p.viewEyes, this.input.settings.fpFov, this.input.settings.chaseFov, this.input.settings.fpLens, p.cam.fovKick);
+      R.dofAmount = this.input.settings.fpDof ?? 1;
       this.syncTrip(i, p, dt);
       v.focus.set(p.pos.x, p.pos.y, p.pos.z);
       if (p.vehicle) v.focus.set(p.vehicle.position.x, p.vehicle.position.y, p.vehicle.position.z);
       v.camera.updateMatrixWorld();
       this.pm.multiplyMatrices(v.camera.projectionMatrix, v.camera.matrixWorldInverse);
       this.frustums[i].setFromProjectionMatrix(this.pm, THREE.WebGLCoordinateSystem, v.camera.reversedDepth);
+    }
+    // The loose ground near the cameras now placed: which tiles are drawn, and the soil in the air.
+    if (this.ground) {
+      const cams: THREE.Vector3[] = [];
+      for (let i = 0; i < this.players.length; i++) cams.push(R.views[i].camera.position);
+      this.ground.frame(cams, (alpha - 1) / 60);
     }
     // Light and headlights, after the weather has had its say. The fires lay out their flames for cameras now placed.
     this.weather.frame(dt);
@@ -1059,7 +1079,17 @@ export abstract class Scene implements Ctx {
       const dr = v.powertrain ? v.drive : null;
       const rpm = dr && dr.redline > 0 ? clamp(dr.rpmFrac, 0, 1) : clamp(Math.abs(v.speed) / Math.max(6, v.topSpeed), 0, 1);
       const throttle = running ? clamp(v.lastIntent.throttle, 0, 1) : 0;
-      const lateralG = clamp((v.body.steerAngle * v.speed) / 5, -1.5, 1.5);
+      // The real sideways pull (yaw rate times speed) and the tyres' real scrub where the wheel model measures them.
+      const vb = v.body instanceof VehicleBody ? v.body : null;
+      const lateralG = vb ? clamp((vb.body.angvel().y * v.speed) / 9.81, -1.5, 1.5) : clamp((v.body.steerAngle * v.speed) / 5, -1.5, 1.5);
+      // A tyre working near its limit starts to sing before it lets go: the driver hears where the edge is.
+      let scrub = 0;
+      if (vb) {
+        for (let i = 0; i < vb.wheelCount; i++) {
+          if (!vb.ctl.wheelIsInContact(i)) continue;
+          scrub = Math.max(scrub, tyreScrub(vb.slipSide[i], vb.slipSpin[i]), 0.22 * smoothstep(0.85, 1.05, vb.gripUse[i]) * clamp01((Math.abs(v.speed) - 4) / 8));
+        }
+      }
       const fit = v.build?.fit ?? {};
       const motor = engineSpec(v.def, fit);
       const gearbox = gearboxSpec(v.def, fit);
@@ -1084,7 +1114,7 @@ export abstract class Scene implements Ctx {
         gearing: gearbox.gearing, strain: v.stats.strain, exhaustNoise: exhaust.noise,
         topSpeed: v.topSpeed, wheelRadius: v.def.physics.wheelRadius, tires,
         surface: this.surfaceAt(v.position.x,v.position.z).name, grounded: v.onGround,
-        slip: Math.abs(lateralG) + (v.lastIntent.handbrake && Math.abs(v.speed)>3 ? .7 : 0),
+        slip: vb ? 0.42 + scrub : Math.abs(lateralG) + (v.lastIntent.handbrake && Math.abs(v.speed)>3 ? .7 : 0),
         signature: Math.max(15, v.signature()),
         speed: v.speed,
         boat: v.def.physics.kind === 'boat',
@@ -1192,6 +1222,7 @@ export abstract class Scene implements Ctx {
     this.debris.clear();
     this.looseProps.clear();
     this.marks.dispose();
+    this.ground?.dispose();
     clearShells();
     this.players.length = 0;
     this.work.dispose();

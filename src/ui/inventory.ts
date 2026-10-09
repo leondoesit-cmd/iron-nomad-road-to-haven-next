@@ -66,7 +66,7 @@ type Act = (player: number) => void;
 const KIND_LABEL: Record<GearDef['kind'], string> = { wear: 'Worn', gun: 'Firearm', melee: 'Melee', tool: 'Tool', mod: 'Add-on' };
 const UTILITY_SHORT: Record<Utility, string> = { flare: 'Flare', molotov: 'Molotov', charge: 'Charge', horn: 'Horn' };
 const UTILITY_ICON = { flare: 'flare', molotov: 'molotov', charge: 'charge', horn: 'horn' } as const;
-const UTILITY_BLURB: Record<Utility, string> = {
+export const UTILITY_BLURB: Record<Utility, string> = {
   flare: 'Thrown: lights the dark around where it lands and pulls the dead toward its glare.',
   molotov: 'Thrown: bursts into fire where it lands. Dry grass carries it further.',
   charge: 'Set against a reinforced barricade to blow it open.',

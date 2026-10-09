@@ -3,7 +3,7 @@ import { legById } from '../src/data';
 import { clayAt, heightAt, makeTerrainDef, surfaceAt, waterAt, CHUNK } from '../src/world/terrain';
 import { districtMask, nearestRoad } from '../src/world/openWorld';
 import { courseAt } from '../src/world/hydro';
-import { FLOOD_SPEED, floodAt, floodStage, panAt, panQ, washAt, type Pan } from '../src/world/washes';
+import { FLOOD_RUN, floodAt, floodStage, panAt, panQ, washAt, type Pan } from '../src/world/washes';
 import { HYDRO_DT, type Hydrograph } from '../src/sim/climate';
 import { ChunkSource } from '../src/world/chunkgen';
 
@@ -154,8 +154,8 @@ describe('a flash flood', () => {
     const h = hydro(t0);
     const head = 40;
     const foot = w.end - 10;
-    const travel = (w.s[foot] - w.s[head]) / (FLOOD_SPEED * leg.dayLength);
-    const tHead = t0 + 0.015 + w.s[head] / (FLOOD_SPEED * leg.dayLength);
+    const travel = (w.s[foot] - w.s[head]) / FLOOD_RUN;
+    const tHead = t0 + 0.015 + w.s[head] / FLOOD_RUN;
     // The head is running while the foot is still dry.
     const a = floodAt(def, net, ...at(head), tHead, h, noPans);
     expect(a?.kind).toBe('flood');
@@ -176,7 +176,7 @@ describe('a flash flood', () => {
   it('fills its bed and climbs the banks, but stays in the wash', () => {
     const h = hydro(0.3);
     const i = 90;
-    const t = 0.3 + 0.02 + w.s[i] / (FLOOD_SPEED * leg.dayLength);
+    const t = 0.3 + 0.02 + w.s[i] / FLOOD_RUN;
     expect(floodAt(def, net, w.x[i], w.z[i], t, h, noPans)).not.toBeNull();
     const nx = -w.dz[i];
     const nz = w.dx[i];

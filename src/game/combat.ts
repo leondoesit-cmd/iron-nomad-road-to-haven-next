@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { stoneHit } from './stones';
 import { G, groups } from '../physics/physics';
 import {
   AMMO,
@@ -57,6 +58,9 @@ export interface ShotOpts {
    */
   seen?: [number, number, number];
 }
+
+/** A round drawn off its path (`ShotOpts.seen`) has eased onto it over this many metres. */
+const SEEN_EASE = 12;
 
 /** A round in the air. */
 interface Bullet {
@@ -120,6 +124,8 @@ export class Combat {
   light = new THREE.PointLight(0xffb468, 0, 14, 2);
   private lightT = 0;
   private lightPeak = 0;
+  /** Where a round really met the loose ground (`GroundWork.refine`). */
+  private soilHit: [number, number, number] = [0, 0, 0];
 
   constructor(private ctx: Ctx) {
     ctx.root.add(this.light);
@@ -303,11 +309,18 @@ export class Combat {
         dz = adv.dz;
       }
     }
+    const from = b.travelled;
     b.travelled += len;
     if (b.trace) {
       const style = TRACER[b.kind];
       const [tr, tg, tb] = tracerTint(style, b.o.side === 'raider');
-      ctx.tracers.add(x0, y0, z0, cx, cy, cz, tr, tg, tb, style.life);
+      // Drawn from the gun as it is held, easing onto the round's path over the first metres (`ShotOpts.seen`).
+      const s = b.seen;
+      if (s) {
+        const k0 = Math.max(0, 1 - from / SEEN_EASE);
+        const k1 = Math.max(0, 1 - b.travelled / SEEN_EASE);
+        ctx.tracers.add(x0 + s[0] * k0, y0 + s[1] * k0, z0 + s[2] * k0, cx + s[0] * k1, cy + s[1] * k1, cz + s[2] * k1, tr, tg, tb, style.life);
+      } else ctx.tracers.add(x0, y0, z0, cx, cy, cz, tr, tg, tb, style.life);
     }
     if (!b.dead) {
       b.x = cx;
@@ -462,13 +475,15 @@ export class Combat {
           v.takeHit(dmg, b.ox, b.oz, { incendiary: o.incendiary, pierce: o.pierce, at: [h.x, h.y, h.z], bullet: structuralMul(b.kind, 'sheet') });
           // The car is boxed roughly: follow the round on through it to see whether it crossed a window.
           v.glass.hitRay(h.x, h.y, h.z, dx, dy, dz, o.damage * frac * structuralMul(b.kind, 'glass'));
-          ctx.fx.spark(h.x, h.y, h.z, 3, 4);
+          // Its sparks come with the hit on its body (`gore.impact`, by the round's energy and angle).
         } else if (o.side === 'raider') {
           ctx.structureHit?.(h.handle, o.damage * frac * ctx.campaign.difficulty.damage);
         }
         const tagged = v ? undefined : (ctx.P.surfaces.get(h.handle) as Surface | undefined);
         // A tree's wood (a standing trunk, a stump, a fallen top): it takes the round its own way (`game/timber.ts`).
         const wood = tagged === 'wood' && b.kind !== 'arrow' && b.kind !== 'bolt' ? ctx.P.trees.get(h.handle) : undefined;
+        // A stone lying about: a round can split it, knock it off its place or chip it (`game/stones.ts`).
+        const stone = tagged === 'stone' && b.kind !== 'arrow' && b.kind !== 'bolt' ? ctx.P.stones.get(h.handle) : undefined;
         // A tagged collider (a prop, a stone) is its own thing: not the box of the world that happens to stand beside it.
         const box = v || tagged ? null : this.boxAt(h.x, h.y, h.z);
         const boxThin = box ? Math.min(box.maxX - box.minX, box.maxZ - box.minZ) : 0;
@@ -484,11 +499,18 @@ export class Combat {
           const body = ctx.P.world.getCollider(h.handle)?.parent();
           if (body && body.isDynamic()) body.applyImpulseAtPoint({ x: dx * spec.mass * speed, y: dy * spec.mass * speed, z: dz * spec.mass * speed }, { x: h.x, y: h.y, z: h.z }, true);
         }
-        const floorImpact = ground || (!v && exact && h.ny > 0.6 && (surface === 'stone' || surface === 'concrete' || surface === 'dirt'));
+        const floorImpact = ground || (!v && !stone && exact && h.ny > 0.6 && (surface === 'stone' || surface === 'concrete' || surface === 'dirt'));
         const floorMaterial: GroundMaterial = ground || surface === 'dirt' ? groundMaterial : surface === 'stone' ? 'stone' : 'concrete';
-        if (floorImpact) ctx.gore.groundStrike(b.kind, floorMaterial, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dy, dz, speed);
-        else if (wood) ctx.gore.timber.impact(wood, b.kind, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dy, dz, speed);
-        else ctx.gore.impact(surface, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dz, (speed / spec.speed) * (o.damage / 30), { moving: !!v, size: spec.hole, heavy: spec.hole >= 0.15, mark: exact, shaft: b.kind === 'arrow' || b.kind === 'bolt' });
+        if (floorImpact) {
+          // Loose ground lies in a rut or a crater under the collider, or on a heap over it: the round lands on what is there.
+          const at = ground && ctx.ground?.refine(h.x, h.y, h.z, dx, dy, dz, this.soilHit) ? this.soilHit : null;
+          ctx.gore.groundStrike(b.kind, floorMaterial, at ? at[0] : h.x, at ? at[1] : h.y, at ? at[2] : h.z, h.nx, h.ny, h.nz, dx, dy, dz, speed);
+        } else if (wood) ctx.gore.timber.impact(wood, b.kind, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dy, dz, speed);
+        else if (stone) {
+          const ke = 0.5 * spec.mass * speed * speed;
+          const r = stoneHit(ctx, stone, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dy, dz, ke, spec.mass * speed);
+          if (r.did === 'chipped') ctx.gore.impact('stone', h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dz, (speed / spec.speed) * (o.damage / 30), { size: spec.hole, dy, ke, tint: r.tint });
+        } else ctx.gore.impact(surface, h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dz, (speed / spec.speed) * (o.damage / 30), { moving: !!v, size: spec.hole, heavy: spec.hole >= 0.15, mark: exact, shaft: b.kind === 'arrow' || b.kind === 'bolt', dy, ke: 0.5 * spec.mass * speed * speed });
         // How far through it goes is worked out before the blow is dealt: a pane that breaks or a wall that gives way is
         // not there to be measured afterwards, and the round should carry on through it.
         let exit = 0;
@@ -551,8 +573,10 @@ export class Combat {
           const px = h.x + dx * run;
           const py = h.y + dy * run;
           const pz = h.z + dz * run;
-          ctx.fx.puff(px, py, pz, info.tint[0], info.tint[1], info.tint[2], 0.5, 0.4);
-          if (info.spark) ctx.fx.spark(px, py, pz, info.spark, 3);
+          // Metal lets out a wisp; masonry and wood a cloud of what the round tore through.
+          ctx.fx.puff(px, py, pz, info.tint[0], info.tint[1], info.tint[2], info.spark ? 0.12 : 0.5, 0.4);
+          // What it tore out of metal flies on with it as sparks.
+          if (info.spark) ctx.fx.sparks.shower(px, py, pz, ndx, ndy, ndz, info.spark, 6, 0.5);
           strike();
           return { x: px, y: py, z: pz, dx: ndx, dy: ndy, dz: ndz, run };
         }
@@ -573,7 +597,8 @@ export class Combat {
             b.vy = sk.dy * sk.speed;
             b.vz = sk.dz * sk.speed;
             b.o = { ...o, damage: o.damage * SKIP_DAMAGE, pierce: 0, noise: 0 };
-            ctx.fx.spark(h.x, h.y, h.z, 7, 5);
+            // A skip strikes sparks off the face, flying on the way the round now goes.
+            ctx.fx.sparkOff(h.x, h.y, h.z, h.nx, h.ny, h.nz, dx, dy, dz, surface === 'steel' || surface === 'sheet' ? 8 : 3, 6);
             ctx.audio.play('ricochet', h.x, h.z, 0.35);
             return { x: h.x + sk.dx * 0.06, y: h.y + sk.dy * 0.06, z: h.z + sk.dz * 0.06, dx: sk.dx, dy: sk.dy, dz: sk.dz, run: 0.06 };
           }
@@ -631,7 +656,8 @@ export class Combat {
       if (!p.targetable) continue;
       const px = p.pos.x;
       const pz = p.pos.z;
-      const py = p.pos.y;
+      // Where the body is: down in a crater or a rut of soft ground, under its capsule.
+      const py = p.pos.y + p.soilDrop;
       const vx = px - ox;
       const vz = pz - oz;
       // closest approach in XZ along the ray
@@ -661,8 +687,9 @@ export class Combat {
     }
     ctx.audio.play('boom', x, z, 1);
     ctx.sig.emit(x, z, 100, 'noise');
-    // A real blast breaks what it can and chars the ground.
-    ctx.gore.groundBlast(x, y, z, radius, damage);
+    // A real blast breaks what it can and chars the ground; soft ground it digs a crater in and throws (groundWork.ts).
+    const dug = ctx.ground?.blast(x, y, z, radius, damage) ?? false;
+    ctx.gore.groundBlast(x, y, z, radius, damage, dug);
     ctx.world?.blast(x, y, z, radius, damage);
     for (const p of ctx.players) p.cam.addShake(Math.max(0, 0.9 - Math.hypot(p.pos.x - x, p.pos.z - z) / (radius * 4)));
     ctx.zombies.blast(x, z, radius, damage, o.owner?.index ?? -1);

@@ -25,10 +25,10 @@ export const Btn = {
   /** Not a physical button: the inventory, driven by whatever the player binds to it (D-pad left on a pad). */
   Inventory: 19,
   /**
-   * Not a physical button: the drugs quick pick, keys only (a pad reaches drugs through the quick belt and the inventory).
+   * Not a physical button: the drugs quick pick, keys only (a pad reaches drugs through the quick select wheel and the inventory).
    */
   Drugs: 25,
-  /** Not physical buttons: the four chores, driven by keys. A pad reaches them through the quick belt. */
+  /** Not physical buttons: the four chores, driven by keys. A pad reaches them through the quick select wheel (hold D-pad ↓). */
   Eat: 20,
   Drink: 21,
   Piss: 22,

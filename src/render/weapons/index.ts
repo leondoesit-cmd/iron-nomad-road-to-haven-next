@@ -8,7 +8,7 @@ import { coach, combat, pump, sawn } from './shotguns';
 import { axe, bat, crowbar, flare, jerrycan, katana, knife, machete, pipe, sledge, wrench } from './melee';
 
 export { WB, type Lod, type Looks } from './kit';
-export { weaponMaterial } from './material';
+export { weaponMaterial, weaponShader } from './material';
 
 type Kind = Exclude<Held, 'none'>;
 
@@ -53,10 +53,11 @@ const MODELS: Partial<Record<Kind, (w: WB, looks: Looks) => void>> = {
 export const hasModel = (kind: Kind) => !!MODELS[kind];
 
 /** Start a weapon's builder with its model drawn in, or null when it has none here. */
-export function buildModel(kind: Kind, lod: Lod, looks: Looks = {}): WB | null {
+export function buildModel(kind: Kind, lod: Lod, looks: Looks = {}, split = false): WB | null {
   const f = MODELS[kind];
   if (!f) return null;
   const w = new WB(lod);
+  w.split = split;
   f(w, looks);
   return w;
 }

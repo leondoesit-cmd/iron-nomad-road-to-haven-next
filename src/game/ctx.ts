@@ -120,6 +120,8 @@ export interface Ctx {
   debris: DebrisField;
   /** Tyre grooves and skid marks. */
   marks: TrackMarks;
+  /** The loose ground: ruts, prints and craters pressed and dug into it (`game/groundWork.ts`). Absent where there is none. */
+  ground?: import('./groundWork').GroundWork;
   /** A vehicle from a build, added to the scene. */
   spawnVehicle(opts: { build: VehicleBuild; x: number; z: number; yaw: number; ownerIndex: number; faction?: Faction; y?: number; hulk?: boolean }): Vehicle;
   /** True once the physics ground under a point exists (chunks stream in), so a car can safely be dropped there. */

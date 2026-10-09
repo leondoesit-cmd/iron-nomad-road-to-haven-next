@@ -1,13 +1,17 @@
 import * as THREE from 'three';
 import { staticTransform } from './staticTransform';
+import { installDrawFilter } from './drawFilter';
+import { twinWarmups } from './dissolve';
+import { asShadowDraws, installCompileGate, type CompileGate } from './compileGate';
 import { AdaptiveResolution } from './adaptiveResolution';
 import { DEG, clamp01, lerp, smoothstep as smooth } from '../core/math';
 import type { LightState } from '../sim/dayclock';
 import { ATMO, installAtmosphere, setAtmosphere } from './atmosphere';
 import { installGloss } from './gloss';
-import { installFireLight } from './fireLight';
+import { fireShadowLight, installFireLight, installFireShadowFilter } from './fireLight';
 import { GLOBALS, KIT } from './materials';
 import { PostFX } from './post';
+import { dofFor, eyepiece, type SightView } from './sights';
 import { SkyDome } from './sky';
 import { BREATH, installBreath, newTripView, resetCamera, shiftHue, tripCamera, tripTempo, lookActive, type TripView } from './trip';
 import type { Look } from '../sim/drugs';
@@ -87,6 +91,10 @@ export interface PlayerView {
   zoom?: number;
   /** How strongly this view is drawn through a body camera's lens (first person only), 0 to 1. */
   lens?: number;
+  /** Degrees the chase view is widened by (speed), on top of the chase field of view. */
+  kick?: number;
+  /** The sights this view's player has up in first person (`sights.ts`), or null: its depth of field and scope eyepiece. */
+  sight?: SightView | null;
 }
 
 /** How much the body-camera lens swells the middle of the picture at full strength (the composite's barrel uses the same). */
@@ -143,6 +151,7 @@ export class GameRenderer {
   fog = new THREE.Fog(0xcfc4aa, 60, 340);
   sky = new SkyDome();
   post: PostFX | null = null;
+  private compileGate: CompileGate;
   /** Left/right is the default; top/bottom (the blueprint's strips) is a setting. */
   layout: SplitLayout = 'vertical';
   /** 1 gives the whole canvas to the first view (solo play); 2 splits it. */
@@ -212,11 +221,16 @@ export class GameRenderer {
     this.gl.autoClear = true;
     // Count the whole frame (scene, shadows, both views and post passes), rather than only the last composite.
     this.gl.info.autoReset = false;
+    installDrawFilter(this.gl);
+    installFireShadowFilter(this.gl);
+    this.compileGate = installCompileGate(this.gl);
     staticTransform(this.scene);
     this.scene.fog = this.fog;
     this.scene.add(this.hemi);
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
+    // Always there, so lit programs never change when a fire is lit; it draws its shadows only when a fire asks.
+    this.scene.add(fireShadowLight());
     this.scene.add(this.sky.mesh);
     this.sun.castShadow = true;
     const sc = this.sun.shadow.camera;
@@ -420,7 +434,7 @@ export class GameRenderer {
 
   private applyFov(v: PlayerView) {
     const layout = this.seats === 1 ? 'horizontal' : this.layout;
-    let fov = v.first ? firstPersonFov(v.camera.aspect, layout, this.fpHfov) : viewFov(v.camera.aspect, layout, this.chaseHfov);
+    let fov = v.first ? firstPersonFov(v.camera.aspect, layout, this.fpHfov) : viewFov(v.camera.aspect, layout, this.chaseHfov + (v.kick ?? 0));
     // Through the body-camera lens the middle keeps its size and the rim takes in more: drawn wider by what the lens's
     // barrel swells the middle by (see the composite in post.ts).
     const lens = v.first ? (v.lens ?? 0) : 0;
@@ -429,6 +443,25 @@ export class GameRenderer {
     const z = v.zoom ?? 1;
     v.camera.fov = z > 1.001 ? (2 * Math.atan(Math.tan((fov * DEG) / 2) / z)) / DEG : fov;
     v.camera.updateProjectionMatrix();
+  }
+
+  /** How strongly the depth of field blurs behind the sights, 0 (off) to 1: the player's setting. */
+  dofAmount = 1;
+
+  /** The sights a view's player has up in first person this frame (null: none), for its depth of field and eyepiece. */
+  setSight(i: number, s: SightView | null) {
+    this.views[i].sight = s;
+  }
+
+  /**
+   * The radius (NDC height) the first-person gun and arms are cut away inside this frame, so the magnified world shows in a
+   * scope's eyepiece: a little past the eyepiece's edge, under its black rim, so no blurred gun bleeds in over the edge. 0
+   * with no scope up, or with no post chain to draw the eyepiece.
+   */
+  scopeCut(i: number): number {
+    const v = this.views[i];
+    if (!this.usePost || !this.post || !v.sight) return 0;
+    return eyepiece(v.sight, v.camera.aspect).r * 1.08;
   }
 
   /** Scope zoom for one view. Cheap to call every frame: the projection is rebuilt only when it has moved. */
@@ -440,16 +473,23 @@ export class GameRenderer {
     this.applyFov(v);
   }
 
-  /** Switch a view between the chase strip and first person. Cheap to call every frame: it only rebuilds the projection on a change. */
-  setViewMode(i: number, first: boolean, hfov = this.fpHfov, chaseHfov = this.chaseHfov, lens = 0) {
+  /**
+   * Switch a view between the chase strip and first person. Cheap to call every frame: it only rebuilds the projection on a
+   * change. `kick` widens this view's chase field of view alone (by speed), in steps of a quarter of a degree.
+   */
+  setViewMode(i: number, first: boolean, hfov = this.fpHfov, chaseHfov = this.chaseHfov, lens = 0, kick = 0) {
     const v = this.views[i];
     const l = first ? lens : 0;
-    if (!!v.first === first && this.fpHfov === hfov && this.chaseHfov === chaseHfov && (v.lens ?? 0) === l) return;
+    const k = first ? 0 : Math.round(kick * 4) / 4;
+    if (!!v.first === first && this.fpHfov === hfov && this.chaseHfov === chaseHfov && (v.lens ?? 0) === l && (v.kick ?? 0) === k) return;
+    const all = this.fpHfov !== hfov || this.chaseHfov !== chaseHfov;
     v.lens = l;
     v.first = first;
+    v.kick = k;
     this.fpHfov = hfov;
     this.chaseHfov = chaseHfov;
-    for (const o of this.views) this.applyFov(o);
+    if (all) for (const o of this.views) this.applyFov(o);
+    else this.applyFov(v);
   }
 
   /**
@@ -492,6 +532,7 @@ export class GameRenderer {
     const az = l.azimuth;
     const hz = Math.sqrt(Math.max(0.05, 1 - e * e));
     this.sunDir.set(Math.cos(az) * hz, e, Math.sin(az) * hz).normalize();
+    GLOBALS.uSunDir.value.copy(this.sunDir);
     this.sun.color.setRGB(...l.sunColor);
     // A dust storm browns the whole sky over and takes the edge off the sun; cloud shades it, a thunderhead all but hides it.
     const dim = 1 - l.night * 0.85;
@@ -695,6 +736,8 @@ export class GameRenderer {
     const dtReal = this.lastRender ? Math.min(0.25, (now - this.lastRender) / 1000) : 1 / 60;
     this.lastRender = now;
     const gl = this.gl;
+    // What the last frame held back for want of a compiled shader compiles now, between frames (`compileGate.ts`).
+    this.compileGate.flush((object, material) => this.compileFor(object, this.scene, material));
     gl.info.reset();
     const q = QUALITY[this.quality];
     this.sky.uniforms.uTime.value = time;
@@ -746,6 +789,20 @@ export class GameRenderer {
       }
       if (!this.views[0].active) post.heat.set(post.heat.y, post.heat.y);
       else if (!this.views[1].active) post.heat.set(post.heat.x, post.heat.x);
+      // Behind the sights: each half's depth of field and scope eyepiece, in the order of the rects.
+      for (let i = 0; i < 2; i++) {
+        const k = this.views[i].active ? i : 1 - i;
+        const v = this.views[k];
+        const s = v.sight;
+        const asp = v.camera.aspect;
+        dofFor(s, asp, this.dofAmount, post.dof.views[i]);
+        post.dof.aspect.setComponent(i, asp);
+        post.viewH[i] = Math.max(1, Math.round(v.rect.h * sy));
+        const e = eyepiece(s, asp);
+        post.sight[i * 2].set(e.k, e.r, e.reticle, e.lit ? 1 : 0);
+        post.sight[i * 2 + 1].set(s?.offX ?? 0, s?.offY ?? 0, 0, 0);
+      }
+      post.nearFar.set(this.views[0].camera.near, this.views[0].camera.far);
       gl.setRenderTarget(null);
       gl.setViewport(0, 0, this.width, this.height);
       gl.setScissorTest(false);
@@ -779,11 +836,59 @@ export class GameRenderer {
     // every program compiled here is keyed to the old type and compiles again, blocking, on that first frame.
     if (gl.shadowMap.type === THREE.PCFSoftShadowMap) gl.shadowMap.type = THREE.PCFShadowMap;
     this.scene.environment = this.sky.updateEnv(gl, 1 / 60, QUALITY[this.quality].envEvery);
+    const all = [this.compileFor(this.scene)];
+    // What can dissolve in later (streamed chunks, cars, pickups) dissolves through twins of its materials (`dissolve.ts`).
+    const twins = this.warmTwins(this.scene);
+    if (twins) all.push(twins);
+    // Shadows drawn with an object's own depth material (animated bodies, swaying trees): compile does not see those.
+    const seen = new Set<THREE.Material>();
+    this.scene.traverse((o) => {
+      for (const m of [o.customDepthMaterial, o.customDistanceMaterial]) {
+        if (!m || seen.has(m)) continue;
+        seen.add(m);
+        all.push(this.compileFor(o, this.scene, m));
+      }
+    });
+    return Promise.all(all);
+  }
+
+  /** Compile, without blocking, objects made after the scene was warmed, for the target the frames draw into. */
+  compileObjects(objects: THREE.Object3D[]): Promise<unknown> {
+    return Promise.all(objects.map((o) => this.compileFor(o, this.scene)));
+  }
+
+  /**
+   * Compile, without blocking, what the dissolvable things under `root` (`dissolve.ts`: streamed chunks, cars, pickups)
+   * will want and nothing has compiled yet: their materials and those materials' dissolve twins. Null when nothing is new.
+   */
+  warmTwins(root: THREE.Object3D): Promise<unknown> | null {
+    const g = twinWarmups(root);
+    return g ? this.compileFor(g, this.scene) : null;
+  }
+
+  /**
+   * `compileAsync` for the target the frames draw into (see `compileScene`), with `scene`'s lights, fog and environment.
+   * With `material` (one of the object's own, say its custom depth material) the object is compiled as drawn with that.
+   */
+  private compileFor(object: THREE.Object3D, scene: THREE.Scene | null = null, material?: THREE.Material): Promise<unknown> {
+    const gl = this.gl;
     const target = gl.getRenderTarget();
+    const mesh = object as THREE.Mesh;
+    const own = mesh.material;
     if (this.usePost && this.post) gl.setRenderTarget(this.post.hdr);
+    // A shadow pass draws with no scene, so without fog: compile it so, or it builds a variant the pass never uses.
+    const shadow = !!material && (material === object.customDepthMaterial || material === object.customDistanceMaterial);
+    const fog = scene?.fog ?? null;
+    if (material && own !== undefined) {
+      if (shadow) asShadowDraws(object, material);
+      mesh.material = material;
+    }
+    if (shadow && scene) scene.fog = null;
     try {
-      return gl.compileAsync(this.scene, this.views[0].camera);
+      return gl.compileAsync(object, this.views[0].camera, scene);
     } finally {
+      if (shadow && scene) scene.fog = fog;
+      if (material && own !== undefined) mesh.material = own;
       gl.setRenderTarget(target);
     }
   }

@@ -1,4 +1,4 @@
-import { ATTACH_LABELS, ATTACH_SLOTS, GEAR, gearDef, hasGear, type AttachSlot, type GearDef, type GunStats, type ModStats } from '../data/gear';
+import { ATTACH_LABELS, ATTACH_SLOTS, GEAR, gearDef, hasGear, type AttachSlot, type GearDef, type GunModel, type GunStats, type ModStats } from '../data/gear';
 import { clamp } from '../core/math';
 import type { Rng } from '../core/rng';
 import { newUid } from './parts';
@@ -51,8 +51,15 @@ export function fitted(it: GearItem | null | undefined): { slot: AttachSlot; def
 export interface GunKit {
   /** The gun's own numbers with every add-on applied. */
   gun: GunStats;
-  /** Aim-down-sights magnification: the fitted optic's, else the gun's own, else 1. */
+  /**
+   * Aim-down-sights magnification: the fitted optic's, else the gun's own scope's, else the iron sights' (`IRON_ZOOM`). A
+   * red dot with no power of its own aims at the irons' zoom.
+   */
   zoom: number;
+  /** What the eye looks through with the sights up: the gun's iron sights, a red dot or holographic window, or a scope. */
+  optic: 'iron' | 'dot' | 'scope';
+  /** Which sight it is (the fitted optic's look, the built-in scope's, or 'iron'): what the eyepiece and its reticle are drawn as. */
+  sight: string;
   /** Muzzle velocity, as a share of the round's. */
   vel: number;
   /** Kick and barrel wander, as shares of the model's. */
@@ -71,10 +78,32 @@ export interface GunKit {
 
 const SUMMED = ['dmg', 'spread', 'hip', 'ads', 'range', 'vel', 'noise', 'flash', 'recoil', 'sway', 'aimSpeed', 'mag', 'magAdd', 'reload', 'rate'] as const;
 
+/**
+ * How much the view closes in behind a gun's own iron sights. The eye settles on the front sight and what is beyond it
+ * fills more of the view: a little with a handgun at arm's length, more with a long gun's sight radius at the cheek. A bow
+ * aims by its own reticle, unmagnified.
+ */
+export const IRON_ZOOM: Record<GunModel, number> = {
+  pistol: 1.35, compact: 1.35, mp: 1.35, revolver: 1.35, cannon: 1.35,
+  smg: 1.4, smg2: 1.4, sawn: 1.4, coach: 1.4, pump: 1.4, combat: 1.4,
+  carbine: 1.5, ar: 1.5, br: 1.5, dmr: 1.5, lmg: 1.5, lever: 1.5, crossbow: 1.5, rifle: 1.5, sniper: 1.5,
+  bow: 1,
+};
+
+/** Guns that come with a scope of their own (taken off when another optic goes on the rail): its look. */
+const OWN_SCOPE: Partial<Record<GunModel, string>> = { rifle: 'hunt', sniper: 'tactical' };
+
+/** Optic families by what the eye looks through. */
+const OPTIC_KIND: Record<string, GunKit['optic']> = { dot: 'dot', pdot: 'dot', scope: 'scope', long: 'scope' };
+
 /** A gun with nothing fitted, or with the add-ons named. `att` maps slots to add-on ids. */
 export function kitFor(base: GunStats, att: Attached | undefined): GunKit {
   const sum = Object.fromEntries(SUMMED.map((k) => [k, 0])) as Record<(typeof SUMMED)[number], number>;
-  let zoom = base.zoom ?? 1;
+  const iron = IRON_ZOOM[base.model] ?? 1;
+  const own = OWN_SCOPE[base.model];
+  let zoom = base.zoom ?? iron;
+  let optic: GunKit['optic'] = own ? 'scope' : 'iron';
+  let sight = own ?? 'iron';
   let beam: GunKit['beam'] = null;
   let count = 0;
   for (const slot of ATTACH_SLOTS) {
@@ -82,7 +111,11 @@ export function kitFor(base: GunStats, att: Attached | undefined): GunKit {
     if (!m || m.slot !== slot) continue;
     count++;
     for (const k of SUMMED) sum[k] += m[k] ?? 0;
-    if (slot === 'optic') zoom = m.zoom ?? 1;
+    if (slot === 'optic') {
+      zoom = m.zoom ?? iron;
+      optic = OPTIC_KIND[m.fam] ?? 'dot';
+      sight = m.look;
+    }
     if (m.beam) beam = beam && beam !== m.beam ? 'both' : m.beam;
   }
   const spread = base.spread * clamp(1 + sum.spread + sum.hip, 0.3, 1.8);
@@ -102,6 +135,8 @@ export function kitFor(base: GunStats, att: Attached | undefined): GunKit {
   return {
     gun,
     zoom,
+    optic,
+    sight,
     vel: clamp(1 + sum.vel, 0.6, 1.5),
     recoil: clamp(1 + sum.recoil, 0.35, 1.4),
     sway: clamp(1 + sum.sway, 0.4, 1.7),

@@ -18,10 +18,13 @@ import { T_CRITICAL, T_HOT, T_OVERHEAT, overheatPower, overheatWear, steamLevel,
 import { buildRaiderBuggy, buildVehicleVisual, buildWagon, defaultLook, lookOf, mountsOfChassis, type VehicleVisual } from '../render/vehicleModels';
 import { CargoRig } from './cargo';
 import { powertrainFor, type Powertrain } from '../sim/powertrain';
+import { driveFeel, type DriveFeel } from '../sim/driveFeel';
+import { tyreScrub } from '../sim/tyreModel';
 import { bodyLoadOf, massBreakdown, type MassBreakdown, type Seat } from '../sim/massModel';
 import { insideMax, insideName, insideUnits, unitsUsed, type InsideRoom } from '../sim/cargo';
 import { bootDeck, bootSpot } from '../render/bootDeck';
 import { PLAYER_COLORS } from '../render/palette';
+import { Fades, markDissolvable } from '../render/dissolve';
 import type { Humanoid, Palette } from '../render/humanoid';
 import { shared, disposeTree } from '../render/dispose';
 import { clamp, damp, lerp } from '../core/math';
@@ -129,6 +132,9 @@ export class Vehicle {
   private lean = 0;
   private sigT = 0;
   private fx = 0;
+  /** Seconds to the next tyre smoke and the next rumble of the pad (`tyreFeedback`). */
+  private tyreFxT = 0;
+  private rumbleT = 0;
   private fireFx = 0;
   /** Seconds since last damage, for "under fire" checks by the Mechanic. */
   sinceHit = 99;
@@ -136,6 +142,9 @@ export class Vehicle {
   onGround = true;
   /** Convoy slot data for crew vehicles. */
   group = new THREE.Group();
+  /** The cabin dissolving in and out at the edge of `CABIN_LOD`. */
+  private cabinFades = new Fades();
+  private cabinSet = false;
   /** Salvage stages already stripped from a neutral car or a hulk. */
   salvaged = 0;
   /** World-car id, so the car system can find this vehicle again. */
@@ -158,6 +167,8 @@ export class Vehicle {
   swing: Record<Panel, number> = { hood: 0, doorL: 0, doorR: 0, trunk: 0 };
   /** The engine, gearbox and final drive turning the wheels (`sim/powertrain.ts`). Null on a boat. */
   powertrain: Powertrain | null = null;
+  /** How the build drives beyond its engine: drive layout, diffs, driving aids, each tyre (`sim/driveFeel.ts`). Null on a boat. */
+  feel: DriveFeel | null = null;
   /**
    * What it weighs right now, item by item, and where its centre of mass is (`sim/massModel.ts`), as last put on the
    * physics body. Null for vehicles with no build (raiders, crew, boats): they run at their tuned reference weight.
@@ -194,6 +205,8 @@ export class Vehicle {
     this.visual = this.makeVisual(color);
     this.group.add(this.visual.root);
     this.shadowCasters(this.visual.root);
+    // Parked cars dissolve in and out as they are put in the world and away (`CarField`); compile their twins up front.
+    markDissolvable(this.group);
     ctx.root.add(this.group);
     if (o.build) {
       this.health = toHealth(o.build);
@@ -212,7 +225,10 @@ export class Vehicle {
     this.bodywork = new Bodywork(this);
     this.glass = new CarGlass(this);
     this.cargoRig = new CargoRig(this);
-    if (this.body instanceof VehicleBody) this.powertrain = powertrainFor(def, o.build?.fit ?? {}, o.build?.tyres);
+    if (this.body instanceof VehicleBody) {
+      this.powertrain = powertrainFor(def, o.build?.fit ?? {}, o.build?.tyres);
+      this.feel = driveFeel(def, o.build?.fit ?? {}, o.build?.tyres);
+    }
     this.weigh();
     if (o.hulk) this.makeHulk();
     this.syncStands();
@@ -347,7 +363,10 @@ export class Vehicle {
     if (this.visual.passenger && wasSeated.p !== undefined) this.visual.passenger.root.visible = wasSeated.p;
     this.spin = this.body.wheelLocal.map(() => 0);
     if (this.wreck) this.charVisual();
-    if (this.body instanceof VehicleBody) this.powertrain = powertrainFor(this.def, b.fit, b.tyres);
+    if (this.body instanceof VehicleBody) {
+      this.powertrain = powertrainFor(this.def, b.fit, b.tyres);
+      this.feel = driveFeel(this.def, b.fit, b.tyres);
+    }
     this.weigh(true);
     this.syncStands();
   }
@@ -381,7 +400,10 @@ export class Vehicle {
     this.health.armorBonus = fresh.armorBonus;
     this.tankMax = this.stats.tank;
     this.fuel = Math.min(this.fuel, this.tankMax);
-    if (this.body instanceof VehicleBody) this.powertrain = powertrainFor(this.def, b.fit, b.tyres);
+    if (this.body instanceof VehicleBody) {
+      this.powertrain = powertrainFor(this.def, b.fit, b.tyres);
+      this.feel = driveFeel(this.def, b.fit, b.tyres);
+    }
     this.weigh(true);
   }
 
@@ -705,6 +727,44 @@ export class Vehicle {
     } else this.blownT = Math.max(0, this.blownT - dt * 2);
   }
 
+  /**
+   * What the tyres are doing, felt and seen: rubber smoke off a tyre scrubbing the tarmac, dirt thrown off one sliding or
+   * spinning on hard earth (soft ground throws its own, `groundWork.ts`), and the driver's pad shaking with the slip, the
+   * anti-lock chattering, the traction control cutting in and the roughness of the ground.
+   */
+  private tyreFeedback(dt: number) {
+    const b = this.body;
+    if (!(b instanceof VehicleBody) || this.wreck || !this.onGround) return;
+    const ctx = this.ctx;
+    let scrub = 0;
+    this.tyreFxT -= dt;
+    const at = this.position;
+    const smoke = this.tyreFxT <= 0 && Math.abs(this.speed) > 1.5 && ctx.players.some((pl) => (pl.cam.pos.x - at.x) ** 2 + (pl.cam.pos.z - at.z) ** 2 < 90 * 90);
+    if (smoke) this.tyreFxT = 0.035;
+    for (let i = 0; i < b.wheelCount; i++) {
+      if (!b.ctl.wheelIsInContact(i)) continue;
+      const s = tyreScrub(b.slipSide[i], b.slipSpin[i]);
+      scrub = Math.max(scrub, s);
+      if (!smoke || s < 0.25) continue;
+      const cp = b.ctl.wheelContactPoint(i);
+      if (!cp || ctx.waterAt(cp.x, cp.z)) continue;
+      const surf = ctx.surfaceAt(cp.x, cp.z).name;
+      const lv = b.body.linvel();
+      if (surf === 'asphalt') ctx.fx.tyreSmoke(cp.x, cp.y, cp.z, lv.x, lv.z, s);
+      else if (surf === 'hardpan') ctx.fx.dust(cp.x, cp.y, cp.z, lv.x * 0.5, lv.z * 0.5, 0.25 + s * 0.6);
+    }
+    const d = this.driver;
+    if (!d?.isPlayer) return;
+    this.rumbleT -= dt;
+    if (this.rumbleT > 0) return;
+    this.rumbleT = 0.1;
+    const surf = ctx.surfaceAt(this.position.x, this.position.z).name;
+    const rough = Math.abs(this.speed) > 2 ? (surf === 'asphalt' ? 0 : surf === 'hardpan' ? 0.06 : 0.1) * clamp(Math.abs(this.speed) / 15, 0, 1) : 0;
+    const strong = clamp(scrub * 0.35 + b.aids.abs * 0.25, 0, 0.6);
+    const weak = clamp(rough + scrub * 0.2 + b.aids.tcs * 0.15 + b.aids.esc * 0.15, 0, 0.5);
+    if (strong + weak > 0.04) ctx.input.rumble(d.index, strong, weak, 120);
+  }
+
   /** Tell the driver as the cooling system runs dry. */
   private coolantWatch() {
     const st = coolantState(this.health.comp.coolant ?? 1);
@@ -793,13 +853,22 @@ export class Vehicle {
       e.brakeMult = this.stats.brakeMult;
       e.steerMult = this.stats.steerMult;
       e.flats = this.health.comp.tires.map((t) => t <= 0);
+      // Each tyre is its own kind on its own corner, as worn as it is; the layout, diffs and aids are the build's.
+      e.feel = this.feel ?? undefined;
+      e.wear = this.health.comp.tires;
       const off = this.stats.offroad;
+      // Soft ground drags as hard as the fresh ground the tyres are cutting: less in a rut already pressed (groundWork.ts).
+      const sink = ctx.ground ? ctx.ground.dragFactor(this) : 1;
       e.surface = (x, z) => {
         const sf = ctx.surfaceAt(x, z);
-        return { grip: terrainGrip(sf.grip, off), drag: terrainDrag(sf.drag, off) };
+        return { grip: terrainGrip(sf.grip, off), drag: terrainDrag(sf.drag, off) * sink, name: sf.name };
       };
     }
+    // The wheels ride the loose ground's ruts, berms and craters, not the collider under them.
+    if (ctx.ground && this.body instanceof VehicleBody) this.env.ground ??= ctx.ground.wheelGround(this);
     this.body.update(this.wreck ? { steer: 0, throttle: 0, brake: 0, handbrake: true } : input, this.env, dt);
+    // ...and press them in: ruts, berms, spun-out soil (before the tyre marks are laid on them).
+    ctx.ground?.vehicleStep(this, dt);
     if (this.pedal && !this.wreck) this.moorTick(dt);
     this.onGround = this.body.grounded > 0;
     waterTick(this, dt);
@@ -878,6 +947,7 @@ export class Vehicle {
     }
 
     // Effects
+    this.tyreFeedback(dt);
     this.fx += dt;
     const p = this.position;
     if (this.onGround && !this.wreck && ctx.biome === 'wasteland' && Math.abs(this.speed) > 5 && this.fx > 0.04) {
@@ -1178,7 +1248,8 @@ export class Vehicle {
       w.pivot.scale.y = 1 - 0.22 * w.flatK;
       w.pivot.position.y = (this.body.wheelLocal[i]?.[1] ?? this.def.physics.hardY) - susp - w.radius * 0.22 * w.flatK - (v.rideLift ?? 0);
       w.pivot.rotation.y = w.steered ? this.body.steerAngle : 0;
-      this.spin[i] += (sp * dt) / w.radius;
+      // Each wheel turns at its own speed: with the road, spinning up under the power, stopped when locked.
+      this.spin[i] += this.body instanceof VehicleBody ? this.body.wheelSpeed[i] * dt : (sp * dt) / w.radius;
       w.spin.rotation.x = this.spin[i];
     }
     if (this.def.physics.lean) {
@@ -1224,10 +1295,25 @@ export class Vehicle {
       if (v.seat && !v.gun) v.seat('passenger', v.passenger, 0);
     }
     // Past the reach of anyone's eyes the cabin is not worth drawing: a street of cars would draw a street of seats.
+    // Coming into reach it dissolves in behind the glass rather than popping (`dissolve.ts`).
     if (v.interior) {
       const rp = v.root.position;
-      v.interior.visible = !!this.driver || !!this.passenger || this.ctx.players.some((pl) => pl.cam.pos.distanceToSquared(rp) < CABIN_LOD * CABIN_LOD);
-      if (v.steerWheel) v.steerWheel.visible = v.interior.visible;
+      const seated = !!this.driver || !!this.passenger;
+      const want = seated || this.ctx.players.some((pl) => pl.cam.pos.distanceToSquared(rp) < CABIN_LOD * CABIN_LOD);
+      const f = this.cabinFades;
+      f.update(dt);
+      const first = !this.cabinSet;
+      this.cabinSet = true;
+      for (const o of v.steerWheel ? [v.interior, v.steerWheel] : [v.interior]) {
+        // The first time it is simply what it should be: the car itself is only just coming in.
+        if (first) o.visible = want;
+        else if (want) {
+          if (!o.visible) {
+            o.visible = true;
+            if (!seated) f.fadeIn(o);
+          } else if (f.leaving(o)) f.fadeIn(o);
+        } else if (o.visible && !f.leaving(o)) f.fadeOut(o, () => (o.visible = false));
+      }
     }
     // Far from every camera the wheels drop their tread blocks and bolts (see `addWheelSet`).
     if (v.setDetail) {

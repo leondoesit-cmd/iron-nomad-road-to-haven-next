@@ -1,0 +1,423 @@
+[
+  {
+    "file": "animal-bear.bin",
+    "model": "animal-bear",
+    "title": "Bear",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/0PXWfxfb0Hu",
+    "original": "bear-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; auto-rigged (quad) with generated animation clips, baked to bone matrices",
+    "sha256": "77f748006043ff3c4092ea180147266f796dac6348ac678ce4fef157ac899569"
+  },
+  {
+    "file": "animal-boar.bin",
+    "model": "animal-boar",
+    "title": "Boar",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/57fSWum6F1P",
+    "original": "boar-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; recoloured; auto-rigged (quad) with generated animation clips, baked to bone matrices",
+    "sha256": "0909f8ebea901e4ae70e904ed1f42224a9aed08d410e03cbd2708c034d976d7e"
+  },
+  {
+    "file": "animal-buffalo.bin",
+    "model": "animal-buffalo",
+    "title": "Bull (Ultimate Animated Animal Pack)",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://poly.pizza/m/a8PIIYwF7r",
+    "original": "bull-quaternius.glb",
+    "edit": "Skinned meshes merged, reoriented and scaled; palette colours baked into vertex colours; animation clips resampled to baked bone matrices",
+    "sha256": "9225a6b1287ab73decbbd2f80bf28ccb7fab9943633f306c7c8308b568ac1018"
+  },
+  {
+    "file": "animal-camel.bin",
+    "model": "animal-camel",
+    "title": "Camel",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/7XeLogrxLad",
+    "original": "camel-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; auto-rigged (quad) with generated animation clips, baked to bone matrices",
+    "sha256": "4d7811e173edf2adba2a05b54d5f80e3404aeccca07df1c873f96e2182d83642"
+  },
+  {
+    "file": "animal-deer.bin",
+    "model": "animal-deer",
+    "title": "Gazelle",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/bPYIQ_XQbrj",
+    "original": "gazelle-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; auto-rigged (quad) with generated animation clips, baked to bone matrices",
+    "sha256": "d0483cd416da657e1724c233c904241587d2f8c155d57dff62e992561d830a63"
+  },
+  {
+    "file": "animal-dog.bin",
+    "model": "animal-dog",
+    "title": "Shiba Inu (Ultimate Animated Animal Pack)",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://poly.pizza/m/y4wdQpg767",
+    "original": "shiba-quaternius.glb",
+    "edit": "Skinned meshes merged, reoriented and scaled; palette colours baked into vertex colours; animation clips resampled to baked bone matrices",
+    "sha256": "01eba91b0fd699b532cada1e009a101a4352f24710f044ecbad99cf8d3cebc5d"
+  },
+  {
+    "file": "animal-fox.bin",
+    "model": "animal-fox",
+    "title": "Fox (Ultimate Animated Animal Pack)",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://poly.pizza/m/Bc97C66HKi",
+    "original": "fox-quaternius.glb",
+    "edit": "Skinned meshes merged, reoriented and scaled; palette colours baked into vertex colours; animation clips resampled to baked bone matrices",
+    "sha256": "a368228b5acd244112367c7c25ea54c1c5b3e0ac1fdbe607aff1c3de79cd85a1"
+  },
+  {
+    "file": "animal-hare.bin",
+    "model": "animal-hare",
+    "title": "Jackrabbit",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/biNOm96olTH",
+    "original": "jackrabbit-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; auto-rigged (quad) with generated animation clips, baked to bone matrices",
+    "sha256": "69066869855f5fe86283cded05b4cb943c654e2761b44b9dfb342f4bffe8ab10"
+  },
+  {
+    "file": "animal-ibex.bin",
+    "model": "animal-ibex",
+    "title": "Goat",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/d7dImmjtF8E",
+    "original": "goat-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; recoloured; auto-rigged (quad) with generated animation clips, baked to bone matrices",
+    "sha256": "f1f9135439c2bdcbd83a0b7aa402576d27b328f3f5500d40e65e03e814ec5b51"
+  },
+  {
+    "file": "animal-jackal.bin",
+    "model": "animal-jackal",
+    "title": "Wolf (Ultimate Animated Animal Pack)",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://poly.pizza/m/P1gU3Qkr9r",
+    "original": "wolf-quaternius.glb",
+    "edit": "Skinned meshes merged, reoriented and scaled; palette colours baked into vertex colours; recoloured; animation clips resampled to baked bone matrices",
+    "sha256": "4eea8698907d4a71e5a8b5976a4ca9a24dd9f826d7dc1672e2cb5da311f94aec"
+  },
+  {
+    "file": "animal-wolf.bin",
+    "model": "animal-wolf",
+    "title": "Wolf (Ultimate Animated Animal Pack)",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://poly.pizza/m/P1gU3Qkr9r",
+    "original": "wolf-quaternius.glb",
+    "edit": "Skinned meshes merged, reoriented and scaled; palette colours baked into vertex colours; animation clips resampled to baked bone matrices",
+    "sha256": "99d79d4f9ff4105f98779fc550ad101ff8a5f7d098c2191f42811600f00d2b82"
+  },
+  {
+    "file": "bird-crow.bin",
+    "model": "bird-crow",
+    "title": "Crow",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/1MIvWQ5Q3R9",
+    "original": "crow-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; auto-rigged (bird) with generated animation clips, baked to bone matrices",
+    "sha256": "7b8dc2893ac9585959701d4cb138ad0cbf31fb1e32f33fd77007419216582ad2"
+  },
+  {
+    "file": "bird-dove.bin",
+    "model": "bird-dove",
+    "title": "Mourning dove",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/1cF8DTp2sAi",
+    "original": "dove-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; reduced to brightness for in-game tinting; auto-rigged (bird) with generated animation clips, baked to bone matrices",
+    "sha256": "89f9a11c14588f2618a105d309373f82ce567feaea478bf549065be41c86f6c9"
+  },
+  {
+    "file": "bird-duck.bin",
+    "model": "bird-duck",
+    "title": "Mallard duck",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/frSLi6b6Vid",
+    "original": "mallard-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; auto-rigged (bird) with generated animation clips, baked to bone matrices",
+    "sha256": "e40737eee88b46f928c58e6635d16bb29b29e578c671504a9af885309e715bc0"
+  },
+  {
+    "file": "bird-egret.bin",
+    "model": "bird-egret",
+    "title": "Snowy egret",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/8VTUh9niy9k",
+    "original": "egret-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; auto-rigged (bird) with generated animation clips, baked to bone matrices",
+    "sha256": "320d25bd884a67c29bbf20d15996700df36d0fa26479cc132f9764a99d64c10a"
+  },
+  {
+    "file": "bird-heron.bin",
+    "model": "bird-heron",
+    "title": "Heron",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/74guNhJR5Ij",
+    "original": "heron-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; auto-rigged (bird) with generated animation clips, baked to bone matrices",
+    "sha256": "026d9ca46faab9d8d971733ffd7aa09f0eedced1f53d2226708b1ae95332c3f4"
+  },
+  {
+    "file": "bird-sparrow.bin",
+    "model": "bird-sparrow",
+    "title": "Sparrow",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/eVTHotZ9Bc_",
+    "original": "sparrow-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; reduced to brightness for in-game tinting; auto-rigged (bird) with generated animation clips, baked to bone matrices",
+    "sha256": "41d993f2e4e5cc7d3340f44fb1a15cfc94c5da5df8562a301bec163380d619c5"
+  },
+  {
+    "file": "bird-stork.bin",
+    "model": "bird-stork",
+    "title": "White stork",
+    "author": "Gwym Hendawyr",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/aRlrdbGgvQC",
+    "original": "stork-gwym.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; auto-rigged (bird) with generated animation clips, baked to bone matrices",
+    "sha256": "2c2ca903623d6262afc5978e6bcf1dfc0f1eaa2f6a68730b1ad85f1c4da34bef"
+  },
+  {
+    "file": "bird-swallow.bin",
+    "model": "bird-swallow",
+    "title": "Cliffswallow",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/5dl4UWhvuTW",
+    "original": "swallow-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; reduced to brightness for in-game tinting; auto-rigged (bird) with generated animation clips, baked to bone matrices",
+    "sha256": "50c5cee0fc3dfa633f6689461b04ceddef7c953da9e73ac21a7de321e82e7ff5"
+  },
+  {
+    "file": "bird-vulture.bin",
+    "model": "bird-vulture",
+    "title": "Turkey vulture",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/fvAgunyr1kd",
+    "original": "vulture-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; auto-rigged (bird) with generated animation clips, baked to bone matrices",
+    "sha256": "79f6e194a2baf8997f03994af935c0143aef4b84ed3fce2c79283a9a684a7d3d"
+  },
+  {
+    "file": "critter-crab.bin",
+    "model": "critter-crab",
+    "title": "Crab",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/2DgM36qZW2u",
+    "original": "crab-poly.glb",
+    "edit": "Mesh merged, reoriented and scaled to 1 m; palette colours baked into vertex colours and reduced to brightness for in-game tinting",
+    "sha256": "87e719a7ddf19c97d4e51de0b1184436a98f3cc70ed5a2218626871e2467b931"
+  },
+  {
+    "file": "critter-dragonfly.bin",
+    "model": "critter-dragonfly",
+    "title": "Dragonfly",
+    "author": "AssetQuest",
+    "license": "CC0-1.0",
+    "source": "https://poly.pizza/m/de6jep5Fq5",
+    "original": "dragonfly-assetquest.glb",
+    "edit": "Body merged, reoriented and scaled to 1 m; palette colours baked into vertex colours and reduced to brightness for in-game tinting; wings split off: the right fore wing laid flat as its own model, every wing's hinge, span and sweep recorded",
+    "sha256": "37e37635ef88abc74680b5cb25529deec800228a3f954aecb3dd6e24420ce251"
+  },
+  {
+    "file": "critter-dragonwing.bin",
+    "model": "critter-dragonfly",
+    "title": "Dragonfly",
+    "author": "AssetQuest",
+    "license": "CC0-1.0",
+    "source": "https://poly.pizza/m/de6jep5Fq5",
+    "original": "dragonfly-assetquest.glb",
+    "edit": "Body merged, reoriented and scaled to 1 m; palette colours baked into vertex colours and reduced to brightness for in-game tinting; wings split off: the right fore wing laid flat as its own model, every wing's hinge, span and sweep recorded",
+    "sha256": "35cfc059a068783168da60c1dcd1d78db3143d86df47b191e699da24455151d5"
+  },
+  {
+    "file": "critter-fish.bin",
+    "model": "critter-fish",
+    "title": "Fish (Animated Fish Pack)",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://poly.pizza/m/XWl86YFtpF",
+    "original": "fish-quaternius.glb",
+    "edit": "Mesh merged, reoriented and scaled to 1 m; palette colours baked into vertex colours and reduced to brightness for in-game tinting",
+    "sha256": "7a103964d3cac6148b76a9d731956e31d5694cff945f4b3382a893ff52f376f4"
+  },
+  {
+    "file": "critter-frog.bin",
+    "model": "critter-frog",
+    "title": "Green Frog",
+    "author": "AssetQuest",
+    "license": "CC0-1.0",
+    "source": "https://poly.pizza/m/yK6MyLkuob",
+    "original": "frog-assetquest.glb",
+    "edit": "Mesh merged, reoriented and scaled to 1 m; palette colours baked into vertex colours and reduced to brightness for in-game tinting",
+    "sha256": "2d89300a277a3c27c92f2b9fef8db8e60b64899b965a085d70b6a0434ce40a53"
+  },
+  {
+    "file": "critter-lizard.bin",
+    "model": "critter-lizard",
+    "title": "Salamander",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/eqjMAgmr-pM",
+    "original": "salamander-poly.glb",
+    "edit": "Mesh merged, reoriented and scaled to 1 m; palette colours baked into vertex colours and reduced to brightness for in-game tinting",
+    "sha256": "f781f78006ad4c9341df2abff78c48c60ab79316cd70a2d29d6491bb8be49ca9"
+  },
+  {
+    "file": "critter-snake.bin",
+    "model": "critter-snake",
+    "title": "Snake",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/2ovwPNrRijL",
+    "original": "snake-poly.glb",
+    "edit": "Mesh merged, reoriented and scaled to 1 m; palette colours baked into vertex colours and reduced to brightness for in-game tinting",
+    "sha256": "4fe0b275223187848985be0810407fa325d1fd11e71c7613ca9cb2c8207032dd"
+  },
+  {
+    "file": "critter-turtle.bin",
+    "model": "critter-turtle",
+    "title": "Turtle",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/c6n73UnGEP4",
+    "original": "terrapin-poly.glb",
+    "edit": "Mesh merged, reoriented and scaled to 1 m; palette colours baked into vertex colours",
+    "sha256": "cbb5971decd617f3ca11caa3080ab1a7e873e25ae709e5c7a97443fd1550eb9b"
+  },
+  {
+    "file": "flyer-bat.bin",
+    "model": "flyer-bat",
+    "title": "Bat",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/a6ZmdFKog_u",
+    "original": "bat-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; reduced to brightness for in-game tinting; auto-rigged (flyer) with generated animation clips, baked to bone matrices",
+    "sha256": "089ea4dbc0c48be40d498823cf5c720571984ea656ad6d349e72ee8ebda3f0cc"
+  },
+  {
+    "file": "flyer-brown.bin",
+    "model": "flyer-brown",
+    "title": "Bird",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/8Ph79kHbt9s",
+    "original": "flyer-black-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; recoloured; auto-rigged (flyer) with generated animation clips, baked to bone matrices",
+    "sha256": "84a5a3c116cad6ce995472ccefe3e676da963631fee65867c7cd86e865f32561"
+  },
+  {
+    "file": "flyer-dark.bin",
+    "model": "flyer-dark",
+    "title": "Bird",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/8Ph79kHbt9s",
+    "original": "flyer-black-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; auto-rigged (flyer) with generated animation clips, baked to bone matrices",
+    "sha256": "5ed00ca8629850864c304da6c8c6fcbcc8bd93df29470f433b75aba31c6f6e0f"
+  },
+  {
+    "file": "flyer-egret.bin",
+    "model": "flyer-egret",
+    "title": "Snowy egret",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/8VTUh9niy9k",
+    "original": "egret-poly.glb",
+    "edit": "Posed for flight (levelled, legs trailing, neck folded) and given the wings of \"Flying seagull\" by Poly by Google, https://poly.pizza/m/6Tpj_vcWP3f (CC BY 3.0); auto-rigged (flyer) with generated flap and glide clips, baked to bone matrices",
+    "sha256": "5e3b07f9c9ee738ec82eb53c122ba2117c83f3b54957d929c29d27082c471278"
+  },
+  {
+    "file": "flyer-gull.bin",
+    "model": "flyer-gull",
+    "title": "Flying seagull",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/6Tpj_vcWP3f",
+    "original": "flyer-gull-poly.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; auto-rigged (flyer) with generated animation clips, baked to bone matrices",
+    "sha256": "5e81440582a48d11939308ae65726721402e2319b3ef74c9124a7f96e56b4adf"
+  },
+  {
+    "file": "flyer-heron.bin",
+    "model": "flyer-heron",
+    "title": "Heron",
+    "author": "Poly by Google",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/74guNhJR5Ij",
+    "original": "heron-poly.glb",
+    "edit": "Posed for flight (levelled, legs trailing, neck folded) and given the wings of \"Flying seagull\" by Poly by Google, https://poly.pizza/m/6Tpj_vcWP3f (CC BY 3.0), greyed; auto-rigged (flyer) with generated flap and glide clips, baked to bone matrices",
+    "sha256": "98752d75fafde11c2fb166415628663b170513a756eb0ff791a54a7392971a7e"
+  },
+  {
+    "file": "flyer-small.bin",
+    "model": "flyer-small",
+    "title": "Bird",
+    "author": "madtrollstudio",
+    "license": "CC-BY-3.0",
+    "source": "https://poly.pizza/m/F3km1zKccq",
+    "original": "flyer-small-madtroll.glb",
+    "edit": "Mesh reoriented and scaled; palette colours baked into vertex colours; reduced to brightness for in-game tinting; auto-rigged (flyer) with generated animation clips, baked to bone matrices",
+    "sha256": "4bc1bfddcb312d0c4c39e2f20c33c745a8d5b485628ba519a6706588df0b9362"
+  },
+  {
+    "file": "zombie-anims.bin",
+    "model": "zombie-anims",
+    "title": "Universal Animation Library 1 & 2 (Standard)",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://quaternius.itch.io/universal-animation-library",
+    "original": "ual1-quaternius.glb, ual2-quaternius.glb, kaykit-general.glb, kaykit-movement-advanced.glb, kaykit-special.glb, kaykit-combat-melee.glb, 100style-zombie-fw.bvh, 100style-zombie-fr.bvh, 100style-zombie-id.bvh, cmu-104_41.bvh, cmu-104_42.bvh, cmu-120_22.bvh",
+    "edit": "Clips retargeted by joint direction onto the game's eleven-joint zombie body and baked to bone matrices",
+    "also": [
+      {
+        "title": "KayKit Character Animations 1.1",
+        "author": "Kay Lousberg",
+        "license": "CC0-1.0",
+        "source": "https://kaylousberg.itch.io/kaykit-character-animations",
+        "edit": "Clips retargeted by joint direction onto the game's eleven-joint zombie body and baked to bone matrices"
+      },
+      {
+        "title": "The 100STYLE Dataset (Zombie style: idle, forward walk, forward run)",
+        "author": "Ian Mason, Sebastian Starke, Taku Komura",
+        "license": "CC-BY-4.0",
+        "source": "https://www.ianxmason.com/100style/",
+        "note": "Zenodo record 8127870",
+        "edit": "Single step cycles and an idle stretch cut from the takes, turned to face ahead and walk on the spot, retargeted by joint direction onto the game's zombie body, looped and baked to bone matrices"
+      },
+      {
+        "title": "CMU Graphics Lab Motion Capture Database (subject 104 trials 41 and 42, subject 120 trial 22)",
+        "author": "Carnegie Mellon University",
+        "license": "CMU-mocap",
+        "source": "http://mocap.cs.cmu.edu/",
+        "note": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217.",
+        "edit": "Single step cycles cut from the takes, turned to face ahead and walk on the spot, retargeted by joint direction onto the game's zombie body, looped and baked to bone matrices"
+      }
+    ],
+    "sha256": "b161b5cf758d7b2299ea22cfe66c5ccf979424ce1bd4d59c227f923c78f6d6ce"
+  }
+]

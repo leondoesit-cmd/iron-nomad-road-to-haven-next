@@ -5,6 +5,7 @@ import { kitMaterial } from './materials';
 import { shared } from './dispose';
 import type { AnimalKind } from '../data';
 import { PART_BIT } from '../sim/anatomy';
+import { AnimalHerd } from './animalModels';
 
 export const MAX_PER_KIND = 40;
 
@@ -527,12 +528,31 @@ export interface AnimalPose {
   pitch?: number;
   /** Lying down on its brisket, 0 standing to 1 down (a wounded animal bedded up): legs folded under, body on the ground. */
   lie?: number;
+  /** How far through a bite, butt or swipe it is, 0..1 (0 when not attacking). Models only. */
+  attack?: number;
+  /** A bird on the wing coasting rather than beating its wings, 0..1. Models only. */
+  glide?: number;
+  /** A duck paddling on the water. Models only. */
+  swim?: number;
+  /** How far through falling dead it is, 0..1 (with `roll` the procedural bodies use). Models only. */
+  dying?: number;
+  /** Which of its takes of a move it plays (stable per animal). Models only. */
+  seed?: number;
+  /** Flinching from a hit: how far through, signed by the side it came from (+ its left). Models only. */
+  hit?: number;
 }
 const NO_POSE: AnimalPose = {};
 
 export class AnimalRenderer {
   readonly group = new THREE.Group();
   private batches = new Map<AnimalKind, Batch>();
+  /** Species drawn from rigged models (`animalModels.ts`), made on first use once their models are loaded. */
+  private herds = new Map<AnimalKind, AnimalHerd>();
+  /** Seconds, for idle and grazing loops (models only). */
+  private time = 0;
+  private last = 0;
+  /** Draw every species procedurally even when its model is loaded (settings, tools). */
+  proceduralOnly = false;
 
   private batch(kind: AnimalKind): Batch {
     let b = this.batches.get(kind);
@@ -560,6 +580,20 @@ export class AnimalRenderer {
 
   begin() {
     for (const b of this.batches.values()) b.count = 0;
+    for (const h of this.herds.values()) h.begin();
+    const now = typeof performance !== 'undefined' ? performance.now() / 1000 : 0;
+    this.time += Math.min(0.1, Math.max(0, now - (this.last || now)));
+    this.last = now;
+  }
+
+  private herd(kind: AnimalKind): AnimalHerd | null {
+    if (this.proceduralOnly) return null;
+    let h = this.herds.get(kind);
+    if (!h && AnimalHerd.ready(kind)) {
+      h = new AnimalHerd(kind, MAX_PER_KIND, this.group);
+      this.herds.set(kind, h);
+    }
+    return h ?? null;
   }
 
   /**
@@ -569,6 +603,8 @@ export class AnimalRenderer {
    * `rear` how far the front is lifted (a bear on its hind legs), `fold` how far a bird's wings are tucked in.
    */
   push(kind: AnimalKind, scale: number, x: number, y: number, z: number, yaw: number, phase: number, gait: number, roll: number, flap: number, bank: number, tint: number, pose: AnimalPose = NO_POSE) {
+    const herd = this.herd(kind);
+    if (herd) return herd.push(scale, x, y, z, yaw, phase, gait, roll, flap, bank, tint, pose, this.time);
     const b = this.batch(kind);
     if (b.count >= MAX_PER_KIND) return;
     const i = b.count++;
@@ -648,6 +684,7 @@ export class AnimalRenderer {
   }
 
   end() {
+    for (const h of this.herds.values()) h.end();
     for (const b of this.batches.values()) {
       const per = b.model.per ?? 1;
       b.body.count = b.count;
@@ -662,6 +699,8 @@ export class AnimalRenderer {
   }
 
   dispose() {
+    for (const h of this.herds.values()) h.dispose();
+    this.herds.clear();
     for (const b of this.batches.values()) {
       b.body.dispose();
       b.limbs.forEach((l) => l.dispose());

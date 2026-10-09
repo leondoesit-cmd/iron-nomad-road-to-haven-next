@@ -1,6 +1,7 @@
 import { MELABES } from '../world/melabes';
 import { staticTransform } from './staticTransform';
 import { FadedBatch } from './fadedBatch';
+import { Fades, markDissolvable, type DissolveState } from './dissolve';
 import * as THREE from 'three';
 import { MeshBuilder, S } from './builder';
 import { appendProp } from './props';
@@ -12,7 +13,8 @@ import { FacadeBuilder, facadeMaterial } from './facade';
 import { crate, plate, spareTyre } from './parts';
 import { buildScatterSteps, type ScatterSet } from './scatter';
 import { kitMaterial } from './materials';
-import { buildShopFrontDetails, buildShopFrontPanel, shopFrontMaterial, type ShopId } from './shopFront';
+import { shared } from './dispose';
+import { shopFrontGeometry, shopFrontMaterial, type ShopId } from './shopFront';
 import { MelabesWorker } from './shopWorker';
 import { buildSignGeometries } from './signs';
 import { CELL, CELLS, CHUNK, corridorHalf, heightAt, normalAt, roadX, surfaceAt, waterAt, type TerrainDef } from '../world/terrain';
@@ -22,7 +24,7 @@ import type { Aabb } from '../world/layout';
 import { facadeStyleOf } from '../world/shopGlass';
 import { PaneSet } from './glass';
 import { BOULEVARD_HALF, SIDEWALK } from '../world/layout';
-import { GROUPS, type Collider, type PhysicsWorld } from '../physics/physics';
+import { GROUPS, stoneKey, type Collider, type PhysicsWorld } from '../physics/physics';
 import { hash2, noise2 } from '../core/rng';
 import { smoothstep } from '../core/math';
 import { forestAt, lushAt } from '../world/hydro';
@@ -45,6 +47,31 @@ export interface ChunkMaterials {
 const ROAD_RAMP = 0.6;
 /** How much higher an open-world road is drawn for each road it crosses under it (`roadLayer`), so the two do not fight. */
 const ROAD_STACK = 0.012;
+/** Collision vertices a staged chunk turns into prop colliders per slice (a hull of a few hundred is about a millisecond). */
+const PROP_COLLIDER_SLICE = 1500;
+/** Mesh vertices of dead trees a staged chunk builds per slice: each is its own mesh, trimesh collider and brittle wood. */
+const DEAD_TREE_SLICE = 6000;
+
+/**
+ * A dead tree's drawn geometry, one per variant: every placement is its own geometry over these shared buffers (so the
+ * wood pieces and collider index worked out from them are worked out once), released without freeing them.
+ */
+const deadTreeGeos = new WeakMap<MeshBuilder, THREE.BufferGeometry>();
+function deadTreeGeometry(proto: MeshBuilder): THREE.BufferGeometry {
+  let src = deadTreeGeos.get(proto);
+  if (!src) deadTreeGeos.set(proto, (src = shared(proto.build())));
+  const g = shared(new THREE.BufferGeometry());
+  for (const [name, attribute] of Object.entries(src.attributes)) g.setAttribute(name, attribute);
+  g.setIndex(src.index);
+  g.boundingBox = src.boundingBox!.clone();
+  g.boundingSphere = src.boundingSphere!.clone();
+  return g;
+}
+function releaseShared(g: THREE.BufferGeometry) {
+  g.setIndex(null);
+  for (const k of Object.keys(g.attributes)) g.deleteAttribute(k);
+  g.dispose();
+}
 
 export function makeChunkMaterials(biome: 'wasteland' | 'city', theme?: GroundTheme): ChunkMaterials {
   return {
@@ -156,6 +183,8 @@ function cliffPush(def: TerrainDef, x: number, z: number, h: number): [number, n
   return [-Math.sign(x - rx) * amt, 0];
 }
 
+const _stoneM = new THREE.Matrix4();
+
 /** Meshes plus colliders for one 128 m chunk. Created and disposed by the streaming system. */
 export class ChunkView {
   group = staticTransform(new THREE.Group());
@@ -175,6 +204,28 @@ export class ChunkView {
   private stages: (() => boolean | void)[] = [];
   /** Barricades that were blown apart before their mesh was built. */
   private removed = new Set<number>();
+  /** Its ground mesh is in (the first stage of a staged chunk). */
+  groundIn = false;
+  /** The ground mesh, once its stage has run; and where its cells' triangles start in its index (after the skirts). */
+  terrainMesh: THREE.Mesh | null = null;
+  private cellIdx0 = 0;
+  /** Every static collider of its ground and props is in (the first stage of a staged chunk), so things can be dropped here. */
+  collidersIn = false;
+  /** Geometries over shared buffers (`deadTreeGeometry`), let go of without freeing the buffers. */
+  private sharedGeos: THREE.BufferGeometry[] = [];
+  /**
+   * How far in the chunk is on screen, 0..1, for the streaming that owns it (`LegScene`): a staged chunk is kept hidden
+   * while it is built and then dissolves in, the far stand-ins over it out (`dissolve.ts`). A whole chunk is in at once.
+   */
+  readonly fade: DissolveState = { value: 1 };
+  /** The fade before it is rounded to what the far landscape's mask can hold, so slow frames still move it on. */
+  fadeRaw = 1;
+  /** Drawn at all (a staged chunk is not, until it is built or someone comes close). */
+  shown = true;
+  /** Fading out before it is unloaded. */
+  leaving = false;
+  /** Distance-limited detail dissolving in or out (`reveal`); its owner runs it. */
+  readonly detailFades = new Fades();
 
   constructor(
     public data: ChunkData,
@@ -186,20 +237,25 @@ export class ChunkView {
     const x0 = data.cx * CHUNK;
     const z0 = data.cz * CHUNK;
     this.city = data.city;
+    markDissolvable(this.group);
     this.vegetation = new Vegetation(phys, opts.vegetationMemory, opts.onTreeBreak);
     this.vegetation.addTrees(data.trees);
     this.buildColliders(def, x0, z0);
     const ground = this.buildTerrain(def, mats, x0, z0);
     this.stages.push(
+      // The props' colliders first, a few at a time (each is a hull or triangle mesh of its drawn shape): nothing else is
+      // solid in between, so they go in in the same order as before, and `collidersIn` says when a car may be dropped here.
+      this.sliced(() => this.buildPropColliders()),
       () => {
         if (!ground.next().done) return true;
+        this.groundIn = true;
         opts.onGround?.();
       },
       // Trees straight after the ground: the far forest has stepped aside already.
       this.sliced(() => this.buildTrees()),
       () => (def.open ? this.buildOpenRoads(def, mats, x0, z0) : this.buildRoad(def, mats, z0)),
       this.sliced(() => this.buildBuildings(data, mats)),
-      () => this.buildProps(data, mats, def.biome === 'city'),
+      this.sliced(() => this.buildProps(data, mats, def.biome === 'city')),
       this.sliced(() => this.buildScatter(def, opts.scatter)),
     );
     if (!opts.staged) while (this.buildNext());
@@ -499,6 +555,7 @@ export class ChunkView {
         idx.push(a, b, as, b, bs, as, a, as, b, b, as, bs);
       }
     }
+    this.cellIdx0 = idx.length;
     for (let r = 0; r < n; r++) {
       for (let c = 0; c < n; c++) {
         const a = r * N1 + c;
@@ -521,6 +578,104 @@ export class ChunkView {
     g.computeBoundingBox();
     const m = this.addMesh(g, mats.terrain, false, true);
     m.position.set(x0, 0, z0);
+    this.terrainMesh = m;
+  }
+
+  /**
+   * The ground mesh's four corners of one 2 m cell (`c` across, `r` down the chunk), for a finer tile drawn in its place
+   * (`render/groundDeform.ts`): heights, normals, colours, ground weights and `tdata` of corners a, b, d, e, packed as the
+   * deform shader reads them (15 texels of 4). False where there is no ground mesh yet, or the cell is a cliff face pushed
+   * off the grid.
+   */
+  cellCorners(c: number, r: number, out: Float32Array): boolean {
+    const m = this.terrainMesh;
+    if (!m || c < 0 || r < 0 || c >= CELLS || r >= CELLS) return false;
+    const g = m.geometry;
+    const pos = g.attributes.position.array as Float32Array;
+    const nor = g.attributes.normal.array as Float32Array;
+    const col = g.attributes.color.array as Float32Array;
+    const spl = g.attributes.splat.array as Float32Array;
+    const td = g.attributes.tdata.array as Float32Array;
+    const N1 = CELLS + 1;
+    const vs = [r * N1 + c, r * N1 + c + 1, (r + 1) * N1 + c, (r + 1) * N1 + c + 1];
+    const cs = [c, c + 1, c, c + 1];
+    const rs = [r, r, r + 1, r + 1];
+    const flat = new Array<number>(24);
+    for (let k = 0; k < 4; k++) {
+      const v = vs[k];
+      if (Math.abs(pos[v * 3] - cs[k] * CELL) > 1e-3 || Math.abs(pos[v * 3 + 2] - rs[k] * CELL) > 1e-3) return false;
+      out[k] = pos[v * 3 + 1];
+      for (let q = 0; q < 3; q++) {
+        flat[k * 3 + q] = nor[v * 3 + q];
+        flat[12 + k * 3 + q] = col[v * 3 + q];
+      }
+      for (let q = 0; q < 4; q++) {
+        out[28 + k * 4 + q] = spl[v * 4 + q];
+        out[44 + k * 4 + q] = td[v * 4 + q];
+      }
+    }
+    for (let q = 0; q < 12; q++) {
+      out[4 + q] = flat[q];
+      out[16 + q] = flat[12 + q];
+    }
+    return true;
+  }
+
+  /**
+   * What the ground mesh is made of at a point of this chunk (metres from its corner): the shares of sand, earth, rock and
+   * gravel it is drawn with, its colour (r, g, b), and how much grass and woodland floor cover it, into `out` (9 numbers).
+   * False where there is no mesh yet.
+   */
+  groundAt(lx: number, lz: number, out: Float32Array | number[]): boolean {
+    const m = this.terrainMesh;
+    if (!m) return false;
+    const u = Math.min(CELLS - 1e-4, Math.max(0, lx / CELL));
+    const v = Math.min(CELLS - 1e-4, Math.max(0, lz / CELL));
+    const c = Math.floor(u);
+    const r = Math.floor(v);
+    const fu = u - c;
+    const fv = v - r;
+    const g = m.geometry;
+    const spl = g.attributes.splat.array as Float32Array;
+    const col = g.attributes.color.array as Float32Array;
+    const td = g.attributes.tdata.array as Float32Array;
+    const N1 = CELLS + 1;
+    const a = r * N1 + c;
+    const w = [(1 - fu) * (1 - fv), fu * (1 - fv), (1 - fu) * fv, fu * fv];
+    const vs = [a, a + 1, a + N1, a + N1 + 1];
+    for (let q = 0; q < 9; q++) out[q] = 0;
+    for (let k = 0; k < 4; k++) {
+      for (let q = 0; q < 4; q++) out[q] += w[k] * spl[vs[k] * 4 + q];
+      for (let q = 0; q < 3; q++) out[4 + q] += w[k] * col[vs[k] * 3 + q];
+      out[7] += w[k] * td[vs[k] * 4 + 2];
+      out[8] += w[k] * td[vs[k] * 4 + 3];
+    }
+    return true;
+  }
+
+  /** Hide one cell of the ground mesh (a finer tile is drawn there), or show it again. */
+  hideCell(c: number, r: number, hidden: boolean) {
+    const m = this.terrainMesh;
+    if (!m || c < 0 || r < 0 || c >= CELLS || r >= CELLS) return;
+    const index = m.geometry.index!;
+    const arr = index.array as Uint16Array | Uint32Array;
+    const N1 = CELLS + 1;
+    const o = this.cellIdx0 + (r * CELLS + c) * 6;
+    const a = r * N1 + c;
+    if (hidden) arr.fill(a, o, o + 6);
+    else {
+      const b = a + 1;
+      const d = a + N1;
+      const e = d + 1;
+      arr[o] = a;
+      arr[o + 1] = d;
+      arr[o + 2] = e;
+      arr[o + 3] = a;
+      arr[o + 4] = e;
+      arr[o + 5] = b;
+    }
+    index.addUpdateRange(o, 6);
+    index.needsUpdate = true;
   }
 
   /** The road: a gently crowned strip with crumbling shoulders, built only in the chunk column it runs through. */
@@ -746,12 +901,42 @@ export class ChunkView {
     }
     this.scatterSet = set;
     this.vegetation.addScatter(set);
-    // Stones and boulders are solid: each is a convex hull of its own drawn shape.
+    // Stones and boulders are solid: each is a convex hull of its own drawn shape. A round can break the loose ones
+    // (`game/stones.ts`); one broken before is left out.
     let n = 0;
     for (const im of [...set.pebbles, ...set.boulders]) {
+      const tag = im.userData.stone as { kind: 'pebble' | 'boulder'; v: number } | undefined;
       for (let i = 0; i < im.count; i++) {
+        im.getMatrixAt(i, _stoneM);
+        const key = stoneKey(_stoneM.elements[12], _stoneM.elements[14]);
+        if (this.phys.brokenStones.has(key)) {
+          im.setMatrixAt(i, _stoneM.makeScale(0, 0, 0));
+          im.instanceMatrix.needsUpdate = true;
+          continue;
+        }
         const c = this.phys.tag(this.phys.addStaticHull(instanceHullPoints(im, i), GROUPS.furn), 'stone');
-        if (c) this.colliders.push(c);
+        if (c) {
+          this.colliders.push(c);
+          if (tag) {
+            let gone = false;
+            this.phys.stones.set(c.handle, {
+              im,
+              i,
+              kind: tag.kind,
+              v: tag.v,
+              remove: () => {
+                if (gone) return;
+                gone = true;
+                this.phys.brokenStones.add(key);
+                im.setMatrixAt(i, _stoneM.makeScale(0, 0, 0));
+                im.instanceMatrix.needsUpdate = true;
+                const k = this.colliders.indexOf(c);
+                if (k >= 0) this.colliders.splice(k, 1);
+                this.phys.removeCollider(c);
+              },
+            });
+          }
+        }
         if (++n % 24 === 0) yield;
       }
     }
@@ -790,29 +975,49 @@ export class ChunkView {
     if (this.treeSet) for (const im of this.treeSet.near) im.visible = d < TREE_NEAR_SHOW;
     const s = this.scatterSet;
     if (!s) return;
-    if (s.grass) s.grass.visible = d < 90;
-    if (s.flowers) s.flowers.visible = d < 85;
-    for (const p of s.pebbles) p.visible = d < 110;
-    if (s.ferns) s.ferns.visible = d < 145;
-    if (s.shrubs) s.shrubs.visible = d < 190;
-    if (s.reeds) s.reeds.visible = d < 190;
-    if (s.cane) s.cane.visible = d < 235;
-    if (s.pads) s.pads.visible = d < 195;
-    if (s.papyrus) s.papyrus.visible = d < 190;
-    if (s.iris) s.iris.visible = d < 110;
-    if (s.oleander) s.oleander.visible = d < 180;
-    if (s.weed) s.weed.visible = d < 68;
-    if (s.blooms) s.blooms.visible = d < 120;
+    if (s.grass) this.reveal(s.grass, d < 90);
+    if (s.flowers) this.reveal(s.flowers, d < 85);
+    for (const p of s.pebbles) this.reveal(p, d < 110);
+    if (s.ferns) this.reveal(s.ferns, d < 145);
+    if (s.shrubs) this.reveal(s.shrubs, d < 190);
+    if (s.reeds) this.reveal(s.reeds, d < 190);
+    if (s.cane) this.reveal(s.cane, d < 235);
+    if (s.pads) this.reveal(s.pads, d < 195);
+    if (s.papyrus) this.reveal(s.papyrus, d < 190);
+    if (s.iris) this.reveal(s.iris, d < 110);
+    if (s.oleander) this.reveal(s.oleander, d < 180);
+    if (s.weed) this.reveal(s.weed, d < 68);
+    if (s.blooms) this.reveal(s.blooms, d < 120);
     // Under the water: only near enough to be seen through it.
-    for (const r of s.bedRocks) r.visible = d < 75;
-    if (s.silt) s.silt.visible = d < 85;
-    if (s.snags) s.snags.visible = d < 120;
-    if (s.shells) s.shells.visible = d < 30;
-    if (s.tape) s.tape.visible = d < 80;
-    if (s.pondweed) s.pondweed.visible = d < 80;
-    if (s.hornwort) s.hornwort.visible = d < 60;
-    if (s.snails) s.snails.visible = d < 25;
+    for (const r of s.bedRocks) this.reveal(r, d < 75);
+    if (s.silt) this.reveal(s.silt, d < 85);
+    if (s.snags) this.reveal(s.snags, d < 120);
+    if (s.shells) this.reveal(s.shells, d < 30);
+    if (s.tape) this.reveal(s.tape, d < 80);
+    if (s.pondweed) this.reveal(s.pondweed, d < 80);
+    if (s.hornwort) this.reveal(s.hornwort, d < 60);
+    if (s.snails) this.reveal(s.snails, d < 25);
     for (const batch of this.fadedBatches) batch.enabled = batch.mesh.visible;
+  }
+
+  /**
+   * Switch a piece of distance-limited detail on or off. Ground cover with a fade of its own in its shader just switches
+   * (it has faded to nothing by then); the rest (stones, snags, litter) dissolves in and out (`dissolve.ts`) once the
+   * chunk itself is all in: before that it goes with the chunk.
+   */
+  private reveal(o: THREE.Object3D, want: boolean) {
+    const m = (o as THREE.Mesh).material as THREE.Material;
+    if (m.userData.scatterFadeEnd !== undefined || !this.shown || this.fadeRaw < 1 || this.leaving) {
+      o.visible = want;
+      return;
+    }
+    const f = this.detailFades;
+    if (want) {
+      if (!o.visible) {
+        o.visible = true;
+        f.fadeIn(o);
+      } else if (f.leaving(o)) f.fadeIn(o);
+    } else if (o.visible && !f.leaving(o)) f.fadeOut(o, () => (o.visible = false));
   }
 
   /** Per-camera culling only removes batches whose colour shader already draws zero-area triangles. */
@@ -853,7 +1058,11 @@ export class ChunkView {
       // A pitched roof replaces the flat slab and parapet; a landmark has no shopfront band.
       this.buildingShell(fb, det, a.minX, a.maxX, a.minZ, a.maxZ, 0, a.y1, tint, style, seed, true, face, { pitched: bs.role === 'synagogue', noShops: !!bs.role, recess: bs.shop === 'malabes' ? (a.minX > 0 ? 'w' : 'e') : undefined });
       if (bs.role) this.landmarkExtras(det, bs, tint);
-      if (bs.shop) this.shopFront(bs, bs.shop as ShopId, mats.roofs);
+      if (bs.shop) {
+        // A shop's front is its own slice: its worker is a whole rigged figure.
+        yield;
+        this.shopFront(bs, bs.shop as ShopId, mats.roofs);
+      }
       if (bs.stepped) {
         const inset = 3;
         if (a.maxX - a.minX > inset * 3 && a.maxZ - a.minZ > inset * 3) {
@@ -1476,11 +1685,10 @@ export class ChunkView {
   private shopFront(bs: BuildingSpec, id: ShopId, detailMaterial: THREE.Material) {
     const a = bs.aabb;
     const onPositiveSide = a.minX > 0;
-    const geo = buildShopFrontPanel();
+    const { panel: geo, details } = shopFrontGeometry(id);
     geo.rotateY(onPositiveSide ? -Math.PI / 2 : Math.PI / 2);
     geo.translate(onPositiveSide ? a.minX - 0.14 : a.maxX + 0.14, 0, (a.minZ + a.maxZ) / 2);
     this.addMesh(geo, shopFrontMaterial(id), false, false);
-    const details = buildShopFrontDetails(id);
     details.rotateY(onPositiveSide ? -Math.PI / 2 : Math.PI / 2);
     details.translate(onPositiveSide ? a.minX - 0.14 : a.maxX + 0.14, 0, (a.minZ + a.maxZ) / 2);
     this.addMesh(details, detailMaterial, true, true);
@@ -1627,22 +1835,28 @@ export class ChunkView {
     }
   }
 
-  private buildProps(data: ChunkData, mats: ChunkMaterials, city: boolean) {
+  private *buildProps(data: ChunkData, mats: ChunkMaterials, city: boolean): Generator<void> {
     const b = new MeshBuilder();
     // Wasteland landmarks are drawn by the far landscape; a city has no such pass, so its few (the metro headhouse) are drawn here.
     const lm = city ? new MeshBuilder() : null;
+    let wood = 0;
     for (const p of data.props) {
       if (p.kind === 'deadTree') {
         const proto = propBuilder(p);
         if (proto && !proto.empty) {
-          const mesh = new THREE.InstancedMesh(proto.build(), kitMaterial(), 1);
+          if (wood > DEAD_TREE_SLICE) {
+            wood = 0;
+            yield;
+          }
+          wood += proto.pos.length / 3;
+          const mesh = new THREE.InstancedMesh(deadTreeGeometry(proto), kitMaterial(), 1);
           const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.yaw);
           mesh.setMatrixAt(0, new THREE.Matrix4().compose(new THREE.Vector3(p.x, p.y, p.z), q, new THREE.Vector3(p.scale, p.scale, p.scale)));
           mesh.computeBoundingSphere();
           mesh.castShadow = mesh.receiveShadow = true;
           this.group.add(mesh);
           this.instanced.push(mesh);
-          this.geos.push(mesh.geometry);
+          this.sharedGeos.push(mesh.geometry);
           this.vegetation.addDeadTree(mesh);
         }
         continue;
@@ -1765,13 +1979,6 @@ export class ChunkView {
     this.colliders.push(this.phys.addHeightfield(x0, z0, CHUNK, CELLS, this.data.heights));
     // Rocks are solid through their mesh below, not a box.
     for (const a of this.data.aabbs) if (a.kind !== 'rock' && a.kind !== 'tree') this.addAabb(a);
-    // Every solid prop collides as its own drawn geometry (furniture group: solid to people and cars, invisible to the camera).
-    for (const p of this.data.props) {
-      if (p.kind === 'deadTree') continue;
-      const m = propCollisionMesh(p);
-      const c = m && this.phys.addPropCollider(m, GROUPS.furn);
-      if (c) this.colliders.push(this.phys.tag(c, propSurface(p.kind)));
-    }
     for (const a of this.data.aabbs) {
       if (!a.pane || !a.paneN) continue;
       const [nx, nz] = a.paneN;
@@ -1779,6 +1986,24 @@ export class ChunkView {
     }
     if (this.panes.size) this.group.add(this.panes.group);
     void def;
+  }
+
+  /** Every solid prop collides as its own drawn geometry (furniture group: solid to people and cars, invisible to the camera). */
+  private *buildPropColliders(): Generator<void> {
+    let verts = 0;
+    for (const p of this.data.props) {
+      if (p.kind === 'deadTree') continue;
+      const m = propCollisionMesh(p);
+      if (!m) continue;
+      if (verts > PROP_COLLIDER_SLICE) {
+        verts = 0;
+        yield;
+      }
+      verts += m.vertices.length / 3;
+      const c = this.phys.addPropCollider(m, GROUPS.furn);
+      if (c) this.colliders.push(this.phys.tag(c, propSurface(p.kind)));
+    }
+    this.collidersIn = true;
   }
 
   /** Give a box a collider (a wall piece added when a wall is breached, or one of the chunk's own on load). */
@@ -1830,6 +2055,7 @@ export class ChunkView {
     this.colliders = [];
     this.panes.dispose();
     for (const g of this.geos) g.dispose();
+    for (const g of this.sharedGeos) releaseShared(g);
     for (const im of this.instanced) im.dispose();
     this.group.removeFromParent();
   }

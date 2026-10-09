@@ -152,20 +152,35 @@ describe('what an add-on does to the gun', () => {
     expect(kitFor(rifle, { muzzle: 'a_brake' }).gun.noise).toBeGreaterThan(bare.gun.noise);
   });
 
-  it('a scope sets the aiming zoom, a better one more, and a bare gun has none', () => {
-    expect(kitFor(rifle, undefined).zoom).toBe(1);
+  it('a scope sets the aiming zoom, a better one more, and iron sights a little', () => {
+    // Behind iron sights the view closes in a little; a long gun's more than a handgun's.
+    const iron = kitFor(rifle, undefined).zoom;
+    expect(iron).toBeGreaterThan(1.3);
+    expect(iron).toBeLessThan(1.8);
+    expect(kitFor(gearDef('w_pistol').gun!, undefined).zoom).toBeLessThan(iron);
+    expect(kitFor(rifle, undefined).optic).toBe('iron');
     const z = (id: string) => kitFor(rifle, { optic: id }).zoom;
-    expect(z('a_dot')).toBe(1);
-    expect(z('a_scope2')).toBeGreaterThan(1.4);
-    expect(z('a_scope4')).toBeGreaterThan(z('a_scope2'));
-    expect(kitFor(gearDef('w_sniper').gun!, { optic: 'a_scope8' }).zoom).toBeGreaterThan(3.5);
+    // A dot with no power of its own aims at the irons' zoom; a reflex or holographic window a touch more.
+    expect(z('a_dot')).toBe(iron);
+    expect(z('a_holo')).toBeGreaterThan(iron);
+    expect(kitFor(rifle, { optic: 'a_holo' }).optic).toBe('dot');
+    // Scopes magnify by what they are called.
+    expect(z('a_scope2')).toBeGreaterThanOrEqual(2);
+    expect(z('a_scope4')).toBeCloseTo(4, 5);
+    expect(kitFor(rifle, { optic: 'a_scope4' })).toMatchObject({ optic: 'scope', sight: 'scope4' });
+    expect(kitFor(gearDef('w_sniper').gun!, { optic: 'a_scope8' }).zoom).toBeCloseTo(8, 5);
+    // The sniper rifle's own tactical scope is a scope too.
+    expect(kitFor(gearDef('w_sniper').gun!, undefined)).toMatchObject({ optic: 'scope', sight: 'tactical' });
+    expect(kitFor(gearDef('w_sniper').gun!, undefined).zoom).toBeGreaterThan(4);
     // Sights tighten the aimed shot; a scope trades sway for reach.
     expect(kitFor(rifle, { optic: 'a_holo' }).gun.adsSpread).toBeLessThan(rifle.adsSpread);
     expect(kitFor(gearDef('w_sniper').gun!, { optic: 'a_scope8' }).sway).toBeGreaterThan(1);
     // The hunting rifle's own worn scope magnifies until a better optic replaces it.
     const hunting = gearDef('w_rifle').gun!;
-    expect(kitFor(hunting, undefined).zoom).toBeGreaterThan(1);
-    expect(kitFor(hunting, { optic: 'a_dot' }).zoom).toBe(1);
+    expect(kitFor(hunting, undefined).zoom).toBeGreaterThan(3);
+    expect(kitFor(hunting, undefined).optic).toBe('scope');
+    expect(kitFor(hunting, { optic: 'a_dot' }).zoom).toBeLessThan(2);
+    expect(kitFor(hunting, { optic: 'a_dot' }).optic).toBe('dot');
   });
 
   it('magazines change capacity and reload; recoil add-ons change the kick', () => {
@@ -702,11 +717,12 @@ describe('add-ons in play', () => {
     sc.renderFrame(1, DT);
     expect(p.zoomNow).toBeLessThan(1.1);
     expect((sc.R.views[0] as { zoom?: number }).zoom).toBeLessThan(1.1);
-    // Without a scope there is no zoom at all.
+    // Behind iron sights the view closes in a little, far less than through a scope.
     arm(p, 'w_ar');
     h.intents[0].lt = 1;
     run(sc, 1);
-    expect(p.zoomNow).toBeCloseTo(1, 5);
+    expect(p.zoomNow).toBeGreaterThan(1.3);
+    expect(p.zoomNow).toBeLessThan(1.8);
   });
 
   it('recoil add-ons and heavier stocks change the kick and the speed of the sights', () => {

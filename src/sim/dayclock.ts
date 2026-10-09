@@ -25,7 +25,7 @@ export const SUNSET_AT = 0.9;
 export const NIGHT_AT = 1.0;
 /**
  * Night camp off (the default): a night played out on the road ends here, and the clock turns over to the next morning
- * (t back to 0, a new day). About four minutes of full dark at the usual day length.
+ * (t back to 0, a new day). About ten minutes of full dark at the usual half-hour day.
  */
 export const DAWN_AT = 1.35;
 /** The sky starts to grey this long before `DAWN_AT`, so the light at the turnover meets the next morning's without a jump. */
@@ -72,6 +72,12 @@ export class DayClock {
   /** Seconds of dark left until a night played out on the road turns into the next morning. */
   get secondsToDawn() {
     return Math.max(0, (DAWN_AT - this.t) * this.dayLength);
+  }
+  /** A new day length, keeping the time of day where it is. */
+  retime(dayLength: number) {
+    const t = this.t;
+    this.dayLength = dayLength;
+    this.elapsed = t * dayLength;
   }
   /** Jump to the Bell (used when the convoy reaches the end of the road early). */
   skipToDusk() {

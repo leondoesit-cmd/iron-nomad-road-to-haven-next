@@ -14,7 +14,8 @@ const SOIL: Record<GroundMaterial, { tint: [number, number, number]; dust: numbe
   concrete: { tint: [0.62, 0.6, 0.57], dust: 0.4, hard: true },
 };
 
-const MELEE_ENERGY: Record<MeleeKind, number> = { fist: 8, knife: 10, machete: 35, katana: 30, bat: 65, pipe: 80, axe: 140, sledge: 260 };
+/** Energy of a blow per (m/s)^2 of swing, J: what it puts into what it strikes. */
+export const MELEE_ENERGY: Record<MeleeKind, number> = { fist: 8, knife: 10, machete: 35, katana: 30, bat: 65, pipe: 80, axe: 140, sledge: 260 };
 
 /** Visual disturbance in metres, driven by kinetic energy, the angle into the ground, and its material. */
 export function groundImpact(weapon: GroundWeapon, material: GroundMaterial, speed: number, incidence: number, dry = 1) {

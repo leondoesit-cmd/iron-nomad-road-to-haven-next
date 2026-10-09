@@ -450,7 +450,6 @@ export interface LegDef {
   length: number;
   seed: number;
   baseThreat: number;
-  dayLength: number;
   tutorial?: boolean;
   /** Ground palette for wasteland legs. */
   theme?: 'dust' | 'salt' | 'cinder';

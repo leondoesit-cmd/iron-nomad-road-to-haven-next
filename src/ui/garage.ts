@@ -18,6 +18,7 @@ import type { Vehicle } from '../game/vehicle';
 import { placeFor } from '../game/access';
 import { needText } from '../sim/access';
 import { breakdownCar, breakdownHtml, type Focus } from './breakdown';
+import { describeFeel, driveFeel } from '../sim/driveFeel';
 
 type Act = (player: number) => void;
 
@@ -316,6 +317,8 @@ export class GarageView {
     const stop = st.brakeMult < 0.75 ? 'bad' : st.brakeMult < 0.95 ? 'mid' : '';
     out.push(
       `<div class="sub2">GEARBOX <span class="${strain}">${gbx}</span> · SPRINGS <span class="${load}">${st.overload > 1.08 ? `SAGGING ${st.overload.toFixed(1)}x` : st.overload > 0.95 ? 'FULL LOAD' : 'OK'}</span> · BRAKES <span class="${stop}">${st.brakeMult < 0.95 ? `${Math.round(st.brakeMult * 100)}% OF STOCK` : 'OK'}</span></div>`,
+      // How it drives: where the drive goes, how the diffs share it, the weight split, and what the electronics catch.
+      `<div class="sub2">DRIVES ${escapeHtml(describeFeel(def, driveFeel(def, b.fit, b.tyres)).toUpperCase())}</div>`,
       `<div class="sub2">WEIGHT ${Math.round(st.mass)} KG · OIL ${st.sumpL.toFixed(1)} L ${Math.round(b.comp.oil * 100)}% · WATER ${st.coolantL.toFixed(1)} L <span class="${(b.comp.coolant ?? 1) < COOLANT_LOW ? 'bad' : ''}">${Math.round((b.comp.coolant ?? 1) * 100)}%</span>${st.hoodOff ? ' · <span class="mid">NO BONNET</span>' : ''}${st.doorsOff ? ` · <span class="mid">${st.doorsOff} DOOR${st.doorsOff > 1 ? 'S' : ''} OFF</span>` : ''}${st.tyresGone ? ` · <span class="bad">${st.tyresGone} BARE WHEEL${st.tyresGone > 1 ? 'S' : ''}</span>` : ''}</div>`,
     );
     if (wrong) {

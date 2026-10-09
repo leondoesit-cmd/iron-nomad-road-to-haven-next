@@ -29,6 +29,7 @@ describe('tree models', () => {
       const N = g.attributes.normal.array as Float32Array;
       const U = g.attributes.uv.array as Float32Array;
       const T = g.attributes.tree.array as Float32Array;
+      const TS = g.attributes.tree.itemSize;
       for (const a of [P, N, U, T]) for (const v of a) expect(Number.isFinite(v)).toBe(true);
       for (const v of U) expect(v >= 0 && v <= 1).toBe(true);
       const idx = g.index!.array;
@@ -37,7 +38,7 @@ describe('tree models', () => {
         let top = 0;
         for (let t = 0; t < idx.length; t += 3) {
           const vs = [idx[t], idx[t + 1], idx[t + 2]];
-          const own = vs.map((i) => T[i * 3 + 1]);
+          const own = vs.map((i) => T[i * TS + 1]);
           // A triangle never mixes variants: the shader drops a variant whole.
           expect(new Set(own).size, `${TREE_SPECIES[sp]} ${v}`).toBe(1);
           if (own[0] !== v) continue;

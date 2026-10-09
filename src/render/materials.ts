@@ -7,6 +7,8 @@ export const GLOBALS = {
   uTime: { value: 0 },
   /** Approximate scene light for unlit-shaded effects (smoke and dust particles). */
   uLight: { value: new THREE.Color(1, 1, 1) },
+  /** Toward the sun (unit, world): for effects that light their own relief (the holes a round leaves). */
+  uSunDir: { value: new THREE.Vector3(0.4, 0.8, 0.3).normalize() },
   /**
    * How wet the hard ground is, 0 bone dry to 1 streaming: darkens rock, asphalt, packed earth and clay and takes the
    * roughness off them. Sand drinks the rain and never shows it (`sim/climate.ts`).

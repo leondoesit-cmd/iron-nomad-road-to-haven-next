@@ -15,6 +15,14 @@ import * as THREE from 'three';
  *
  * The same lights also glow in the air: `FIRE_SCATTER` integrates each one's light scattered toward the eye along a ray
  * (analytically, no march), for the screen-space light pass and the smoke.
+ *
+ * The nearest fire also casts shadows, so walls, cars and people stand dark against it and it does not light a room
+ * through the wall. That takes a depth cube round the fire, which three already knows how to draw and sample for a point
+ * light: `fireShadowLight` is one such light that only casts (black, it adds no light of its own), set at the fire the views
+ * pick to shade. The fire system puts that fire first in the list and raises `FIRE.info.w`, and the loop darkens light 0 by
+ * the light's cube. It is three's only shadow-casting point light, so its map is always `pointShadowMap[ 0 ]`. The light
+ * stays in the scene from the start and its map is only redrawn when asked, so programs never change when a fire is lit and
+ * nothing is drawn for it while no fire needs it.
  */
 
 /** Most fire lights one view carries. */
@@ -25,7 +33,7 @@ export const FIRE = {
   pos: new Float32Array(FIRE_MAX * 4),
   /** rgb: colour times intensity (as three's point lights: candela-like), w: range (m) past which it adds nothing. */
   col: new Float32Array(FIRE_MAX * 4),
-  /** x: lights in use, y: how thick the air is for the glow round them (1/m), z: smoke lit by them, w: unused. */
+  /** x: lights in use, y: how thick the air is for the glow round them (1/m), z: smoke lit by them, w: 1 when light 0 casts shadows. */
   info: { x: 0, y: 0, z: 1, w: 0 },
 };
 
@@ -99,6 +107,13 @@ if ( fireLightInfo.x > 0.5 ) {
     directLight.direction = lv * inversesqrt( max( d2, 1e-6 ) );
     directLight.color = fc.rgb * ( win * win / ( d2 + fp.w * fp.w ) );
     directLight.visible = true;
+    #if defined( USE_SHADOWMAP ) && NUM_POINT_LIGHT_SHADOWS > 0 && ( defined( SHADOWMAP_TYPE_PCF ) || defined( SHADOWMAP_TYPE_BASIC ) )
+    // The shadow-casting fire, through the cube its light drew; easing off toward the cube's reach so no edge shows there.
+    if ( fi == 0 && fireLightInfo.w > 0.5 && receiveShadow ) {
+      float fsh = getPointShadow( pointShadowMap[ 0 ], pointLightShadows[ 0 ].shadowMapSize, pointLightShadows[ 0 ].shadowIntensity, pointLightShadows[ 0 ].shadowBias, pointLightShadows[ 0 ].shadowRadius, vPointShadowCoord[ 0 ], pointLightShadows[ 0 ].shadowCameraNear, pointLightShadows[ 0 ].shadowCameraFar );
+      directLight.color *= mix( fsh, 1.0, smoothstep( 0.7, 1.0, sqrt( d2 ) / pointLightShadows[ 0 ].shadowCameraFar ) );
+    }
+    #endif
     RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );
   }
 }
@@ -116,6 +131,122 @@ export function installFireLight() {
   THREE.ShaderChunk.lights_fragment_begin = `${THREE.ShaderChunk.lights_fragment_begin}\n${FIRE_LIGHTS}`;
   const lib = THREE.ShaderLib as unknown as Record<string, { uniforms: Record<string, THREE.IUniform> }>;
   for (const k of Object.keys(lib)) Object.assign(lib[k].uniforms, uniforms);
+}
+
+let shadowLight: THREE.PointLight | null = null;
+
+/** The light whose shadow the nearest fire casts. The renderer keeps it in its scene for good. */
+export function fireShadowLight(): THREE.PointLight {
+  if (shadowLight) return shadowLight;
+  // Black: three's own light loop skips it (and its shadow lookups); only the fire loop reads its cube.
+  const l = new THREE.PointLight(0x000000, 0, 30, 2);
+  l.name = 'fireShadow';
+  l.castShadow = true;
+  const s = l.shadow;
+  // Drawn only when the fire system asks. The first frame draws it once (from far below, where nothing is), so a depth map
+  // is always bound behind the shadow sampler.
+  s.autoUpdate = false;
+  s.needsUpdate = true;
+  s.mapSize.set(256, 256);
+  s.camera.near = 0.1;
+  s.bias = 0.0015;
+  s.normalBias = 0.05;
+  s.radius = blurFor(256);
+  l.position.set(0, -10000, 0);
+  l.updateMatrixWorld();
+  shadowLight = l;
+  return l;
+}
+
+/** A fire is a glowing body, not a point: its shadows are soft, by the same angle whatever the cube's size. */
+function blurFor(n: number): number {
+  return 1.5 + n / 64;
+}
+
+/** Side of each face of the fire's shadow cube (0 for none at all). */
+export function setFireShadowSize(n: number) {
+  const s = fireShadowLight().shadow;
+  if (n <= 0 || n === s.mapSize.x) return;
+  s.mapSize.set(n, n);
+  s.radius = blurFor(n);
+  // three does not resize a cube target: make it again on the next draw.
+  if (s.map) {
+    s.map.depthTexture?.dispose();
+    s.map.dispose();
+    s.map = null as unknown as THREE.WebGLRenderTarget;
+  }
+  s.needsUpdate = true;
+}
+
+/** Cube drawings so far, so a batch is checked once per drawing rather than once per face. */
+let aims = 0;
+
+/**
+ * Cast the shadows of light 0 from (x, y, z), out to `far` metres, `strength` 0..1 deep. Redraws the cube with the view
+ * that follows.
+ */
+export function aimFireShadow(x: number, y: number, z: number, far: number, strength = 1) {
+  const l = fireShadowLight();
+  l.position.set(x, y, z);
+  l.distance = far;
+  l.updateMatrixWorld();
+  l.shadow.needsUpdate = true;
+  aims++;
+  keepFireShadow(strength);
+}
+
+const _p = new THREE.Vector3();
+const _s = new THREE.Sphere();
+
+/** Whether anything of a batch drawn wherever its members are stands within the fire shadow's reach. */
+function batchNearFire(object: THREE.Object3D, geometry: THREE.BufferGeometry): boolean {
+  const l = fireShadowLight();
+  if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+  const bs = geometry.boundingSphere;
+  if (!bs) return true;
+  const im = object as THREE.InstancedMesh;
+  if (!im.isInstancedMesh) {
+    _s.copy(bs).applyMatrix4(object.matrixWorld);
+    return _s.center.distanceToSquared(l.position) < (l.distance + _s.radius) ** 2;
+  }
+  const reach = l.distance + bs.radius * object.matrixWorld.getMaxScaleOnAxis();
+  const m = im.instanceMatrix.array;
+  for (let i = 0; i < im.count; i++) {
+    _p.set(m[i * 16 + 12], m[i * 16 + 13], m[i * 16 + 14]).applyMatrix4(object.matrixWorld);
+    if (_p.distanceToSquared(l.position) < reach * reach) return true;
+  }
+  return false;
+}
+
+/**
+ * Keep the fire's cube to what stands near the fire. three culls each object against each face by its bounds, but a batch's
+ * bounds take in all its members: a chunk's trees span a hundred metres, and a batch drawn wherever its members stand (bounds
+ * off: the forage plants, a herd, a crowd) has none, so either would be drawn whole into all six faces however far off its
+ * members are. In a meadow that was three quarters of the cube's work. A batch goes in only when one of its members stands
+ * within the shadow's reach, checked once per drawing of the cube. Installed over the renderer's draw.
+ */
+export function installFireShadowFilter(gl: THREE.WebGLRenderer) {
+  const draw = gl.renderBufferDirect.bind(gl);
+  const cam = fireShadowLight().shadow.camera;
+  const near = new WeakMap<THREE.Object3D, { aim: number; near: boolean }>();
+  gl.renderBufferDirect = (camera, scene, geometry, material, object, group) => {
+    if (camera === cam && (object.frustumCulled === false || (object as THREE.InstancedMesh).isInstancedMesh)) {
+      let n = near.get(object);
+      if (!n) near.set(object, (n = { aim: -1, near: true }));
+      if (n.aim !== aims) {
+        n.aim = aims;
+        n.near = batchNearFire(object, geometry);
+      }
+      if (!n.near) return;
+    }
+    draw(camera, scene, geometry, material, object, group);
+  };
+}
+
+/** Light 0 casts shadows `strength` 0..1 deep from the cube as last drawn (0: none), for the view that follows. */
+export function keepFireShadow(strength: number) {
+  FIRE.info.w = strength > 0 ? 1 : 0;
+  fireShadowLight().shadow.intensity = strength;
 }
 
 /** Fires whose heat haze each view shows. */
@@ -163,4 +294,5 @@ export function setFireLights(list: readonly FireLightIn[], n: number, haze: num
 /** No fire anywhere (a scene being torn down, a delve with none). */
 export function clearFireLights() {
   FIRE.info.x = 0;
+  FIRE.info.w = 0;
 }

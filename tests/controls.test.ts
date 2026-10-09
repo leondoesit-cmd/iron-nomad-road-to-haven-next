@@ -359,6 +359,114 @@ describe('keyboard and mouse bindings', () => {
   });
 });
 
+describe('a controller picks up a seat at any time', () => {
+  /** Keyboards in every seat (as a run started from the mouse leaves them) and a pad nobody has joined. */
+  function latePad(seats: 1 | 2) {
+    const { im, win, key } = kbInput();
+    im.setSeats(seats);
+    if (seats === 2) im.autoJoinKeyboard();
+    const down = new Set<number>();
+    const pad = {
+      index: 0,
+      connected: true,
+      mapping: 'standard',
+      axes: [0, 0, 0, 0],
+      get buttons() {
+        return Array.from({ length: 17 }, (_, i) => ({ pressed: down.has(i), value: down.has(i) ? 1 : 0 }));
+      },
+    } as unknown as Gamepad;
+    im.mockPads = [pad];
+    return { im, win, key, down, pad };
+  }
+
+  it('solo: a press on the pad takes the keyboard seat, without that press acting', () => {
+    const { im, down } = latePad(1);
+    expect(im.slots[0]).toEqual({ kind: 'kb', set: 1 });
+    const swaps: number[] = [];
+    im.onSeatDevice = (p) => swaps.push(p);
+    down.add(Btn.A);
+    im.sample(DT);
+    expect(im.slots[0]).toEqual({ kind: 'pad', index: 0 });
+    expect(swaps).toEqual([0]);
+    expect(im.intents[0].pressed & (1 << Btn.A)).toBe(0);
+    down.delete(Btn.A);
+    im.sample(DT);
+    down.add(Btn.A);
+    im.sample(DT);
+    expect(im.intents[0].pressed & (1 << Btn.A)).toBeTruthy();
+  });
+
+  it('solo: the keyboard takes the seat back with any of its keys', () => {
+    const { im, key, down } = latePad(1);
+    down.add(Btn.X);
+    im.sample(DT);
+    expect(im.slots[0]?.kind).toBe('pad');
+    key('keydown', 'KeyW');
+    im.sample(DT);
+    im.sample(DT);
+    expect(im.slots[0]).toEqual({ kind: 'kb', set: 1 });
+    key('keyup', 'KeyW');
+    down.clear();
+    im.sample(DT);
+    down.add(Btn.A);
+    im.sample(DT);
+    expect(im.slots[0]?.kind).toBe('pad');
+    key('keydown', 'ArrowUp');
+    im.sample(DT);
+    im.sample(DT);
+    expect(im.slots[0]).toEqual({ kind: 'kb', set: 2 });
+  });
+
+  it('a pad held at rest with the stick in the middle does not keep stealing the seat', () => {
+    const { im, key, down } = latePad(1);
+    down.add(Btn.B);
+    im.sample(DT);
+    key('keydown', 'KeyW');
+    im.sample(DT);
+    im.sample(DT);
+    // B still held: no new touch, so the keyboard keeps the seat.
+    for (let i = 0; i < 30; i++) im.sample(DT);
+    expect(im.slots[0]).toEqual({ kind: 'kb', set: 1 });
+  });
+
+  it('split screen: the pad takes the idle keyboard seat, not the one being played', () => {
+    const { im, key, down } = latePad(2);
+    key('keydown', 'KeyD');
+    for (let i = 0; i < 90; i++) im.sample(DT);
+    down.add(Btn.Start);
+    im.sample(DT);
+    expect(im.slots[0]).toEqual({ kind: 'kb', set: 1 });
+    expect(im.slots[1]).toEqual({ kind: 'pad', index: 0 });
+    // Start that took the seat does not also pause.
+    expect(im.intents[1].pressed & (1 << Btn.Start)).toBe(0);
+  });
+
+  it('split screen: both keyboards in use, the pad waits', () => {
+    const { im, key, down } = latePad(2);
+    key('keydown', 'KeyD');
+    key('keydown', 'ArrowLeft');
+    for (let i = 0; i < 90; i++) im.sample(DT);
+    down.add(Btn.A);
+    im.sample(DT);
+    expect(im.slots.map((s) => s?.kind)).toEqual(['kb', 'kb']);
+  });
+
+  it('a replugged pad on a new index takes the seat of the one that was unplugged', () => {
+    const { im, win, down } = padInput();
+    im.setSeats(1);
+    const old = im.mockPads![0]!;
+    (old as { connected: boolean }).connected = false;
+    win.dispatchEvent(Object.assign(new Event('gamepaddisconnected'), { gamepad: old }));
+    expect(im.disconnected[0]).toBe(true);
+    const fresh = { index: 1, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons: [{ pressed: true, value: 1 }] } as unknown as Gamepad;
+    im.mockPads = [old, fresh];
+    down.clear();
+    im.sample(DT);
+    expect(im.slots[0]).toEqual({ kind: 'pad', index: 1 });
+    expect(im.disconnected[0]).toBe(false);
+  });
+});
+
 describe('rebinding capture', () => {
   it('takes the next key, and the game sees no input meanwhile or just after', () => {
     const { im, key } = kbInput();

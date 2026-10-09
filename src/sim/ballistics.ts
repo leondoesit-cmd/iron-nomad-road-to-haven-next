@@ -239,9 +239,9 @@ export const KNOCK = 90;
 
 /**
  * How well a melee weapon takes limbs off, per point of damage, on the same scale as a round's `gore`. A bat breaks bone but
- * does not cut; a knife needs a couple of strokes; a machete or an axe takes a limb off a walker in one.
+ * does not cut; a knife needs a couple of strokes; a machete, an axe or a katana takes a limb off a walker in one.
  */
-export const CUT: Record<string, number> = { bat: 0, knife: 0.3, machete: 0.9, axe: 1.5 };
+export const CUT: Record<string, number> = { bat: 0, knife: 0.3, machete: 0.9, axe: 1.5, katana: 1.3 };
 export const cutOf = (model: string) => CUT[model] ?? 0;
 
 /** Metres per second a body is shoved back by one round. */
@@ -309,7 +309,7 @@ export interface SeverResult {
  * Take a blow to a zone. `dealt` is the damage that landed, `gore` the round's limb-taking, `hp` the body's full hit points.
  * `pick` chooses among the arms when a blow is large enough to tear one off a hit to the body.
  */
-export function wound(w: Wounds, zone: Zone, dealt: number, gore: number, hp: number, killed: boolean, pick: number): SeverResult {
+export function wound(w: Wounds, zone: Zone, dealt: number, gore: number, hp: number, killed: boolean, pick: number, headHp = hp): SeverResult {
   const off: Exclude<Zone, 'torso'>[] = [];
   const power = dealt * gore;
   if (power <= 0) return { off };
@@ -322,7 +322,7 @@ export function wound(w: Wounds, zone: Zone, dealt: number, gore: number, hp: nu
   const i = ZONES.indexOf(zone);
   w.acc[i] += power;
   if (zone === 'head') {
-    if (w.acc[i] >= hp * HEAD_HP || (killed && power >= hp * 0.4)) take('head');
+    if (w.acc[i] >= headHp * HEAD_HP || (killed && power >= hp * 0.4)) take('head');
   } else if (zone === 'torso') {
     // A big enough blow to the body takes an arm with it.
     if (power >= hp * OVERKILL) take(pick < 0.5 ? 'armL' : 'armR');

@@ -416,7 +416,7 @@ export class TravellerSystem {
       const [nx, nz] = rightOf(r.tx, r.tz);
       tv.x = r.x + nx * tv.lat;
       tv.z = r.z + nz * tv.lat;
-      tv.y = ctx.groundAt(tv.x, tv.z);
+      tv.y = ctx.groundAt(tv.x, tv.z) + (ctx.ground?.heightAt(tv.x, tv.z) ?? 0);
       tv.yaw = Math.atan2(r.tx, r.tz);
       if (def.trade && k === 0) tv.stock = makeStock(this.rng);
       if (def.cart) tv.cart = makeHandcart(roll.seed);
@@ -971,7 +971,7 @@ export class TravellerSystem {
 
   private present(tv: Traveller, dt: number) {
     const ctx = this.ctx;
-    tv.y = ctx.groundAt(tv.x, tv.z);
+    tv.y = ctx.groundAt(tv.x, tv.z) + (ctx.ground?.heightAt(tv.x, tv.z) ?? 0);
     const h = tv.human;
     h.root.position.set(tv.x, tv.y, tv.z);
     h.root.rotation.y = tv.yaw;

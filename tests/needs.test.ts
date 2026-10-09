@@ -27,6 +27,7 @@ import {
 } from '../src/sim/needs';
 import { ACTION_BY_ID, defaultBindings } from '../src/input/bindings';
 import { fakeServices, run } from './helpers/sim';
+import { TUNED_DAY, TUNING } from '../src/sim/tuning';
 
 beforeAll(async () => {
   await initPhysics();
@@ -64,13 +65,29 @@ describe('needs: draining and filling', () => {
 
   it('with no food on a normal day you are hungry by nightfall, starving the day after, and it never goes below zero', () => {
     const n = newNeeds();
-    tickFor(n, 720);
+    tickFor(n, TUNING.dayLength);
     expect(intakeLevel(n.food)).toBe('low');
-    tickFor(n, 720);
+    tickFor(n, TUNING.dayLength);
     expect(intakeLevel(n.food)).toBe('critical');
-    tickFor(n, 5000);
+    tickFor(n, 12000);
     expect(n.food).toBe(0);
     expect(n.water).toBe(0);
+  });
+
+  it('a longer day spreads the drain out: a day of hunger is a day of hunger whatever its length', () => {
+    const was = TUNING.dayLength;
+    try {
+      const a = newNeeds();
+      TUNING.dayLength = TUNED_DAY;
+      tickFor(a, TUNED_DAY);
+      const b = newNeeds();
+      TUNING.dayLength = 3600;
+      tickFor(b, 3600);
+      expect(b.food).toBeCloseTo(a.food, 3);
+      expect(b.water).toBeCloseTo(a.water, 3);
+    } finally {
+      TUNING.dayLength = was;
+    }
   });
 
   it('what goes in comes out: the bladder and bowels fill behind eating and drinking', () => {
@@ -111,12 +128,12 @@ describe('needs: warnings', () => {
   it('a warning can fire again after you have dealt with it', () => {
     const n = newNeeds();
     n.bladder = 0.59;
-    let warns = tickFor(n, 10).filter((e) => e.type === 'warn' && e.need === 'bladder');
+    let warns = tickFor(n, 30).filter((e) => e.type === 'warn' && e.need === 'bladder');
     expect(warns).toHaveLength(1);
     relieve(n, 'piss', 1);
     tickNeeds(n, 0.5);
     n.bladder = 0.59;
-    warns = tickFor(n, 10).filter((e) => e.type === 'warn' && e.need === 'bladder');
+    warns = tickFor(n, 30).filter((e) => e.type === 'warn' && e.need === 'bladder');
     expect(warns).toHaveLength(1);
   });
 

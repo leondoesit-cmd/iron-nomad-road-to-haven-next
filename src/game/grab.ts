@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Btn, wasPressed, type PlayerIntent } from '../input/intents';
+import { Btn, isHeld, wasPressed, type PlayerIntent } from '../input/intents';
 import { carryModelKey, carriedName, foodLines, inspectLines, partInspect, type Carried, type InspectLine } from '../sim/carry';
 import { planLoad, sizeOf, surfacesOf, type Zone } from '../sim/cargo';
 import { FOODS } from '../sim/food';
@@ -10,15 +10,22 @@ import { makeCarryModel } from '../render/props';
 import { bodyMat } from '../render/vehicleKit';
 import { promptLabel } from '../input/input';
 import { keyLabel, live } from '../input/bindings';
+import { launchPitch, throwBody, throwCharge, throwCost, throwKg, throwRange, throwSpeed, type Thrower } from '../sim/throwing';
+import { STAMINA, spendStamina } from '../sim/vitals';
+import { venomSlow } from '../sim/venom';
+import { clamp } from '../core/math';
 import { isOwnRide } from './access';
+import type { Ctx } from './ctx';
 import type { Cand, Player } from './player';
 import type { Vehicle } from './vehicle';
 
 /**
  * Hands-on carrying, the way a scrapyard is worked: what you lift is held out in front of you where you look, and you put it
  * exactly where you want it. The wheel brings it nearer or pushes it out, the swap button turns it, fire lets go of it (on the
- * ground, or on a deck of one of your vehicles: in the rickshaw's cab, in a pickup's bed, on a roof) and aim throws it. A part
- * held at its mount still goes on with the interact hold; X still stows or sets down as before.
+ * ground, or on a deck of one of your vehicles: in the rickshaw's cab, in a pickup's bed, on a roof) and aim throws it: hold to
+ * wind up, let go to throw, as far as its weight and your shape allow (`sim/throwing.ts`). Something thrown that comes to rest
+ * on one of your decks is loaded there. A part held at its mount still goes on with the interact hold; X still stows or sets
+ * down as before.
  *
  * It also says what you are looking at: a white label under the crosshair with the thing's name, what it is good for and how
  * worn it is (`Player.lookInfo`), and the buttons that do something with it (`Player.handHints`).
@@ -32,9 +39,10 @@ export const HOLD_START = 1.2;
 const HOLD_STEP = 0.18;
 /** A press of the swap button turns it this much. */
 const TURN_STEP = Math.PI / 4;
-/** How hard a throw goes, m/s along the aim, and how much it lifts. */
-const THROW_SPEED = 7.5;
-const THROW_LIFT = 2.4;
+/** Wound up all the way, it is pulled back this close, out to the throwing side and up a little, off the line of sight. */
+const WIND_DIST = 0.85;
+const WIND_SIDE = 0.5;
+const WIND_RAISE = 0.12;
 /** Eye height on foot, where the line something is held along starts. */
 const EYE = 1.6;
 /** How far from the aim line something can lie and still be the thing looked at, and how far away. */
@@ -55,6 +63,9 @@ export interface HoldState {
   /** The model floating in the hands, and the carried thing it shows. */
   model: THREE.Group | null;
   key: string;
+  /** Winding up a throw (the throw button went down while holding it), and how far, 0 to 1. */
+  winding: boolean;
+  charge: number;
 }
 
 /** Where a held thing would come to rest: on the ground, or on a deck of one of your vehicles. */
@@ -75,7 +86,7 @@ export interface HandHint {
 }
 
 export function newHold(): HoldState {
-  return { dist: HOLD_START, yaw: 0, at: new THREE.Vector3(), spot: null, model: null, key: '' };
+  return { dist: HOLD_START, yaw: 0, at: new THREE.Vector3(), spot: null, model: null, key: '', winding: false, charge: 0 };
 }
 
 const _o = new THREE.Vector3();
@@ -115,9 +126,9 @@ export function holdPoint(p: Player, dist: number, out = new THREE.Vector3()): T
 }
 
 /** The deck of one of your own vehicles under a point, if any: the highest one it is over. */
-function deckUnder(p: Player, c: Carried, at: THREE.Vector3): Spot | null {
+function deckUnder(ctx: Ctx, c: Carried, at: THREE.Vector3): Spot | null {
   let best: Spot | null = null;
-  for (const v of p.ctx.vehicles) {
+  for (const v of ctx.vehicles) {
     if (!isOwnRide(v) || !v.build) continue;
     if (Math.hypot(v.position.x - at.x, v.position.z - at.z) > v.def.length / 2 + 2.5) continue;
     const anchor = mountsOfChassis(v.def);
@@ -146,7 +157,7 @@ function deckUnder(p: Player, c: Carried, at: THREE.Vector3): Spot | null {
 
 /** Where what is held comes to rest if it is let go now. */
 export function restSpot(p: Player, c: Carried, at: THREE.Vector3): Spot {
-  return deckUnder(p, c, at) ?? { kind: 'ground', pos: new THREE.Vector3(at.x, p.ctx.groundAt(at.x, at.z), at.z) };
+  return deckUnder(p.ctx, c, at) ?? { kind: 'ground', pos: new THREE.Vector3(at.x, p.ctx.groundAt(at.x, at.z), at.z) };
 }
 
 /**
@@ -165,12 +176,39 @@ export function holdTick(p: Player, it: PlayerIntent): boolean {
   }
   if (it.toolStep) h.dist = Math.max(HOLD_MIN, Math.min(HOLD_MAX, h.dist - it.toolStep * HOLD_STEP));
   if (wasPressed(it, Btn.LB)) h.yaw = (h.yaw + TURN_STEP) % (Math.PI * 2);
-  holdPoint(p, h.dist, h.at);
+  const busy = !!p.action;
+  // Throw: the button down winds up (it comes back over the shoulder), up throws. A tap is a soft toss.
+  if (!busy && wasPressed(it, Btn.LT)) h.winding = true;
+  if (h.winding) {
+    const kg = throwKg(c);
+    if (busy) {
+      h.winding = false;
+      h.charge = 0;
+    } else if (isHeld(it, Btn.LT)) h.charge = throwCharge(it.heldTime[Btn.LT], kg, p.stamina.winded);
+    else {
+      const charge = throwCharge(it.releasedAfter?.[Btn.LT] ?? 0, kg, p.stamina.winded);
+      h.winding = false;
+      h.charge = 0;
+      holdPoint(p, h.dist, h.at);
+      return throwIt(p, c, charge);
+    }
+  }
+  holdPoint(p, h.winding ? h.dist + (Math.min(h.dist, WIND_DIST) - h.dist) * h.charge : h.dist, h.at);
+  if (h.winding) {
+    h.at.x -= Math.cos(p.aimYaw) * WIND_SIDE * h.charge;
+    h.at.z += Math.sin(p.aimYaw) * WIND_SIDE * h.charge;
+    h.at.y += WIND_RAISE * h.charge;
+    const land = throwLanding(p, c, h.charge);
+    h.spot = land;
+    // A ring where it comes down, wider the further off it is so it still reads at a distance.
+    const far = Math.hypot(land.pos.x - p.pos.x, land.pos.z - p.pos.z);
+    const sz = (sizeOf(c) >= 4 ? 0.8 : sizeOf(c) >= 2 ? 0.6 : 0.45) + 0.05 * far;
+    p.ctx.work.ghost(`h${p.index}`, [{ pos: land.pos.clone().add(new THREE.Vector3(0, 0.03, 0)), quat: RING_FLAT, size: [0.03, sz, sz], shape: 'drum' }], land.kind === 'deck' && !land.ok ? 'blocked' : 'aimed');
+    return false;
+  }
   const spot = restSpot(p, c, h.at);
   h.spot = spot;
-  const busy = !!p.action;
   if (!busy && wasPressed(it, Btn.RT)) return letGo(p, c, spot);
-  if (!busy && wasPressed(it, Btn.LT)) return throwIt(p, c);
   // Show where it would land.
   const sz = sizeOf(c) >= 4 ? 0.7 : sizeOf(c) >= 2 ? 0.45 : 0.28;
   p.ctx.work.ghost(`h${p.index}`, [{ pos: spot.pos.clone().add(new THREE.Vector3(0, 0.02, 0)), quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.aimYaw + h.yaw), size: [sz, 0.04, sz] }], spot.kind === 'deck' ? (spot.ok ? 'aimed' : 'blocked') : 'idle');
@@ -203,35 +241,111 @@ function letGo(p: Player, c: Carried, spot: Spot): boolean {
 }
 
 
-/** Throw it: it flies off along the aim, tumbles, and can be lifted again once it lies still. */
-function throwIt(p: Player, c: Carried): boolean {
+/** What a player's body brings to a throw right now. */
+export function throwerOf(p: Player): Thrower {
+  return {
+    stamina: p.stamina.value / STAMINA.max,
+    winded: p.stamina.winded,
+    hp: p.hp / p.maxHp,
+    wounds: p.bleed.level,
+    pace: p.drugs.mods().speed * p.nm.speed * venomSlow(p.venom) * (1 - clamp(p.fatigue, 0, 0.2)),
+    crouch: p.crouch,
+    wading: p.waterDepth,
+  };
+}
+
+/** The velocity a throw at this wind-up leaves the hand with: along the aim, lofted a little, plus the way you are moving. */
+function throwVelocity(p: Player, c: Carried, charge: number, out = new THREE.Vector3()): THREE.Vector3 {
+  const v = throwSpeed(throwKg(c), charge, throwBody(throwerOf(p)));
+  const pitch = launchPitch(p.aimPitch);
+  const [fx, fz] = p.footVel;
+  return out.set(Math.sin(p.aimYaw) * Math.cos(pitch) * v + fx * 0.8, Math.sin(pitch) * v, Math.cos(p.aimYaw) * Math.cos(pitch) * v + fz * 0.8);
+}
+
+/** How far a throw at this wind-up would carry over flat ground, m, for the hint. */
+export function throwReach(p: Player, c: Carried, charge: number): number {
+  const v = throwSpeed(throwKg(c), charge, throwBody(throwerOf(p)));
+  return throwRange(v, launchPitch(p.aimPitch), Math.max(0.3, p.hold.at.y - p.ctx.groundAt(p.hold.at.x, p.hold.at.z)));
+}
+
+const _tp = new THREE.Vector3();
+/** The drum outline's axis is its x: stood on end, it is a ring lying on the ground. */
+const RING_FLAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+const _tv = new THREE.Vector3();
+
+/** Where a throw now would first come down: on one of your decks, or on the ground (the arc, stepped; air and bounces left out). */
+export function throwLanding(p: Player, c: Carried, charge: number): Spot {
+  const ctx = p.ctx;
+  _tp.copy(p.hold.at);
+  throwVelocity(p, c, charge, _tv);
+  const dt = 1 / 30;
+  for (let i = 0; i < 150; i++) {
+    _tv.y -= 9.81 * dt;
+    _tp.addScaledVector(_tv, dt);
+    if (_tv.y < 0) {
+      const deck = deckUnder(ctx, c, _tp);
+      if (deck && _tp.y <= deck.pos.y + 0.1) return deck;
+    }
+    const gy = ctx.groundAt(_tp.x, _tp.z);
+    if (_tp.y <= gy) return { kind: 'ground', pos: new THREE.Vector3(_tp.x, gy, _tp.z) };
+  }
+  return { kind: 'ground', pos: new THREE.Vector3(_tp.x, ctx.groundAt(_tp.x, _tp.z), _tp.z) };
+}
+
+/** Throw it: it flies off along the aim, tumbles, and can be lifted again once it lies still. It costs wind. */
+function throwIt(p: Player, c: Carried, charge: number): boolean {
   const ctx = p.ctx;
   if (!ctx.loose) return false;
-  const { d } = aimRay(p);
   const geo = pieceGeometry(c);
   geo.computeBoundingBox();
   const bb = geo.boundingBox!;
-  const size = sizeOf(c);
-  const heavy = size === 4 ? 0.45 : size === 2 ? 0.75 : 1;
-  const vel = new THREE.Vector3(d.x * THROW_SPEED * heavy, d.y * THROW_SPEED * heavy + THROW_LIFT * heavy, d.z * THROW_SPEED * heavy);
+  const kg = throwKg(c);
+  const vel = throwVelocity(p, c, charge);
+  spendStamina(p.stamina, throwCost(kg, charge));
+  const spinK = clamp(vel.length() / 8, 0.3, 1.2);
   ctx.debris.spawn({
     geo,
     material: bodyMat,
     pos: p.hold.at.clone(),
     quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.aimYaw + p.hold.yaw),
     vel,
-    spin: new THREE.Vector3((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6),
+    spin: new THREE.Vector3((Math.random() - 0.5) * 6 * spinK, (Math.random() - 0.5) * 6 * spinK, (Math.random() - 0.5) * 6 * spinK),
     centre: [(bb.max.x + bb.min.x) / 2, (bb.max.y + bb.min.y) / 2, (bb.max.z + bb.min.z) / 2],
     half: [Math.max(0.04, (bb.max.x - bb.min.x) / 2), Math.max(0.04, (bb.max.y - bb.min.y) / 2), Math.max(0.04, (bb.max.z - bb.min.z) / 2)],
-    mass: size === 4 ? 30 : size === 2 ? 10 : 3,
+    mass: Math.max(1, kg),
     round: c.kind === 'part' && c.item.id.startsWith('tyre'),
     item: c.kind === 'part' ? c.item : null,
     carried: c.kind === 'part' ? null : c,
     tag: 'thrown',
+    armAfter: 0.12,
   });
   p.carry = null;
-  ctx.audio.play('pickup', p.pos.x, p.pos.z, 0.6);
+  ctx.audio.play('pickup', p.pos.x, p.pos.z, 0.4 + 0.4 * charge);
   return true;
+}
+
+/**
+ * Something thrown that has come to rest on a deck of one of your vehicles (a can tossed into the pickup's bed, a wheel
+ * onto the roof) is loaded there, as if it had been set down. Once per fixed tick.
+ */
+export function settleThrown(ctx: Ctx) {
+  for (const piece of ctx.debris.pieces) {
+    if (piece.tag !== 'thrown' || piece.rest < 0.5) continue;
+    const c: Carried | null = piece.item ? { kind: 'part', item: piece.item } : piece.carried;
+    if (!c) continue;
+    const t = piece.body.translation();
+    _tp.set(t.x, t.y, t.z);
+    const deck = deckUnder(ctx, c, _tp);
+    // Not over a deck, or no room on it: it stays where it lies, and is not looked at again.
+    piece.tag = 'thrown-rest';
+    if (!deck || deck.kind !== 'deck' || !deck.ok) continue;
+    const r = piece.body.rotation();
+    const yaw = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(r.x, r.y, r.z, r.w), 'YXZ').y;
+    ctx.debris.take(`debris:${piece.id}`);
+    deck.v.cargoRig.add(c, deck.zone, deck.local, yaw - deck.v.yaw);
+    ctx.audio.play('pickup', t.x, t.z, 0.4);
+    return;
+  }
 }
 
 // ------------------------------------------------------------------------------------------------ looking at things
@@ -327,11 +441,17 @@ export function lookTick(p: Player, attach = false, detach = false) {
   const mouse = slot?.kind === 'kb' && slot.set === 1;
   const c = p.carry;
   if (c) {
-    p.lookInfo = { lines: lookLines(c) };
+    // Winding up a throw, the label would sit right over the spot it is going to land on.
+    p.lookInfo = p.hold.winding ? null : { lines: lookLines(c) };
     const hints: HandHint[] = [{ key: key('RT'), text: 'Release' }];
     // Keys alone have no aim of their own unless one is bound; the mouse throws with its aim button.
     const canThrow = slot?.kind !== 'kb' || live.mouseLocked || !!live.bindings.kb[slot.set - 1]?.aim;
-    if (canThrow) hints.push({ key: key('LT'), text: 'Throw' });
+    if (canThrow) {
+      // Winding up, the distance is to the spot the marker shows; otherwise what a full throw would make over flat ground.
+      const land = p.hold.winding ? p.hold.spot : null;
+      const m = Math.max(1, Math.round(land ? Math.hypot(land.pos.x - p.pos.x, land.pos.z - p.pos.z) : throwReach(p, c, 1)));
+      hints.push({ key: key('LT'), text: p.hold.winding ? `Throw ${m} m` : `Throw (hold: ${m} m)` });
+    }
     hints.push({ key: key('LB'), text: 'Rotate' });
     if (mouse) hints.push({ key: 'SCROLL', text: 'Move' });
     if (attach) hints.push({ key: key('A'), text: c.kind === 'part' ? 'Attach' : 'Pour in' });

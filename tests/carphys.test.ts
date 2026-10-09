@@ -14,12 +14,16 @@ beforeAll(async () => {
 const fitOf = (...ids: string[]) => Object.fromEntries(ids.map((id) => [partDef(id).slot, newPart(id)]));
 const engine = (id: string) => partDef(id).engine!;
 
-/** The old arcade physics, measured with tests/helpers/carBench.ts before the powertrain went in. */
+/**
+ * The old arcade physics, measured with tests/helpers/carBench.ts before the powertrain went in. Two launches have moved on
+ * purpose since (2026-10-09, `sim/driveFeel.ts`): the hatch is front-wheel drive and lifts its driven wheels as it pulls
+ * away, the quad drives its back axle only; both were all-wheel drive before (1.73 and 1.77 s to 50 km/h then).
+ */
 const BASELINE: Record<string, { t50: number; top: number; brake: number; hill20: number }> = {
   moped: { t50: 2.28, top: 66.9, brake: 16.6, hill20: 58.4 },
-  quad: { t50: 1.77, top: 98.9, brake: 25.9, hill20: 87.5 },
+  quad: { t50: 2.05, top: 98.9, brake: 25.9, hill20: 87.5 },
   buggy: { t50: 1.82, top: 89.9, brake: 23.2, hill20: 79.4 },
-  hatch: { t50: 1.73, top: 110.2, brake: 23.3, hill20: 97.2 },
+  hatch: { t50: 2.18, top: 110.2, brake: 23.3, hill20: 97.2 },
   sedan: { t50: 1.78, top: 113.4, brake: 23.3, hill20: 99.2 },
   pickup: { t50: 1.97, top: 100.7, brake: 23.3, hill20: 87.3 },
   van: { t50: 2.2, top: 91.4, brake: 25.7, hill20: 77.9 },
